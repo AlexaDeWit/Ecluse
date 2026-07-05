@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>$title$ | Écluse</title>
     <meta name="description" content="$description$" />
-    <!-- Canonical links identify the preferred URL; they load no resource, so SRI is inapplicable. -->
-    <!-- nosemgrep: html.security.audit.missing-integrity.missing-integrity -->
     <link rel="canonical" href="$canonical-url$" />
     <link rel="icon" href="favicon-32.png" sizes="32x32" />
     <meta property="og:type" content="article" />
@@ -41,7 +39,9 @@ $endif$
         <a href="index.html">Home</a>
         <a href="motivation.html">Why</a>
         <a href="alternatives.html">Alternatives</a>
+        <a href="architecture.html">Design</a>
         <a href="usage.html">Operating</a>
+        <a href="security.html">Security</a>
         <a href="api/index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
       </nav>
@@ -53,6 +53,7 @@ $body$
       <p>
         <a href="https://github.com/AlexaDeWit/Ecluse">Source repository</a> &middot;
         <a href="api/index.html">API reference (Haddock)</a> &middot;
+        <a href="threat-model.html">Threat model</a> &middot;
         rendered from the repository's Markdown with <a href="https://pandoc.org">pandoc</a>.
       </p>
       <p>Écluse is free and open source &middot; pre-launch, under active development.</p>

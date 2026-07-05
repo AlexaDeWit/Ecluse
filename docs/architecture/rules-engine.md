@@ -249,7 +249,7 @@ CVE gating happens at ingestion: a version is checked once, before it enters the
 rule-free thereafter, so a CVE disclosed after a version is mirrored is not caught by the gate. The
 post-ingestion disposition (operator scanning, a hard deny-by-identity revocation, and operator
 purge, *deny-then-purge*) is catalogued as
-[threat #13](https://ecluse-proxy.com/threat-model.html); holding the dataset locally
+[threat #13](https://ecluse-proxy.com/threat-model.html#threat-13); holding the dataset locally
 keeps a periodic mirror re-scan straightforward to add later.
 
 ### Testing

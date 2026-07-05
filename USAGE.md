@@ -118,7 +118,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   public-derived packages share one store, so you lose provenance separation, per-provenance
   scanning, and clean post-incident scoping. **Écluse Dredger refuses to boot** if
   `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
-  first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html)
+  first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html#threat-10)
   and #16.)
 - **Pointing the private upstream at a registry that itself draws from public** (say a CodeArtifact
   repo with the stock `npm-store` upstream to npmjs). This is the **dangerous one**, and Écluse
@@ -126,7 +126,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   gate instead of through it, nullifying the rules, integrity floor, and freshness quarantine.
   Aggregate **trusted stores only** into the private upstream (your first-party store plus Écluse's
   mirror), and let the gated mirror be the only way public content enters. (Register
-  [threat #15](https://ecluse-proxy.com/threat-model.html).)
+  [threat #15](https://ecluse-proxy.com/threat-model.html#threat-15).)
 
 The other deviations self-announce: an open edge (`ECLUSE_AUTH_TOKEN` unset) leans on your network
 boundary, a static publish credential fails closed at boot without that edge, and a `static`

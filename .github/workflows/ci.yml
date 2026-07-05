@@ -193,7 +193,7 @@ jobs:
         run: nix develop --command task test-e2e
 
   static-checks:
-    name: Static checks (format, lint, Semgrep, workflows)
+    name: Static checks (format, lint, Semgrep, workflows, site)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Formerly four jobs (format/lint, cabal-check, Semgrep, workflow-lint). None
@@ -201,6 +201,9 @@ jobs:
     # check. Merged so that setup is paid once. Each check runs even if an earlier
     # one failed (`if: !cancelled()`), so one run still reports them all; the job
     # fails if any check fails — identical gate semantics to the separate jobs.
+    # `task static-checks` also runs `site-stub`: the pandoc site assembled over
+    # stubbed API artefacts plus the site link/metadata gates, so a dangling link
+    # or orphaned page fails the PR here instead of the Pages deploy after merge.
     permissions:
       contents: read
       security-events: write # upload the Semgrep SARIF to code scanning

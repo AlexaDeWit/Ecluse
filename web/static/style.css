@@ -72,6 +72,14 @@ th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: l
 th { background: var(--code-bg); }
 img { max-width: 100%; }
 
+/* Desktop: widen the documentation column so data-heavy blocks (the operator
+   manual's configuration tables, code fences, diagrams) get room, while prose
+   blocks keep the readable measure and anchor left within the wider column. */
+@media (min-width: 75rem) {
+  main.doc, .site-footer { max-width: 70rem; }
+  main.doc > p, main.doc > ul, main.doc > ol, main.doc > blockquote { max-width: 56rem; }
+}
+
 /* Threat-register pills (web/threat-register.lua emits these classes). */
 .badge {
   display: inline-block; padding: 0.05em 0.5em; border-radius: 999px;
