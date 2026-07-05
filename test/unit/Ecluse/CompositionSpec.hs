@@ -874,17 +874,6 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
         parseCodeArtifactHost "my-company-domain-111122223333.d.codeartifact.eu-central-1.amazonaws.com"
             `shouldBe` Just ("my-company-domain", "111122223333", "eu-central-1")
 
-parseEndpointUrlSpec :: Spec
-parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
-    it "parses http with explicit port" $ do
-        parseEndpointUrl "http://localhost:4566" `shouldBe` Just (False, "localhost", 4566)
-    it "parses https with implicit port" $ do
-        parseEndpointUrl "https://s3.amazonaws.com" `shouldBe` Just (True, "s3.amazonaws.com", 443)
-    it "parses http with implicit port" $ do
-        parseEndpointUrl "http://s3.amazonaws.com" `shouldBe` Just (False, "s3.amazonaws.com", 80)
-    it "rejects malformed URLs" $ do
-        parseEndpointUrl "not-a-url" `shouldBe` Nothing
-
     it "returns Nothing if the host does not contain .d.codeartifact." $ do
         parseCodeArtifactHost "example.com" `shouldBe` Nothing
         parseCodeArtifactHost "my-domain-111122223333.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
@@ -901,6 +890,23 @@ parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
     it "returns Nothing if the host is missing the .amazonaws.com suffix" $ do
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2.com" `shouldBe` Nothing
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2" `shouldBe` Nothing
+
+    it "returns Nothing if the owner is not exactly a 12-digit AWS account id" $ do
+        parseCodeArtifactHost "my-domain-11112222333.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-1111222233334.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-11112222333a.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-owner.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+
+parseEndpointUrlSpec :: Spec
+parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
+    it "parses http with explicit port" $ do
+        parseEndpointUrl "http://localhost:4566" `shouldBe` Just (False, "localhost", 4566)
+    it "parses https with implicit port" $ do
+        parseEndpointUrl "https://s3.amazonaws.com" `shouldBe` Just (True, "s3.amazonaws.com", 443)
+    it "parses http with implicit port" $ do
+        parseEndpointUrl "http://s3.amazonaws.com" `shouldBe` Just (False, "s3.amazonaws.com", 80)
+    it "rejects malformed URLs" $ do
+        parseEndpointUrl "not-a-url" `shouldBe` Nothing
 
 -- Build a 'Config' from an env + optional document, failing the test on a policy
 -- error (the composeBindings examples want a successfully-loaded config).
