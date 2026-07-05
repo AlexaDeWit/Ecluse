@@ -86,6 +86,12 @@ backendSpec = describe "backend selection" $ do
         it "rejects unknown backends" $
             parseMirrorCredentialProvider "vault"
                 `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
+        it "rejects empty string" $
+            parseMirrorCredentialProvider ""
+                `shouldBe` Left "unknown mirror-target credential provider \"\" (expected one of: static, codeartifact, gcp-artifact-registry)"
+        it "rejects whitespace string" $
+            parseMirrorCredentialProvider "   "
+                `shouldBe` Left "unknown mirror-target credential provider \"   \" (expected one of: static, codeartifact, gcp-artifact-registry)"
 
 urlSpec :: Spec
 urlSpec = describe "Url" $ do
