@@ -57,7 +57,7 @@ data OsvSeverityEntry = OsvSeverityEntry
     { sevType :: Text
     , sevScore :: Text
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvSeverityEntry where
     parseJSON = withObject "OsvSeverityEntry" $ \v ->
