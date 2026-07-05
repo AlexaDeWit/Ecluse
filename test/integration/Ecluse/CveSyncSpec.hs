@@ -97,9 +97,9 @@ spec =
                                         }
                                 syncEnv =
                                     SyncEnv
-                                        { syncFetch = s3CveFetch awsEnv bucket "npm-osv-schema1.db" (512 * 1024 * 1024)
+                                        { syncFetch = s3CveFetch awsEnv bucket "npm-osv-schema2.db" (512 * 1024 * 1024)
                                         , syncEcosystem = Npm
-                                        , syncDbPath = dataDir <> "/npm-osv-schema1.db"
+                                        , syncDbPath = dataDir <> "/npm-osv-schema2.db"
                                         , syncSlot = slot
                                         }
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000}
@@ -128,7 +128,7 @@ spec =
                                 -- The byte cap against the real S3 leg: a fetch whose
                                 -- cap the published artifact's declared length
                                 -- oversteps fails fast, before any bytes sink.
-                                let cappedFetch = s3CveFetch awsEnv bucket "npm-osv-schema1.db" 16
+                                let cappedFetch = s3CveFetch awsEnv bucket "npm-osv-schema2.db" 16
                                 fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
                                     `shouldThrow` (== OsvDbTooLarge 16)
   where

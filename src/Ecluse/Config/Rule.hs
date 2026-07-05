@@ -18,6 +18,8 @@ import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (..),
+    FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
     defaultPrecedence,
@@ -67,6 +69,8 @@ data RuleEntry = RuleEntry
     , entryAgeSeconds :: Maybe Integer
     , entryScope :: Maybe Text
     , entryIdentity :: Maybe Text
+    , entryMinSeverity :: Maybe Double
+    , entryOnUnavailable :: Maybe Text
     }
     deriving stock (Eq, Show)
 
@@ -120,8 +124,33 @@ buildRule name ty entry = case ty of
         Just ident -> Right (AllowByIdentity ident)
         Nothing -> Left [MalformedRule name "\"AllowByIdentity\" requires \"identity\""]
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
+    "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
+
+{- | Decode 'DenyIfCve''s parameters. @minSeverity@ (a CVSS base score, 0 to 10)
+is required, so an operator states the threshold consciously. @onUnavailable@ is
+optional and defaults to @deny@ (fail-closed): a package the advisory database
+cannot vet is refused rather than admitted.
+-}
+buildDenyIfCveParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfCveParams
+buildDenyIfCveParams name entry = do
+    severity <- case entryMinSeverity entry of
+        Just s
+            | s >= 0 && s <= 10 -> Right s
+            | otherwise -> Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
+        Nothing -> Left [MalformedRule name "\"DenyIfCve\" requires \"minSeverity\" (a CVSS score, 0 to 10)"]
+    alignment <- parseOnUnavailable name (entryOnUnavailable entry)
+    Right (DenyIfCveParams severity alignment)
+
+-- Decode the @onUnavailable@ policy: how the rule resolves when the advisory
+-- database cannot answer. Absent defaults to fail-closed.
+parseOnUnavailable :: Text -> Maybe Text -> Either [PolicyError] FailureAlignment
+parseOnUnavailable name = \case
+    Nothing -> Right FailDeny
+    Just "deny" -> Right FailDeny
+    Just "skip" -> Right FailNoDecision
+    Just other -> Left [MalformedRule name ("\"onUnavailable\" must be \"deny\" or \"skip\", not " <> quote other)]
 
 patchRuleValue :: Text -> RuleEntry -> Rule -> Either [PolicyError] Rule
 patchRuleValue name entry rule = do
@@ -136,6 +165,14 @@ patchRuleValue name entry rule = do
         DenyByIdentity i -> Right (DenyByIdentity (fromMaybe i (entryIdentity entry)))
         AllowByIdentity i -> Right (AllowByIdentity (fromMaybe i (entryIdentity entry)))
         AllowIfRemediatesCve -> Right AllowIfRemediatesCve
+        DenyIfCve params -> do
+            severity <- case entryMinSeverity entry of
+                Just s
+                    | s >= 0 && s <= 10 -> Right s
+                    | otherwise -> Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
+                Nothing -> Right (dicMinSeverity params)
+            alignment <- maybe (Right (dicOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
+            Right (DenyIfCve (DenyIfCveParams severity alignment))
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
@@ -152,6 +189,7 @@ knownRuleTypes =
     , "AllowIfOlderThan"
     , "AllowByIdentity"
     , "AllowIfRemediatesCve"
+    , "DenyIfCve"
     , "DenyInstallTimeExecution"
     , "DenyByIdentity"
     ]

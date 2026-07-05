@@ -89,7 +89,7 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), insideAffectedRange)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Types
@@ -184,6 +184,43 @@ evalRule deps _ AllowIfRemediatesCve pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (NoDecision "no advisory database is loaded")
         Just cve -> remediationVerdict cve pd
+evalRule deps _ (DenyIfCve params) pd =
+    rdWithCveLookup deps $ \case
+        Nothing -> pure (noAdvisoryDbVerdict params)
+        Just cve -> denyVerdict params cve pd
+
+{- The deny rule's answer when no advisory database is loaded: pre-first-sync, a
+sync yet to land its first artifact, or the rule enabled with no advisory bucket
+configured at all. A fail-open rule skips ('NoDecision', returned at face value so
+the resilience harness does not retry a deterministic absence); a fail-closed rule
+refuses the version it cannot vet as 'Undecidable' (a retryable 503, so readiness
+gating and the operator's dashboards surface a misconfiguration loudly). -}
+noAdvisoryDbVerdict :: DenyIfCveParams -> RuleResult
+noAdvisoryDbVerdict params = case dicOnUnavailable params of
+    FailNoDecision -> NoDecision "DenyIfCve: no advisory database loaded; failing open"
+    FailDeny -> Unavailable (WillResolve Nothing) FailDeny "DenyIfCve: no advisory database loaded; failing closed"
+
+{- The deny rule's verdict against a loaded advisory database: deny the version if
+any advisory that affects it meets the configured severity threshold, naming the
+advisories for the audit trail; otherwise abstain. An unscored advisory clears the
+threshold (fail-closed, so npm malware -- unscored -- is denied). -}
+denyVerdict :: DenyIfCveParams -> CveLookup -> PackageDetails -> IO RuleResult
+denyVerdict params cve pd = do
+    ranges <- cveAdvisoriesFor cve name
+    let blocking =
+            ordNub
+                [ arCveId ar
+                | ar <- ranges
+                , insideAffectedRange eco version ar
+                , severityAtLeast (dicMinSeverity params) (arSeverity ar)
+                ]
+    pure $ case blocking of
+        [] -> NoDecision "no advisory at or above the severity threshold affects this version"
+        ids -> Deny ("affected by " <> T.intercalate ", " ids <> " (CVSS >= " <> show (dicMinSeverity params) <> ")")
+  where
+    eco = pkgEcosystem (pkgName pd)
+    name = renderPackageName (pkgName pd)
+    version = renderVersion (pkgVersion pd)
 
 -- The CVE rule's verdict against a loaded advisory database.
 remediationVerdict :: CveLookup -> PackageDetails -> IO RuleResult
@@ -309,17 +346,23 @@ prepareRule deps (PrecededRule prec rule) = do
 -- policy (allocating its per-source breaker); the pure rules carry none.
 resilienceFor :: RuleDeps -> Rule -> IO (Maybe Resilience)
 resilienceFor deps = \case
-    AllowIfRemediatesCve -> do
+    AllowIfRemediatesCve -> effectful FailNoDecision
+    -- The deny rule aligns per its config: fail-closed refuses a version it cannot
+    -- vet, fail-open skips itself. The same alignment governs a lookup that throws
+    -- or times out (here) and a database that is not loaded ('noAdvisoryDbVerdict').
+    DenyIfCve params -> effectful (dicOnUnavailable params)
+    _ -> pure Nothing
+  where
+    effectful alignment = do
         breaker <- newBreaker
         pure $
             Just
                 Resilience
                     { resConfig = defaultEffectfulConfig
-                    , resAlignment = FailNoDecision
+                    , resAlignment = alignment
                     , resBreaker = breaker
                     , resBreakerReporter = rdBreakerReporter deps
                     }
-    _ -> pure Nothing
 
 {- | Arrange a rule set into the single total order evaluation walks: __highest
 precedence first, then rule name ascending__ as the deterministic tiebreak. A pure

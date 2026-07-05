@@ -5,7 +5,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import Ecluse.Core.Cve (AdvisoryRange (..), insideAffectedRange)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
--- A builder exposing only the axes under test: the interval bounds.
+-- A builder for a fixed-bounded (half-open) interval, exposing only its bounds.
 range :: Maybe Text -> Maybe Text -> AdvisoryRange
 range intro fixed =
     AdvisoryRange
@@ -13,7 +13,16 @@ range intro fixed =
         , arSeverity = Nothing
         , arIntroduced = intro
         , arFixed = fixed
+        , arLastAffected = Nothing
         }
+
+-- A builder for an interval closed by an inclusive @last_affected@ bound.
+through :: Maybe Text -> Maybe Text -> AdvisoryRange
+through intro lastAffected = (range intro Nothing){arLastAffected = lastAffected}
+
+-- A builder for an exact affected point (introduced == last_affected).
+point :: Text -> AdvisoryRange
+point v = through (Just v) (Just v)
 
 inside :: Text -> AdvisoryRange -> Bool
 inside = insideAffectedRange Npm
@@ -42,6 +51,21 @@ spec = describe "insideAffectedRange" $ do
 
         it "a missing fixed bound never ends the range" $
             inside "99.0.0" (range (Just "1.0.0") Nothing) `shouldBe` True
+
+    describe "the inclusive last_affected bound [introduced, last_affected]" $ do
+        it "contains the last_affected bound itself (unlike a fix)" $
+            inside "3.8.8" (through (Just "0") (Just "3.8.8")) `shouldBe` True
+
+        it "excludes a version above the last_affected bound" $
+            inside "3.9.0" (through (Just "0") (Just "3.8.8")) `shouldBe` False
+
+    describe "an exact affected point (introduced == last_affected)" $ do
+        it "is affected only at that exact version" $
+            inside "1.0.0" (point "1.0.0") `shouldBe` True
+
+        it "excludes any other version, above or below" $ do
+            inside "1.0.1" (point "1.0.0") `shouldBe` False
+            inside "0.9.9" (point "1.0.0") `shouldBe` False
 
     describe "fail-closed on unprovable comparisons" $ do
         it "an unparseable introduced bound counts as inside" $

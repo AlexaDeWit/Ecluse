@@ -372,6 +372,13 @@ bans:
   deny. Available.
 - **`revoke`**: a hard-deny (`DenyByIdentity`) rule for a specific package or `package@version`, at
   a precedence above the scope allow-list. Available.
+- **`DenyIfCve`**: an **opt-in** deny gate that blocks a version a synced advisory records as
+  affected at or above a CVSS `minSeverity` (a base score, 0-10). Because the npm malware feed
+  carries no CVSS score, and an unscored advisory is treated as above every threshold, enabling it
+  also blocks known-malicious packages, not only high-severity CVEs. It sits just *below*
+  `AllowByIdentity`, so an explicit identity pin overrides it. Its `onUnavailable` knob (`deny` by
+  default, or `skip`) decides what happens when the advisory database cannot answer. **Off by
+  default**; read *Onboarding DenyIfCve* below before enabling.
 
 You override values, add rules (e.g. opt into `DenyInstallTimeExecution`), or suppress a
 default by name in the configuration document:
@@ -383,10 +390,29 @@ default by name in the configuration document:
     "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 },
     "revoke-bad": { "type": "DenyByIdentity", "identity": "bad-package" },
     "cve-fast-lane": { "type": "AllowIfRemediatesCve" },
+    "deny-known-cves": { "type": "DenyIfCve", "minSeverity": 8 },
     "pin-fix": { "type": "AllowByIdentity", "identity": "left-pad@1.3.0" }
   }
 }
 ```
+
+#### Onboarding DenyIfCve
+
+`DenyIfCve` is powerful enough to break a cold deployment: on a freshly-stood-up mirror it can deny
+historical versions your existing builds still depend on that an advisory has since covered. Enable
+it *after* your private mirror is warmed, not before:
+
+1. Leave `DenyIfCve` out of your policy and run Écluse normally, so your CI and developers pull the
+   versions you depend on. Each is mirrored into the trusted store (Registry B), which the rules
+   never re-gate once it is there.
+2. Once your must-have builds are mirrored, add `DenyIfCve` with a `minSeverity` you are comfortable
+   with (8 blocks high and critical CVEs; malware blocks regardless of the threshold).
+3. If a specific version you must keep is then denied (a false positive, or a risk you accept), pin
+   it with an `AllowByIdentity` rule, which outranks `DenyIfCve`.
+
+Set `onUnavailable: skip` if you would rather the gate fail open (skip itself, logging loudly) than
+refuse traffic when the advisory database is briefly unavailable; the default `deny` fails closed,
+so a version that cannot be vetted is not admitted.
 
 Full semantics (precedence, the patch/add/suppress merge, and the strict validation) are in
 [Rule policy](docs/architecture/configuration.md#rule-policy) and
@@ -491,9 +517,6 @@ Documented ahead of implementation so the configuration surface is known.
 - **GCP backends** (**planned**): the Pub/Sub `MirrorQueue` and ADC credential leaf. The AWS
   equivalents (SQS `MirrorQueue`, CodeArtifact credential leaf, mirror worker, composition root)
   are built and wired.
-- **`DenyIfCVE` rule** (**planned**): a hard-deny over the OSV advisory index. Its allow-side
-  counterpart, `AllowIfRemediatesCve`, has shipped (see [Rule policy](#rule-policy)).
-
 The full deployment runbook ships with the launch.
 
 ## Learn more

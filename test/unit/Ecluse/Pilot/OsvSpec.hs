@@ -8,7 +8,7 @@ import Conduit
 import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Katip (Environment (..), Katip (..), KatipContext (..), LogEnv, initLogEnv)
-import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
@@ -30,6 +30,16 @@ instance KatipContext TestM where
     localKatipContext _ m = m
     getKatipNamespace = pure mempty
     localKatipNamespace _ m = m
+
+-- | An advisory carrying only the severity evidence under test.
+advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
+advisory entries label =
+    OsvAdvisory
+        { osvId = "GHSA-test-severity"
+        , osvAffected = Nothing
+        , osvSeverity = if null entries then Nothing else Just entries
+        , osvDatabaseSpecific = OsvDatabaseSpecific . Just <$> label
+        }
 
 spec :: Spec
 spec = describe "Osv parsing and streaming" $ do
@@ -57,9 +67,57 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-2234-fmw7-43wr"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "4.6.5"
-                                    , extSeverity = Just "MODERATE"
+                                    , extLastAffected = Nothing
+                                    , -- The fixture carries both a CVSS 3.1 vector and the
+                                      -- "MODERATE" label; the computed base score wins.
+                                      extSeverity = Just 5.9
                                     }
                                ]
+
+    describe "advisorySeverity" $ do
+        it "computes the base score from a CVSS vector and prefers it over the label" $
+            advisorySeverity
+                (advisory [OsvSeverityEntry "CVSS_V3" "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"] (Just "HIGH"))
+                `shouldBe` Just 9.8
+
+        it "takes the highest score when several vectors parse" $
+            advisorySeverity
+                ( advisory
+                    [ OsvSeverityEntry "CVSS_V3" "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:H/A:N" -- 5.9
+                    , OsvSeverityEntry "CVSS_V3" "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" -- 9.8
+                    ]
+                    Nothing
+                )
+                `shouldBe` Just 9.8
+
+        it "parses a CVSS v4 vector (needs cvss >= 0.3) rather than dropping it" $
+            -- A critical v4 vector, no label: it can only score above 8 if the v4
+            -- parser is present. On cvss 0.2 it would have been unscored (Nothing).
+            advisorySeverity
+                (advisory [OsvSeverityEntry "CVSS_V4" "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"] Nothing)
+                `shouldSatisfy` maybe False (>= 8.0)
+
+        it "falls back to the qualitative label when no vector parses" $
+            advisorySeverity
+                (advisory [OsvSeverityEntry "CVSS_V3" "not-a-real-vector"] (Just "CRITICAL"))
+                `shouldBe` Just 10.0
+
+        it "yields Nothing for an advisory with no severity evidence at all" $
+            advisorySeverity (advisory [] Nothing) `shouldBe` Nothing
+
+    describe "extractFromAdvisory (affected-set shapes)" $ do
+        it "records an exact enumerated version as a point segment (no ranges)" $ do
+            -- The npm malware feed names the single bad version in versions[] with
+            -- no ranges; the old parser dropped these entirely.
+            let adv = OsvAdvisory "MAL-test" (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing
+            extractFromAdvisory adv
+                `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") Nothing (Just "1.0.0") Nothing]
+
+        it "carries an inclusive last_affected bound distinct from a fix" $ do
+            let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing Nothing (Just "3.8.8")]
+                adv = OsvAdvisory "GHSA-la" (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory adv
+                `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") Nothing (Just "3.8.8") Nothing]
 
     it "extracts multiple packages and ranges from a complex OSV advisory" $ do
         fileBytes <- BS.readFile "test/unit/fixtures/osv/complex.json"
@@ -78,6 +136,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "1.0.0"
+                                    , extLastAffected = Nothing
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -86,6 +145,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "1.1.0"
                                     , extFixed = Just "1.2.0"
+                                    , extLastAffected = Nothing
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -94,6 +154,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "2.0.0"
                                     , extFixed = Just "2.1.0"
+                                    , extLastAffected = Nothing
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -102,6 +163,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "3.0.0"
+                                    , extLastAffected = Nothing
                                     , extSeverity = Nothing
                                     }
                                ]

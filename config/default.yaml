@@ -61,3 +61,22 @@ rules:
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
+  # Opt-in CVE deny gate (OFF by default -- not in this shipped policy). Denies a
+  # version a synced advisory records as affected at or above `minSeverity` (a CVSS
+  # base score, 0-10). It also blocks the npm malware feed: those advisories carry
+  # no score and are treated as above every threshold, so enabling this makes Écluse
+  # a malware blocklist as well as a severity gate. It sits just below
+  # `AllowByIdentity`, so an explicit identity pin still overrides it.
+  #
+  # ONBOARD BEFORE ENABLING. On a cold mirror this can deny historical versions your
+  # existing builds depend on that an advisory now covers. First let normal traffic
+  # pull your must-have packages through so they are mirrored into the trusted store
+  # (which rules never re-gate), THEN enable this in your own config. Keep any
+  # specific version you must retain despite an advisory with an `AllowByIdentity`
+  # rule.
+  #
+  # deny-known-cves:
+  #   type: DenyIfCve
+  #   minSeverity: 8          # CVSS >= 8.0 (high/critical); unscored malware always blocks
+  #   onUnavailable: deny     # fail-closed if the advisory DB cannot answer;
+  #                           # set to "skip" to fail-open (availability over the gate)

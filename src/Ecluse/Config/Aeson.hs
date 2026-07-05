@@ -231,7 +231,7 @@ instance FromJSON RulePatch where
 instance FromJSON RuleEntry where
     parseJSON = withObject "rule" $ \o -> do
         rejectSecretKeys o
-        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope", "identity"] o
+        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope", "identity", "minSeverity", "onUnavailable"] o
         RuleEntry
             <$> o .:? "type"
             <*> o .:? "precedence"
@@ -239,3 +239,5 @@ instance FromJSON RuleEntry where
             <*> o .:? "ageSeconds"
             <*> o .:? "scope"
             <*> o .:? "identity"
+            <*> o .:? "minSeverity"
+            <*> o .:? "onUnavailable"

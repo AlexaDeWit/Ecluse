@@ -108,7 +108,8 @@ mkDbWithWrongEpoch path = withConnection path $ \conn -> do
         \  cve_id TEXT NOT NULL,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
         \)"
     setEpoch conn (osvSchemaEpoch + 1)
 
@@ -125,12 +126,13 @@ mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
         \  cve_id TEXT,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
         \)"
     execute_
         conn
         "CREATE VIEW package_vulnerability_ranges AS \
-        \SELECT package_name, cve_id, introduced_version, fixed_version, severity FROM raw_rows"
+        \SELECT package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity FROM raw_rows"
     setEpoch conn osvSchemaEpoch
 
 {- | An artifact that passes acceptance (right epoch, real ranges table, npm
@@ -148,11 +150,12 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
         \  cve_id TEXT NOT NULL,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
-    execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', 'HIGH')"
+    execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', NULL, 7.5)"
     execute_
         conn
         "CREATE TRIGGER malicious AFTER INSERT ON package_vulnerability_ranges \
@@ -176,7 +179,8 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
         \  cve_id TEXT NOT NULL,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
@@ -199,12 +203,13 @@ mkMinimalValidDb path pkg = withConnection path $ \conn -> do
         \  cve_id TEXT NOT NULL,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute conn "INSERT INTO meta (key, value) VALUES ('source_url', ?)" (Only pkg)
-    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', 'HIGH')" (Only pkg)
+    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', NULL, NULL)" (Only pkg)
     setEpoch conn osvSchemaEpoch
 
 setEpoch :: Connection -> Int -> IO ()

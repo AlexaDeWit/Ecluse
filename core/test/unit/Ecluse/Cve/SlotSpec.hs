@@ -15,7 +15,7 @@ the tests can pin exactly when a displaced generation is retired.
 fakeDb :: Text -> IORef [Text] -> CveDb
 fakeDb tag closeLog =
     CveDb
-        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (Just "1.0.0"))]
+        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (Just "1.0.0") Nothing)]
         , cveDbClose = modifyIORef' closeLog (<> [tag])
         , cveDbMeta = []
         }

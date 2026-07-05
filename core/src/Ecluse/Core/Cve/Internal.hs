@@ -20,16 +20,20 @@ import Database.SQLite.Simple (Connection, Only (..), close, execute_, open, que
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (MetaKey (MetaEcosystem), osvSchemaEpoch, renderMetaKey)
 
-{- | One advisory range recorded against a package: the advisory's identifier,
-its optional qualitative severity label, and the affected interval's bounds as
-the artifact stores them (verbatim version text; 'Nothing' introduced means
-"from the beginning", 'Nothing' fixed means "no fix known").
+{- | One advisory segment recorded against a package: the advisory's identifier,
+its CVSS base score (0 to 10, 'Nothing' when unscored), and the affected
+interval's bounds as the artifact stores them (verbatim version text). The lower
+bound 'arIntroduced' is inclusive ('Nothing' == from the beginning); the upper
+bound is @'arFixed'@ (exclusive) or @'arLastAffected'@ (inclusive) or neither
+(open-ended). An exactly-enumerated affected version is a point segment
+(@introduced == last_affected@).
 -}
 data AdvisoryRange = AdvisoryRange
     { arCveId :: Text
-    , arSeverity :: Maybe Text
+    , arSeverity :: Maybe Double
     , arIntroduced :: Maybe Text
     , arFixed :: Maybe Text
+    , arLastAffected :: Maybe Text
     }
     deriving stock (Eq, Show)
 
@@ -121,17 +125,18 @@ probeQuery conn name version = do
     hits <- query conn "SELECT 1 FROM package_vulnerability_ranges WHERE package_name = ? AND fixed_version = ? LIMIT 1" (name, version) :: IO [Only Int]
     pure (not (null hits))
 
--- | Every advisory range recorded against a package name.
+-- | Every advisory segment recorded against a package name.
 advisoriesQuery :: Connection -> Text -> IO [AdvisoryRange]
 advisoriesQuery conn name = do
-    rows <- query conn "SELECT cve_id, introduced_version, fixed_version, severity FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
+    rows <- query conn "SELECT cve_id, introduced_version, fixed_version, last_affected_version, severity FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
     pure (map toRange rows)
   where
-    toRange (cveId, intro, fixed, severity) =
+    toRange (cveId, intro, fixed, lastAffected, severity) =
         AdvisoryRange
             { arCveId = cveId
             , arIntroduced = intro
             , arFixed = fixed
+            , arLastAffected = lastAffected
             , arSeverity = severity
             }
 

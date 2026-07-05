@@ -209,6 +209,7 @@ Each rule may set an integer `precedence` (higher wins); omit it to use the type
 | `AllowIfOlderThan` | 100 | `ageSeconds` |
 | `AllowIfRemediatesCve` | 150 | -- |
 | `AllowScope` | 200 | `scope` |
+| `DenyIfCve` | 225 | `minSeverity` |
 | `AllowByIdentity` | 250 | `identity` |
 | `DenyInstallTimeExecution` | 300 | -- |
 | `DenyByIdentity` | 400 | `identity` |
@@ -217,9 +218,12 @@ At boot the rules are arranged once into a single total order, highest precedenc
 rule name ascending, and evaluation takes the first decisive result (an allow, a deny, or a
 fail-closed unavailability); if none is decisive, the package is denied by default. Equal
 explicit precedence is resolved by rule name, not by a deny-over-allow priority, so two rules
-given the same precedence resolve deterministically. Deny-over-allow still holds out of the box,
-because the deny defaults sit strictly above the allow defaults. The resolved boot order is
-logged at start-up (one line per rule, per mount). See
+given the same precedence resolve deterministically. Deny-over-allow holds out of the box for
+`DenyInstallTimeExecution` and `DenyByIdentity`, whose defaults sit strictly above every allow. The
+one deliberate exception is `DenyIfCve` at 225, ranked just below `AllowByIdentity` (250) so an
+explicit identity pin can override an advisory deny, while still outranking the passive quarantine
+and scope allow-lists. The resolved boot order is logged at start-up (one line per rule, per mount).
+See
 [Rules Engine → Evaluation model](rules-engine.md#evaluation-model).
 
 #### The default policy
@@ -233,12 +237,14 @@ quarantine: a quarantine must never delay a security patch (see
 
 Every other built-in rule (the precedence table above) is off by default and opts in by name.
 `DenyInstallTimeExecution` denies install-time code execution, off by default because many legitimate
-packages ship install scripts. The effectful `DenyIfCVE` (a blanket deny of advisory-affected
-versions) is planned, not yet shipped.
+packages ship install scripts. The effectful `DenyIfCve` denies a version an advisory affects at or
+above a configured CVSS `minSeverity` (and, because unscored advisories count as above every
+threshold, the npm malware feed); it is off by default and opts in by name, since enabling it before
+the mirror is warmed can deny historical versions an existing build depends on.
 
 ### Advisory database sync
 
-The remediation fast lane (and the planned `DenyIfCVE`) read a synced local advisory database rather
+The remediation fast lane (and `DenyIfCve`) read a synced local advisory database rather
 than calling an API per request; the compilation, ETag polling, and atomic shadow-swap are described
 under [Rules Engine → CVE subsystem](rules-engine.md#cve-subsystem). Its operator knobs, the
 advisory-database bucket, the poll interval, the OSV export source, and a size cap bounding an
