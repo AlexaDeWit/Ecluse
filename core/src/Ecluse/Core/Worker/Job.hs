@@ -11,7 +11,6 @@ module Ecluse.Core.Worker.Job (
     JobOutcome (..),
     processJob,
     processBatch,
-    displayExceptionT,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -325,8 +324,3 @@ releaseForRetry receipt = do
 -- A one-line identifier for a job, for log lines.
 renderJob :: MirrorJob -> Text
 renderJob job = renderPackageName (jobPackage job) <> "@" <> renderVersion (jobVersion job)
-
--- Render an exception as 'Text' for a log line (relude's 'displayException' is over
--- 'String').
-displayExceptionT :: (Exception e) => e -> Text
-displayExceptionT = toText . displayException

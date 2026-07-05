@@ -80,6 +80,7 @@ module Ecluse.Core.Queue (
     newBoundedInMemoryQueue,
     memoryQueueBatchSize,
     memoryQueueDropReportInterval,
+    reportWorthy,
 
     -- * Buffered producer hand-off
     newEnqueueBuffer,
@@ -92,6 +93,7 @@ import System.Timeout (timeout)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (Hash, PackageName)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (Version)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the
@@ -151,7 +153,9 @@ data MirrorArtifact = MirrorArtifact
     the job with no publish.
     -}
     , maSize :: Maybe Int
-    -- ^ The declared artifact size in bytes, if the registry reported it.
+    {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte
+    count: for npm it is the unpacked-tree size (@dist.unpackedSize@).
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -488,7 +492,14 @@ newBoundedInMemoryQueue cfg onDrop = do
 -- Report the first drop, then every interval-th, so the first shed is always
 -- visible while a sustained flood is rate-limited.
 shouldReportDrop :: Int -> Bool
-shouldReportDrop n = n == 1 || n `mod` memoryQueueDropReportInterval == 0
+shouldReportDrop n = reportWorthy n memoryQueueDropReportInterval
+
+{- | Whether the @n@-th event in a rate-limited series should be reported: the first
+(@n == 1@), then every @interval@-th. Shared by the bounded queue's drop reporting and
+the composition root's enqueue-buffer reporting so the two cannot drift.
+-}
+reportWorthy :: Int -> Int -> Bool
+reportWorthy n interval = n == 1 || n `mod` interval == 0
 
 {- Take a bounded batch within one STM transaction: block (retry) until at least one
 job is available, then drain up to 'memoryQueueBatchSize' total without blocking. The
@@ -602,5 +613,5 @@ deliverNext buffer failureCount onDeliveryFailure backend = do
     tryAny (enqueue backend job) >>= \case
         Left failure -> do
             n <- atomically (bumpCount failureCount)
-            onDeliveryFailure n (toText (displayException failure))
+            onDeliveryFailure n (displayExceptionT failure)
         Right () -> pass

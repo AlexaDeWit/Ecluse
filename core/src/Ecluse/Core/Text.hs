@@ -9,6 +9,7 @@ module Ecluse.Core.Text (
     stripTrailingSlash,
     joinUrlPath,
     renderIso8601Utc,
+    displayExceptionT,
 ) where
 
 import Data.Text qualified as T
@@ -98,3 +99,10 @@ renderIso8601Utc t@(UTCTime day dt)
         | frac == 0 = mempty
         | otherwise =
             TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
+
+{- | Render an exception as 'Text' for a log line or error value. relude's
+'displayException' is over 'String'; this is the 'Text' form the log and error sites
+want, defined once rather than re-spelled at each call site.
+-}
+displayExceptionT :: (Exception e) => e -> Text
+displayExceptionT = toText . displayException

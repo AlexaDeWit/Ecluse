@@ -120,7 +120,7 @@ import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer)
+import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
@@ -313,7 +313,7 @@ bufferedMirrorHandOff warn countEnqueueFailure =
 rate-limited drop reporting. The metric alongside counts every event; only the log
 line is rate-limited. -}
 enqueueReportWorthy :: Int -> Bool
-enqueueReportWorthy n = n == 1 || n `mod` Composition.mirrorEnqueueReportInterval == 0
+enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 
 -- One advisory sync task per configured ecosystem: each runs under the boot log's
 -- "cve-sync" namespace and flips its ecosystem's one-way readiness flag once its

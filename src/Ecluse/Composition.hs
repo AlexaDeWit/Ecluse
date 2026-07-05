@@ -117,7 +117,7 @@ import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Metadata qualified as Metadata
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (displayExceptionT, nonBlank)
 
 {- | Apply an explicit per-host connection bound to an HTTP manager's settings.
 
@@ -294,12 +294,12 @@ openFileSoftLimit = do
         ResourceLimitInfinity -> privateConnectionsCap * privateConnectionsFdShare
         ResourceLimitUnknown -> privateConnectionsCap * privateConnectionsFdShare
 
-{- | The process-global credential providers, keyed by the backend they
-implement. Built __once__ at the composition root from the environment layer; a
+{- | The process-global credential providers, keyed by the ecosystem they
+serve. Built __once__ at the composition root from the environment layer; a
 mount references one by name and never holds its own.
 
-The keyset (see 'initializedBackends') is the boot-check's pure surface -- a mount
-that names a backend absent from it has an unresolved credential reference.
+The keyset (see 'initializedEcosystems') is the boot-check's pure surface -- a mount
+that names an ecosystem absent from it has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
@@ -355,7 +355,7 @@ initProviderFor reporters eco mcfg = \case
     Nothing -> pure (Right (eco, staticTokenProvider mcfg))
     Just caConfig ->
         tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
-            Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
+            Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
             Right provider -> Right (eco, Just provider)
 
 -- The static mirror-target write provider, when its token
@@ -592,9 +592,9 @@ renderBootError = \case
             <> detail
             <> " (a transient AWS error may clear on retry; a permanent one -- bad domain/region or missing permission -- must be fixed)"
     PublishScopesMissing eco ->
-        "ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLICATION_TARGET is set but ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLISH_SCOPES is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard."
+        mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_SCOPES" <> " is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
-        "ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLICATION_TARGET_TOKEN is set but ECLUSE_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+        mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it

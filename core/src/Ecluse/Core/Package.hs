@@ -518,7 +518,10 @@ data Artifact = Artifact
     , artHashes :: [Hash]
     -- ^ Integrity digests; the client verifies the download against these.
     , artSize :: Maybe Int
-    -- ^ Size in bytes, if known.
+    {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball
+    byte count: npm populates it from @dist.unpackedSize@, the size of the unpacked
+    tree.
+    -}
     , artInterpreter :: Maybe Text
     -- ^ Interpreter constraint (@requires-python@ \/ @required_ruby_version@).
     , artYanked :: Bool
