@@ -198,14 +198,6 @@ logRuleBootOrder logEnv = traverse_ logMount
         logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
         traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
-{- The process-global mirror-write credential provider stored in 'Env' for the
-worker, selected by the configured provider backend
-('Ecluse.Config.'): the static token or the
-CodeArtifact mint. In the common case there is a single provider; the no-backend
-placeholder only holds the slot when the selected provider was not built -- a mount
-that references it has already failed the boot-time credential check by this point,
-so the worker (the slot's only consumer) never reaches the placeholder. -}
-
 {- | Raised to abort start-up after a boot phase has reported its aggregated
 failure to stderr. A distinct type -- rather than a bare 'exitFailure' -- so the
 abort is observable in a test without the process actually exiting; uncaught, it

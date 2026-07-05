@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Ecluse.Pilot.Osv (
@@ -39,7 +38,7 @@ data OsvAdvisory = OsvAdvisory
     , osvSeverity :: Maybe [OsvSeverityEntry]
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvAdvisory where
     parseJSON = withObject "OsvAdvisory" $ \v ->
@@ -73,7 +72,7 @@ newtype OsvDatabaseSpecific = OsvDatabaseSpecific
     advisories: @LOW@, @MODERATE@, @HIGH@, or @CRITICAL@).
     -}
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvDatabaseSpecific where
     parseJSON = withObject "OsvDatabaseSpecific" $ \v ->
@@ -89,7 +88,7 @@ data OsvAffected = OsvAffected
     with no @ranges@ at all); each is an affected point in its own right.
     -}
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvAffected where
     parseJSON = withObject "OsvAffected" $ \v ->
@@ -102,7 +101,7 @@ data OsvPackage = OsvPackage
     { packageName :: Text
     , packageEcosystem :: Text
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvPackage where
     parseJSON = withObject "OsvPackage" $ \v ->
@@ -114,7 +113,7 @@ data OsvRange = OsvRange
     { rangeType :: Text
     , rangeEvents :: [OsvEvent]
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvRange where
     parseJSON = withObject "OsvRange" $ \v ->
@@ -134,7 +133,7 @@ data OsvEvent = OsvEvent
     , eventFixed :: Maybe Text
     , eventLastAffected :: Maybe Text
     }
-    deriving stock (Show, Eq, Generic)
+    deriving stock (Show, Eq)
 
 instance FromJSON OsvEvent where
     parseJSON = withObject "OsvEvent" $ \v ->

@@ -147,7 +147,7 @@ import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
-import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
+import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
 import UnliftIO.Exception (SomeAsyncException, mask, throwIO)
 
 import Ecluse.Core.InFlight (guardInFlight)
@@ -742,11 +742,6 @@ data CacheOccupancy = CacheOccupancy
     }
 
 -- Convert a 'NominalDiffTime' (seconds) to the @cache@ library's monotonic
--- 'TimeSpec' (whole seconds + nanoseconds), clamping a negative TTL to zero.
+-- 'TimeSpec' via 'fromNanoSecs', clamping a negative TTL to zero.
 toTimeSpec :: NominalDiffTime -> TimeSpec
-toTimeSpec ttl =
-    let nanos = max 0 (round (realToFrac ttl * 1e9 :: Double)) :: Integer
-        billion = 1000000000
-     in TimeSpec
-            (fromInteger (nanos `div` billion))
-            (fromInteger (nanos `mod` billion))
+toTimeSpec ttl = fromNanoSecs (max 0 (round (realToFrac ttl * 1e9 :: Double) :: Integer))

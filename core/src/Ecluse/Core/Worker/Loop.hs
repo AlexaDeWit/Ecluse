@@ -25,7 +25,8 @@ import UnliftIO (tryAny)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Queue (MirrorQueue (receive))
-import Ecluse.Core.Worker.Job (displayExceptionT, processBatch)
+import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Worker.Job (processBatch)
 import Ecluse.Core.Worker.Liveness (recordPoll)
 import Ecluse.Core.Worker.Types
 

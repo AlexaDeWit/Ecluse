@@ -148,6 +148,7 @@ import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (Version)
 
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
@@ -634,7 +635,7 @@ enqueueMirror rt deps name version artifact =
     enqueueErrorDetail = either (Just . enqueueFailureDetail) (const Nothing)
 
     enqueueFailureDetail :: SomeException -> Text
-    enqueueFailureDetail e = "mirror enqueue failed: " <> toText (displayException e)
+    enqueueFailureDetail e = "mirror enqueue failed: " <> displayExceptionT e
 
 {- Whether an artifact's @dist.tarball@ host may be fetched, given the origin's trust,
 the mount's tarball-host policy, and the host that served the packument it came from.
