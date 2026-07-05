@@ -20,8 +20,9 @@ byte); the rest coalesce in the output buffer, so the relay pays fewer socket
 sends than upstream chunks. No @ResourceT@, no conduit on the hot path (see
 @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime").
 
-This is the serve path; it __streams, never buffers__. The whole-artifact-in-memory
-'Ecluse.Core.Registry.fetchArtifact' is the separate mirroring concern, not this.
+This is the serve path; it __streams, never buffers__. The mirror worker's
+whole-artifact fetch ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'), bounded and
+buffered, is the separate mirroring concern, not this.
 -}
 module Ecluse.Core.Server.Stream (
     -- * Streaming a response through

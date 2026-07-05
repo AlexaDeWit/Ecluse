@@ -42,9 +42,10 @@ not here.
    exactly one `%2F`. A reserved byte the denylist admits (`%`, `?`, `#`, `;`, space;
    canonically a once-decoded `%2e%2e%2f`) is re-encoded (`%2e%2e%2f` → `%252e%252e%252f`)
    rather than reaching the upstream raw, where a decode-and-normalise CDN could resolve
-   it to traversal or a `?`/`#` could inject a query/fragment. Both URL-composing points,
-   the data-plane builders (`Ecluse.Core.Registry.Npm`) and the defence-in-depth re-check
-   (`Ecluse.Core.Security.upstreamUrlFor`), apply the same encoder.
+   it to traversal or a `?`/`#` could inject a query/fragment. The data-plane URL builder
+   (`Ecluse.Core.Registry.Npm.Request`) applies this encoder around the structural sigils
+   it writes; component safety itself is enforced at the router
+   (`Ecluse.Core.Server.Route.isSafeComponent`) before a name is accepted.
 2. **Outbound fetches are restricted to the configured upstream hosts** (an allowlist).
    Artifact bytes are fetched only from the upstream-declared `dist.tarball`, after the
    allowlist check, never from a client-supplied URL. The allowlist is enforced when the

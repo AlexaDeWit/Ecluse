@@ -84,7 +84,6 @@ fakeRegistry :: RegistryClient
 fakeRegistry =
     RegistryClient
         { fetchMetadata = const (throwString "publish must not fetchMetadata")
-        , fetchArtifact = \_ _ -> throwString "publish must not fetchArtifact"
         , publishArtifact = \_ _ _ _ -> throwString "publish must not use the handle publishArtifact"
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")

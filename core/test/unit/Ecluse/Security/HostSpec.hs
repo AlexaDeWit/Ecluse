@@ -395,6 +395,12 @@ hostAddressSpec = describe "hostAddress" $ do
         -- "@" tricks: the real host is what follows the last '@', not the part
         -- before it (https://registry.npmjs.org@evil.com → evil.com).
         hostAddress "https://registry.npmjs.org@evil.com/path" `shouldBe` "evil.com"
+    it "gates on the scheme authority, not a later :// in the path or query" $
+        -- A crafted dist.tarball carrying a second "://" in its query must gate on
+        -- the host actually dialled (the first authority), not the one after the
+        -- last "://" (https://169.254.169.254/x?u=https://ok → 169.254.169.254).
+        hostAddress "https://169.254.169.254/x?u=https://registry.npmjs.org"
+            `shouldBe` "169.254.169.254"
     it "lower-cases the host" $
         hostAddress "https://Registry.NPMJS.org/x" `shouldBe` "registry.npmjs.org"
     it "extracts a bare host[:port] authority" $

@@ -21,10 +21,9 @@ proxying tractable.
 'Ecluse.Core.Registry.Npm.Request.artifactRequest' marks its request __non-decompressing__
 so a tarball is opaque binary that must reach the client byte-for-byte. The
 request is exposed so the web layer can relay the open body __without buffering
-the whole artifact in memory__. The handle's 'Ecluse.Core.Registry.fetchArtifact'
-field, by contrast, buffers (its 'RegistryResponse' return is whole bytes) and
-is for the mirror worker, which must read the entire artifact to verify its
-integrity before publishing.
+the whole artifact in memory__. The mirror worker, which must read the whole
+artifact to verify its integrity before publishing, buffers it (bounded) through
+'Ecluse.Core.Worker.Fetch.fetchArtifactBytes' instead.
 
 == Authentication
 
@@ -84,7 +83,6 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated),
     Validators,
-    artifactRequest,
     metadataRequest,
     noValidators,
  )
@@ -177,7 +175,6 @@ newNpmPublishClient config mintToken =
             { fetchMetadata = \name -> do
                 token <- mintToken
                 fetchMetadataForm config{npmToken = token} Abbreviated noValidators name
-            , fetchArtifact = fetchArtifact' config
             , publishArtifact = publishArtifact' config mintToken
             , -- Each version's @dist.tarball@ scheme is normalised against the host this
               -- client reads from (same-host http upgraded, foreign-host http dropped) as
@@ -232,13 +229,6 @@ readBoundedBody limits bodyReader =
     boundedRead limits (brRead bodyReader) >>= \case
         Right body -> pure (RegistryResponse body)
         Left err -> throwIO (ResponseBoundExceeded err)
-
--- Fetch and __buffer__ a version's artifact bytes (the handle's 'fetchArtifact').
-fetchArtifact' :: NpmClientConfig -> PackageName -> Version -> IO RegistryResponse
-fetchArtifact' config name version = do
-    request <- orThrow (artifactRequest (npmBaseUrl config) (npmToken config) name version)
-    response <- httpLbs request (npmManager config)
-    pure (RegistryResponse (toStrict (responseBody response)))
 
 {- Publish a version's artifact: assemble the ecosystem-specific publish document
 from the artifact metadata and raw tarball bytes, then PUT it, treating a

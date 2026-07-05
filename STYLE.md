@@ -327,6 +327,28 @@ accessors), or with its constructors and fields exposed, as `PackageDetails
 (..)`, deliberately; the choice encodes whether the type has invariants to
 protect (see §6), and pairs with the `.Internal` escape hatch in 4.6.
 
+### 4.8 Delete superseded code when a replacement lands
+
+When a new implementation replaces an old one, **delete the old one in the same
+change**; do not leave a parallel, unreferenced version in place. Dead code is not
+free. A fix applied to the dead copy is a silent no-op, it drifts from the live
+path, and it misleads a reader into trusting a code path that never runs. This is
+worse the more authoritative the code looks (a "the sanctioned way to build X"
+module) or the more security-relevant it is: dead code that appears load-bearing is
+worse than an obvious gap.
+
+Dead code is what has **no caller and no intended future caller**: a handle field
+nothing invokes, a module only its own tests reach, or a helper a better one has
+replaced. "We might need it later" is not an intended caller. Git history is the
+archive, not an unreferenced definition. If the migration is only partial (the old
+path still has live callers), finish it, or state the remaining callers explicitly
+at the definition; never leave two live-looking paths silently.
+
+The compiler will not always catch this: an **exported** unused definition, a dead
+record field, or a field bound only to refusing test stubs all compile clean under
+`-Werror`. Judge reachability from the live composition root, not from whether the
+code builds.
+
 ---
 
 ## 5. Documentation (Haddock)

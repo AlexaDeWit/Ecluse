@@ -1,6 +1,6 @@
 module Ecluse.SecuritySpec (spec) where
 
-import Ecluse.Core.Security (LimitError (..), TarballHostPolicy (..), UrlError (..), defaultLimits)
+import Ecluse.Core.Security (LimitError (..), TarballHostPolicy (..), defaultLimits)
 import Test.Hspec
 
 spec :: Spec
@@ -16,9 +16,6 @@ showInstancesSpec = describe "Show instances" $ do
         show (BodyTooLarge 10) `shouldBe` ("BodyTooLarge 10" :: Text)
         show (TooManyVersions 4 3) `shouldBe` ("TooManyVersions 4 3" :: Text)
         show (TooDeeplyNested 3) `shouldBe` ("TooDeeplyNested 3" :: Text)
-    it "renders UrlError values" $ do
-        show (UnsafeComponent "..") `shouldBe` ("UnsafeComponent \"..\"" :: Text)
-        show EmptyBaseUrl `shouldBe` ("EmptyBaseUrl" :: Text)
     it "renders TarballHostPolicy values" $ do
         show SameHostAsPackument `shouldBe` ("SameHostAsPackument" :: Text)
         show AnyAllowlistedHost `shouldBe` ("AnyAllowlistedHost" :: Text)

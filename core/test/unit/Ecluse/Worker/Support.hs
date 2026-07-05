@@ -202,14 +202,13 @@ newtype PublishLog = PublishLog {plDocuments :: [ByteString]}
 the given fixed outcome. The mirror-presence probe (the worker's first step) answers
 __absent__ -- an unparseable metadata body, the same shape a production mirror gives a
 package it does not hold -- so every test drives the full pipeline unless it swaps in
-'mirrorListingClient'. The fields the worker never uses refuse loudly, so a test that
-wrongly reaches one fails rather than passing on a fabricated result.
+'mirrorListingClient'. The parse fields the worker never exercises return an inert
+'ParseError' rather than a fabricated success.
 -}
 recordingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
 recordingClient logRef outcome =
     RegistryClient
         { fetchMetadata = const (pure (RegistryResponse ""))
-        , fetchArtifact = \_ _ -> refuse "fetchArtifact"
         , publishArtifact = \_ _ _ document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
             pure outcome
@@ -217,9 +216,6 @@ recordingClient logRef outcome =
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
         }
-  where
-    refuse :: Text -> IO a
-    refuse field = throwString (toString ("recordingClient: the worker must not use the handle field " <> field))
 
 {- | 'recordingClient' whose mirror-presence probe __confirms__ the given versions
 present at the mirror target, for the dedup short-circuit tests.
