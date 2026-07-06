@@ -15,7 +15,8 @@ module Ecluse.Core.Cve.Internal (
     provenanceQuery,
 ) where
 
-import Database.SQLite.Simple (Connection, Only (..), close, execute_, open, query, query_)
+import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, open, query, query_)
+import UnliftIO.Exception (try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (MetaKey (MetaEcosystem), osvSchemaEpoch, renderMetaKey)
@@ -48,6 +49,11 @@ data CveDbRejected
       binary's 'osvSchemaEpoch'.
       -}
       CveDbWrongEpoch Int
+    | {- | @PRAGMA quick_check@ found the artifact structurally corrupt (a
+      malformed, truncated, or crafted b-tree); the carried lines are its
+      integrity report, which SQLite caps at 100 problems.
+      -}
+      CveDbIntegrityFailed [Text]
     | {- | The ranges relation is not a plain table -- a view here is
       attacker-authored SQL wearing the table's name.
       -}
@@ -60,13 +66,21 @@ data CveDbRejected
 
 {- | Open an artifact read-only-in-effect and accept or reject it.
 
-Hardening order matters: @trusted_schema = OFF@ (schema-defined functions,
-views feeding triggers, and virtual tables in the file are distrusted) and
-@query_only = ON@ (the connection refuses every write, so no trigger can ever
-fire through it) are applied before the first query. Acceptance then checks,
-cheapest and least trusting first: the 'osvSchemaEpoch' stamp, the ranges
-relation being a real table, and the @meta@ ecosystem matching the one asked
-for. A rejected artifact's connection is closed before returning.
+Hardening order matters, and every pragma is applied before the first query.
+@trusted_schema = OFF@ distrusts schema-defined functions, views feeding
+triggers, and virtual tables in the file; @query_only = ON@ refuses every write,
+so no trigger can ever fire through the connection; @cell_size_check = ON@
+validates each b-tree cell against its page as pages are read, so a crafted
+oversized cell becomes a clean error rather than an out-of-bounds access; and
+@mmap_size = 0@ keeps reads on the bounds-checked pager instead of mapping
+hostile file pages straight into the address space.
+
+Acceptance then checks, cheapest and least trusting first: the 'osvSchemaEpoch'
+stamp (a header field, so a stale or substituted artifact is refused before the
+file's interior is walked at all), a @PRAGMA quick_check@ structural-integrity
+walk (a malformed or truncated b-tree is rejected before any lookup dereferences
+it), the ranges relation being a real table, and the @meta@ ecosystem matching
+the one asked for. A rejected artifact's connection is closed before returning.
 
 Read-only is enforced at the connection level: sqlite-simple's public API has
 no way to pass @SQLITE_OPEN_READONLY@ at open time, and @query_only@ yields
@@ -77,6 +91,8 @@ openHardenedConnection eco dbFile = do
     conn <- open dbFile
     execute_ conn "PRAGMA trusted_schema = OFF"
     execute_ conn "PRAGMA query_only = ON"
+    execute_ conn "PRAGMA cell_size_check = ON"
+    execute_ conn "PRAGMA mmap_size = 0"
     accepted <- acceptArtifact eco conn
     case accepted of
         Left rejection -> do
@@ -87,6 +103,7 @@ openHardenedConnection eco dbFile = do
 acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 acceptArtifact eco conn = runExceptT $ do
     ExceptT (checkEpochStamp conn)
+    ExceptT (checkIntegrity conn)
     ExceptT (checkRangesTable conn)
     ExceptT (checkMetaEcosystem eco conn)
 
@@ -98,6 +115,25 @@ checkEpochStamp conn = do
             | epoch == osvSchemaEpoch -> Right ()
             | otherwise -> Left (CveDbWrongEpoch epoch)
         _ -> Left (CveDbWrongEpoch 0)
+
+{- | Walk the whole database structure and refuse an artifact SQLite reports as
+corrupt. @quick_check@ (unlike full @integrity_check@) skips the index-vs-table
+content cross-validation we do not rely on, keeping the scan to the structural
+soundness a hostile file could weaponise; it returns a single @ok@ on success.
+
+A well-formed database reports its problems as result rows, but a badly enough
+mangled b-tree can abort the walk with @SQLITE_CORRUPT@ instead. Both are the
+same verdict here, so the thrown error is caught and folded into the rejection
+rather than propagated: a hostile artifact is refused, never a fault to unwind.
+-}
+checkIntegrity :: Connection -> IO (Either CveDbRejected ())
+checkIntegrity conn = do
+    result <- try (query_ conn "PRAGMA quick_check") :: IO (Either SQLError [Only Text])
+    pure $ case result of
+        Left err -> Left (CveDbIntegrityFailed [show err])
+        Right report -> case map fromOnly report of
+            ["ok"] -> Right ()
+            problems -> Left (CveDbIntegrityFailed problems)
 
 checkRangesTable :: Connection -> IO (Either CveDbRejected ())
 checkRangesTable conn = do
