@@ -17,7 +17,6 @@ import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus,
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString)
 import UnliftIO.Timeout (timeout)
 
 import Data.Time (addUTCTime, getCurrentTime)
@@ -25,7 +24,6 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Queue (newInMemoryQueue)
-import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
@@ -36,6 +34,7 @@ import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
+import Ecluse.Proxy (unconfiguredRegistry)
 import Ecluse.Server (
     DrainSignal,
     InteractiveHalt (..),
@@ -61,21 +60,6 @@ layer only routes, classifies, and renders -- it never fetches -- so a handle th
 refuses loudly is enough to assemble an 'Env'. If a route reached an effectful
 field, the refusal would surface the leak.
 -}
-fakeRegistry :: RegistryClient
-fakeRegistry =
-    RegistryClient
-        { fetchMetadata = const unused
-        , publishArtifact = \_ _ _ _ -> unused
-        , parsePackageInfo = \_ _ -> Left unusedParse
-        , parseVersionDetails = \_ _ -> Left unusedParse
-        , parseVersionList = const (Left unusedParse)
-        }
-  where
-    unused :: IO a
-    unused = throwString "fakeRegistry: the web layer must not fetch when only routing"
-
-    unusedParse :: ParseError
-    unusedParse = ParseError "fakeRegistry: the web layer must not parse when only routing"
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
 
@@ -91,7 +75,7 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-
