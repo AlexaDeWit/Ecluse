@@ -141,8 +141,9 @@ the proxy image plus its nginx/Verdaccio/ministack data plane). Both stamp every
 they create with two labels:
 
 - `com.ecluse.test` = `integration` | `e2e`, marking it as an Écluse test container; and
-- `com.ecluse.test.scope` = a **per-worktree** id (from `ECLUSE_TEST_SCOPE`, set by the
-  `task test-*` targets from `scripts/test-containers.sh scope`).
+- `com.ecluse.test.scope` = a **per-worktree** id (from `ECLUSE_TEST_SCOPE`, set from
+  `scripts/test-containers.sh scope` by every container-running target: `task test-integration`,
+  `task test-e2e`, and the `coverage` tier that `task check` runs).
 
 Under a normal exit both harnesses tear their own containers down (a `bracket` in the e2e
 harness, `withContainers` in the integration tier), and the `docker run`s carry `--rm` so a
@@ -156,9 +157,9 @@ Two reaping commands close that gap, both driven by `scripts/test-containers.sh`
 - **`task test-clean`** removes only **this worktree's** test containers, networks (and, in
   `--all` mode, build images), keyed on the `com.ecluse.test.scope` label. Because it is
   scoped it is safe to run while other agents or worktrees have suites running; it cannot
-  touch theirs. `task test-integration` and `task test-e2e` run this scoped reap automatically
-  before the suite (sweeping this worktree's strays from a previous killed run) and again on
-  exit.
+  touch theirs. `task test-integration`, `task test-e2e`, and the `coverage` tier on the
+  `task check` path run this scoped reap automatically before the suite (sweeping this
+  worktree's strays from a previous killed run) and again on exit.
 - **`task test-clean-all`** removes **every** Écluse test container/network/image on the
   daemon regardless of scope. Reach for it only when you know no other suite is running; it
   will remove a parallel worktree's live containers.

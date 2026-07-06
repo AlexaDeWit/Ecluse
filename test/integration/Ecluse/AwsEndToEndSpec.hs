@@ -68,7 +68,7 @@ Hermetic and gating, but requires a Docker daemon (for @ministack@) and no real 
 -}
 spec :: Spec
 spec =
-    around withMinistack $
+    aroundAll withMinistack $
         describe "AWS-backed Écluse end to end (ministack SQS + WAI npm stubs)" $ do
             it "filters public versions by the rules on a packument request" $ \container ->
                 withAwsProxy container "aws-e2e-packument" $ \proxy -> do

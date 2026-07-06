@@ -8,8 +8,9 @@ accumulate:
 
   * @com.ecluse.test@ names the suite (@integration@ or @e2e@); and
   * @com.ecluse.test.scope@ carries a per-worktree id (from @ECLUSE_TEST_SCOPE@, set by
-    the @task test-*@ targets) so a scoped reap only ever removes /this/ worktree's
-    containers and never a sibling worktree's live ones.
+    the container-running @task@ targets -- the @test-*@ suites and the @coverage@ tier
+    @task check@ runs) so a scoped reap only ever removes /this/ worktree's containers and
+    never a sibling worktree's live ones.
 
 @scripts\/test-containers.sh@ is the reaper that reads these labels; this module is the
 matching writer, so the two cannot drift on the label spelling. See @docs\/testing.md@
@@ -23,9 +24,9 @@ module Ecluse.Test.Containers (
 
 -- 'lookupEnv', 'Text', 'toText', 'toString', and '<&>' all come from the relude prelude.
 
-{- | The reaping scope for the current run: @ECLUSE_TEST_SCOPE@ when the @task test-*@
-targets have pinned it (to this worktree's id), else @local@ for a bare @cabal test@
-invocation.
+{- | The reaping scope for the current run: @ECLUSE_TEST_SCOPE@ when a container-running
+@task@ target has pinned it to this worktree's id (the @test-*@ suites and the @coverage@
+tier @task check@ runs), else @local@ for a bare @cabal test@ invocation.
 -}
 testScope :: IO Text
 testScope =

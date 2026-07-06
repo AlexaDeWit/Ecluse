@@ -1,17 +1,19 @@
 {- | The end-to-end scenarios, driven through the real @npm@ CLI against the real image.
 
-__Per-test isolation is the assumed default.__ Every active case gets its __own fresh
-environment__ ('withE2E' under 'around') -- a freshly booted proxy + Verdaccio + nginx
-stub on their own docker network -- so each case starts from a pristine system and no case
-can observe or disrupt another's harness state (a published mirror, a paused upstream, a
-@SIGTERM@ed proxy). This is slower than sharing one environment, deliberately:
-independence over speed. If the wall-clock bites, shard the cases across CI workers rather
-than reintroduce shared state. When the environment is unavailable (no docker / image),
-every case is reported @pending@ rather than failed.
+__One data plane, shared per-describe proxies.__ The whole suite shares a single data
+plane -- the docker network plus the Verdaccio, nginx, and ministack containers -- booted
+once by 'withGlobalDataPlane' under @aroundAll@. On top of it each @describe@ block boots
+its own proxy (and, when a telemetry scenario needs one, its own OTLP collector) under
+@aroundAllWith@ ('withE2E' \/ 'withE2EWith'), shared across that block's cases rather than
+booted per case. Cases stay independent not through a fresh environment each but by acting
+on __distinct fixture packages__ (@allowPkg@, @denyPkg@, @tamperPkg@, @headPkg@,
+@mirrorPkg@, ...), so one case's mirror state or its bracketed (paused-then-resumed)
+upstream is never observed by another. When the environment is unavailable (no docker /
+image), every case is reported @pending@ rather than failed.
 
 See @planning\/slices\/S53-e2e-ecosystem.md@ for the design and the full scenario list.
 Graceful-drain is @pending@ here -- it tracks the #160 drain work; it is kept outside the
-per-test 'around' so it boots no environment until it is implemented.
+@aroundAll@ so it boots no environment until it is implemented.
 -}
 module Ecluse.E2E.SuiteSpec (spec) where
 
@@ -34,12 +36,13 @@ spec = do
             publishScenarios
             pendingScenarios
 
-{- | The active scenarios. Under 'around' each @it@ gets its own freshly booted
-environment, torn down before the next -- per-test isolation (see the module header).
+{- | The active scenarios, grouped into @describe@ blocks that each share one proxy under
+@aroundAllWith@. Cases stay independent through distinct fixture packages, not a fresh
+environment each (see the module header).
 -}
 scenarios :: SpecWith GlobalDataPlane
 scenarios = do
-    describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withSharedE2E $ do
+    describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withE2E $ do
         describe "public surface -- install and policy" $ do
             it "installs an allow-listed package end to end" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
@@ -115,12 +118,12 @@ scenarios = do
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
                 status `shouldBe` 405
 
-{- | The whole-system telemetry scenarios. Each gets its __own__ freshly booted
-environment with the telemetry topology it needs -- an OTLP collector and the proxy's
-telemetry dialect ('E2EConfig') -- under its own 'around', still per-test isolated like
-'scenarios'. The collector validation keys on the collector's @debug@ exporter output (no
-Datadog SaaS); the stdout/log validation keys on the proxy container's own JSONL stream.
-See @planning\/slices\/S53-e2e-ecosystem.md@.
+{- | The whole-system telemetry scenarios. Each @describe@ block boots its __own__ proxy
+with the telemetry topology it needs -- an OTLP collector and the proxy's telemetry dialect
+('E2EConfig') -- under @aroundAllWith@ on the shared data plane, so its collector and dialect
+never reach a sibling block. The collector validation keys on the collector's @debug@
+exporter output (no Datadog SaaS); the stdout/log validation keys on the proxy container's
+own JSONL stream. See @planning\/slices\/S53-e2e-ecosystem.md@.
 -}
 telemetryScenarios :: SpecWith GlobalDataPlane
 telemetryScenarios = do
@@ -242,12 +245,12 @@ telemetryScenarios = do
                         80
                 correlated `shouldBe` True
 
-{- | The first-party publish scenarios. The round-trip and the anti-shadowing refusal each
-get their __own__ freshly booted environment with the publication target enabled
-('publishTargetEnv', layered through 'E2EConfig' so only these scenarios see it) -- Verdaccio
-is both the publication target and the private upstream, the architected "publish, then read
-back over the private leg" model. The opt-in @405@ posture runs on the base topology (no
-publication target). Each is per-test isolated like 'scenarios'. See
+{- | The first-party publish scenarios. The round-trip and the anti-shadowing refusal share
+one proxy with the publication target enabled ('publishTargetEnv', layered through 'E2EConfig'
+so only these scenarios see it) under @aroundAllWith@ -- Verdaccio is both the publication
+target and the private upstream, the architected "publish, then read back over the private
+leg" model. The opt-in @405@ posture runs on the base topology (no publication target). The
+two cases act on distinct package names, so neither observes the other's publish. See
 @planning\/slices\/S52-publish-path.md@.
 -}
 publishScenarios :: SpecWith GlobalDataPlane
@@ -271,8 +274,9 @@ publishScenarios = do
             it "refuses an out-of-scope publish before any upstream write (anti-shadowing guard)" $ \e2e -> do
                 let name = publishOutOfScopeName
                     ver = publishVersion
-                -- Precondition: the freshly booted, sealed Verdaccio has never seen it, so the
-                -- post-publish absence below is attributable to the refusal, not a stale state.
+                -- Precondition: no other case publishes this out-of-scope name, so the
+                -- suite-shared, sealed Verdaccio has never received it and the post-publish
+                -- absence below is attributable to the refusal, not a stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
                 -- A name outside ECLUSE_PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
@@ -288,9 +292,10 @@ publishScenarios = do
                     reached <- verdaccioHasVersionNow e2e name ver
                     reached `shouldBe` False
 
-{- | Placeholders for not-yet-implemented work, kept outside 'around' so they boot no
-environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the
-per-test isolated 'scenarios' above.
+{- | Placeholders for not-yet-implemented work, kept outside @aroundAll@ so they boot no
+environment. Graceful drain (#160) @SIGTERM@s the proxy, a destructive act on shared state,
+so when written it needs its own single-case @describe@ block (its own proxy) rather than a
+seat in a shared-proxy block above.
 -}
 pendingScenarios :: SpecWith GlobalDataPlane
 pendingScenarios =

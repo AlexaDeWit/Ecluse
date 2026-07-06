@@ -29,7 +29,7 @@ running Docker daemon and no real AWS.
 -}
 spec :: Spec
 spec =
-    around withMinistack $
+    aroundAll withMinistack $
         describe "mirror queue (ministack)" $ do
             it "round-trips a job: enqueue, receive, ack, then no redelivery" $ \container -> do
                 queue <- freshQueue container "mirror-roundtrip" defaultQueueOptions
