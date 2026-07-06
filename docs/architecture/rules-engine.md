@@ -236,8 +236,12 @@ from there. Its interval (`cveDbPollInterval`) is deliberately more frequent tha
 interval, since matching the two rates would nearly double the worst-case advisory age.
 
 A newly detected `osv.db` is downloaded to a temp file, byte-bounded by `maxOsvDbBytes`, and verified
-by the same acceptance that guards every open (the epoch stamp, the table shape, the ecosystem). The
-accepted file is renamed atomically onto the canonical per-ecosystem path and shadow-swapped into the
+by the same acceptance that guards every open. Because the file is treated as untrusted even behind the
+bucket's access controls, the connection is hardened before its first query (`trusted_schema` off,
+`query_only` on, `cell_size_check` on, memory-mapped I/O disabled) and acceptance walks it cheapest-first:
+the epoch stamp, a `quick_check` structural-integrity scan, the table shape, and the ecosystem. A tampered
+or truncated artifact that parses as SQLite but is structurally unsound is refused here, before any lookup
+reads it. The accepted file is renamed atomically onto the canonical per-ecosystem path and shadow-swapped into the
 read path (`Ecluse.Core.Cve.Slot`): rule evaluations borrow the current generation through a bracketed
 read, the swap waits for the displaced generation's readers to drain, and the drained close releases
 the old artifact's last inode reference. The connection that verified is the connection that serves,

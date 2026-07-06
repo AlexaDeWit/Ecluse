@@ -1,7 +1,7 @@
 module Ecluse.Core.CveSpec (spec) where
 
 import Data.List (isSuffixOf)
-import Database.SQLite.Simple (SQLError, close, execute_)
+import Database.SQLite.Simple (Only, SQLError, close, execute_, fromOnly, query_)
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -13,7 +13,7 @@ import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
@@ -119,6 +119,17 @@ spec = do
                     Left rejection -> fail ("trigger artifact unexpectedly rejected: " <> show rejection)
                     Right () -> pass
 
+        it "rejects an artifact whose b-tree pages are structurally corrupt" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "corrupt.db"
+                mkDbWithCorruptPage path
+                openCveDb Npm path >>= \case
+                    Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
+                    Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
+                    Right db -> do
+                        cveDbClose db
+                        fail "expected a corrupt artifact to be rejected, but it was accepted"
+
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
             withFixtureOsvDb CorpusV1 $ \dbFile -> do
@@ -128,6 +139,18 @@ spec = do
                     Right conn -> do
                         let write = execute_ conn "INSERT INTO meta (key, value) VALUES ('tampered', '1')"
                         write `shouldThrow` \(_ :: SQLError) -> True
+                        close conn
+
+        it "validates cell sizes and reads through the pager, not a memory map" $
+            withFixtureOsvDb CorpusV1 $ \dbFile -> do
+                opened <- openHardenedConnection Npm dbFile
+                case opened of
+                    Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
+                    Right conn -> do
+                        cellCheck <- query_ conn "PRAGMA cell_size_check" :: IO [Only Int]
+                        mmap <- query_ conn "PRAGMA mmap_size" :: IO [Only Int]
+                        map fromOnly cellCheck `shouldBe` [1]
+                        map fromOnly mmap `shouldBe` [0]
                         close conn
 
 -- Every path this process holds an open descriptor to (Linux's /proc table;

@@ -27,14 +27,17 @@ module Ecluse.Test.Osv (
     mkDbWithViewShadowingRanges,
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
+    mkDbWithCorruptPage,
     mkMinimalValidDb,
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
 import Conduit (runConduit, sinkLazy, yieldMany, (.|))
+import Data.ByteString qualified as BS
 import Data.Time (LocalTime (..), fromGregorian, midnight)
 import Database.SQLite.Simple (Connection, Only (Only), execute, execute_, withConnection)
 import System.FilePath (takeFileName, (</>))
+import System.IO (SeekMode (AbsoluteSeek), hSeek, withBinaryFile)
 
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 
@@ -186,6 +189,42 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('zz-opaque', X'DEADBEEF')"
     setEpoch conn osvSchemaEpoch
+
+{- | A structurally corrupt artifact: a valid, right-epoch database whose
+interior b-tree pages have been overwritten with garbage on disk. Page 1 (the
+file header and the schema) is left intact, so the file still opens, reports the
+current 'osvSchemaEpoch', and presents a real @package_vulnerability_ranges@
+table; only the @PRAGMA quick_check@ integrity walk, reading the wrecked table
+b-tree, catches it. This models a tampered or truncated download that parses as
+SQLite but is not a sound database. The ranges table is created first, so its
+b-tree root is page 2; a handful of rows keep that page a populated leaf.
+-}
+mkDbWithCorruptPage :: FilePath -> IO ()
+mkDbWithCorruptPage path = do
+    withConnection path $ \conn -> do
+        execute_
+            conn
+            "CREATE TABLE package_vulnerability_ranges (\
+            \  package_name TEXT NOT NULL,\
+            \  cve_id TEXT NOT NULL,\
+            \  introduced_version TEXT,\
+            \  fixed_version TEXT,\
+            \  last_affected_version TEXT,\
+            \  severity REAL\
+            \)"
+        execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+        execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+        for_ [1 .. 32 :: Int] $ \i ->
+            execute
+                conn
+                "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-corpus-bulk', '0', '1.0.0', NULL, NULL)"
+                (Only (show i :: Text))
+        setEpoch conn osvSchemaEpoch
+    -- Overwrite page 2 (the ranges b-tree root, at the default 4096-byte page
+    -- size) with 0xFF; page 1's header and schema stay readable.
+    withBinaryFile path ReadWriteMode $ \h -> do
+        hSeek h AbsoluteSeek 4096
+        BS.hPut h (BS.replicate 4096 255)
 
 {- | A minimal artifact 'Ecluse.Core.Cve.openCveDb' accepts: the ranges table,
 an npm @meta@ row, the current epoch stamp, and one advisory row whose package
