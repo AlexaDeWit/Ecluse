@@ -45,7 +45,7 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 ctx :: EvalContext
-ctx = EvalContext now
+ctx = EvalContext now Nothing
 
 {- | The policy under test: a 7-day publish-age quarantine plus an install-script
 deny. A version is approved iff it is at least 7 days old and declares no install

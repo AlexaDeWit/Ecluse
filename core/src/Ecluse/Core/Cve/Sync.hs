@@ -57,17 +57,9 @@ import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, openCveDb)
+import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
 import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
-
-{- | An artifact version marker: S3's ETag, opaque text compared for equality
-only. Two objects with equal ETags carry equal bytes, so an unchanged ETag is
-"nothing to do" and a rejected artifact's remembered ETag is "still the same
-bad artifact".
--}
-newtype DbEtag = DbEtag Text
-    deriving stock (Eq, Show)
 
 {- | The sync transport, as data: how to learn the remote artifact's current
 version and how to fetch its bytes. Injected so 'syncStep' is unit-testable
@@ -163,7 +155,7 @@ publishVerified env temp fetched db = mask $ \restore -> do
     -- cancellation while the displaced generation drains must never close the
     -- newly live database, so no cleanup wraps it. The mask pins the
     -- ownership handoff; the drain wait inside stays interruptible.
-    swapIn (syncSlot env) db
+    swapIn (syncSlot env) fetched db
     pure (SyncSwapped fetched (cveDbMeta db))
 
 -- Best-effort: the temp may already be renamed away or never created.

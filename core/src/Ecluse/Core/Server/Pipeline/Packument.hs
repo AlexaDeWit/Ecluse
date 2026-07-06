@@ -120,7 +120,7 @@ import Ecluse.Core.Registry.Metadata (
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext, ctxAdvisoryEtag))
 import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
@@ -138,9 +138,11 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
 import Ecluse.Core.Server.Pipeline.Internal (
+    VersionVerdict (..),
     admitByIntegrity,
     evalTier,
     logDecodeFailure,
+    logDenials,
     logNameMismatch,
     packumentServeDecision,
     recordDenials,
@@ -277,12 +279,12 @@ serveWithDeps mode renderer deps name request respond
     serveAdmitted rt = do
         logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
         let metrics = srMetrics rt
-        evalCtx <- liftIO (EvalContext <$> pdNow deps)
+        evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pdAdvisoryEtag deps)
         (privResult, pubResult) <-
             concurrently
                 (fetchPrivateOrigin deps rt clientToken name)
                 (fetchPublicOrigin deps rt name)
-        (public, publicExclusions) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
+        (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
         let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
             sources = catMaybes [private, public]
         case packumentPlan sources of
@@ -293,6 +295,7 @@ serveWithDeps mode renderer deps name request respond
                 let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                 liftIO (recordDenials metrics decisions)
+                logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
                 liftIO (respond (noSurvivors renderer deps decisions))
 
     -- The validator is derived from the serve's inputs, so the conditional
@@ -649,9 +652,9 @@ from it at assembly, so a denied version's object is unreachable by construction
 This gate runs on the public path only; the trusted (private) contribution is admitted
 separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
 it -- the trust split is the caller's). -}
-gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe Manifest -> IO (Maybe Contribution, [ServeDecision])
+gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe Manifest -> IO (Maybe Contribution, [ServeDecision], [VersionVerdict])
 gatePublic tracing metrics deps name ctx = \case
-    Nothing -> pure (Nothing, [])
+    Nothing -> pure (Nothing, [], [])
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
@@ -660,10 +663,13 @@ gatePublic tracing metrics deps name ctx = \case
         let plan = filterPlanFromDecisions decisions admissible
         pure $
             if Set.null (fpSurvivors plan)
-                then (Nothing, projectDecisions admissible (fpDecisions plan) <> integrityRefusals)
+                then
+                    let verdicts = projectDecisions admissible (fpDecisions plan)
+                     in (Nothing, map vvDecision verdicts <> integrityRefusals, verdicts)
                 else
                     ( Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest))
                     , integrityRefusals
+                    , []
                     )
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
@@ -675,13 +681,15 @@ decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text De
 decideVersions deps ctx info =
     traverse (evalRules ctx (pdRules deps)) (infoVersions info)
 
-{- Project each excluded version's 'Decision' to a 'ServeDecision' for the
-no-survivors status. The plan carries its decisions ('fpDecisions') in
-@versions@-key order ('Data.Map.elems'), so they zip back onto the same-ordered
-'PackageDetails' to recover the package\/version each denial is about. -}
-projectDecisions :: PackageInfo -> [Decision] -> [ServeDecision]
+{- Project each excluded version's 'Decision' to a 'VersionVerdict', keeping the
+version string so a denial's audit line can name it. The plan carries its
+decisions ('fpDecisions') in @versions@-key order, so they zip back onto the
+same-ordered version keys to recover the package\/version each denial is about. -}
+projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =
-    zipWith serveDecisionOf (Map.elems (infoVersions info))
+    zipWith versionVerdict (Map.toList (infoVersions info))
+  where
+    versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
 -- The fully-edited served body: the raw @Value@ to encode and answer against the
 -- conditional request.

@@ -26,7 +26,7 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 ctx :: EvalContext
-ctx = EvalContext now
+ctx = EvalContext now Nothing
 
 {- | A package version under an optional npm scope, published @ageDays@ days
 before 'now'. Other fields are fixed; the rules under test read only the scope,
@@ -94,6 +94,7 @@ depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
 depsWith rows =
     RuleDeps
         { rdWithCveLookup = \use -> use (Just (fakeCveLookup rows))
+        , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         }
 
@@ -395,6 +396,7 @@ spec = do
             let broken =
                     RuleDeps
                         { rdWithCveLookup = \_ -> throwString "advisory database exploded"
+                        , rdCurrentAdvisoryEtag = pure Nothing
                         , rdBreakerReporter = noBreakerReporter
                         }
                 policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]

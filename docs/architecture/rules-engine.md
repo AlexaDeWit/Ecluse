@@ -269,8 +269,11 @@ catch-up window while a new rule waits for newly-populated data degrades per rul
 unavailability under that rule's failure alignment) rather than per database. A column exists exactly
 when the build populates it, so a NULL always means "no data known for this row", never "not
 populated yet". The artifact also carries a small `meta` key/value table of provenance (Pilot
-version, ecosystem, build timestamp, source URL, row count); with the active ETag it ties a rule
-decision to the exact database that produced it.
+version, ecosystem, build timestamp, source URL, row count). Each denial's audit log line records
+the advisory database ETag active when the request was served (`active_advisory_db_etag`), resolved
+once per request onto the evaluation context. It names the database live at emit, deliberately not
+the one the verdict was evaluated against, since a shadow-swap can land mid-request; the log line's
+own timestamp completes the true statement.
 
 Polling rather than looking up on demand removes the one external dependency that would otherwise sit
 under the fail-closed gate: an advisory-source outage becomes sync lag, the last-good `osv.db` keeps

@@ -1,5 +1,7 @@
 module Ecluse.Server.Pipeline.InternalSpec (spec) where
 
+import Data.Aeson (Value (String))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
@@ -16,6 +18,7 @@ import Katip (
     initLogEnv,
     permitItem,
     registerScribe,
+    toObject,
  )
 import Katip.Monadic (runKatipContextT)
 import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
@@ -23,6 +26,7 @@ import Test.Hspec
 import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempFile)
 
+import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
@@ -55,7 +59,10 @@ import Ecluse.Core.Rules.Types (
     atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
+    DenialAudit (..),
+    Metadata (..),
     admitByIntegrity,
+    denialAuditPayload,
     denialLabels,
     evalTier,
     logDecodeFailure,
@@ -189,6 +196,31 @@ spec = do
                 [ Undecidable (WillResolve Nothing) "unreachable"
                 , BlockedByDefault []
                 ]
+
+    describe "denialAuditPayload" $ do
+        let audit etag extra =
+                DenialAudit
+                    { daPackage = mkPackageName Npm Nothing "left-pad"
+                    , daVersion = "1.2.3"
+                    , daRule = Just "DenyIfCve"
+                    , daReasonClass = Metric.ReasonPolicy
+                    , daAdvisoryEtag = etag
+                    , daExtra = extra
+                    }
+
+        it "names the version, deciding rule, and active advisory ETag" $ do
+            let obj = toObject (denialAuditPayload (audit (Just (DbEtag "etag-xyz")) mempty))
+            KeyMap.lookup "version" obj `shouldBe` Just (String "1.2.3")
+            KeyMap.lookup "rule" obj `shouldBe` Just (String "DenyIfCve")
+            KeyMap.lookup "active_advisory_db_etag" obj `shouldBe` Just (String "etag-xyz")
+
+        it "omits the ETag field when no advisory database is active" $
+            KeyMap.lookup "active_advisory_db_etag" (toObject (denialAuditPayload (audit Nothing mempty)))
+                `shouldBe` Nothing
+
+        it "folds the extension metadata bag into the payload" $
+            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing (Metadata (Map.fromList [("cve", "CVE-2024-1")])))))
+                `shouldBe` Just (String "CVE-2024-1")
 
     -- The integrity-floor admission policy buckets the dropped versions into two refusal
     -- lists in a single pass over the class map. This pins the contract that pass must

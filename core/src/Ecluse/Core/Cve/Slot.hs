@@ -19,17 +19,21 @@ module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
     withSlotLookup,
+    currentAdvisoryEtag,
     swapIn,
 ) where
 
 import Control.Concurrent.STM (check)
 import UnliftIO.Exception (bracket, catchAny)
 
-import Ecluse.Core.Cve (CveDb (..), CveLookup)
+import Ecluse.Core.Cve (CveDb (..), CveLookup, DbEtag)
 
--- | One installed generation: the owning resource and its live-reader count.
+{- | One installed generation: the owning resource, its artifact ETag, and its
+live-reader count.
+-}
 data Generation = Generation
     { genDb :: CveDb
+    , genEtag :: DbEtag
     , genReaders :: TVar Int
     }
 
@@ -54,6 +58,16 @@ withSlotLookup (CveSlot cell) use = bracket acquire release (use . fmap (cveDbLo
         pure mGen
     release = traverse_ (\g -> atomically (modifyTVar' (genReaders g) (subtract 1)))
 
+{- | The active generation's artifact 'DbEtag', or 'Nothing' before the first
+sync. A non-pinning read: it snapshots the live generation's identity without
+bumping the reader count, so it never delays a swap. It answers "which advisory
+database is live right now" for the audit trail, not "hold this generation
+open", so a swap landing just after it read means a later reader saw the newer
+database. The evaluation context resolves this once per request.
+-}
+currentAdvisoryEtag :: CveSlot -> IO (Maybe DbEtag)
+currentAdvisoryEtag (CveSlot cell) = fmap genEtag <$> readTVarIO cell
+
 {- | Install a newly-verified generation and retire the one it displaces:
 publish the new 'CveDb' to readers atomically, wait for the displaced
 generation's readers to drain to zero, then close it, releasing the old
@@ -72,12 +86,12 @@ new generation live and the displaced one unclosed until process exit.
 Safe under a single swapper (the one sync task per slot); with several, each
 call retires exactly the generation it displaced.
 -}
-swapIn :: CveSlot -> CveDb -> IO ()
-swapIn (CveSlot cell) newDb = do
+swapIn :: CveSlot -> DbEtag -> CveDb -> IO ()
+swapIn (CveSlot cell) etag newDb = do
     readers <- newTVarIO (0 :: Int)
     displaced <- atomically $ do
         old <- readTVar cell
-        writeTVar cell (Just (Generation newDb readers))
+        writeTVar cell (Just (Generation newDb etag readers))
         pure old
     for_ displaced $ \g -> do
         atomically (readTVar (genReaders g) >>= check . (== 0))

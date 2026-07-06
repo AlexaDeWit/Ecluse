@@ -5,8 +5,8 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
-import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Test.Cve (fakeCveLookup)
 
 {- | A fake owning resource over the in-memory lookup, recording every close so
@@ -33,7 +33,7 @@ spec = describe "CveSlot" $ do
     it "hands the installed generation's view after a swap" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
-        swapIn slot (fakeDb "gen-a" closeLog)
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
         withSlotLookup slot (traverse (\l -> cveRemediationProbe l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         -- Nothing was displaced, so nothing was closed.
@@ -42,7 +42,7 @@ spec = describe "CveSlot" $ do
     it "a swap closes the displaced generation once its readers drain, and not before" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
-        swapIn slot (fakeDb "gen-a" closeLog)
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
 
         insideReader <- newEmptyMVar
         releaseReader <- newEmptyMVar
@@ -54,7 +54,7 @@ spec = describe "CveSlot" $ do
             generationSeen mLookup
 
         takeMVar insideReader
-        swapper <- async (swapIn slot (fakeDb "gen-b" closeLog))
+        swapper <- async (swapIn slot (DbEtag "gen-b") (fakeDb "gen-b" closeLog))
         -- Give the swap every chance to (wrongly) close early: it must be
         -- parked draining while the reader is inside.
         threadDelay 50_000
@@ -72,15 +72,15 @@ spec = describe "CveSlot" $ do
     it "each swap retires exactly the generation it displaced" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
-        swapIn slot (fakeDb "gen-a" closeLog)
-        swapIn slot (fakeDb "gen-b" closeLog)
-        swapIn slot (fakeDb "gen-c" closeLog)
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
+        swapIn slot (DbEtag "gen-b") (fakeDb "gen-b" closeLog)
+        swapIn slot (DbEtag "gen-c") (fakeDb "gen-c" closeLog)
         readIORef closeLog `shouldReturn` ["gen-a", "gen-b"]
 
     it "concurrent readers all pin the generation; the swap waits for the last" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
-        swapIn slot (fakeDb "gen-a" closeLog)
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
 
         entered <- newTVarIO (0 :: Int)
         gate <- newEmptyMVar
@@ -91,7 +91,7 @@ spec = describe "CveSlot" $ do
                 generationSeen mLookup
         -- Only swap once every reader has acquired (pinned) the generation.
         atomically (readTVar entered >>= check . (== 8))
-        swapper <- async (swapIn slot (fakeDb "gen-b" closeLog))
+        swapper <- async (swapIn slot (DbEtag "gen-b") (fakeDb "gen-b" closeLog))
         threadDelay 50_000
         readIORef closeLog `shouldReturn` []
 
@@ -101,3 +101,12 @@ spec = describe "CveSlot" $ do
         readIORef closeLog `shouldReturn` ["gen-a"]
         -- Every pinned reader answered from gen-a; none observed gen-b.
         results `shouldBe` replicate 8 (Just False)
+
+    it "reports the active generation's ETag for the audit trail, Nothing before the first swap" $ do
+        closeLog <- newIORef []
+        slot <- newCveSlot
+        currentAdvisoryEtag slot `shouldReturn` Nothing
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
+        currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-a")
+        swapIn slot (DbEtag "gen-b") (fakeDb "gen-b" closeLog)
+        currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-b")

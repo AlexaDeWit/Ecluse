@@ -42,7 +42,7 @@ import Network.Wai.Test qualified as WaiTest
 
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve.Slot (newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -93,6 +93,7 @@ spec =
                             let ruleDeps =
                                     RuleDeps
                                         { rdWithCveLookup = withSlotLookup slot
+                                        , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
                                         , rdBreakerReporter = noBreakerReporter
                                         }
                                 syncEnv =
@@ -196,6 +197,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow
+                , pdAdvisoryEtag = pure Nothing
                 , pdHelp = Nothing
                 , pdMinIntegrity = defaultMinIntegrity
                 , pdMinTrustedIntegrity = defaultMinTrustedIntegrity

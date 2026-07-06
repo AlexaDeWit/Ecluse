@@ -110,7 +110,7 @@ import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
 
-import Ecluse.Core.Rules (RuleDeps, prepare)
+import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, splitHostPort, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
@@ -693,7 +693,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
         -- Prepare the resolved policy into the engine's runtime rules, closing the
         -- injected 'RuleDeps' into them; an effectful rule (AllowIfRemediatesCve)
         -- gets its resilience policy and breaker allocated here, once per mount.
-        prepared <- prepare (ruleDepsFor (mountEcosystem mount)) (mountPolicy mount)
+        -- The same RuleDeps' non-pinning advisory-ETag reader is bridged onto the
+        -- deps below, since the serve gate is where the per-request EvalContext is built.
+        let ruleDeps = ruleDepsFor (mountEcosystem mount)
+        prepared <- prepare ruleDeps (mountPolicy mount)
         let regs = mountRegistries mount
         pure
             PackumentDeps
@@ -718,6 +721,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                 , pdLimits = limits
                 , pdInboundToken = cfgAuthToken app
                 , pdNow = clock
+                , pdAdvisoryEtag = rdCurrentAdvisoryEtag ruleDeps
                 , pdHelp = helpMessage
                 , -- The global public-integrity admission floor, validated at config
                   -- load, carried onto every mount's deps so the public gate refuses

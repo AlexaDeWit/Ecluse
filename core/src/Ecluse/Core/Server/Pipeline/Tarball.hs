@@ -85,6 +85,7 @@ import Network.Wai (Request, Response, ResponseReceived, requestHeaders, respons
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
     PackageDetails (pkgArtifacts),
@@ -124,7 +125,9 @@ import Ecluse.Core.Server.Context (
     ctxRuntime,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
+    VersionVerdict (..),
     evalTier,
+    logDenials,
     recordDenials,
     serveDecisionClass,
  )
@@ -149,7 +152,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, renderVersion)
 
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
 request's 'RequestCtx'.
@@ -368,14 +371,18 @@ servePublicArtifact ::
     Handler ResponseReceived
 servePublicArtifact mode rt renderer deps validators name version file respond = do
     let metrics = srMetrics rt
-    withServeAdmission metrics (srAdmission rt) (gatePublicVersion rt deps name version file) >>= \case
+    -- The advisory database active for this request, resolved once and used both for
+    -- the version's evaluation and for a denial's audit line.
+    advisoryEtag <- liftIO (pdAdvisoryEtag deps)
+    withServeAdmission metrics (srAdmission rt) (gatePublicVersion rt deps name version file advisoryEtag) >>= \case
         Just (Admitted artifact) -> do
             liftIO (mpServeDecision metrics Metric.Admit)
             liftIO (streamPublicArtifact mode rt renderer deps validators name version artifact respond)
-        Just (Refused decision) -> liftIO $ do
-            mpServeDecision metrics (serveDecisionClass decision)
-            recordDenials metrics [decision]
-            respond (artifactError renderer deps (artifactStatus decision) decision)
+        Just (Refused decision) -> do
+            liftIO (mpServeDecision metrics (serveDecisionClass decision))
+            logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
+            liftIO (recordDenials metrics [decision])
+            liftIO (respond (artifactError renderer deps (artifactStatus decision) decision))
         Nothing -> liftIO $ do
             mpServeDecision metrics Metric.Unavailable
             respond (serveOverloaded renderer)
@@ -408,9 +415,9 @@ a misreporting origin included -- is a transient upstream outage (@503@), the si
 path collapsing every unobtainable-metadata cause to the same retryable outage; a present
 version is decided by the rules, where a needed effectful rule that cannot be consulted
 fail-closes to an 'Unavailable' @503@\/@500@. -}
-gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Handler PublicArtifactGate
-gatePublicVersion rt deps name version file = do
-    evalCtx <- liftIO (EvalContext <$> pdNow deps)
+gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Maybe DbEtag -> Handler PublicArtifactGate
+gatePublicVersion rt deps name version file advisoryEtag = do
+    evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pure advisoryEtag)
     eval <-
         withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
             liftIO (fetchVersionDetails client name version)

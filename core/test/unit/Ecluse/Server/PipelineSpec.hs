@@ -217,6 +217,7 @@ depsFor publicPort = do
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow
+            , pdAdvisoryEtag = pure Nothing
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity

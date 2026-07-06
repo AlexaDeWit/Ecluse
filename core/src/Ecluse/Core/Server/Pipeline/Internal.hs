@@ -29,12 +29,20 @@ module Ecluse.Core.Server.Pipeline.Internal (
     -- * Metric emits (off a serve outcome)
     recordDenials,
     recordEffectfulFailures,
+
+    -- * Denial audit trail (structured log)
+    VersionVerdict (..),
+    Metadata (..),
+    DenialAudit (..),
+    denialAuditPayload,
+    logDenials,
 ) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
+import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoVersions),
@@ -235,3 +243,73 @@ recordEffectfulFailures metrics = traverse_ recordOne
     recordOne = \case
         Undecidable transience _ -> mpRuleEffectfulFailure metrics (transienceCause transience)
         _ -> pass
+
+{- | A per-version serve outcome that keeps the version (the decision's subject),
+so a denial's audit line can name it. 'Ecluse.Core.Server.Pipeline.Packument.gatePublic'
+preserves it rather than dropping the version when it projects to 'ServeDecision'.
+-}
+data VersionVerdict = VersionVerdict
+    { vvVersion :: Text
+    , vvDecision :: ServeDecision
+    }
+    deriving stock (Eq, Show)
+
+{- | An extensible bag of audit fields folded into a denial line's JSON at emit
+time. It lives here, at the audit boundary, deliberately __not__ on the pure
+'Ecluse.Core.Rules.Types.Decision': the rule engine carries no logging concern,
+and new audit data (a CVE id, an EPSS score) is added at this layer without
+threading a field through the decision path.
+-}
+newtype Metadata = Metadata (Map Text Text)
+    deriving stock (Eq, Show)
+
+instance Semigroup Metadata where
+    Metadata a <> Metadata b = Metadata (a <> b)
+
+instance Monoid Metadata where
+    mempty = Metadata Map.empty
+
+{- | Everything one denial audit line records: typed and stable. The advisory
+'DbEtag' is the database active when the request was admitted (carried on the
+'Ecluse.Core.Rules.Types.EvalContext'); it is named as active at emit, never
+claimed as the database the decision was evaluated against, since a shadow-swap
+may land mid-request.
+-}
+data DenialAudit = DenialAudit
+    { daPackage :: PackageName
+    , daVersion :: Text
+    , daRule :: Maybe Text
+    , daReasonClass :: Metric.ReasonClass
+    , daAdvisoryEtag :: Maybe DbEtag
+    , daExtra :: Metadata
+    }
+
+-- | Render a 'DenialAudit' to the structured payload katip folds into the line's @data@ object.
+denialAuditPayload :: DenialAudit -> SimpleLogPayload
+denialAuditPayload da =
+    sl "module" pipelineInternalModule
+        <> sl "package" (renderPackageName (daPackage da))
+        <> sl "version" (daVersion da)
+        <> maybe mempty (sl "rule") (daRule da)
+        <> sl "reason_class" (show (daReasonClass da) :: Text)
+        <> foldMap (\(DbEtag e) -> sl "active_advisory_db_etag" e) (daAdvisoryEtag da)
+        <> metadataPayload (daExtra da)
+  where
+    metadataPayload (Metadata m) = Map.foldrWithKey (\k v acc -> sl k v <> acc) mempty m
+
+{- | Emit one audit log line per denied version, __denials only__ (an admit logs
+nothing). Companion to 'recordDenials', which counts the same denials as metrics.
+The 'DbEtag' is the advisory database active at emit (from the request's
+'Ecluse.Core.Rules.Types.EvalContext'), so the line answers "which database was
+live when this verdict was logged", not "which database produced it".
+-}
+logDenials :: (KatipContext m) => PackageName -> Maybe DbEtag -> [VersionVerdict] -> m ()
+logDenials pkg etag = traverse_ logOne
+  where
+    logOne vv = case vvDecision vv of
+        Admit -> pass
+        Reject (Rejection reason _) ->
+            let (rule, reasonClass) = denialLabels reason
+                audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag mempty
+             in katipAddContext (denialAuditPayload audit) $
+                    logFM WarningS (ls ("denied" :: Text))

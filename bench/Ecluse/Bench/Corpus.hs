@@ -322,7 +322,7 @@ syntheticPackageInfo = projectInfo benchPackageName . syntheticPackumentValue
 the age-based rule is deterministic across runs.
 -}
 benchEvalContext :: EvalContext
-benchEvalContext = EvalContext (UTCTime (fromGregorian 2026 6 27) (secondsToDiffTime 0))
+benchEvalContext = EvalContext (UTCTime (fromGregorian 2026 6 27) (secondsToDiffTime 0)) Nothing
 
 {- | A representative rule set spanning all three pure rule types -- an allow-list, an
 install-time-execution deny, and an age quarantine -- so the rule sweep exercises

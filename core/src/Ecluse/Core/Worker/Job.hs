@@ -218,7 +218,9 @@ reevaluatePolicy job = do
                 VersionMissing ->
                     pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
                 VersionPresent details -> do
-                    ctx <- liftIO (EvalContext <$> wpNow policy)
+                    -- The back-fill path emits no per-decision audit line, so the
+                    -- advisory ETag is not resolved for its context.
+                    ctx <- liftIO (EvalContext <$> wpNow policy <*> pure Nothing)
                     decision <- liftIO (evalRules ctx (wpRules policy) details)
                     pure (outcomeOfDecision job decision)
   where

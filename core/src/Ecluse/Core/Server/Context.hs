@@ -51,6 +51,7 @@ import Network.HTTP.Client (Manager, Request)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
@@ -192,6 +193,13 @@ data PackumentDeps = PackumentDeps
     , pdNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Types.EvalContext'.
     Injected so the time-sensitive age gate is deterministic under test.
+    -}
+    , pdAdvisoryEtag :: IO (Maybe DbEtag)
+    {- ^ A non-pinning read of the active advisory database's 'DbEtag' for the
+    per-request 'Ecluse.Core.Rules.Types.EvalContext' (the same value
+    'Ecluse.Core.Rules.rdCurrentAdvisoryEtag' provides, bridged onto these deps
+    because the serve gate is where the context is built). 'Nothing' when no
+    database is loaded.
     -}
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
