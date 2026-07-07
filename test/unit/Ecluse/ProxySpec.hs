@@ -16,7 +16,7 @@ import UnliftIO.Exception (throwString)
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (CveDb (..))
+import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -103,13 +103,13 @@ spec = do
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
-            swapIn (csSlot handle) fakeDb
+            swapIn (csSlot handle) (DbEtag "e1") fakeDb
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
-            swapIn (csSlot handle) fakeDb
+            swapIn (csSlot handle) (DbEtag "e1") fakeDb
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 

@@ -89,7 +89,7 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), insideAffectedRange, severityAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Types
@@ -109,6 +109,12 @@ once no evaluation still holds it. 'Nothing' means no advisory database is loade
 data RuleDeps = RuleDeps
     { rdWithCveLookup :: forall a. (Maybe CveLookup -> IO a) -> IO a
     -- ^ Bracketed access to the current advisory database view, if one is loaded.
+    , rdCurrentAdvisoryEtag :: IO (Maybe DbEtag)
+    {- ^ A non-pinning read of the active advisory database's 'DbEtag' for the
+    per-request 'EvalContext'. 'Nothing' when none is loaded. Distinct from
+    'rdWithCveLookup': it snapshots identity for the audit trail without holding
+    a generation open, so it never delays a shadow-swap.
+    -}
     , rdBreakerReporter :: BreakerReporter
     {- ^ The observer effectful rules report their breaker transitions to
     (@ecluse.rule.breaker.state@); 'noBreakerReporter' when unobserved.
@@ -122,6 +128,7 @@ inertRuleDeps :: RuleDeps
 inertRuleDeps =
     RuleDeps
         { rdWithCveLookup = \use -> use Nothing
+        , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         }
 

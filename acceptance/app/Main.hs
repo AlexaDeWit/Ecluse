@@ -163,7 +163,7 @@ runTransform now pkg body =
         Left _ -> pure False
         Right value -> case parsePackageInfoFromValue pkg value of
             Right (Projected info) -> do
-                plan <- filterPlan inertRuleDeps (EvalContext now) serveRules info
+                plan <- filterPlan inertRuleDeps (EvalContext now Nothing) serveRules info
                 let size :: Int
                     size = case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
                         Just merged

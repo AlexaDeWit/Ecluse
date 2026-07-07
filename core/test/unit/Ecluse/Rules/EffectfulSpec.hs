@@ -28,7 +28,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 
 -- | An 'EvalContext' at a given instant (the breaker reads its clock from here).
 ctxAt :: UTCTime -> EvalContext
-ctxAt = EvalContext
+ctxAt t = EvalContext t Nothing
 
 ctx :: EvalContext
 ctx = ctxAt now

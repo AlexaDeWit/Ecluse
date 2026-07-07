@@ -39,6 +39,9 @@ module Ecluse.Core.Cve (
     -- * Rejection
     CveDbRejected (..),
 
+    -- * Artifact identity
+    DbEtag (..),
+
     -- * Pure range matching
     insideAffectedRange,
     severityAtLeast,
@@ -51,6 +54,15 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
 import Database.SQLite.Simple (Connection, close)
+
+{- | An artifact version marker: S3's ETag, opaque text compared for equality
+only. Two objects with equal ETags carry equal bytes, so an unchanged ETag is
+"nothing to do", a rejected artifact's remembered ETag is "still the same bad
+artifact", and it names the exact advisory database a rule decision was
+recorded against.
+-}
+newtype DbEtag = DbEtag Text
+    deriving stock (Eq, Show)
 
 {- | Advisory questions about one ecosystem's artifact -- the read-only view a
 consumer (a rule evaluation) is handed. It deliberately cannot release the

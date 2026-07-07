@@ -171,7 +171,7 @@ record never spans physical lines. This is what the Datadog Agent's stdout autod
 consumes. Each line carries a `dd` object for correlation and unified service tagging:
 
 ```json
-{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"}
+{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution","reason_class":"ReasonPolicy","active_advisory_db_etag":"d41d8cd98f00b204e9800998ecf8427e"}
 ```
 
 `dd.service`/`dd.env`/`dd.version` come from the same config as the traces

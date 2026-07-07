@@ -40,6 +40,7 @@ module Ecluse.Core.Rules.Types (
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
+import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (Scope)
 
 {- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator
@@ -252,11 +253,20 @@ every other rule (including explicit allow-lists), to serve as a hard revocation
 defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
 
-{- | Ambient information a rule may need that is not part of the package itself
-(the wall-clock "now" for age calculations).
+{- | Ambient information a rule may need that is not part of the package itself:
+the wall-clock "now" for age calculations, and the active advisory database's
+identity for a decision's audit trail.
 -}
-newtype EvalContext = EvalContext
+data EvalContext = EvalContext
     { ctxNow :: UTCTime
+    -- ^ The wall-clock "now" for age-based rules.
+    , ctxAdvisoryEtag :: Maybe DbEtag
+    {- ^ The advisory database 'DbEtag' active when this request was admitted, or
+    'Nothing' when none is loaded (or on a path that does not consult one). It is
+    the artifact a denial's audit line names as active at emit; it is
+    deliberately __not__ "the database this decision was evaluated against",
+    since a shadow-swap may land mid-request. Resolved once per request.
+    -}
     }
     deriving stock (Eq, Show)
 

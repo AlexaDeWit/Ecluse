@@ -48,7 +48,7 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 ctx :: EvalContext
-ctx = EvalContext now
+ctx = EvalContext now Nothing
 
 {- | The policy under test: a single 7-day publish-age quarantine. A version is
 __approved__ iff its @time@ entry is at least 7 days before 'now', and otherwise

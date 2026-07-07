@@ -618,6 +618,7 @@ deps privatePort publicPort inbound = do
             , pdLimits = defaultLimits
             , pdInboundToken = mkSecret <$> inbound
             , pdNow = pure now
+            , pdAdvisoryEtag = pure Nothing
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
