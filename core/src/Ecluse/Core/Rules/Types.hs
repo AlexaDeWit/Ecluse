@@ -30,7 +30,8 @@ module Ecluse.Core.Rules.Types (
     -- * Evaluation
     EvalContext (..),
     Reason,
-    RuleResult (..),
+    RuleVerdict (..),
+    RuleEvaluation (..),
     FailureAlignment (..),
     Decision (..),
 
@@ -273,29 +274,58 @@ data EvalContext = EvalContext
 -- | A human-facing reason a rule attaches to its result, kept for the audit trail.
 type Reason = Text
 
-{- | The verdict of a single rule against a single package version.
+{- | What a single rule returns for a single package version: a __deterministic__
+verdict. The rule computes its answer -- over the package, and for the effectful rules
+the advisory database -- and returns one of these. A rule cannot manufacture an
+'Unavailable'; that is the distinction the resilience harness turns on. A verdict is a
+decided value the harness takes at face value, never a fault it retries.
 
-A result is __decisive__ iff it is 'Allow', 'Deny', or @'Unavailable' _ 'FailDeny' _@.
-'NoDecision' and @'Unavailable' _ 'FailNoDecision' _@ are __non-decisive__ no-ops; the
+A verdict is __decisive__ iff it is 'Allow', 'Deny', or @'CannotVet' 'FailDeny' _@.
+'NoDecision' and @'CannotVet' 'FailNoDecision' _@ are __non-decisive__ no-ops; the
 engine collects their reasons (in boot order) for the deny-by-default audit trail.
 -}
-data RuleResult
+data RuleVerdict
     = -- | This rule admits the package (with a human reason). Decisive.
       Allow Reason
     | -- | This rule blocks the package (with a human reason). Decisive.
       Deny Reason
     | -- | This rule has no opinion; the reason is kept for the audit trail. A no-op.
       NoDecision Reason
-    | {- | The rule could not be computed -- its IO failed, timed out, or its source
-      circuit breaker is open. It carries its own __failure alignment__: a
-      'FailDeny' rule is decisive (fail-closed, → 'Undecidable'), a 'FailNoDecision'
-      rule is a no-op (fail-open). The 'Transience' records whether a retry can help;
-      the 'Reason' is the audit reason. The built-in rules never yield this.
+    | {- | The rule reached the package but cannot vet it -- a __deterministic,
+      in-process absence__, not a fault (today: no advisory database is loaded). It
+      carries its own __failure alignment__: a 'FailDeny' rule is decisive
+      (fail-closed, → 'Undecidable'), a 'FailNoDecision' rule is a no-op (fail-open).
+      It carries __no__ 'Transience' on purpose: the absence is deterministic, so no
+      in-process retry can change it -- which is exactly why the harness must not
+      route it through the retry\/breaker path.
+      -}
+      CannotVet FailureAlignment Reason
+    deriving stock (Eq, Show)
+
+{- | The outcome the resilience harness produces for one rule: either the rule
+'Decided' (any 'RuleVerdict', taken at face value), or the harness could not obtain a
+verdict at all and the evaluation is 'Unavailable' -- the rule's IO threw, timed out,
+or its source circuit breaker was open. __Only the harness constructs 'Unavailable'__;
+a rule cannot, so the retry\/breaker machinery provably reacts only to a fault the
+harness itself observed, never to a verdict a rule deliberately returned.
+
+Decisive iff it credits a 'Decision': a decisive 'RuleVerdict', or an
+@'Unavailable' _ 'FailDeny' _@. A non-decisive verdict, or an @'Unavailable' _
+'FailNoDecision' _@, is a no-op whose reason is gathered for the audit trail.
+-}
+data RuleEvaluation
+    = -- | The rule returned a verdict; the harness takes it at face value.
+      Decided RuleVerdict
+    | {- | The harness could not obtain a verdict: the rule's IO failed, timed out, or
+      its source circuit breaker is open. It carries the rule's __failure alignment__
+      (a 'FailDeny' evaluation is decisive → 'Undecidable', a 'FailNoDecision' one is a
+      no-op) and a 'Transience' recording whether a retry can help. Only the harness
+      builds this.
       -}
       Unavailable Transience FailureAlignment Reason
     deriving stock (Eq, Show)
 
-{- | How a rule's 'Unavailable' result aligns when the rule could not be computed.
+{- | How a rule aligns when it cannot vet a version, or its evaluation faults.
 
 There is deliberately __no @FailAllow@__: a failed or uncomputable check must never
 /admit/ unvetted bytes. A rule whose verdict is load-bearing for safety fails

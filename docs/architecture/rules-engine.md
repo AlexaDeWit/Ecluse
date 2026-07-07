@@ -7,9 +7,11 @@
 **Deny by default; the boot order decides.** Each rule carries a configurable integer precedence.
 At boot the rule set is arranged once into a single total order (highest precedence first, then
 rule name ascending as the deterministic tiebreak), and evaluation walks it and takes the first
-decisive result. Every rule yields *allow*, *deny*, *no-decision*, or *unavailable*; allow, deny,
-and a fail-closed unavailable are decisive, while no-decision and a fail-open unavailable are
-no-ops. If nothing is decisive, the package is denied by default. Built-in deny rules default above
+decisive result. Every rule yields *allow*, *deny*, *no-decision*, or *cannot-vet* (a deterministic
+inability to vet, such as no advisory database being loaded); allow, deny, and a fail-closed
+cannot-vet are decisive, while no-decision and a fail-open cannot-vet are no-ops. A rule whose
+evaluation faults under its resilience harness resolves the same way, by its fail-closed or
+fail-open alignment. If nothing is decisive, the package is denied by default. Built-in deny rules default above
 allow rules, so "any deny overrides any allow" holds out of the box, but an operator can rank a
 specific allow above a specific deny (e.g. to let a trusted internal scope through an install-script
 deny). At equal explicit precedence the tie is resolved by rule name, not by a deny-over-allow
@@ -59,19 +61,28 @@ and effectful for another.
 
 ### Evaluation model
 
-Each rule, applied to a `PackageDetails`, yields a `RuleResult`:
+Each rule, applied to a `PackageDetails`, yields a `RuleVerdict` -- a deterministic answer, never a
+fault:
 
 - **`Allow reason`**, the version is admissible. Decisive.
 - **`Deny reason`**, the version must be blocked. Decisive.
 - **`NoDecision reason`**, no opinion. A no-op; the reason is retained for the audit trail.
-- **`Unavailable transience alignment reason`**, the rule could not be computed (IO failed, timed
-  out, or the source breaker is open). It carries its own failure alignment: a fail-closed
-  (`FailDeny`) `Unavailable` is decisive, a fail-open (`FailNoDecision`) one is a no-op. There is
-  deliberately no fail-allow: a failed check must never admit unvetted bytes.
+- **`CannotVet alignment reason`**, the rule reached the version but cannot vet it deterministically
+  and in-process (today: no advisory database is loaded). It carries its own failure alignment: a
+  fail-closed (`FailDeny`) `CannotVet` is decisive, a fail-open (`FailNoDecision`) one is a no-op.
+  There is deliberately no fail-allow: a check that cannot vet must never admit unvetted bytes.
+
+Running a rule under its resilience harness produces a `RuleEvaluation`: either `Decided` with the
+rule's `RuleVerdict`, taken at face value, or `Unavailable transience alignment reason` -- the one
+outcome a rule cannot report about itself, synthesised only by the harness when it could not obtain a
+verdict at all (the IO failed, timed out, or the source breaker is open). Because a rule cannot
+manufacture an `Unavailable`, the retry and breaker machinery provably reacts only to a fault the
+harness observed, never to a verdict a rule returned (a deterministic `CannotVet` included).
 
 The engine arranges the rules into `bootOrder` (`(precedence descending, name ascending)`), walks
 it, and takes the first decisive result, crediting the rule by name: `Admitted name reason`,
-`Blocked name reason`, or `Undecidable transience reason` (a fail-closed `Unavailable` that won). If
+`Blocked name reason`, or `Undecidable transience reason` (a fail-closed `CannotVet` verdict or
+harness `Unavailable` that won). If
 nothing is decisive, the result is `BlockedByDefault reasons`, with each non-decisive rule's reason
 collected in boot order so the denial response can explain what was considered. Because the boot
 order (not list position) decides and resolves every equal-precedence tie by name, the decision and
@@ -88,14 +99,18 @@ start-up (see [Configuration → rule policy](configuration.md#rule-policy)).
 An effectful rule does IO that can fail or hang. Each has a short timeout budget (a couple of
 seconds) with bounded retry+backoff and a per-source circuit breaker: after repeated failures the
 breaker trips and the rule fast-fails for a cooldown (with periodic half-open probes), so a
-sustained outage neither adds latency to every request nor hammers a down service. On failure the
-rule yields `Unavailable`, carrying its transience (will-resolve vs not) and its failure alignment:
+sustained outage neither adds latency to every request nor hammers a down service. A **fault** the
+harness observes (the IO threw, timed out, or the breaker is open) becomes an `Unavailable`, carrying
+its transience (will-resolve vs not) and the rule's failure alignment. A **deterministic in-process
+absence** a rule reports as a `CannotVet` verdict (no advisory database loaded) is taken at face
+value instead: never retried and never counted towards the breaker, because no retry could change it.
+Either path is governed by the same alignment:
 
-- **`FailDeny` (fail-closed, the default)**: the `Unavailable` is decisive, a version a needed rule
-  could not vet is not admitted just because the scanner is down. A fail-closed `Unavailable` that
-  wins becomes `Undecidable`.
-- **`FailNoDecision` (fail-open)**: the `Unavailable` is a no-op, for a remediation/allow-direction
-  rule where a missing signal should not block availability. There is deliberately no fail-allow.
+- **`FailDeny` (fail-closed, the default)**: decisive, a version a needed rule could not vet is not
+  admitted just because the scanner is down or the advisory database is not yet loaded. A fail-closed
+  `CannotVet` or `Unavailable` that wins becomes `Undecidable`.
+- **`FailNoDecision` (fail-open)**: a no-op, for a remediation/allow-direction rule where a missing
+  signal should not block availability. There is deliberately no fail-allow.
 
 The blast radius is small: only packages not yet in the private mirror reach this path;
 already-approved versions serve from the private upstream with no rules. How a fail-closed
@@ -178,11 +193,12 @@ typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of pack
 - **`Allow`** when an advisory for *P* names *V* as its exact fixed version and no advisory's
   affected range still contains *V*, i.e. *V* is a fix and is not itself vulnerable. The reason
   names the remediated advisory IDs.
-- **`NoDecision`** otherwise, and a fail-open (`FailNoDecision`) `Unavailable` when the lookup fails
-  or no database is loaded yet. An allow that cannot confirm a remediation fails open (unlike a deny
-  that cannot confirm safety, which fails closed), so the version falls back to the normal quarantine
-  rather than being admitted on an unverified claim. A CVE-source outage thus costs patches their
-  fast lane but never admits anything it could not vouch for.
+- **`NoDecision`** otherwise -- including when no advisory database is loaded yet, where an
+  allow-direction rule simply abstains -- and a fail-open (`FailNoDecision`) `Unavailable` when a
+  lookup against a loaded database faults. An allow that cannot confirm a remediation fails open
+  (unlike a deny that cannot confirm safety, which fails closed), so the version falls back to the
+  normal quarantine rather than being admitted on an unverified claim. A CVE-source outage thus costs
+  patches their fast lane but never admits anything it could not vouch for.
 
 It is ranked above the quarantine allow (so the fix is admitted immediately) and below the scope
 allow-list (so a trusted scope never pays the probe). The fix test is a deliberate exact string
@@ -207,11 +223,13 @@ shown to be low does not slip the gate.
 - **`Deny`** when some advisory affects *V* (by the same range/point membership the allow direction
   uses) and clears the severity threshold. The reason names the deciding advisories.
 - **`NoDecision`** when no affecting advisory clears the threshold.
-- **`Unavailable`** when the advisory database cannot answer, aligned by the rule's `onUnavailable`:
-  **`FailDeny`** (the default) is decisive, so a version that cannot be vetted is refused
-  (`Undecidable`, a retryable 503); **`FailNoDecision`** skips the rule, logging loudly, for an
-  operator who puts availability above the gate. This is the deliberate inverse of
-  `AllowIfRemediatesCve`, which fails open, an allow that cannot confirm safety must not admit, a
+- **`CannotVet`** when no advisory database is loaded (deterministic and in-process), and the
+  harness's **`Unavailable`** when a lookup against a loaded database faults; both are aligned by the
+  rule's `onUnavailable`: **`FailDeny`** (the default) is decisive, so a version that cannot be vetted
+  is refused (`Undecidable`, a retryable 503); **`FailNoDecision`** skips the rule, logging loudly,
+  for an operator who puts availability above the gate. The deterministic no-database case is taken at
+  face value -- never retried, never tripping the breaker. This is the deliberate inverse of
+  `AllowIfRemediatesCve`, which fails open: an allow that cannot confirm safety must not admit, a
   deny that cannot confirm safety must not admit either.
 
 It is ranked just **below** `AllowByIdentity` (precedence 225 against 250): an operator's explicit

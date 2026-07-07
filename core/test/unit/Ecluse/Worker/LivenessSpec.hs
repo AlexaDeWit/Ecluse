@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleResult (Allow, Deny))
+import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)

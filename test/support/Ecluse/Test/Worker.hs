@@ -17,7 +17,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleResult (Allow))
+import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (sampleDetails)

@@ -81,7 +81,7 @@ read only the package). This is the engine's injection point -- an arbitrary 'pr
 and a chosen 'prepName', without widening the closed 'Rule' vocabulary.
 -}
 mkRuleR ::
-    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
+    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
 mkRuleR reporter name prec cfg align eval = do
     breaker <- newBreaker
     pure
@@ -93,11 +93,11 @@ mkRuleR reporter name prec cfg align eval = do
             }
 
 -- | As 'mkRuleR', through the inert default reporter.
-mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
+mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
 mkRule = mkRuleR noBreakerReporter
 
--- | An effectful rule that always returns the given clean result (no IO failure).
-constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleResult -> IO PreparedRule
+-- | An effectful rule that always returns the given verdict (no IO failure).
+constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleVerdict -> IO PreparedRule
 constRule name prec cfg align outcome = mkRule name prec cfg align (\_ -> pure outcome)
 
 -- | An effectful rule whose IO always throws (its source is down).
@@ -140,21 +140,21 @@ isUndecidable = \case
     Undecidable{} -> True
     _ -> False
 
-isUnavailableResult :: RuleResult -> Bool
-isUnavailableResult = \case
+isUnavailable :: RuleEvaluation -> Bool
+isUnavailable = \case
     Unavailable{} -> True
     _ -> False
 
 {- | An outcome for the equal-precedence tie tests: an allow, a deny, or a
-self-reported (fail-closed) unavailability -- the three decisive positions that
-compete in the boot order.
+deterministic fail-closed 'CannotVet' -- the three decisive positions that compete in
+the boot order.
 -}
-genTieOutcome :: Gen RuleResult
+genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
     Gen.element
         [ Allow "vetted clean"
         , Deny "known-bad version"
-        , Unavailable (WillResolve Nothing) FailDeny "source unreachable"
+        , CannotVet FailDeny "no advisory database loaded"
         ]
 
 spec :: Spec
@@ -246,13 +246,6 @@ spec = do
                 Undecidable transience _ -> transience `shouldBe` WillResolve (Just (RetryAfter 15))
                 other -> expectationFailure ("expected Undecidable, got " <> show other)
 
-        it "honours a self-reported permanent (WontResolve) fault through to Undecidable WontResolve" $ do
-            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Unavailable WontResolve FailDeny "corrupt advisory index")
-            decision <- evalRules ctx [rule] (pkg (Just "myorg") 0)
-            case decision of
-                Undecidable transience _ -> transience `shouldBe` WontResolve
-                other -> expectationFailure ("expected Undecidable WontResolve, got " <> show other)
-
         it "a failing FailNoDecision rule is a no-op (fail-open), leaving a pure allow standing" $ do
             rule <- failingRule "EffAllow" 300 fastConfig FailNoDecision
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
@@ -328,14 +321,14 @@ spec = do
     describe "runEffectfulRule -- the per-rule resilience wrapper" $ do
         it "runs a pure rule directly (no resilience)" $ do
             outcome <- runEffectfulRule ctx (pureAt 200 (AllowScope (mkScope "myorg"))) (pkg (Just "myorg") 0)
-            outcome `shouldSatisfy` (\case Allow{} -> True; _ -> False)
+            outcome `shouldSatisfy` (\case Decided Allow{} -> True; _ -> False)
 
         it "times out a hanging rule and resolves per alignment (fail-closed)" $ do
             -- A 5ms timeout against a rule that sleeps far longer: the attempt is a
             -- failure, so a FailDeny rule yields Unavailable.
             rule <- mkRule "Slow" 1 fastConfig{ecTimeout = 5_000} FailDeny (\_ -> threadDelay 1_000_000 >> pure (Allow "late"))
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
-            outcome `shouldSatisfy` isUnavailableResult
+            outcome `shouldSatisfy` isUnavailable
 
         it "retries a transiently failing rule and succeeds within the budget" $ do
             attempts <- newIORef (0 :: Int)
@@ -343,7 +336,7 @@ spec = do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 2 then throwString "blip" else pure (Allow "recovered")
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
-            outcome `shouldBe` Allow "recovered"
+            outcome `shouldBe` Decided (Allow "recovered")
             readIORef attempts `shouldReturn` 2 -- the initial attempt plus one retry
         it "gives up after the retry budget is spent" $ do
             attempts <- newIORef (0 :: Int)
@@ -351,7 +344,7 @@ spec = do
                 modifyIORef' attempts (+ 1)
                 throwString "still down"
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
-            outcome `shouldSatisfy` isUnavailableResult
+            outcome `shouldSatisfy` isUnavailable
             readIORef attempts `shouldReturn` 3 -- the initial attempt plus two retries
         it "trips the breaker after the threshold, then fast-fails without running the rule" $ do
             attempts <- newIORef (0 :: Int)
@@ -367,6 +360,22 @@ spec = do
             fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule source circuit breaker is open"
             readIORef attempts `shouldReturn` 2
 
+        it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do
+            -- The no-advisory-database verdict is deterministic and in-process, so the
+            -- harness must take it at face value: no in-process retry could change it,
+            -- and it must not count towards the breaker. A genuine fault (an exception,
+            -- a timeout) still would; a returned verdict never does. Regressing this is
+            -- a self-inflicted 503 outage before the first advisory sync lands.
+            evals <- newIORef (0 :: Int)
+            rule <- mkRule "DenyCve" 1 fastConfig{ecBackoff = [0, 0], ecBreakerThreshold = 2} FailDeny $ \_ -> do
+                modifyIORef' evals (+ 1)
+                pure (CannotVet FailDeny "no advisory database loaded")
+            -- Run well past the breaker threshold. Were the verdict retried, each call
+            -- would evaluate three times; were it counted as a failure, the breaker
+            -- would open and later calls would fast-fail without evaluating.
+            outcomes <- replicateM 4 (runEffectfulRule ctx rule (pkg Nothing 0))
+            outcomes `shouldBe` replicate 4 (Decided (CannotVet FailDeny "no advisory database loaded"))
+            readIORef evals `shouldReturn` 4 -- one evaluation per call: no retry, no fast-fail
         it "half-opens after the cooldown and recovers on a successful probe" $ do
             attempts <- newIORef (0 :: Int)
             failRef <- newIORef True
@@ -378,7 +387,7 @@ spec = do
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             writeIORef failRef False
             recovered <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule (pkg Nothing 0)
-            recovered `shouldBe` Deny "now reachable"
+            recovered `shouldBe` Decided (Deny "now reachable")
 
         it "an exhausted FailNoDecision rule resolves to a fail-open Unavailable with a named reason" $ do
             rule <- failingRule "EffAllow" 1 fastConfig FailNoDecision
@@ -403,7 +412,7 @@ spec = do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 2 then throwString "blip" else pure (Allow "recovered")
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
-            outcome `shouldBe` Allow "recovered"
+            outcome `shouldBe` Decided (Allow "recovered")
             readIORef attempts `shouldReturn` 2
 
         it "exhausts under the shipped default config (no suggested Retry-After)" $ do
@@ -422,13 +431,13 @@ spec = do
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now)]
             writeIORef recovered True
             outcome <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule (pkg Nothing 0)
-            outcome `shouldBe` Allow "recovered"
+            outcome `shouldBe` Decided (Allow "recovered")
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
 
         it "records nothing through the default no-op reporter, still resolving fail-closed" $ do
             rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 1} FailDeny (\_ -> throwString "down")
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
-            outcome `shouldSatisfy` isUnavailableResult
+            outcome `shouldSatisfy` isUnavailable
 
     describe "properties" $ do
         it "a failing FailDeny rule that could decide is always fail-closed (Undecidable)" $
@@ -446,7 +455,7 @@ spec = do
                 outcome <-
                     forAll $
                         Gen.element
-                            [NoDecision "x", Unavailable WontResolve FailNoDecision "u"]
+                            [NoDecision "x", CannotVet FailNoDecision "u"]
                 let p = pkg (Just "myorg") ageDays
                 rule <- liftIO (constRule "Eff" effPrec fastConfig FailNoDecision outcome)
                 decision <- liftIO (evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] p)

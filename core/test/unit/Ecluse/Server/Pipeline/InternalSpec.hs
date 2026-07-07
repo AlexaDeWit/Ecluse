@@ -55,7 +55,7 @@ import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
     Rule (AllowIfOlderThan),
-    RuleResult (NoDecision),
+    RuleVerdict (NoDecision),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
