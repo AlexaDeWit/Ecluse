@@ -7,6 +7,7 @@ module Ecluse.Config.Rule (
     emptyPolicy,
     PolicyError (..),
     renderPolicyError,
+    knownRuleTypes,
     resolvePolicy,
     RulePatch (..),
     emptyPatch,
@@ -189,6 +190,12 @@ checkRestatedType name entry rule = case entryType entry of
         | ty `elem` knownRuleTypes -> Left [MalformedRule name ("\"type\" " <> quote ty <> " does not match the default rule it patches")]
         | otherwise -> Left [UnknownRuleType name ty]
 
+{- | The rule type names the diagnostics recognise: the vocabulary
+'checkRestatedType' treats as a real-but-mismatched type (a 'MalformedRule')
+rather than an unknown one (an 'UnknownRuleType'). Exported so a test can pin it
+against drift from the 'Ecluse.Core.Rules.Types.Rule' constructors, their
+'buildRule' branches, and 'Ecluse.Core.Rules.Types.ruleName'.
+-}
 knownRuleTypes :: [Text]
 knownRuleTypes =
     [ "AllowScope"

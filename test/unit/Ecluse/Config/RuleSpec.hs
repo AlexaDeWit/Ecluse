@@ -21,6 +21,7 @@ import Ecluse.Core.Rules.Types (
     defaultAllowIfRemediatesCvePrecedence,
     defaultDenyIfCvePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
+    ruleName,
  )
 
 spec :: Spec
@@ -225,6 +226,28 @@ spec = describe "rulePolicySpec" $ do
                     `shouldMatchList` [UnknownRuleType "bad-type" "Nope", SuppressUnknownRule "ghost"]
             Right rs -> expectationFailure ("expected aggregated errors, got " <> show rs)
 
+    describe "rule-type name contract" $ do
+        it "covers exactly the diagnostic knownRuleTypes list (neither has drifted)" $
+            map fst knownRuleAdds `shouldMatchList` knownRuleTypes
+
+        it "accepts every known rule type and round-trips it through ruleName" $
+            for_ knownRuleAdds $ \(ty, body) ->
+                case resolveJsonOver emptyPolicy body of
+                    Right [PrecededRule _ rule] -> ruleName rule `shouldBe` ty
+                    other ->
+                        expectationFailure
+                            (T.unpack ty <> ": expected a single resolved rule, got " <> show other)
+
+        it "rejects restating a default as another known type with MalformedRule, not UnknownRuleType" $
+            for_ (filter (/= "AllowIfOlderThan") knownRuleTypes) $ \ty ->
+                resolveJson ("{\"rules\":{\"min-age\":{\"type\":\"" <> encodeUtf8 ty <> "\"}}}")
+                    `shouldBe` Left
+                        [MalformedRule "min-age" ("\"type\" \"" <> ty <> "\" does not match the default rule it patches")]
+
+        it "rejects restating a default as an unknown type with UnknownRuleType" $
+            resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThat\"}}}"
+                `shouldBe` Left [UnknownRuleType "min-age" "AllowIfOlderThat"]
+
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
 resolveJson = resolveJsonOver defaultPolicy
 
@@ -262,3 +285,19 @@ containsAllowScope _ = False
 hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
+
+{- | A minimal well-formed "add" patch for each rule type, keyed by its type name.
+Tied to 'knownRuleTypes' by the "covers exactly" expectation, so a new 'Rule' type
+cannot be added without extending this table (and through it the round-trip pin), and
+the round-trip proves each type's 'buildRule' branch and 'ruleName' agree on the name.
+-}
+knownRuleAdds :: [(Text, ByteString)]
+knownRuleAdds =
+    [ ("AllowScope", "{\"rules\":{\"r\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}")
+    , ("AllowIfOlderThan", "{\"rules\":{\"r\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}")
+    , ("AllowByIdentity", "{\"rules\":{\"r\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}")
+    , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
+    , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}")
+    , ("DenyInstallTimeExecution", "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\"}}}")
+    , ("DenyByIdentity", "{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}}")
+    ]
