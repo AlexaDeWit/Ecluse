@@ -295,6 +295,17 @@ spec = do
             it "accepts the bare mount prefix with a trailing slash (empty path → 404)" $
                 get "/npm/" `shouldRespondWith` 404
 
+            it "normalises repeated trailing slashes the same as one (empty path → 404)" $
+                -- @/npm//@ collapses its run of trailing empty segments to the bare mount,
+                -- exactly like @/npm/@, rather than leaving a spurious empty path component.
+                get "/npm//" `shouldRespondWith` 404
+
+            it "leaves an internal empty segment for the router to reject (404, not collapsed)" $
+                -- Only /trailing/ empties are dropped: @/npm//is-odd@ keeps its leading empty
+                -- segment, so it stays an unrecognised path (404) rather than normalising to the
+                -- @/npm/is-odd@ packument route.
+                get "/npm//is-odd" `shouldRespondWith` 404
+
             it "404s an unknown /-/… meta-route under the mount" $
                 get "/npm/-/whoami" `shouldRespondWith` 404
 
