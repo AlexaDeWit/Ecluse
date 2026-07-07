@@ -1,0 +1,26 @@
+{
+  "id": "GHSA-corpus-0006",
+  "aliases": ["CVE-2026-10006"],
+  "summary": "Fixture: one advisory spanning npm and a foreign ecosystem.",
+  "database_specific": { "severity": "MODERATE" },
+  "affected": [
+    {
+      "package": { "name": "corpus-mixed", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }, { "fixed": "1.0.0" }]
+        }
+      ]
+    },
+    {
+      "package": { "name": "redis", "ecosystem": "PyPI" },
+      "ranges": [
+        {
+          "type": "ECOSYSTEM",
+          "events": [{ "introduced": "0" }, { "fixed": "5.0.0" }]
+        }
+      ]
+    }
+  ]
+}

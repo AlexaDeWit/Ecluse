@@ -18,6 +18,7 @@ type RangeRow = (Text, Text, Maybe Text, Maybe Text, Maybe Double)
 corpusV1Rows :: [RangeRow]
 corpusV1Rows =
     [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9)
+    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9)
     , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing)
     , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing)
     , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0)
@@ -29,6 +30,7 @@ corpusV2Rows :: [RangeRow]
 corpusV2Rows =
     [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9)
     , ("corpus-clean", "GHSA-corpus-1001", Just "0", Nothing, Just 8.9)
+    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9)
     , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing)
     , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing)
     , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0)
@@ -53,6 +55,13 @@ spec = do
 
         it "compiles CorpusV2 to CorpusV1 plus the corpus-clean advisory (the swap flip)" $
             withFixtureOsvDb CorpusV2 (\db -> rangeRows db `shouldReturn` corpusV2Rows)
+
+        it "omits foreign affected packages from mixed-ecosystem advisories" $
+            withFixtureOsvDb CorpusV1 $ \db -> do
+                conn <- open db
+                rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges WHERE package_name = 'redis'" :: IO [Only Text]
+                close conn
+                map fromOnly rows `shouldBe` []
 
         it "stamps the generated artifact with the current schema epoch" $
             withFixtureOsvDb CorpusV1 $ \db -> do

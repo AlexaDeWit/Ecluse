@@ -56,6 +56,7 @@ corpusV1Files =
     , "v1/GHSA-corpus-0003.json"
     , "v1/GHSA-corpus-0004.json"
     , "v1/GHSA-corpus-0005.json"
+    , "v1/GHSA-corpus-0006.json"
     , "v1/malformed-deliberate.json"
     ]
 

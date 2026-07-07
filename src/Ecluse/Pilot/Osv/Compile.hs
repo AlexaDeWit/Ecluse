@@ -52,6 +52,7 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
             liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
             runConduit $
                 streamOsvUrl telemetry urlStr
+                    .| CL.filter ((== ecosystem) . extEcosystem)
                     .| CL.chunksOf 2000
                     .| sinkSqlite conn
 
