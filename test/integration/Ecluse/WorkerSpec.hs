@@ -46,7 +46,7 @@ Hermetic and gating, but requires a Docker daemon (for ministack) and no real AW
 -}
 spec :: Spec
 spec =
-    around withMinistack $
+    aroundAll withMinistack $
         describe "mirror worker (ministack + WAI stubs)" $ do
             it "fetches, verifies, publishes, and acks a faithful job (via the loop)" $ \container ->
                 withUpstream $ \upstreamUrl ->

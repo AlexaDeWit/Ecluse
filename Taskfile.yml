@@ -171,8 +171,13 @@ tasks:
         vars: { SUITE: ecluse-core-unit }
       - task: coverage-unit
         vars: { SUITE: ecluse-unit }
-      - task: coverage-unit
-        vars: { SUITE: ecluse-integration }
+      # The integration tier drives ministack containers, so it runs in its own task that pins
+      # the reaping scope and reaps around itself -- the integration suite's Docker lifecycle on
+      # the `task check` path (which runs coverage), matching what `test-integration` does. It is
+      # kept out of the shared `coverage-unit` because that scope env (an ECLUSE_-prefixed var)
+      # would leak into the unit tiers, whose BootSpec boots the real server from the process
+      # environment and rejects the unknown ECLUSE_TEST_SCOPE config key.
+      - task: coverage-integration
       - |
         core_unit_tix="$(find dist-coverage -type f -name ecluse-core-unit.tix | head -n1)"
         unit_tix="$(find dist-coverage -type f -name ecluse-unit.tix | head -n1)"
@@ -202,6 +207,25 @@ tasks:
     desc: Fast, Docker-free unit-only coverage
     cmds:
       - bash scripts/coverage.sh {{.SUITE}} {{.COVERAGE_FLAGS}}
+
+  coverage-integration:
+    desc: Integration-tier coverage (drives ministack; scoped + reaped like test-integration)
+    env:
+      # Pin this worktree's reaping scope so the ministack containers this tier starts are
+      # stamped with it (see Ecluse.Test.Containers) and the reaps below target only our own.
+      # Isolated to this task -- never the shared `coverage-unit` -- because ECLUSE_TEST_SCOPE
+      # is an ECLUSE_-prefixed var the config resolver treats as an unknown key, which would
+      # abort BootSpec's boot-the-real-server cases in the unit tiers (they read the process
+      # environment). The Haskell writer defaults to an unreapable "local" when it is unset.
+      ECLUSE_TEST_SCOPE:
+        sh: bash scripts/test-containers.sh scope
+    cmds:
+      # Sweep this worktree's strays from a prior killed run first, then reap again on exit, so a
+      # hard-killed coverage run leaves no scoped ministack orphans. Both scoped, so a sibling
+      # worktree's live containers are never touched.
+      - bash scripts/test-containers.sh reap
+      - defer: bash scripts/test-containers.sh reap
+      - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
 
   gen-version-fixtures:
     desc: Regenerate version-ordering fixtures

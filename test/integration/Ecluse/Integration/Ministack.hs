@@ -50,9 +50,11 @@ import Ecluse.Test.Containers (testContainerLabels)
 ministackPort :: TC.Port
 ministackPort = 4566
 
-{- | An @hspec@ @around@ hook that starts a @ministack@ container exposing the SQS
+{- | An @hspec@ resource hook that starts a @ministack@ container exposing the SQS
 gateway port, waits until that port accepts connections, and tears it down after
-the action.
+the action. Used with @aroundAll@ so a whole spec shares __one__ container while each
+case still isolates on its own queue ('freshQueue' \/ 'freshQueueUrl'); it never needs
+a fresh container per case.
 
 The image is wrapped in a trivial derived build that re-labels it with ASCII: the
 upstream @ministackorg/ministack@ carries a non-ASCII @description@ label (an em

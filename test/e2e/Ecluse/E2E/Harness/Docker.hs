@@ -3,7 +3,6 @@ module Ecluse.E2E.Harness.Docker (
     withGlobalDataPlane,
     withE2E,
     withE2EWith,
-    withSharedE2E,
 
     -- * Telemetry topology
     collectorOtlpEndpoint,
@@ -81,21 +80,26 @@ dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
 
-{-# NOINLINE globalFixtures #-}
-globalFixtures :: IO FilePath
-globalFixtures = do
-    tmpRoot <- getTemporaryDirectory
-    let workDir = tmpRoot </> "ecluse-e2e-shared-fixtures"
-        htmlDir = workDir </> "html"
-        certsDir = workDir </> "certs"
-        verdConf = workDir </> "verdaccio.yaml"
-        nginxConf = workDir </> "nginx.conf"
-    createDirectoryIfMissing True htmlDir
-    buildFixtures htmlDir fixturePackages
-    writeFileText verdConf verdaccioConfig
-    writeFileText nginxConf nginxStubConfig
-    generateCerts certsDir
-    pure workDir
+{- | Build the shared fixture tree (packument\/tarball HTML, the Verdaccio and nginx
+configs, and a fresh test CA + server cert) in a unique per-run temp directory for the
+duration of the action, then remove the whole tree on every exit path. The directory is
+unique per run (rather than a fixed name) so two worktrees running the e2e at once never
+share -- or delete out from under each other -- one another's fixtures.
+-}
+withFixtureDir :: (FilePath -> IO a) -> IO a
+withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
+  where
+    acquire = do
+        tmpRoot <- getTemporaryDirectory
+        sfx <- uniqueSuffix
+        let workDir = tmpRoot </> ("ecluse-e2e-fixtures-" <> sfx)
+            htmlDir = workDir </> "html"
+        createDirectoryIfMissing True htmlDir
+        buildFixtures htmlDir fixturePackages
+        writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
+        writeFileText (workDir </> "nginx.conf") nginxStubConfig
+        generateCerts (workDir </> "certs")
+        pure workDir
 
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane action = do
@@ -106,96 +110,67 @@ withGlobalDataPlane action = do
             action GlobalDataPlane{gdpNet = "", gdpStub = "upstream", gdpVerd = "verdaccio", gdpMini = "ministack", gdpVerdPort = 4873, gdpMiniPort = 4566, gdpWorkDir = ""}
         _ -> do
             sfx <- uniqueSuffix
-            workDir <- globalFixtures
-            -- Stamp every container and the network with the reaping labels, so a
-            -- run that is hard-killed (past the bracket teardown below) can still be
-            -- swept up by `task test-clean` -- see "Ecluse.Test.Containers".
+            -- Every container and the network carries the reaping labels, so a run that is
+            -- hard-killed past the brackets below can still be swept by `task test-clean`
+            -- (see "Ecluse.Test.Containers"). The nested brackets tear each resource down in
+            -- reverse order on every exit path: success, failure, or exception.
             labelArgs <- dockerLabelArgs "e2e"
-            let net = "ecluse-e2e-global-net-" <> sfx
-                stub = "ecluse-e2e-global-stub-" <> sfx
-                verd = "ecluse-e2e-global-verd-" <> sfx
-                mini = "ecluse-e2e-global-mini-" <> sfx
-                htmlDir = workDir </> "html"
-                certsDir = workDir </> "certs"
-                verdConf = workDir </> "verdaccio.yaml"
-                nginxConf = workDir </> "nginx.conf"
-            bracket
-                (pure ())
-                (\_ -> teardown net [verd, stub, mini] "")
-                ( \_ -> do
-                    dockerOk (["network", "create", "--subnet", "10.254.254.0/24"] <> labelArgs <> [net])
-                    dockerOk $
-                        [ "run"
-                        , "--rm"
-                        , "-d"
-                        , "--name"
-                        , verd
-                        , "--network"
-                        , net
-                        , "--network-alias"
-                        , "verdaccio"
-                        , "-p"
-                        , "127.0.0.1:0:4873"
-                        , "-v"
-                        , verdConf <> ":/verdaccio/conf/config.yaml:ro"
-                        ]
-                            <> labelArgs
-                            <> ["verdaccio/verdaccio:5"]
-                    dockerOk $
-                        [ "run"
-                        , "--rm"
-                        , "-d"
-                        , "--name"
-                        , stub
-                        , "--network"
-                        , net
-                        , "--network-alias"
-                        , "upstream"
-                        , "--network-alias"
-                        , "mirror"
-                        , "-v"
-                        , htmlDir <> ":/usr/share/nginx/html:ro"
-                        , "-v"
-                        , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
-                        , "-v"
-                        , certsDir <> ":/certs:ro"
-                        ]
-                            <> labelArgs
-                            <> ["nginx:alpine"]
-                    dockerOk $
-                        [ "run"
-                        , "--rm"
-                        , "-d"
-                        , "--name"
-                        , mini
-                        , "--network"
-                        , net
-                        , "--network-alias"
-                        , "ministack"
-                        , "-p"
-                        , "127.0.0.1:0:4566"
-                        ]
-                            <> labelArgs
-                            <> ["ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"]
-                    miniPort <- publishedPort mini "4566/tcp"
-                    verdPort <- publishedPort verd "4873/tcp"
-                    action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
-                )
+            withFixtureDir $ \workDir -> do
+                let net = "ecluse-e2e-global-net-" <> sfx
+                    verd = "ecluse-e2e-global-verd-" <> sfx
+                    stub = "ecluse-e2e-global-stub-" <> sfx
+                    mini = "ecluse-e2e-global-mini-" <> sfx
+                    verdRun =
+                        (dockerRun verd net "verdaccio/verdaccio:5")
+                            { drAliases = ["verdaccio"]
+                            , drPorts = ["127.0.0.1:0:4873"]
+                            , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
+                            }
+                    -- One nginx terminates TLS for both registry stubs, so it answers to two
+                    -- in-network aliases (`upstream` and `mirror`) -- the multi-alias the raw
+                    -- docker CLI supports and testcontainers 0.5.3.0 does not.
+                    stubRun =
+                        (dockerRun stub net "nginx:alpine")
+                            { drAliases = ["upstream", "mirror"]
+                            , drMounts =
+                                [ (workDir </> "html", "/usr/share/nginx/html:ro")
+                                , (workDir </> "nginx.conf", "/etc/nginx/conf.d/default.conf:ro")
+                                , (workDir </> "certs", "/certs:ro")
+                                ]
+                            }
+                    miniRun =
+                        (dockerRun mini net "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594")
+                            { drAliases = ["ministack"]
+                            , drPorts = ["127.0.0.1:0:4566"]
+                            }
+                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never
+                -- blocks (see "Ecluse.Core.Security.Host" and its spec), so the real image
+                -- runs unmodified with no production escape hatch. See docs/testing.md.
+                withDockerNetwork labelArgs net ["--subnet", "203.0.113.0/24"] $ \_ ->
+                    withDockerContainer labelArgs verdRun $ \_ ->
+                        withDockerContainer labelArgs stubRun $ \_ ->
+                            withDockerContainer labelArgs miniRun $ \_ -> do
+                                miniPort <- publishedPort mini "4566/tcp"
+                                verdPort <- publishedPort verd "4873/tcp"
+                                action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
 
-{- | Bring the network + base containers up, wait for proxy readiness, run the action,
-then tear everything down on every exit path -- the plain topology ('defaultE2EConfig'),
+{- | Bring up a proxy on the shared data plane, wait for its readiness, run the action,
+then tear the proxy down on every exit path -- the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
+Used under @aroundAllWith@, so one proxy is shared across a describe block's cases (see
+"Ecluse.E2E.SuiteSpec").
 -}
 withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2E = withE2EWith defaultE2EConfig
 
-{- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
-the proxy exports to (on the same TEST-NET, reached by its @otelcol@ network alias),
-and layer extra proxy environment over the base 'proxyEnv'. The collector -- when asked
-for -- is brought up __before__ the proxy and waited until ready, so it is already
-receiving when the proxy makes its first export, and is torn down with the others. Every
-case under 'withE2EWith' is still per-test isolated: its own network, containers, and
-collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
+{- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector the
+proxy exports to (on the shared data-plane network, reached by its @otelcol@ alias), and
+layer extra proxy environment over the base 'proxyEnv'. The collector -- when asked for --
+is brought up __before__ the proxy and waited until ready, so it is already receiving when
+the proxy makes its first export, and is torn down with it. The proxy and collector are
+per-invocation (a describe block's own, under @aroundAllWith@); the network and the
+Verdaccio\/nginx\/ministack data plane underneath are the suite-shared ones from
+'withGlobalDataPlane'.
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2EWith cfg action gdp = do
@@ -223,69 +198,31 @@ withE2EWith cfg action gdp = do
                 prox = "ecluse-e2e-proxy-" <> sfx
                 coll = "ecluse-e2e-otelcol-" <> sfx
                 certsDir = gdpWorkDir gdp </> "certs"
-            bracket
-                (pure ())
-                (\_ -> teardown "" [prox, coll] "")
-                ( \_ -> do
-                    -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
-                    -- into a `debug` exporter at detailed verbosity (so each received metric and
-                    -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
-                    -- and waited ready here -- before the proxy -- so it is already accepting when
-                    -- the proxy first exports.
-                    when (ecCollector cfg) $ do
-                        dockerOk $
-                            [ "run"
-                            , "--rm"
-                            , "-d"
-                            , "--name"
-                            , coll
-                            , "--network"
-                            , net
-                            , "--network-alias"
-                            , toString collectorAlias
-                            , "-e"
-                            , "OTELCOL_CONFIG=" <> toString collectorConfig
-                            ]
-                                <> labelArgs
-                                <> [ collectorImage
-                                   , -- The args after the image replace the image's default CMD, so the
-                                     -- inline config arrives through the `env:` provider with no shell,
-                                     -- file, or bind mount on the distroless image.
-                                     "--config"
-                                   , "env:OTELCOL_CONFIG"
-                                   ]
-                        ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
-                        unless ready (fail "OTLP collector did not become ready within the timeout")
-                    manager <- newManager defaultManagerSettings
-                    -- Create the mirror queue in ministack and learn its URL. The proxy routes to
-                    -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
-                    -- URL's host (here ministack's own `localhost:4566`) is immaterial.
-                    let queueName = "ecluse-e2e-queue-" <> T.pack sfx
-                    queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
-                    -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
-                    -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before
-                    -- the container starts -- the assigned port is only readable after.
-                    proxyPort <- freeHostPort
-                    -- The real proxy image: server ‖ worker over the real SQS backend, pointed
-                    -- at ministack through the production AWS_ENDPOINT_URL_SQS override.
-                    dockerOk $
-                        [ "run"
-                        , "--rm"
-                        , "-d"
-                        , "--name"
-                        , prox
-                        , "--network"
-                        , net
-                        , "-p"
-                        , "127.0.0.1:" <> show proxyPort <> ":4873"
-                        , -- The test CA bundle the proxy trusts (SSL_CERT_FILE in proxyEnv points
-                          -- here): the documented "extend the image with your cert chain" workflow.
-                          "-v"
-                        , certsDir <> ":/certs:ro"
-                        ]
-                            <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
-                            <> labelArgs
-                            <> [image]
+            -- The OTLP collector (only when the scenario asks for one) comes up and is waited
+            -- ready BEFORE the proxy, so it is already accepting when the proxy first exports;
+            -- it is torn down after the body. 'Nothing' when the scenario runs without one.
+            withOptionalCollector cfg labelArgs net coll $ \collectorName -> do
+                manager <- newManager defaultManagerSettings
+                -- Create the mirror queue in ministack and learn its URL. The proxy routes to
+                -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
+                -- URL's host (here ministack's own `localhost:4566`) is immaterial.
+                let queueName = "ecluse-e2e-queue-" <> T.pack sfx
+                queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
+                -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
+                -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before the
+                -- container starts -- the assigned port is only readable after.
+                proxyPort <- freeHostPort
+                -- The real proxy image: server ‖ worker over the real SQS backend, pointed at
+                -- ministack through the production AWS_ENDPOINT_URL_SQS override. The test CA
+                -- bundle it trusts (SSL_CERT_FILE in 'proxyEnv') is bind-mounted from the shared
+                -- certs dir -- the documented "extend the image with your cert chain" workflow.
+                let proxRun =
+                        (dockerRun prox net image)
+                            { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
+                            , drMounts = [(certsDir, "/certs:ro")]
+                            , drEnv = proxyEnv proxyPort queueUrl <> ecExtraEnv cfg
+                            }
+                withDockerContainer labelArgs proxRun $ \_ -> do
                     let verdPort = gdpVerdPort gdp
                         base = "http://127.0.0.1:" <> show proxyPort
                         e2e =
@@ -295,19 +232,12 @@ withE2EWith cfg action gdp = do
                                 , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
                                 , e2eStubContainer = stub
                                 , e2eProxyContainer = prox
-                                , e2eCollectorContainer = if ecCollector cfg then Just coll else Nothing
+                                , e2eCollectorContainer = collectorName
                                 , e2eManager = manager
                                 }
                     ready <- waitFor manager (base <> "/readyz") 200
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
-                )
-
-{- | A shared E2E environment for tests that do not interfere with each other
-(e.g., read-only tests). It boots the proxy once and passes it to the tests.
--}
-withSharedE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
-withSharedE2E = withE2EWith defaultE2EConfig
 
 {- | The proxy's environment, given the host port it is published on and the mirror
 queue URL created in ministack. The real SQS backend is pointed at ministack through
@@ -348,11 +278,101 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
-teardown :: String -> [String] -> FilePath -> IO ()
-teardown net containers workDir = do
-    for_ containers (\c -> void (readProcess (proc "docker" ["rm", "-f", c])))
-    unless (null net) $ void (readProcess (proc "docker" ["network", "rm", net]))
-    unless (null workDir) $ handleAny (const pass) (removePathForcibly workDir)
+{- | A detached test container's @docker run@ specification: everything that varies
+between the harness's containers, so the creation sites share one builder ('dockerRun')
+and one bracket ('withDockerContainer') rather than each re-spelling the whole invocation.
+-}
+data DockerRun = DockerRun
+    { drName :: String
+    -- ^ The @--name@; also how the log\/pause helpers address the container later.
+    , drNetwork :: String
+    -- ^ The network to join (@--network@).
+    , drAliases :: [String]
+    -- ^ In-network aliases (@--network-alias@, repeatable).
+    , drPorts :: [String]
+    -- ^ @-p@ publish specs, e.g. @"127.0.0.1:0:4873"@.
+    , drMounts :: [(FilePath, String)]
+    -- ^ @-v@ bind mounts as @(hostPath, "containerPath[:ro]")@.
+    , drEnv :: [(Text, Text)]
+    -- ^ @-e@ environment.
+    , drImage :: String
+    , drCmd :: [String]
+    -- ^ Arguments after the image (override the default CMD); usually empty.
+    }
+
+-- | The base 'DockerRun' for a named container on a network: no ports, mounts, env, or cmd.
+dockerRun :: String -> String -> String -> DockerRun
+dockerRun name net image =
+    DockerRun
+        { drName = name
+        , drNetwork = net
+        , drAliases = []
+        , drPorts = []
+        , drMounts = []
+        , drEnv = []
+        , drImage = image
+        , drCmd = []
+        }
+
+{- | Render and run a 'DockerRun' detached (@docker run --rm -d@), stamped with the reaping
+labels; fails the test loudly on a non-zero exit.
+-}
+runDetached :: [String] -> DockerRun -> IO ()
+runDetached labelArgs spec =
+    dockerOk $
+        ["run", "--rm", "-d", "--name", drName spec, "--network", drNetwork spec]
+            <> concatMap (\a -> ["--network-alias", a]) (drAliases spec)
+            <> concatMap (\p -> ["-p", p]) (drPorts spec)
+            <> concatMap (\(h, c) -> ["-v", h <> ":" <> c]) (drMounts spec)
+            <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (drEnv spec)
+            <> labelArgs
+            <> (drImage spec : drCmd spec)
+
+{- | Run a detached container for the duration of the action, force-removing it
+(@docker rm -f@) on every exit path -- success, failure, or exception. Yields the
+container's name (which the caller chose, and the log\/pause helpers reuse).
+-}
+withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
+withDockerContainer labelArgs spec =
+    bracket (runDetached labelArgs spec >> pure (drName spec)) removeContainer
+
+{- | Create a labelled docker network for the duration of the action, removing it on every
+exit path (after any containers on it, since the brackets nest). @createArgs@ carries extra
+@network create@ flags (e.g. @--subnet@). Yields the network name.
+-}
+withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
+withDockerNetwork labelArgs name createArgs =
+    bracket (dockerOk (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
+
+{- | Bring up the OTLP collector for a scenario that asks for one (an OTLP\/HTTP receiver
+into a @debug@ exporter at detailed verbosity, so each received span and metric is written
+to its logs, reached by the proxy as @otelcol@), waited ready and torn down around the
+action; a no-op yielding 'Nothing' otherwise. The inline config arrives through the @env:@
+provider, so the distroless image needs no shell, file, or bind mount.
+-}
+withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
+withOptionalCollector cfg labelArgs net coll body
+    | not (ecCollector cfg) = body Nothing
+    | otherwise = withDockerContainer labelArgs collectorRun $ \_ -> do
+        ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
+        unless ready (fail "OTLP collector did not become ready within the timeout")
+        body (Just coll)
+  where
+    collectorRun =
+        (dockerRun coll net collectorImage)
+            { drAliases = [toString collectorAlias]
+            , drEnv = [("OTELCOL_CONFIG", collectorConfig)]
+            , drCmd = ["--config", "env:OTELCOL_CONFIG"]
+            }
+
+-- Force-remove a container by name; never throws (a missing container is fine), so a
+-- bracket release cannot mask the action's own result or exception.
+removeContainer :: String -> IO ()
+removeContainer c = void (readProcess (proc "docker" ["rm", "-f", c]))
+
+-- Remove a network by name; never throws, for the same reason as 'removeContainer'.
+removeNetwork :: String -> IO ()
+removeNetwork net = void (readProcess (proc "docker" ["network", "rm", net]))
 
 -- The collector's network alias on the TEST-NET; the proxy exports to it by this name.
 collectorAlias :: Text

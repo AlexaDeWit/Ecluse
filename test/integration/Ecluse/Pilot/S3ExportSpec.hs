@@ -7,7 +7,7 @@ module Ecluse.Pilot.S3ExportSpec (
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, around, describe, it, shouldBe)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import TestContainers (containerAddress)
 import UnliftIO (throwIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -27,7 +27,7 @@ import Katip (Environment (..), initLogEnv, runKatipContextT)
 spec :: Spec
 spec = do
     describe "S3 Export Integration" $ do
-        around withMinistack $ do
+        aroundAll withMinistack $ do
             it "uploads OSV databases to S3" $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     let (host, port) = containerAddress container 4566

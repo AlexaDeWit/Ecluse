@@ -70,7 +70,7 @@ import Ecluse.Core.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
 spec :: Spec
 spec =
-    around withMinistack $
+    aroundAll withMinistack $
         describe "advisory sync + shadow swap (ministack S3, one proxy, two phases)" $
             it "denies the young fix with no database, then admits it once the synced artifact swaps in" $ \container ->
                 withSystemTempDir $ \dataDir ->
