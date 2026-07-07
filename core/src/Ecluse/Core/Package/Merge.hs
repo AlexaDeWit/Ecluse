@@ -62,6 +62,11 @@ module Ecluse.Core.Package.Merge (
     integrityHashes,
     mergePackuments,
 
+    -- * Divergence policy (a post-plan projection)
+    DivergencePolicy (..),
+    parseDivergencePolicy,
+    applyDivergencePolicy,
+
     -- * The merge accumulator
     -- $accumulator
     Merge,
@@ -71,6 +76,7 @@ module Ecluse.Core.Package.Merge (
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (
@@ -191,6 +197,64 @@ data MergePlan = MergePlan
     -}
     }
     deriving stock (Eq, Show)
+
+{- | The operator's policy for a served version a cross-upstream integrity 'Divergence'
+was detected on. The signal itself -- the @WARNING@ log line and the
+@ecluse.registry.merge.divergence@ counter -- fires under __both__ policies; the policy
+decides only whether the contested version is additionally withheld from the served
+listing.
+
+The merge never consults this: 'mergePackuments' always records the divergence and lets
+the trusted copy win, and 'applyDivergencePolicy' is a separate projection the serve
+layer runs over the finished plan. That keeps the merge a pure, policy-free function and
+leaves the availability-vs-strictness trade with the operator (@ECLUSE_DIVERGENCE_POLICY@).
+-}
+data DivergencePolicy
+    = {- | Serve the trusted (winning) copy and rely on the divergence signal alone (the
+      default). The contested version stays in the listing.
+      -}
+      Warn
+    | {- | Withhold every version a divergence was detected on from the served listing: it
+      is dropped from the survivors, its @time@ entry removed, and any @dist-tag@
+      (including @latest@) that pointed at it dropped. A resolver pinned to that exact
+      version then fails to resolve it rather than receive a contested copy.
+      -}
+      FailClosed
+    deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+{- | Parse an operator-supplied divergence policy (the @ECLUSE_DIVERGENCE_POLICY@ value):
+@warn@ or @fail-closed@, case-insensitively and tolerant of @fail_closed@\/@failclosed@
+spellings. Any other value is a 'Left' naming the offending input.
+-}
+parseDivergencePolicy :: Text -> Either Text DivergencePolicy
+parseDivergencePolicy raw =
+    case T.toLower (T.strip raw) of
+        "warn" -> Right Warn
+        "fail-closed" -> Right FailClosed
+        "fail_closed" -> Right FailClosed
+        "failclosed" -> Right FailClosed
+        other -> Left ("unknown divergence policy '" <> other <> "' (expected 'warn' or 'fail-closed')")
+
+{- | Apply a 'DivergencePolicy' to a finished 'MergePlan' -- a projection the serve layer
+runs __after__ it has logged and metered the plan's divergences. 'Warn' is the identity.
+'FailClosed' drops every version key a 'Divergence' was detected on from the served
+surface, coherently: removed from 'mpSurvivors' and 'mpTime', and any 'mpDistTags' target
+(including @latest@) that resolved to a dropped version removed too, so the projected plan
+still assembles a self-consistent document. 'mpDivergences' is left intact -- it is the
+audit record, already actioned by the caller's log and metric. Dropping every surviving
+version leaves an empty 'mpSurvivors'; the caller takes the same no-survivors terminal
+'mergePackuments' already guards for.
+-}
+applyDivergencePolicy :: DivergencePolicy -> MergePlan -> MergePlan
+applyDivergencePolicy Warn plan = plan
+applyDivergencePolicy FailClosed plan =
+    plan
+        { mpSurvivors = Map.withoutKeys (mpSurvivors plan) dropped
+        , mpTime = Map.withoutKeys (mpTime plan) dropped
+        , mpDistTags = Map.filter (\target -> not (unVersion target `Set.member` dropped)) (mpDistTags plan)
+        }
+  where
+    dropped = Set.map divVersion (mpDivergences plan)
 
 {- | An order-independent fingerprint of a version's artifact integrity: the sorted
 multiset of @(resolved algorithm, comparable digest body)@ pairs across all of the

@@ -96,10 +96,12 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret)
 
 import Ecluse.Core.Package (
+    HashAlg,
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageInfo (infoVersions),
     PackageName,
+    renderHashAlg,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
@@ -107,9 +109,14 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    MergePlan (mpSurvivors),
+    Divergence (divLosing, divVersion, divWinning),
+    DivergencePolicy,
+    IntegrityFingerprint,
+    MergePlan (mpDivergences, mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
+    applyDivergencePolicy,
+    integrityHashes,
     mergePackuments,
  )
 import Ecluse.Core.Registry.Metadata (
@@ -263,54 +270,87 @@ serveWithDeps ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 serveWithDeps mode renderer deps name request respond
-    | not (edgeTokenMatches (pdInboundToken deps) clientToken) = liftIO (respond (edgeUnauthorised renderer))
+    | not (edgeTokenMatches (pdInboundToken deps) (forwardedToken request)) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         rt <- asks ctxRuntime
-        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmitted rt) >>= \case
+        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode renderer deps name request respond rt) >>= \case
             Just received -> pure received
             Nothing -> liftIO $ do
                 mpServeDecision (srMetrics rt) Metric.Unavailable
                 respond (serveOverloaded renderer)
-  where
-    -- The client's bearer, scanned out of the headers once: the edge gate compares
-    -- it and the private-origin fetch forwards it.
-    clientToken = forwardedToken request
 
-    serveAdmitted rt = do
-        logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
-        let metrics = srMetrics rt
-        evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pdAdvisoryEtag deps)
-        (privResult, pubResult) <-
-            concurrently
-                (fetchPrivateOrigin deps rt clientToken name)
-                (fetchPublicOrigin deps rt name)
-        (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
-        let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
-            sources = catMaybes [private, public]
-        case packumentPlan sources of
-            Just plan -> do
-                liftIO (mpServeDecision metrics Metric.Admit)
-                answerConditional rt sources plan
-            Nothing -> do
-                let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
-                liftIO (mpServeDecision metrics (packumentServeDecision decisions))
-                liftIO (recordDenials metrics decisions)
-                logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
-                liftIO (respond (noSurvivors renderer deps decisions))
+{- Serve a packument once past the admission gate: fetch both origins, gate and merge
+them, then either answer the conditional serve or take the no-survivors terminal. Hoisted
+to the module level, taking its serve context as parameters rather than closing over a
+large @where@, so the request flow reads as a flat sequence rather than deep nesting. -}
+serveAdmittedPackument ::
+    PackumentServe ->
+    MountRenderer ->
+    PackumentDeps ->
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    ServeRuntime ->
+    Handler ResponseReceived
+serveAdmittedPackument mode renderer deps name request respond rt = do
+    logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
+    let metrics = srMetrics rt
+        -- The client's bearer, scanned out of the headers once; the private-origin fetch
+        -- forwards it (the edge gate already compared it before admission).
+        clientToken = forwardedToken request
+    evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pdAdvisoryEtag deps)
+    (privResult, pubResult) <-
+        concurrently
+            (fetchPrivateOrigin deps rt clientToken name)
+            (fetchPublicOrigin deps rt name)
+    (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
+    let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
+        sources = catMaybes [private, public]
+        -- The terminal for a request that leaves nothing serveable: the merge found no
+        -- survivors, or the divergence policy withheld the last of them (fail-closed).
+        noServeableVersions = do
+            let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
+            liftIO (mpServeDecision metrics (packumentServeDecision decisions))
+            liftIO (recordDenials metrics decisions)
+            logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
+            liftIO (respond (noSurvivors renderer deps decisions))
+        -- Serve a plan that survived the divergence policy: record the admit, then answer
+        -- the conditional request.
+        serveResolved served = do
+            liftIO (mpServeDecision metrics Metric.Admit)
+            answerPackumentConditional mode deps name request respond rt sources served
+    case packumentPlan sources of
+        Nothing -> noServeableVersions
+        Just plan -> do
+            -- A cross-upstream integrity divergence (threat #11) is logged and metered
+            -- under every policy; only 'FailClosed' then withholds the contested
+            -- version(s), which 'survivingPlan' folds into the no-survivors terminal.
+            warnDivergences metrics name plan
+            maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
 
-    -- The validator is derived from the serve's inputs, so the conditional
-    -- request is answered BEFORE any assembly: a 304 costs the fetches and
-    -- the plan, never the document rebuild, encode, or an output hash.
-    answerConditional rt sources plan = do
-        let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
-        case evaluateETag (requestHeaders request) etag of
-            NotModified matched -> do
-                logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-                liftIO (respond (notModifiedResponse matched))
-            Modified fresh -> do
-                logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-                bytes <- liftIO (servedBytes rt deps sources plan fresh)
-                liftIO (respond (packumentResponse mode fresh bytes))
+{- Answer the conditional packument request BEFORE any assembly: a 304 costs the fetches
+and the plan, never the document rebuild, encode, or output hash. Hoisted to the module
+level, its serve context passed in, rather than nested inside 'serveWithDeps'. -}
+answerPackumentConditional ::
+    PackumentServe ->
+    PackumentDeps ->
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    ServeRuntime ->
+    [Contribution] ->
+    MergePlan ->
+    Handler ResponseReceived
+answerPackumentConditional mode deps name request respond rt sources plan = do
+    let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
+    case evaluateETag (requestHeaders request) etag of
+        NotModified matched -> do
+            logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
+            liftIO (respond (notModifiedResponse matched))
+        Modified fresh -> do
+            logFM DebugS (ls ("serving packument for " <> renderPackageName name))
+            bytes <- liftIO (servedBytes rt deps sources plan fresh)
+            liftIO (respond (packumentResponse mode fresh bytes))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -518,6 +558,50 @@ logBreach name err =
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
+{- Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it. A
+public copy contradicts the trusted one on a shared integrity algorithm for a shared
+version; the trusted copy still won the merge (and is served, or withheld under
+'FailClosed'), so this is the supply-chain signal the operator alarms on, never a silent
+reconciliation. The structured payload names the package and the contradicting versions;
+the @ecluse.registry.merge.divergence@ counter is incremented once per contradicting
+version. Nothing is logged or metered for a clean merge. -}
+warnDivergences :: (KatipContext m) => MetricsPort -> PackageName -> MergePlan -> m ()
+warnDivergences metrics name plan =
+    case toList (mpDivergences plan) of
+        [] -> pass
+        divs -> do
+            liftIO (for_ divs (const (mpMergeDivergence metrics)))
+            katipAddContext (payload divs) $ logFM WarningS (ls (message divs))
+  where
+    payload divs =
+        sl "module" pipelineModule
+            <> sl "package" (renderPackageName name)
+            <> sl "versions" (T.intercalate "," (map divVersion divs))
+    message divs =
+        "cross-upstream integrity divergence: the trusted copy of "
+            <> renderPackageName name
+            <> " is served, but a public copy contradicts it on a shared integrity algorithm for "
+            <> show (length divs)
+            <> " version(s): "
+            <> T.intercalate "; " (map renderDivergence divs)
+
+-- One divergence rendered for the log line: the version key and the contradicting trusted
+-- vs public integrity fingerprints, read back via 'integrityHashes'.
+renderDivergence :: Divergence -> Text
+renderDivergence d =
+    divVersion d
+        <> " (trusted "
+        <> renderFingerprint (divWinning d)
+        <> " vs public "
+        <> renderFingerprint (divLosing d)
+        <> ")"
+
+renderFingerprint :: IntegrityFingerprint -> Text
+renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashes fp)) <> "}"
+
+renderHash :: (Maybe HashAlg, Text) -> Text
+renderHash (alg, body) = maybe "none" renderHashAlg alg <> ":" <> body
+
 {- Log the malformed packument entries an upstream served that the projection dropped
 rather than failing the whole document on, at 'WarningS', so an operator can see that an
 upstream served a malformed entry, which kind (a version manifest, a dist-tag, or a
@@ -705,6 +789,14 @@ packumentPlan sources = do
     plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
     pure plan
+
+{- The plan a request should serve under an operator divergence policy, or 'Nothing' when
+the policy withheld the last surviving version (take the no-survivors terminal). 'Warn'
+never withholds; 'FailClosed' drops the contested versions and may leave no survivors. -}
+survivingPlan :: DivergencePolicy -> MergePlan -> Maybe MergePlan
+survivingPlan policy plan =
+    let served = applyDivergencePolicy policy plan
+     in if Map.null (mpSurvivors served) then Nothing else Just served
 
 {- | The derived packument validator: a SHA-256 over the serve's __inputs__ -- the
 mount base URL, the package name, and per source (in merge order) its provenance,

@@ -54,7 +54,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (MergePlan, SourceId)
+import Ecluse.Core.Package.Merge (DivergencePolicy, MergePlan, SourceId)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
@@ -212,6 +212,13 @@ data PackumentDeps = PackumentDeps
     -}
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
+    , pdDivergencePolicy :: DivergencePolicy
+    {- ^ What to do with a served version a cross-upstream integrity divergence was
+    detected on (@ECLUSE_DIVERGENCE_POLICY@, default 'Ecluse.Core.Package.Merge.Warn').
+    The signal (the @WARNING@ log and the @ecluse.registry.merge.divergence@ counter)
+    fires regardless; this only decides whether the contested version is additionally
+    withheld from the served listing ('Ecluse.Core.Package.Merge.FailClosed').
+    -}
     , pdNewMetadataClient ::
         TracingPort ->
         MetricsPort ->

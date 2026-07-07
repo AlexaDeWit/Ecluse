@@ -105,6 +105,8 @@ data MetricName
       ServeAdmissionInFlight
     | -- | @ecluse.serve.admission.queued@ -- admissions that waited for a slot (counter).
       ServeAdmissionQueued
+    | -- | @ecluse.registry.merge.divergence@ -- cross-upstream integrity divergences detected in the packument merge (counter).
+      MergeDivergence
     | -- | @ecluse.upstream.fetch.duration@ -- upstream fetch latency (histogram).
       UpstreamFetchDuration
     | -- | @ecluse.upstream.fetch.errors@ -- upstream fetch errors (counter).
@@ -146,6 +148,7 @@ metricName = \case
     RuleBreakerState -> "ecluse.rule.breaker.state"
     ServeAdmissionInFlight -> "ecluse.serve.admission.in_flight"
     ServeAdmissionQueued -> "ecluse.serve.admission.queued"
+    MergeDivergence -> "ecluse.registry.merge.divergence"
     UpstreamFetchDuration -> "ecluse.upstream.fetch.duration"
     UpstreamFetchErrors -> "ecluse.upstream.fetch.errors"
     MetadataCacheRequests -> "ecluse.metadata_cache.requests"

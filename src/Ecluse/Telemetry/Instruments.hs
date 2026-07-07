@@ -39,6 +39,7 @@ module Ecluse.Telemetry.Instruments (
     recordServeDecision,
     recordServeAdmissionInFlight,
     recordServeAdmissionQueued,
+    recordMergeDivergence,
 
     -- * Rule gate
     recordRuleDenial,
@@ -117,6 +118,7 @@ data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
     , mServeAdmissionQueued :: Counter Int64
+    , mMergeDivergence :: Counter Int64
     , mRuleDenials :: Counter Int64
     , mRuleEvalDuration :: Histogram
     , mRuleEffectfulFailures :: Counter Int64
@@ -153,6 +155,7 @@ newMetrics telemetry = do
         <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
         <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
         <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
+        <*> counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
         <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
         <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
         <*> counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
@@ -207,6 +210,7 @@ metricsPortOf m =
         { mpServeDecision = recordServeDecision m
         , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
+        , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
         , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
@@ -248,6 +252,14 @@ recordServeAdmissionInFlight m delta =
 recordServeAdmissionQueued :: (MonadIO m) => Metrics -> m ()
 recordServeAdmissionQueued m =
     addOne (mServeAdmissionQueued m) []
+
+{- | Record one cross-upstream integrity divergence (@ecluse.registry.merge.divergence@),
+incremented once per contradicting version. Label-free: the package, version, and digest
+bodies live on the @WARNING@ log line, never a metric label (the bounded-label discipline).
+-}
+recordMergeDivergence :: (MonadIO m) => Metrics -> m ()
+recordMergeDivergence m =
+    addOne (mMergeDivergence m) []
 
 {- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
 denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)

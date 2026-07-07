@@ -46,6 +46,7 @@ import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -201,6 +202,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 , pdHelp = Nothing
                 , pdMinIntegrity = defaultMinIntegrity
                 , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+                , pdDivergencePolicy = Warn
                 , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
