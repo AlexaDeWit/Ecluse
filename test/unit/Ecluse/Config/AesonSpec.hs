@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse.Config (AppConfig (..), Config (..), ConfigError, loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
 
 spec :: Spec
 spec = describe "decodeDocument" $ do
@@ -86,6 +87,20 @@ spec = describe "decodeDocument" $ do
                 cfgCveDbPollInterval (configApp doc) `shouldBe` 60
                 cfgMaxOsvDbBytes (configApp doc) `shouldBe` 536870912
                 cfgVulnerabilityDatabaseBucket (configApp doc) `shouldBe` Nothing
+
+    it "defaults the divergence policy to warn" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgDivergencePolicy (configApp doc) `shouldBe` Warn
+
+    it "parses ECLUSE_DIVERGENCE_POLICY=fail-closed from the environment" $
+        case loadConfig [("ECLUSE_DIVERGENCE_POLICY", "fail-closed")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgDivergencePolicy (configApp doc) `shouldBe` FailClosed
+
+    it "rejects an unknown ECLUSE_DIVERGENCE_POLICY value, naming the field" $
+        loadConfig [("ECLUSE_DIVERGENCE_POLICY", "drop")] Nothing
+            `shouldSatisfy` decodeErrorMentions "divergencePolicy"
 
     it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
         case loadConfig [] Nothing of

@@ -12,6 +12,7 @@ module Ecluse.Test.Port (
     -- * Serve-path ports
     noopMetricsPort,
     recordingMetricsPort,
+    recordingDivergenceMetricsPort,
     passthroughTracingPort,
 
     -- * Worker ports
@@ -56,6 +57,16 @@ recordingMetricsPort :: IO (MetricsPort, IO [Decision])
 recordingMetricsPort = do
     seen <- newTVarIO []
     let port = noopMetricsPort{mpServeDecision = \d -> atomically (modifyTVar' seen (<> [d]))}
+    pure (port, readTVarIO seen)
+
+{- | A 'MetricsPort' that counts the cross-upstream integrity divergences it is handed
+(@ecluse.registry.merge.divergence@), alongside a reader for the running total. Every
+other field is inert. Lets a spec assert the serve path metered a divergence.
+-}
+recordingDivergenceMetricsPort :: IO (MetricsPort, IO Int)
+recordingDivergenceMetricsPort = do
+    seen <- newTVarIO 0
+    let port = noopMetricsPort{mpMergeDivergence = atomically (modifyTVar' seen (+ 1))}
     pure (port, readTVarIO seen)
 
 {- | A 'TracingPort' that opens no span and simply runs the bracketed body -- the inert

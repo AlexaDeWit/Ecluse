@@ -54,7 +54,7 @@ import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Port (passthroughTracingPort, recordingMetricsPort)
+import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -72,6 +72,25 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
+
+    it "logs and meters a cross-upstream integrity divergence, still serving the trusted copy (warn)" $
+        -- Both origins resolve leftpad 1.0.0 but contradict on the shared SHA-512 digest,
+        -- so the merge records a divergence (threat #11). Under the default warn policy the
+        -- trusted copy is served (200) and the divergence counter fires once.
+        testWithApplication (pure upstreamApp) $ \publicPort ->
+            testWithApplication (pure divergentPrivateApp) $ \privatePort -> do
+                (metricsPort, divergences) <- recordingDivergenceMetricsPort
+                rt <- mkRuntime metricsPort
+                baseDeps <- depsFor publicPort
+                let privateUrl = "http://localhost:" <> show privatePort
+                    deps =
+                        baseDeps
+                            { pdPrivateBaseUrl = privateUrl
+                            , pdTarballHostGate = tarballHostGate privateUrl (pdPublicBaseUrl baseDeps) (pdMirrorTarget baseDeps)
+                            }
+                resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+                statusCode (responseStatus resp) `shouldBe` 200
+                divergences >>= (`shouldBe` 1)
 
     it "records an unavailability and renders 503 when no upstream resolves" $ do
         (metricsPort, decisions) <- recordingMetricsPort
@@ -261,9 +280,11 @@ upstreamApp req respond =
 artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"
 
--- | A one-version packument for @leftpad@, its tarball self-hosted on @host@.
-packumentFor :: ByteString -> Value
-packumentFor host =
+{- | A one-version packument for @leftpad@, its tarball self-hosted on @host@, committing
+to the given @integrity@ string (so a divergent copy differs only in that digest).
+-}
+packumentWithIntegrity :: ByteString -> Text -> Value
+packumentWithIntegrity host integrity =
     object
         [ "name" .= ("leftpad" :: Text)
         , "dist-tags" .= object ["latest" .= ("1.0.0" :: Text)]
@@ -276,13 +297,37 @@ packumentFor host =
                         , "dist"
                             .= object
                                 [ "tarball" .= ("http://" <> (decodeUtf8 host :: Text) <> "/leftpad/-/leftpad-1.0.0.tgz")
-                                , "integrity" .= sha512Integrity artifactBytes
+                                , "integrity" .= integrity
                                 ]
                         ]
                 ]
         , "time" .= object ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)]
         ]
 
+-- | The public copy's packument: its integrity is a real SHA-512 over the served bytes.
+packumentFor :: ByteString -> Value
+packumentFor host = packumentWithIntegrity host (sha512Integrity artifactBytes)
+
 -- | The Subresource-Integrity @sha512-<base64>@ string over the given bytes.
 sha512Integrity :: ByteString -> Text
 sha512Integrity bytes = "sha512-" <> decodeUtf8 (convertToBase Base64 (hash bytes :: Digest SHA512) :: ByteString)
+
+{- | A private (trusted) upstream serving @leftpad@ 1.0.0 with an integrity that
+contradicts the public copy on the shared SHA-512 algorithm (a digest over different
+bytes): the private side of a cross-upstream divergence. Only the packument route is
+served, since the divergence is decided on metadata and no tarball is fetched.
+-}
+divergentPrivateApp :: Application
+divergentPrivateApp req respond =
+    case rawPathInfo req of
+        "/leftpad" ->
+            respond (responseLBS status200 [(hContentType, "application/json")] (encode (packumentForDivergent host)))
+        _ -> respond (responseLBS status404 [] "")
+  where
+    host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
+
+{- | The private copy's packument: a well-formed SHA-512 digest over /different/ bytes, so
+it contradicts 'packumentFor' on the shared algorithm while still meeting the floor.
+-}
+packumentForDivergent :: ByteString -> Value
+packumentForDivergent host = packumentWithIntegrity host (sha512Integrity "leftpad artifact bytes (privately tampered)")
