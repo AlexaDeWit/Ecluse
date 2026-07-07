@@ -21,30 +21,13 @@ import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (newInMemoryQueue)
-import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
-import Ecluse.Proxy (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, mountBindingFor, npmServerConfig, planCveSync)
+import Ecluse.Proxy (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, mountBindingFor, npmServerConfig, planCveSync, unconfiguredRegistry)
 import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Cve (fakeCveLookup)
-
-fakeRegistry :: RegistryClient
-fakeRegistry =
-    RegistryClient
-        { fetchMetadata = const unused
-        , publishArtifact = \_ _ _ _ -> unused
-        , parsePackageInfo = \_ _ -> Left unusedParse
-        , parseVersionDetails = \_ _ -> Left unusedParse
-        , parseVersionList = const (Left unusedParse)
-        }
-  where
-    unused :: IO a
-    unused = throwString "fakeRegistry: composition-root routing must not fetch"
-
-    unusedParse :: ParseError
-    unusedParse = ParseError "fakeRegistry: composition-root routing must not parse"
 
 newTestManager :: IO Manager
 newTestManager = newManager defaultManagerSettings
@@ -56,7 +39,7 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 npmApp :: IO Application
 npmApp = application npmServerConfig <$> newTestEnv
