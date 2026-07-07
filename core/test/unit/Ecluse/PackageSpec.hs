@@ -96,6 +96,18 @@ spec = do
             parseHashAlg "SHA-384" `shouldBe` Right SHA384
             parseHashAlg (renderHashAlg SHA384) `shouldBe` Right SHA384
 
+        it "accepts canonical names and single-dash aliases, case- and whitespace-insensitively" $ do
+            parseHashAlg "sha256" `shouldBe` Right SHA256
+            parseHashAlg "SHA-256" `shouldBe` Right SHA256
+            parseHashAlg "  Sha512  " `shouldBe` Right SHA512
+            parseHashAlg "blake2b" `shouldBe` Right Blake2b
+        it "rejects arbitrary internal dashes rather than masking a typo" $ do
+            parseHashAlg "s-h-a--2-5-6" `shouldSatisfy` isLeft
+            parseHashAlg "sha--256" `shouldSatisfy` isLeft
+            parseHashAlg "sha-2-56" `shouldSatisfy` isLeft
+        it "rejects the sri wrapper, which names no algorithm of its own" $
+            parseHashAlg "sri" `shouldSatisfy` isLeft
+
         it "resolves a sha384 SRI prefix to SHA384 (was Nothing before it was modelled)" $
             sriAlgorithm "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
                 `shouldBe` Just SHA384
