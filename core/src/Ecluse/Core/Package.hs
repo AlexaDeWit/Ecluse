@@ -40,6 +40,7 @@ module Ecluse.Core.Package (
     pkgNamespace,
     pkgCanonical,
     pkgDisplay,
+    pkgBaseName,
     renderPackageName,
     unscopedName,
 
@@ -127,7 +128,7 @@ build it with 'mkPackageName', which records the ecosystem, computes a
 'pkgCanonical' key used for equality\/matching, and keeps a 'pkgDisplay' form
 for faithful rendering. Equality and ordering are on
 @('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only -- never the display
-form -- so @Flask@ and @flask@ are the same PyPI package but different npm ones.
+or base form -- so @Flask@ and @flask@ are the same PyPI package but different npm ones.
 -}
 data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
@@ -142,6 +143,14 @@ data PackageName = PackageName
     , pkgDisplay :: ShortText
     {- ^ The name as published, for rendering and round-tripping. Held as
     'ShortText'; read it back as 'Text' through 'renderPackageName'.
+    -}
+    , pkgBaseName :: ShortText
+    {- ^ The unscoped base name: the published name with any @\@scope\/@ prefix
+    dropped (@\@babel\/code-frame@ → @code-frame@). Stored structurally at
+    'mkPackageName' (it is exactly the bare name the constructor is given), so the
+    npm tarball\/path layer and the mirror queue read it as a field rather than
+    re-slicing the display form. Not part of identity (like 'pkgDisplay'); held as
+    'ShortText' and read back as 'Text' through 'unscopedName'.
     -}
     }
     deriving stock (Show)
@@ -169,6 +178,7 @@ mkPackageName eco ns raw =
         , pkgNamespace = ns
         , pkgCanonical = TS.fromText (canonicalise eco display)
         , pkgDisplay = TS.fromText display
+        , pkgBaseName = TS.fromText raw
         }
   where
     display = case ns of
@@ -196,15 +206,13 @@ normalisePyPI t =
 renderPackageName :: PackageName -> Text
 renderPackageName = TS.toText . pkgDisplay
 
-{- | The unscoped (base) name: the display name with any @\@scope/@ prefix dropped
-(@\@babel\/code-frame@ → @code-frame@). The single home for the bare-name derivation
-the npm tarball/path layer and the mirror queue all need -- they previously each
-reconstructed it by rendering then string-stripping the scope.
+{- | The unscoped (base) name as 'Text' (@\@babel\/code-frame@ → @code-frame@): the
+'ShortText' 'pkgBaseName' field read back. The single home for the bare-name the npm
+tarball/path layer and the mirror queue all need; it is stored structurally at
+'mkPackageName' rather than reconstructed by rendering then string-stripping the scope.
 -}
 unscopedName :: PackageName -> Text
-unscopedName name = case pkgNamespace name of
-    Just _ -> T.drop 1 (snd (T.breakOn "/" (renderPackageName name)))
-    Nothing -> renderPackageName name
+unscopedName = TS.toText . pkgBaseName
 
 {- | Whether installing a version executes code (the cross-ecosystem unification
 of npm install scripts, PyPI sdist builds, and RubyGems native extensions).

@@ -138,6 +138,22 @@ spec = do
         it "treats PyPI names equal up to normalisation" $
             mkPackageName PyPI Nothing "Flask" `shouldBe` mkPackageName PyPI Nothing "flask"
 
+    describe "unscopedName / pkgBaseName" $ do
+        it "drops the @scope/ prefix of a scoped name" $
+            unscopedName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
+                `shouldBe` "code-frame"
+        it "is the whole name for an unscoped package" $
+            unscopedName (mkPackageName Npm Nothing "left-pad") `shouldBe` "left-pad"
+        it "reads the stored base field (no display-slicing round-trip)" $
+            pkgBaseName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
+                `shouldBe` "code-frame"
+        it "does not enter identity: two names differing only in base are still equatable by identity" $
+            -- The base name is carried but excluded from 'nameKey', like the display form:
+            -- equality stays on (ecosystem, namespace, canonical), so a name equals itself
+            -- regardless of how the base is read back.
+            mkPackageName Npm (Just (mkScope "babel")) "code-frame"
+                `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "code-frame"
+
     describe "PackageInfo" $ do
         -- A packument-level fixture: one package, one published version "1.0.0"
         -- tagged "latest", carrying its own publish time on the version snapshot. The
