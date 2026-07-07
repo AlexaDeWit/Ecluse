@@ -173,7 +173,13 @@ withServeAdmission metrics (BoundedServeAdmission ba) action =
                     then liftIO (mpServeAdmissionQueued metrics) >> admitted restore
                     else pure Nothing
   where
+    -- The in-flight gauge is incremented under the enclosing mask, before
+    -- 'restore', so it is paired with the 'release' decrement on every path. Were
+    -- the increment inside 'restore' (interruptible), a cancellation delivered
+    -- after unmasking but before the increment ran would still run 'release' via
+    -- 'finally', decrementing a gauge that was never incremented and drifting it
+    -- negative. 'restore' therefore wraps only the interruptible run.
     admitted restore =
-        Just <$> (restore (liftIO (mpServeAdmissionInFlight metrics 1) >> action) `UE.finally` release)
+        Just <$> ((liftIO (mpServeAdmissionInFlight metrics 1) >> restore action) `UE.finally` release)
 
     release = atomically (modifyTVar' (baSlots ba) (+ 1)) >> liftIO (mpServeAdmissionInFlight metrics (-1))
