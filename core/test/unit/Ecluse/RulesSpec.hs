@@ -422,6 +422,27 @@ spec = do
                                        ]
                     other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
 
+    describe "renderDuration" $ do
+        it "renders a whole unit as that unit alone" $ do
+            renderDuration 604800 `shouldBe` "7 days"
+            renderDuration 86400 `shouldBe` "1 day"
+            renderDuration 60 `shouldBe` "1 minute"
+        it "renders the two most-significant non-zero units" $ do
+            renderDuration 90 `shouldBe` "1 minute 30 seconds"
+            renderDuration 3661 `shouldBe` "1 hour 1 minute"
+            renderDuration 86700 `shouldBe` "1 day 5 minutes"
+        it "distinguishes a value just short of a threshold from the threshold" $ do
+            renderDuration 89 `shouldBe` "1 minute 29 seconds"
+            renderDuration 90 `shouldBe` "1 minute 30 seconds"
+        it "pluralises only non-unit counts" $ do
+            renderDuration 1 `shouldBe` "1 second"
+            renderDuration 2 `shouldBe` "2 seconds"
+        it "renders a zero or sub-second duration as zero seconds" $ do
+            renderDuration 0 `shouldBe` "0 seconds"
+            renderDuration 0.4 `shouldBe` "0 seconds"
+        it "clamps a negative duration to zero" $
+            renderDuration (negate 5) `shouldBe` "0 seconds"
+
     describe "properties" $ do
         it "an empty rule set always denies by default" $
             hedgehog $ do
