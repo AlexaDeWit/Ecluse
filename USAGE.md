@@ -45,9 +45,10 @@ rule set.
 
 `ecluse pilot compile --out DIR` runs one OSV compilation and exits: it fetches an ecosystem's
 advisory export (`--ecosystem`, default `npm`; `--source URL` overrides the configured
-`osvExportBaseUrl`), writes `osv.db` into `DIR`, and exits non-zero on failure, so it's safe to
-script and schedule. `--upload` also publishes the artifact to the vulnerability-database bucket,
-making one invocation a full sync cycle; `--upload` without a configured bucket aborts immediately.
+`osvExportBaseUrl`), filters the flattened advisory rows to that ecosystem, writes `osv.db` into
+`DIR`, and exits non-zero on failure, so it's safe to script and schedule. `--upload` also publishes
+the artifact to the vulnerability-database bucket, making one invocation a full sync cycle; `--upload`
+without a configured bucket aborts immediately.
 
 The default command runs the `proxy` process (the HTTP front door on `ECLUSE_PORT`, default
 `8080`) plus the mirror worker. The proxy scales horizontally behind a load balancer, but

@@ -256,10 +256,13 @@ into deny-by-default.
 The object key is stable per ecosystem and embeds the table-schema epoch:
 `<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema1.db`). Per-ecosystem artifacts keep uploads
 independent: one ecosystem's failed compilation never holds back another's, and a Pilot restart
-loses at most one ecosystem's work. The stable key is what makes ETag polling work. The epoch is a
-hand-bumped constant shared by the Pilot writer and the proxy reader (`Ecluse.Core.Osv.Schema`); the
-artifact is immutable and rebuilt from scratch on every compilation, so there are no migrations, only
-a read-compatibility contract, and the epoch is that contract's version.
+loses at most one ecosystem's work. Pilot also filters flattened advisory rows to the target
+ecosystem before writing the artifact, so an OSV advisory that spans npm and another ecosystem does
+not leak the foreign package rows into the npm database. The stable key is what makes ETag polling
+work. The epoch is a hand-bumped constant shared by the Pilot writer and the proxy reader
+(`Ecluse.Core.Osv.Schema`); the artifact is immutable and rebuilt from scratch on every compilation,
+so there are no migrations, only a read-compatibility contract, and the epoch is that contract's
+version.
 
 Pilot stamps the same epoch inside the artifact as SQLite's `user_version`; the proxy verifies it
 after download and before the shadow-swap, and a mismatch keeps the last-good database and alarms.
