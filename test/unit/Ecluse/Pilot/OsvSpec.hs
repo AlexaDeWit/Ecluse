@@ -13,8 +13,18 @@ import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, sh
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
 import Ecluse.Pilot.Osv
-import Ecluse.Pilot.Osv.Stream (parseOsvStream, streamOsvUrl)
+import Ecluse.Pilot.Osv.Stream (
+    IngestLimits (..),
+    IngestStats (..),
+    defaultIngestLimits,
+    newOsvIngest,
+    parseOsvStream,
+    readIngestStats,
+    streamOsvUrl,
+    systemicDrop,
+ )
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
 
@@ -173,10 +183,11 @@ spec = describe "Osv parsing and streaming" $ do
         results <-
             runResourceT $
                 runReaderT
-                    ( runTestM $
+                    ( runTestM $ do
+                        ingest <- newOsvIngest defaultIngestLimits
                         runConduit $
                             sourceFile "test/unit/fixtures/osv/sample.zip"
-                                .| parseOsvStream telemetryDisabled
+                                .| parseOsvStream telemetryDisabled ingest
                                 .| sinkList
                     )
                     le
@@ -195,10 +206,11 @@ spec = describe "Osv parsing and streaming" $ do
         results <-
             runResourceT $
                 runReaderT
-                    ( runTestM $
+                    ( runTestM $ do
+                        ingest <- newOsvIngest defaultIngestLimits
                         runConduit $
                             sourceFile "test/unit/fixtures/osv/empty.zip"
-                                .| parseOsvStream telemetryDisabled
+                                .| parseOsvStream telemetryDisabled ingest
                                 .| sinkList
                     )
                     le
@@ -209,10 +221,11 @@ spec = describe "Osv parsing and streaming" $ do
         results <-
             runResourceT $
                 runReaderT
-                    ( runTestM $
+                    ( runTestM $ do
+                        ingest <- newOsvIngest defaultIngestLimits
                         runConduit $
                             sourceFile "test/unit/fixtures/osv/malformed-json.zip"
-                                .| parseOsvStream telemetryDisabled
+                                .| parseOsvStream telemetryDisabled ingest
                                 .| sinkList
                     )
                     le
@@ -223,10 +236,11 @@ spec = describe "Osv parsing and streaming" $ do
         let action =
                 runResourceT $
                     runReaderT
-                        ( runTestM $
+                        ( runTestM $ do
+                            ingest <- newOsvIngest defaultIngestLimits
                             runConduit $
                                 sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
-                                    .| parseOsvStream telemetryDisabled
+                                    .| parseOsvStream telemetryDisabled ingest
                                     .| sinkList
                         )
                         le
@@ -238,9 +252,10 @@ spec = describe "Osv parsing and streaming" $ do
         results <- withStub status200 zipData $ \stub -> do
             runResourceT $
                 runReaderT
-                    ( runTestM $
+                    ( runTestM $ do
+                        ingest <- newOsvIngest defaultIngestLimits
                         runConduit $
-                            streamOsvUrl telemetryDisabled (unpack (stubBaseUrl stub) <> "/sample.zip")
+                            streamOsvUrl telemetryDisabled ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
                                 .| sinkList
                     )
                     le
@@ -258,10 +273,67 @@ spec = describe "Osv parsing and streaming" $ do
         let action =
                 runResourceT $
                     runReaderT
-                        ( runTestM $
+                        ( runTestM $ do
+                            ingest <- newOsvIngest defaultIngestLimits
                             runConduit $
-                                streamOsvUrl telemetryDisabled "not-a-valid-url"
+                                streamOsvUrl telemetryDisabled ingest "not-a-valid-url"
                                     .| sinkList
                         )
                         le
         action `shouldThrow` anyException
+
+    describe "ingest bounds (issue #571)" $ do
+        it "drops an over-large advisory and keeps ingesting the entries after it" $ do
+            le <- initLogEnv "test" (Environment "test")
+            -- The oversized entry is dropped before decode, so its bytes need not be
+            -- valid JSON; it is placed first, so the good entry after it only surfaces
+            -- if the drop drained cleanly to the next entry boundary.
+            zipData <-
+                osvZipOf
+                    [ ("big.json", LBS.replicate 3000 120)
+                    , ("good.json", "{\"id\":\"GHSA-good\",\"affected\":[{\"package\":{\"name\":\"good-pkg\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")
+                    ]
+            let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000}
+            (results, stats) <-
+                runResourceT $
+                    runReaderT
+                        ( runTestM $ do
+                            ingest <- newOsvIngest limits
+                            rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream telemetryDisabled ingest .| sinkList
+                            st <- readIngestStats ingest
+                            pure (rs, st)
+                        )
+                        le
+            map extCveId results `shouldBe` ["GHSA-good"]
+            statAccepted stats `shouldBe` 1
+            statDroppedOversize stats `shouldBe` 1
+            statDroppedMalformed stats `shouldBe` 0
+
+        it "flags an anomalous fan-out but still ingests every range of the advisory" $ do
+            le <- initLogEnv "test" (Environment "test")
+            zipData <-
+                osvZipOf
+                    [("fan.json", "{\"id\":\"GHSA-fan\",\"affected\":[{\"package\":{\"name\":\"fan\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"1.1.0\",\"1.2.0\",\"1.3.0\",\"1.4.0\"]}]}")]
+            let limits = defaultIngestLimits{ilMaxAdvisoryFanOut = 3}
+            (results, stats) <-
+                runResourceT $
+                    runReaderT
+                        ( runTestM $ do
+                            ingest <- newOsvIngest limits
+                            rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream telemetryDisabled ingest .| sinkList
+                            st <- readIngestStats ingest
+                            pure (rs, st)
+                        )
+                        le
+            length results `shouldBe` 5
+            statAccepted stats `shouldBe` 1
+
+    describe "systemicDrop" $ do
+        it "does not trip on a healthy feed with a few bad entries" $
+            systemicDrop (IngestStats 40000 3 2) `shouldBe` False
+        it "does not trip below the absolute floor even at a high fraction" $
+            systemicDrop (IngestStats 10 5 5) `shouldBe` False
+        it "trips when drops are both non-trivial and a large fraction of entries" $
+            systemicDrop (IngestStats 50 30 20) `shouldBe` True
+        it "does not trip when non-trivial drops are only a small fraction" $
+            systemicDrop (IngestStats 10000 30 20) `shouldBe` False
