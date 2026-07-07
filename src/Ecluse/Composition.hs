@@ -473,13 +473,20 @@ itself contain hyphens. 'Nothing' for any host that is not this shape -- includi
 whose tail after the last hyphen is not an account id, so a hyphen-bearing
 non-CodeArtifact host never mis-parses into a bogus owner. -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
-parseCodeArtifactHost host = do
-    [domainOwner, regionTail] <- Just (T.splitOn ".d.codeartifact." host)
-    region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
-    let (domainDash, owner) = T.breakOnEnd "-" domainOwner
-    domain <- nonBlank (T.dropEnd 1 domainDash)
-    guard (isAccountId owner)
-    pure (domain, owner, region)
+parseCodeArtifactHost host =
+    -- The accepted shape is exactly one @.d.codeartifact.@ marker, splitting the host
+    -- into its @{domain}-{owner}@ label and its @{region}.amazonaws.com@ tail; any
+    -- other number of parts (none, or a host carrying the marker twice) is not a
+    -- CodeArtifact endpoint and is rejected here rather than via an implicit
+    -- pattern-match failure in the 'Maybe' monad.
+    case T.splitOn ".d.codeartifact." host of
+        [domainOwner, regionTail] -> do
+            region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
+            let (domainDash, owner) = T.breakOnEnd "-" domainOwner
+            domain <- nonBlank (T.dropEnd 1 domainDash)
+            guard (isAccountId owner)
+            pure (domain, owner, region)
+        _ -> Nothing
 
 {- | A reason the composition root refuses to start. Every case is a __fail-loud__
 boot failure; they are aggregated so a single run reports every problem an
