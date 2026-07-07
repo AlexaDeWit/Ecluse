@@ -4,9 +4,11 @@ A rule set is evaluated against a single 'PackageDetails' snapshot to produce a
 'Decision'. The model is __deny by default; the boot order decides__: the configured
 rules are arranged once, at boot, into a single total order ('bootOrder') -- highest
 precedence first, then rule name ascending -- and evaluation walks that order and
-takes the __first decisive result__. A result is decisive iff it is 'Allow', 'Deny',
-or an @'Unavailable' _ 'FailDeny' _@ (a fail-closed uncomputable check); 'NoDecision'
-and @'Unavailable' _ 'FailNoDecision' _@ are non-decisive no-ops whose reasons are
+takes the __first decisive result__. A result is decisive iff the rule returned a
+decisive verdict ('Allow', 'Deny', or a fail-closed 'CannotVet'), or the harness
+resolved a faulted evaluation fail-closed (@'Unavailable' _ 'FailDeny' _@); a
+non-decisive verdict ('NoDecision', a fail-open 'CannotVet') or a fail-open fault
+(@'Unavailable' _ 'FailNoDecision' _@) is a non-decisive no-op whose reason is
 collected, in boot order, for the deny-by-default audit trail. If no rule is decisive
 the package is 'BlockedByDefault'.
 
@@ -17,9 +19,9 @@ over the boot-bound capabilities in 'RuleDeps'. The engine's runtime structure i
 'PreparedRule': it pairs a rule's boot-order identity (precedence and name) with the
 raw per-version evaluator and an optional 'Resilience' policy. 'prepare' builds one
 per configured rule; the pure built-ins carry no 'Resilience' and run directly, while
-the effectful 'AllowIfRemediatesCve' carries a 'Resilience' (a per-attempt timeout,
-bounded retry with backoff, and a per-source 'Ecluse.Core.Breaker.Breaker') applied by
-the harness 'runEffectfulRule'. The order /is/ the tiebreak: there is no runtime
+the effectful CVE rules carry a 'Resilience' (a per-attempt timeout, bounded retry
+with backoff, and a per-source 'Ecluse.Core.Breaker.Breaker') applied by the harness
+'runEffectfulRule'. The order /is/ the tiebreak: there is no runtime
 comparison of results.
 
 The evaluator on a 'PreparedRule' is __not__ reachable from config: 'prepare' only
@@ -134,16 +136,17 @@ inertRuleDeps =
 
 {- | Evaluate a single built-in rule against a single package version -- the one place
 "how a rule decides" lives. The dispatch over the closed 'Rule' data: the pure
-constructors reason over the 'PackageDetails' alone and 'pure' their result, never
-yielding 'Unavailable'; 'AllowIfRemediatesCve' reads the advisory database through
-the boot-bound 'RuleDeps' and does IO, relying on its 'Resilience' harness (attached
-by 'prepare') to resolve a failing lookup to a fail-open 'Unavailable'.
+constructors reason over the 'PackageDetails' alone and 'pure' their 'RuleVerdict';
+'AllowIfRemediatesCve' and 'DenyIfCve' read the advisory database through the
+boot-bound 'RuleDeps' and do IO. A rule returns only a __verdict__ -- it never
+manufactures an 'Unavailable'; a genuine lookup fault surfaces as an exception, which
+the 'Resilience' harness (attached by 'prepare') catches and resolves.
 
 'IO'-typed so the dispatch is uniform across the pure and effectful arms. The pure
-arms are total -- a malformed rule or package yields a result, never an exception, so
+arms are total -- a malformed rule or package yields a verdict, never an exception, so
 hostile metadata cannot crash the gate.
 -}
-evalRule :: RuleDeps -> EvalContext -> Rule -> PackageDetails -> IO RuleResult
+evalRule :: RuleDeps -> EvalContext -> Rule -> PackageDetails -> IO RuleVerdict
 evalRule _ _ (AllowScope scope) pd =
     pure $ case pkgNamespace (pkgName pd) of
         Just s
@@ -196,22 +199,23 @@ evalRule deps _ (DenyIfCve params) pd =
         Nothing -> pure (noAdvisoryDbVerdict params)
         Just cve -> denyVerdict params cve pd
 
-{- The deny rule's answer when no advisory database is loaded: pre-first-sync, a
-sync yet to land its first artifact, or the rule enabled with no advisory bucket
-configured at all. A fail-open rule skips ('NoDecision', returned at face value so
-the resilience harness does not retry a deterministic absence); a fail-closed rule
-refuses the version it cannot vet as 'Undecidable' (a retryable 503, so readiness
-gating and the operator's dashboards surface a misconfiguration loudly). -}
-noAdvisoryDbVerdict :: DenyIfCveParams -> RuleResult
-noAdvisoryDbVerdict params = case dicOnUnavailable params of
-    FailNoDecision -> NoDecision "DenyIfCve: no advisory database loaded; failing open"
-    FailDeny -> Unavailable (WillResolve Nothing) FailDeny "DenyIfCve: no advisory database loaded; failing closed"
+{- The deny rule's verdict when no advisory database is loaded: pre-first-sync, a sync
+yet to land its first artifact, or the rule enabled with no advisory bucket configured
+at all. This is a __deterministic, in-process absence__, so it is a 'CannotVet'
+verdict, not a fault: the harness takes it at face value and never retries it or trips
+the breaker on it (no in-process retry could load a database). The rule's own alignment
+decides what the absence means -- a fail-open rule skips ('CannotVet' 'FailNoDecision',
+a no-op), a fail-closed rule refuses the version it cannot vet ('CannotVet' 'FailDeny',
+decisive → 'Undecidable', a retryable 503, so readiness gating and the operator's
+dashboards surface a misconfiguration loudly). -}
+noAdvisoryDbVerdict :: DenyIfCveParams -> RuleVerdict
+noAdvisoryDbVerdict params = CannotVet (dicOnUnavailable params) "DenyIfCve: no advisory database loaded"
 
 {- The deny rule's verdict against a loaded advisory database: deny the version if
 any advisory that affects it meets the configured severity threshold, naming the
 advisories for the audit trail; otherwise abstain. An unscored advisory clears the
 threshold (fail-closed, so npm malware -- unscored -- is denied). -}
-denyVerdict :: DenyIfCveParams -> CveLookup -> PackageDetails -> IO RuleResult
+denyVerdict :: DenyIfCveParams -> CveLookup -> PackageDetails -> IO RuleVerdict
 denyVerdict params cve pd = do
     ranges <- cveAdvisoriesFor cve name
     let blocking =
@@ -230,7 +234,7 @@ denyVerdict params cve pd = do
     version = renderVersion (pkgVersion pd)
 
 -- The CVE rule's verdict against a loaded advisory database.
-remediationVerdict :: CveLookup -> PackageDetails -> IO RuleResult
+remediationVerdict :: CveLookup -> PackageDetails -> IO RuleVerdict
 remediationVerdict cve pd = do
     fixes <- cveRemediationProbe cve name version
     if not fixes
@@ -248,7 +252,7 @@ remediationVerdict cve pd = do
 -- Classify the fetched ranges: a version still inside *any* advisory's affected
 -- range (an unfixed one included) must not fast-track; otherwise credit the
 -- advisories that name this version as their exact fixed bound.
-classifyRanges :: Ecosystem -> Text -> [AdvisoryRange] -> RuleResult
+classifyRanges :: Ecosystem -> Text -> [AdvisoryRange] -> RuleVerdict
 classifyRanges eco version ranges =
     case (remediated, stillOpen) of
         (_, _ : _) ->
@@ -281,7 +285,7 @@ the evaluator from 'evalRule', and (today) no 'Resilience'. Because the evaluato
 plain function field -- not a closed 'Rule' -- it is also where an arbitrary evaluator
 can be supplied without widening the closed 'Rule' vocabulary: the engine's own tests
 build a 'PreparedRule' directly with a fake evaluator (one that throws, hangs, or
-returns a chosen 'RuleResult') and a chosen name to exercise the resilience harness
+returns a chosen 'RuleVerdict') and a chosen name to exercise the resilience harness
 and the parallel walk. That escape hatch is a code-layer capability; config only ever
 reaches the closed data path through 'prepare', so it cannot supply one.
 
@@ -296,7 +300,7 @@ data PreparedRule = PreparedRule
     -- ^ The precedence at which this rule competes; higher wins in the boot order.
     , prepResilience :: Maybe Resilience
     -- ^ The resilience policy, or 'Nothing' for a rule run directly.
-    , prepEval :: EvalContext -> PackageDetails -> IO RuleResult
+    , prepEval :: EvalContext -> PackageDetails -> IO RuleVerdict
     {- ^ The rule's raw verdict for one version. For a resilient rule it may perform IO
     that fails or hangs; 'runEffectfulRule' wraps it.
     -}
@@ -427,7 +431,7 @@ evalRules ctx rules pd = step (bootOrder rules) []
         | isNothing (prepResilience r) = do
             -- A direct rule is zero-cost: run it in place. Reaching it means every
             -- earlier rule was non-decisive, so no speculated IO has been mooted.
-            res <- prepEval r ctx pd
+            res <- Decided <$> prepEval r ctx pd
             case decisive (prepName r) res of
                 Just d -> pure d
                 Nothing -> step rs (reasonOf res : reasons)
@@ -454,7 +458,7 @@ evalBlock ctx pd block =
 
 -- Await a launched block's evaluations in boot order; a decisive winner cancels
 -- every strictly-later one.
-awaitInOrder :: [(PreparedRule, Async RuleResult)] -> [Reason] -> IO (Either Decision [Reason])
+awaitInOrder :: [(PreparedRule, Async RuleEvaluation)] -> [Reason] -> IO (Either Decision [Reason])
 awaitInOrder [] reasons = pure (Right (reverse reasons))
 awaitInOrder ((r, a) : rest) reasons = do
     res <- wait a
@@ -466,38 +470,44 @@ awaitInOrder ((r, a) : rest) reasons = do
 
 -- Map a rule result to the 'Decision' it credits if decisive, or 'Nothing' if it is a
 -- no-op (the only runtime classification -- there is no comparison of competing
--- results, the boot order having already settled who wins).
-decisive :: Text -> RuleResult -> Maybe Decision
+-- results, the boot order having already settled who wins). A deterministic
+-- 'CannotVet' and a harness 'Unavailable' fault credit the same 'Undecidable'; the
+-- 'CannotVet' carries no transience of its own, so it is a plain retryable 503.
+decisive :: Text -> RuleEvaluation -> Maybe Decision
 decisive name = \case
-    Allow reason -> Just (Admitted name reason)
-    Deny reason -> Just (Blocked name reason)
+    Decided (Allow reason) -> Just (Admitted name reason)
+    Decided (Deny reason) -> Just (Blocked name reason)
+    Decided (NoDecision _) -> Nothing
+    Decided (CannotVet FailDeny reason) -> Just (Undecidable (WillResolve Nothing) reason)
+    Decided (CannotVet FailNoDecision _) -> Nothing
     Unavailable transience FailDeny reason -> Just (Undecidable transience reason)
-    NoDecision _ -> Nothing
     Unavailable _ FailNoDecision _ -> Nothing
 
 -- The audit reason carried by any result, gathered for the deny-by-default trail.
-reasonOf :: RuleResult -> Reason
-reasonOf = \case
+reasonOf :: RuleEvaluation -> Reason
+reasonOf (Unavailable _ _ reason) = reason
+reasonOf (Decided verdict) = case verdict of
     Allow reason -> reason
     Deny reason -> reason
     NoDecision reason -> reason
-    Unavailable _ _ reason -> reason
+    CannotVet _ reason -> reason
 
 {- | Run one prepared rule through its resilience policy. A rule with no 'Resilience'
-(@'prepResilience' = 'Nothing'@) runs directly. A resilient rule's IO runs under its
-circuit-breaker gate, a per-attempt timeout, and bounded retry with backoff: a clean
-verdict ('Allow'\/'Deny'\/'NoDecision') resets the breaker and is returned; an
-exhausted rule (timeout, exception, the breaker open, or the rule self-reporting
-'Unavailable' on every attempt) advances the breaker and resolves to @'Unavailable'
-transience alignment reason@ -- the alignment from the rule's 'Resilience' (fail-closed
-or fail-open), the transience from the last failing attempt.
+(@'prepResilience' = 'Nothing'@) runs directly, its verdict wrapped 'Decided'. A
+resilient rule's IO runs under its circuit-breaker gate, a per-attempt timeout, and
+bounded retry with backoff: any 'RuleVerdict' the rule returns -- a deterministic
+'CannotVet' included -- resets the breaker and is returned 'Decided', taken at face
+value and never retried; only a __fault__ the harness observes (a timeout, an
+exception, or the breaker already open) advances the breaker and resolves to
+@'Unavailable' transience alignment reason@, the alignment from the rule's 'Resilience'
+(fail-closed or fail-open).
 
 The breaker timing reads the 'EvalContext' clock, so it is deterministic under test.
 Total -- it never throws; a rule failure becomes a result.
 -}
-runEffectfulRule :: EvalContext -> PreparedRule -> PackageDetails -> IO RuleResult
+runEffectfulRule :: EvalContext -> PreparedRule -> PackageDetails -> IO RuleEvaluation
 runEffectfulRule ctx rule pd = case prepResilience rule of
-    Nothing -> prepEval rule ctx pd
+    Nothing -> Decided <$> prepEval rule ctx pd
     Just res -> do
         let now = ctxNow ctx
         admitted <- admitProbe res now
@@ -510,27 +520,25 @@ runEffectfulRule ctx rule pd = case prepResilience rule of
                 result <- attemptWithRetry res (prepEval rule ctx) pd
                 settleOutcome res (prepName rule) now result
 
-{- Settle a finished retry run against the breaker: a clean verdict resets the
-breaker and is returned; an exhausted run advances the breaker and resolves to
-the rule's aligned 'Unavailable'. -}
-settleOutcome :: Resilience -> Text -> UTCTime -> Either Transience RuleResult -> IO RuleResult
+{- Settle a finished retry run against the breaker: a returned verdict resets the
+breaker and is passed on 'Decided'; an exhausted run advances the breaker and resolves
+to the rule's aligned 'Unavailable'. -}
+settleOutcome :: Resilience -> Text -> UTCTime -> Either Transience RuleVerdict -> IO RuleEvaluation
 settleOutcome res name now = \case
-    Right outcome -> do
+    Right verdict -> do
         commitBreaker res recordSuccess
-        pure outcome
+        pure (Decided verdict)
     Left transience -> do
         commitBreaker res (tripOnFailure (resConfig res) now)
         pure (exhausted res name transience "the rule could not be evaluated")
 
-{- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until
-the retry budget is spent. 'Right' a clean verdict on success; 'Left' the 'Transience'
-of the last failing attempt when every attempt failed (an exception, a timeout, or
-the rule yielding its own 'Unavailable'). 'retrying' returns the final value the
-action produced, so the surfaced transience is the last attempt's: a permanent
-('WontResolve') self-report on that attempt is honoured through to the serve mapping,
-while any other failure stays transient. A rule that returns
-'Allow'\/'Deny'\/'NoDecision' is taken at face value and not retried. -}
-attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleResult) -> PackageDetails -> IO (Either Transience RuleResult)
+{- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until the
+retry budget is spent. 'Right' the rule's 'RuleVerdict' on success -- any verdict is
+taken at face value and __not__ retried; 'Left' the transient 'Transience' when the
+attempt faulted (an exception or a timeout), the only condition a retry might clear.
+'retrying' re-runs solely on a 'Left', so a deterministic verdict never enters the
+retry loop. -}
+attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either Transience RuleVerdict)
 attemptWithRetry res evalAt pd =
     retrying (backoffPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
   where
@@ -546,32 +554,26 @@ backoffPolicy :: [Int] -> RetryPolicyM IO
 backoffPolicy backoffs = RetryPolicyM (\rs -> pure (backoffs !!? rsIterNumber rs))
 
 {- One attempt: run the rule's IO under the timeout, catching any exception. 'Right'
-a clean verdict; 'Left' the 'Transience' to surface should the retry budget be
-exhausted on this attempt. A timeout, an exception, or a rule reporting its own
-transient unavailability is 'WillResolve' (an infrastructural outage the configured
-'RetryAfter' applies to); a rule reporting its own /permanent/ ('WontResolve')
-unavailability keeps that distinction so an internal\/parse fault is not later
-dressed up as retryable. Either way a self-reported 'Unavailable' still counts as a
-failed attempt -- the harness retries and trips the breaker rather than trusting a
-single self-report -- only the transience it carries on exhaustion differs. -}
-attemptOnce :: Resilience -> (PackageDetails -> IO RuleResult) -> PackageDetails -> IO (Either Transience RuleResult)
+the rule's 'RuleVerdict' -- whatever it decided, a deterministic 'CannotVet' included,
+is a decided value taken at face value. 'Left' the transient 'Transience' only when the
+harness itself could not obtain a verdict: the rule's IO threw, or the attempt timed
+out. Those are the sole retryable conditions -- a fault a later attempt might clear --
+and the sole inputs to the breaker; a verdict is never either. -}
+attemptOnce :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either Transience RuleVerdict)
 attemptOnce res evalAt pd = do
     result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt pd))
     pure $ case result of
         Left _ -> Left transient -- the rule's IO threw
         Right Nothing -> Left transient -- the attempt timed out
-        Right (Just (Unavailable WontResolve _ _)) -> Left WontResolve -- a permanent self-report, honoured
-        Right (Just (Unavailable (WillResolve _) _ _)) -> Left transient -- a transient self-report
-        Right (Just clean) -> Right clean
+        Right (Just verdict) -> Right verdict -- a verdict is decided; never retried
   where
     transient = transientCause (resConfig res)
 
-{- The result an exhausted rule resolves to: @'Unavailable' transience alignment@ --
-'WillResolve' for an infrastructural failure (a timeout, an exception, an open
-breaker) or a self-reported transient, 'WontResolve' for a self-reported permanent
-fault; the alignment is the rule's own (fail-closed 'FailDeny' or fail-open
-'FailNoDecision'). The reason is carried for the audit trail. -}
-exhausted :: Resilience -> Text -> Transience -> Text -> RuleResult
+{- The result a faulted evaluation resolves to: @'Unavailable' transience alignment@ --
+'WillResolve' for the infrastructural fault that produced it (a timeout, an exception,
+or an open breaker); the alignment is the rule's own (fail-closed 'FailDeny' or
+fail-open 'FailNoDecision'). The reason is carried for the audit trail. -}
+exhausted :: Resilience -> Text -> Transience -> Text -> RuleEvaluation
 exhausted res name transience reason = Unavailable transience (resAlignment res) (name <> ": " <> reason)
 
 {- The transient 'Transience' an infrastructural failure (a timeout, an exception, an

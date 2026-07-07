@@ -41,15 +41,15 @@ pkg mScope ageDays =
             , pkgLicenses = ["MIT"]
             }
 
-isAllow :: RuleResult -> Bool
+isAllow :: RuleVerdict -> Bool
 isAllow (Allow _) = True
 isAllow _ = False
 
-isNoDecision :: RuleResult -> Bool
+isNoDecision :: RuleVerdict -> Bool
 isNoDecision (NoDecision _) = True
 isNoDecision _ = False
 
-isDeny :: RuleResult -> Bool
+isDeny :: RuleVerdict -> Bool
 isDeny (Deny _) = True
 isDeny _ = False
 

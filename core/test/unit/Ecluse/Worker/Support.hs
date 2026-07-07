@@ -50,7 +50,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionPresent),
  )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleResult (Allow, Deny))
+import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
@@ -309,7 +309,7 @@ withQueueRuntime queue body = do
 {- | A prepared rule with a fixed verdict, built directly through the engine's injection
 point so a re-evaluation reaches a chosen decision independent of the version's details.
 -}
-constRule :: Text -> RuleResult -> PreparedRule
+constRule :: Text -> RuleVerdict -> PreparedRule
 constRule name result =
     PreparedRule
         { prepName = name

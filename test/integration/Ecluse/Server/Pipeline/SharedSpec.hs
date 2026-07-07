@@ -18,7 +18,7 @@ import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
-import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleResult (..))
+import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -35,7 +35,7 @@ spec = do
     boundsSpec
     boundsLogSpec
 
-mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
+mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
 mkEffectful name prec cfg align eval = do
     breaker <- newBreaker
     pure
