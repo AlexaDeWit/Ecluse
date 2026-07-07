@@ -51,7 +51,6 @@ module Ecluse.Env (
 
 import Katip (LogEnv, katipAddContext)
 import Network.HTTP.Client (Manager)
-import UnliftIO (MonadUnliftIO, bracket)
 
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
@@ -186,13 +185,14 @@ newEnvWithAdmission admission registry queue manager privateManager metadataCach
             , envWorkerHeartbeat = heartbeat
             }
 
-{- | Build an 'Env', run an action against it, and tear it down -- even on
-exception or asynchronous cancellation. The teardown is bracketed via @unliftio@,
-so the composition root's resources are released along every exit path; this is
-the scope within which the server and worker run.
+{- | Assemble an 'Env' and run an action within its scope -- the scope the server
+and worker run in. The composition root __borrows__ every resource it holds (the
+'Manager's, the 'Telemetry' providers); each is owned and torn down by the caller
+that supplied it, so this root has nothing of its own to release and needs no
+teardown bracket.
 -}
 withEnv ::
-    (MonadUnliftIO m) =>
+    (MonadIO m) =>
     RegistryClient ->
     MirrorQueue ->
     Manager ->
@@ -206,11 +206,12 @@ withEnv ::
 withEnv =
     withEnvWithAdmission unlimitedServeAdmission
 
-{- | Bracket an 'Env' carrying an explicit serve admission handle. This is the
-production form of 'withEnv'; teardown ownership is otherwise identical.
+{- | Assemble an 'Env' carrying an explicit serve admission handle and run an action
+within its scope. This is the production form of 'withEnv'; resource ownership is
+otherwise identical -- the root borrows its handles and releases nothing of its own.
 -}
 withEnvWithAdmission ::
-    (MonadUnliftIO m) =>
+    (MonadIO m) =>
     ServeAdmission ->
     RegistryClient ->
     MirrorQueue ->
@@ -222,18 +223,14 @@ withEnvWithAdmission ::
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat =
-    bracket
-        (liftIO (newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat))
-        teardown
-  where
-    -- The connection pool behind the 'Manager' and the telemetry providers behind
-    -- the 'Telemetry' handle are each owned and released by whoever provided them
-    -- (the manager's caller; 'Ecluse.Telemetry.withTelemetry' for the providers),
-    -- and the handles hold no resource this root acquired -- so the composition
-    -- root has nothing of its own to release.
-    teardown :: (MonadUnliftIO m) => Env -> m ()
-    teardown _ = pure ()
+withEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
+    -- The connection pool behind each 'Manager' and the telemetry providers behind
+    -- the 'Telemetry' handle are owned and released by whoever provided them (the
+    -- manager's caller; 'Ecluse.Telemetry.withTelemetry' for the providers), and the
+    -- handles hold no resource this root acquired -- so assembly needs no teardown
+    -- bracket; the 'Env' simply scopes the action.
+    env <- liftIO (newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat)
+    action env
 
 {- | Project the request runtime ("Ecluse.Core.Server.Context.ServeRuntime") the serve
 path is closed over from the composition root: the two data-plane managers, the

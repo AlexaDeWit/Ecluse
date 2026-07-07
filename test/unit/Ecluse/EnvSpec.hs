@@ -159,7 +159,7 @@ spec = do
             heartbeat <- newWorkerHeartbeat
             withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
-        it "propagates an exception thrown in the body (bracketed teardown re-raises)" $ do
+        it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
             metadataCache <- newTestCache
