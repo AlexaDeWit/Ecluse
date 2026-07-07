@@ -99,7 +99,9 @@ not re-emit them. Names follow OTel semantic conventions for HTTP (`http.server.
 `http.client.*`) plus a custom `ecluse.*` namespace for domain signals. The catalogue:
 
 - **Serving**, `http.server.request.duration` (histogram); `ecluse.serve.decision`
-  (counter; admit/deny/unavailable).
+  (counter; admit/deny/unavailable); `ecluse.registry.merge.divergence` (counter) ← the
+  cross-upstream integrity-divergence alarm (threat #11), incremented once per contradicting
+  version. The package and version are on the paired `WARNING` log line, never a metric label.
 - **Gate**, `ecluse.rule.denials` (counter; rule, reason-class); `ecluse.rule.eval.duration`
   (histogram; tier); `ecluse.rule.effectful.failures` (counter; rule, cause);
   `ecluse.rule.breaker.state` (gauge; source).

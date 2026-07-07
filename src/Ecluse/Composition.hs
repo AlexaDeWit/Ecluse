@@ -732,6 +732,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- trusted gate drops a below-floor private version from the listing
                   -- and gates the private artifact serve.
                   pdMinTrustedIntegrity = cfgMinTrustedIntegrity app
+                , -- The operator's cross-upstream divergence policy (default warn),
+                  -- carried onto every mount's deps so the serve path withholds a
+                  -- contested version under fail-closed.
+                  pdDivergencePolicy = cfgDivergencePolicy app
                 , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> Metadata.newNpmMetadataClient t p u c f1 f2 f3 (Npm.NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s

@@ -25,6 +25,7 @@ import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirr
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
@@ -193,6 +194,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdHelp = Nothing
                 , pdMinIntegrity = defaultMinIntegrity
                 , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+                , pdDivergencePolicy = Warn
                 , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s

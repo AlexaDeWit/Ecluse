@@ -21,6 +21,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn), parseDivergencePolicy)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Log (parseLogFormat)
 import Ecluse.Telemetry (parseTelemetrySwitch)
@@ -117,6 +118,7 @@ appConfigParser o = do
         <*> (o .:? "publicUrl" >>= traverse parseUrl)
         <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
         <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
+        <*> (o .:? "divergencePolicy" >>= maybe (pure Warn) (parseEnum parseDivergencePolicy "divergencePolicy"))
         <*> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
         <*> (o .:? "osvDataDir" .!= "data/osv")
         <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
@@ -157,6 +159,7 @@ acceptedDocumentKeys =
     , "publicUrl"
     , "minPublicIntegrity"
     , "minTrustedIntegrity"
+    , "divergencePolicy"
     , "additionalBlockedRanges"
     , "rules"
     , "osvDataDir"

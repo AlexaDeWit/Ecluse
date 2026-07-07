@@ -34,6 +34,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
@@ -159,6 +160,7 @@ data AppConfig = AppConfig
     , cfgPublicUrl :: Maybe Url
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
+    , cfgDivergencePolicy :: DivergencePolicy
     , cfgAdditionalBlockedRanges :: [IPRange]
     , cfgOsvDataDir :: FilePath
     , cfgOsvExportBaseUrl :: Text

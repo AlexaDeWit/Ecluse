@@ -143,8 +143,13 @@ order-independent; only the positional labels track input order.
 - **Collision → private wins; divergence is a signal.** On a shared version key the private copy
   wins. But if the public copy contradicts the private one on a shared integrity algorithm (one
   both carry, whose digests disagree), that is the supply-chain tampering Écluse exists to catch
-  ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged, and
-  metered (and may fail-closed on that version), never silently reconciled. The algorithm compared
+  ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged (a
+  `WARNING` naming the package, the contradicting versions, and their digests) and metered
+  (`ecluse.registry.merge.divergence`), never silently reconciled. Whether the contested version is
+  additionally withheld from the served listing is the operator's `ECLUSE_DIVERGENCE_POLICY`:
+  `warn` (the default) serves the trusted copy and relies on the alarm; `fail-closed` drops the
+  contested version from the listing (dropping any `dist-tag`, including `latest`, that pointed at
+  it). The algorithm compared
   is the one each digest asserts (an SRI is resolved to its embedded algorithm, not bucketed under
   an opaque `SRI` tag), so the same algorithm as hex or SRI is cross-checked together. An asymmetric
   set (one upstream carrying a digest the other omits, no disagreement on any shared algorithm)

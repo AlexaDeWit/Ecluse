@@ -105,6 +105,7 @@ import Ecluse.Composition (connectionPoolSettings, openFileSoftLimit, resolvePri
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (
@@ -458,6 +459,7 @@ npmDeps privatePort publicPort = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdDivergencePolicy = Warn
             , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s

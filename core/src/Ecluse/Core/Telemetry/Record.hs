@@ -54,6 +54,12 @@ data MetricsPort = MetricsPort
     -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpServeAdmissionQueued :: IO ()
     -- ^ Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+    , mpMergeDivergence :: IO ()
+    {- ^ Record one cross-upstream integrity divergence detected in the packument merge
+    (@ecluse.registry.merge.divergence@) -- incremented once per contradicting version.
+    The high-cardinality identifiers (package, version, the digest bodies) go on the
+    'WARNING' log line, never a metric label.
+    -}
     , mpRuleDenial :: Maybe Text -> ReasonClass -> IO ()
     {- ^ Record one rule denial (@ecluse.rule.denials@) by reason class and, for a
     policy denial, the deciding rule. A non-policy refusal carries no rule.

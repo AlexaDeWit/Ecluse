@@ -34,6 +34,7 @@ import UnliftIO.Exception (throwString)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
@@ -622,6 +623,7 @@ deps privatePort publicPort inbound = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdDivergencePolicy = Warn
             , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s

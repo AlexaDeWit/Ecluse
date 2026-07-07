@@ -177,6 +177,21 @@ substitutes for cryptographic strength; this is the only way Écluse serves a su
 and only on the trusted private origin. An unknown algorithm name is still rejected at load. See
 the [Operator Manual](../../USAGE.md#environment-variables) for supported values.
 
+### Cross-upstream divergence policy
+
+When a shared version's private and public copies contradict on a shared integrity algorithm
+(one both carry, whose digests disagree), that is the supply-chain tampering Écluse exists to
+catch ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11); see
+[Packument merge](registry-model.md#packument-merge-across-upstreams)). The trusted copy always
+wins the bytes, and the divergence is always logged (a `WARNING`) and metered
+(`ecluse.registry.merge.divergence`). `ECLUSE_DIVERGENCE_POLICY` decides what else happens to the
+contested version: `warn` (the default) serves the trusted copy and relies on the alarm;
+`fail-closed` additionally withholds the contested version from the served listing, so a resolver
+pinned to that exact version fails to resolve it rather than receive a contested copy. Fail-closed
+trades availability for strictness and drops any `dist-tag` (including `latest`) that pointed at the
+withheld version; run `warn` first and watch the counter to learn your benign-divergence rate before
+enabling it. See the [Operator Manual](../../USAGE.md#environment-variables).
+
 ### Rule policy
 
 The rule policy is a named map of rules layered over a built-in default policy that ships with

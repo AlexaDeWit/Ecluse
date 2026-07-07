@@ -26,6 +26,7 @@ import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -221,6 +222,7 @@ depsFor publicPort = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdDivergencePolicy = Warn
             , pdNewMetadataClient = \t p u c f1 f2 f3 l m t' s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig t' m s l)
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s

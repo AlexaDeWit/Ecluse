@@ -333,6 +333,48 @@ spec = do
                     integrityHashes (divLosing d) `shouldBe` [sriPair sriPublic]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
+    describe "applyDivergencePolicy (the caller's fail-closed projection)" $ do
+        -- 2.0.0 (the @latest@) diverges across sources; 1.0.0 agrees. The projection is
+        -- what the serve layer runs AFTER logging and metering the divergence, so a
+        -- fail-closed operator withholds only the contested version, coherently.
+        let trusted = packument [("1.0.0", sriSame), ("2.0.0", sriPrivate)]
+            gated = packument [("1.0.0", sriSame), ("2.0.0", sriPublic)]
+            plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
+
+        it "warn is the identity: every version and its dist-tag survive" $ do
+            (survivorKeys . applyDivergencePolicy Warn <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
+            (Map.lookup "latest" . mpDistTags . applyDivergencePolicy Warn <$> plan)
+                `shouldBe` Just (Just (mkVersion Npm "2.0.0"))
+
+        it "fail-closed withholds the contested version, keeps the agreeing one" $
+            (survivorKeys . applyDivergencePolicy FailClosed <$> plan) `shouldBe` Just ["1.0.0"]
+
+        it "fail-closed drops the dist-tag and time entry that pointed at the contested version" $ do
+            let served = applyDivergencePolicy FailClosed <$> plan
+            (Map.lookup "latest" . mpDistTags <$> served) `shouldBe` Just Nothing
+            (Map.member "2.0.0" . mpTime <$> served) `shouldBe` Just False
+
+        it "fail-closed leaves the audit record (mpDivergences) intact" $
+            (Set.null . mpDivergences . applyDivergencePolicy FailClosed <$> plan) `shouldBe` Just False
+
+        it "fail-closed empties the listing when every surviving version is contested" $ do
+            let onlyDivergent =
+                    mergePackuments
+                        [ (TrustedSource, packument [("1.0.0", sriPrivate)])
+                        , (GatedSource, packument [("1.0.0", sriPublic)])
+                        ]
+            (Map.null . mpSurvivors . applyDivergencePolicy FailClosed <$> onlyDivergent) `shouldBe` Just True
+
+    describe "parseDivergencePolicy (the ECLUSE_DIVERGENCE_POLICY value)" $ do
+        it "parses warn and fail-closed, case- and spelling-tolerant" $ do
+            parseDivergencePolicy "warn" `shouldBe` Right Warn
+            parseDivergencePolicy "fail-closed" `shouldBe` Right FailClosed
+            parseDivergencePolicy "FAIL_CLOSED" `shouldBe` Right FailClosed
+            parseDivergencePolicy "  FailClosed  " `shouldBe` Right FailClosed
+
+        it "rejects an unknown policy" $
+            parseDivergencePolicy "drop" `shouldSatisfy` isLeft
+
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
         -- A divergence is reported only when two copies *contradict* on an algorithm
         -- they both carry. An asymmetric digest set -- one mirror also serving a digest

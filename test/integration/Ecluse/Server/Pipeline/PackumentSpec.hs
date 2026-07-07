@@ -4,6 +4,7 @@ import Data.Aeson (Value (String))
 import Data.ByteString.Lazy qualified as LBS
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
@@ -227,6 +228,34 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "private")
+
+    it "fail-closed withholds the divergent version from the listing while still serving an agreeing one" $ do
+        privateUp <-
+            servingUpstream
+                ( encodePackument
+                    ( privatePackumentWith
+                        [ ("1.0.0", versionObject "1.0.0" (sriFor "private") False)
+                        , ("2.0.0", versionObject "2.0.0" (sriFor "shared") False)
+                        ]
+                        "2.0.0"
+                    )
+                )
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [ ("1.0.0", versionObject "1.0.0" (sriFor "public") False)
+                        , ("2.0.0", versionObject "2.0.0" (sriFor "shared") False)
+                        ]
+                        "2.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 3)]
+                    )
+                )
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdDivergencePolicy = FailClosed}) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["2.0.0"]
 
     it "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)" $ do
         privateUp <- failingUpstream

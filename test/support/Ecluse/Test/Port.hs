@@ -33,6 +33,7 @@ noopMetricsPort =
         { mpServeDecision = const pass
         , mpServeAdmissionInFlight = const pass
         , mpServeAdmissionQueued = pass
+        , mpMergeDivergence = pass
         , mpRuleDenial = \_ _ -> pass
         , mpRuleEvalDuration = \_ _ -> pass
         , mpRuleEffectfulFailure = const pass

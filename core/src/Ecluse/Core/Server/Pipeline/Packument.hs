@@ -96,10 +96,12 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret)
 
 import Ecluse.Core.Package (
+    HashAlg,
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageInfo (infoVersions),
     PackageName,
+    renderHashAlg,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
@@ -107,9 +109,13 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    MergePlan (mpSurvivors),
+    Divergence (divLosing, divVersion, divWinning),
+    IntegrityFingerprint,
+    MergePlan (mpDivergences, mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
+    applyDivergencePolicy,
+    integrityHashes,
     mergePackuments,
  )
 import Ecluse.Core.Registry.Metadata (
@@ -287,16 +293,27 @@ serveWithDeps mode renderer deps name request respond
         (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
         let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
             sources = catMaybes [private, public]
-        case packumentPlan sources of
-            Just plan -> do
-                liftIO (mpServeDecision metrics Metric.Admit)
-                answerConditional rt sources plan
-            Nothing -> do
+        -- The terminal for a request that leaves nothing serveable: the merge found no
+        -- survivors, or the divergence policy withheld the last of them (fail-closed).
+        let noServeableVersions = do
                 let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                 liftIO (recordDenials metrics decisions)
                 logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
                 liftIO (respond (noSurvivors renderer deps decisions))
+        case packumentPlan sources of
+            Just plan -> do
+                -- A cross-upstream integrity divergence (threat #11) is logged and metered
+                -- under every policy; only 'FailClosed' then withholds the contested
+                -- version(s) from the served listing.
+                warnDivergences metrics name plan
+                let served = applyDivergencePolicy (pdDivergencePolicy deps) plan
+                if Map.null (mpSurvivors served)
+                    then noServeableVersions
+                    else do
+                        liftIO (mpServeDecision metrics Metric.Admit)
+                        answerConditional rt sources served
+            Nothing -> noServeableVersions
 
     -- The validator is derived from the serve's inputs, so the conditional
     -- request is answered BEFORE any assembly: a 304 costs the fetches and
@@ -517,6 +534,50 @@ logBreach name err =
         BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
+
+{- Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it. A
+public copy contradicts the trusted one on a shared integrity algorithm for a shared
+version; the trusted copy still won the merge (and is served, or withheld under
+'FailClosed'), so this is the supply-chain signal the operator alarms on, never a silent
+reconciliation. The structured payload names the package and the contradicting versions;
+the @ecluse.registry.merge.divergence@ counter is incremented once per contradicting
+version. Nothing is logged or metered for a clean merge. -}
+warnDivergences :: (KatipContext m) => MetricsPort -> PackageName -> MergePlan -> m ()
+warnDivergences metrics name plan =
+    case toList (mpDivergences plan) of
+        [] -> pass
+        divs -> do
+            liftIO (for_ divs (const (mpMergeDivergence metrics)))
+            katipAddContext (payload divs) $ logFM WarningS (ls (message divs))
+  where
+    payload divs =
+        sl "module" pipelineModule
+            <> sl "package" (renderPackageName name)
+            <> sl "versions" (T.intercalate "," (map divVersion divs))
+    message divs =
+        "cross-upstream integrity divergence: the trusted copy of "
+            <> renderPackageName name
+            <> " is served, but a public copy contradicts it on a shared integrity algorithm for "
+            <> show (length divs)
+            <> " version(s): "
+            <> T.intercalate "; " (map renderDivergence divs)
+
+-- One divergence rendered for the log line: the version key and the contradicting trusted
+-- vs public integrity fingerprints, read back via 'integrityHashes'.
+renderDivergence :: Divergence -> Text
+renderDivergence d =
+    divVersion d
+        <> " (trusted "
+        <> renderFingerprint (divWinning d)
+        <> " vs public "
+        <> renderFingerprint (divLosing d)
+        <> ")"
+
+renderFingerprint :: IntegrityFingerprint -> Text
+renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashes fp)) <> "}"
+
+renderHash :: (Maybe HashAlg, Text) -> Text
+renderHash (alg, body) = maybe "none" renderHashAlg alg <> ":" <> body
 
 {- Log the malformed packument entries an upstream served that the projection dropped
 rather than failing the whole document on, at 'WarningS', so an operator can see that an

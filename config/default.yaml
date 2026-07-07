@@ -29,6 +29,12 @@ logFormat: json
 telemetry: "off"
 minPublicIntegrity: sha256
 minTrustedIntegrity: sha256
+# What to do when the public and private copies of a version contradict on a shared
+# integrity algorithm (threat #11). Both policies log a WARNING and increment the
+# ecluse.registry.merge.divergence counter; the trusted copy always wins the bytes.
+#   warn        - serve the trusted copy and rely on the alarm (default)
+#   fail-closed - additionally withhold the contested version from the served listing
+divergencePolicy: warn
 osvDataDir: "data/osv"
 # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
 # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it;
