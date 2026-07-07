@@ -546,6 +546,7 @@ test-suite ecluse-unit
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec
+    Ecluse.ConfigSpec
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec

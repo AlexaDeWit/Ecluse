@@ -437,10 +437,13 @@ renderHashAlg = \case
     Blake2b -> "blake2b"
     SRI -> "sri"
 
-{- | Parse an algorithm name, tolerating case and an optional internal @\'-\'@ (so
-@"SHA-256"@ and @"sha256"@ both parse). An unrecognised name is reported as such,
-distinct from a recognised-but-too-weak floor. This admits only the named hash
-algorithms; the @sri@ wrapper is not a config-selectable algorithm and is rejected.
+{- | Parse an algorithm name, tolerating surrounding whitespace and case, and a
+single family-separating @\'-\'@ (so @"SHA-256"@ and @"sha256"@ both parse). It
+accepts only the canonical names and their documented single-dash aliases: it does
+__not__ strip arbitrary internal dashes, so a typo such as @"s-h-a--2-5-6"@ is
+rejected rather than silently read as @sha256@. An unrecognised name is reported as
+such, distinct from a recognised-but-too-weak floor. The @sri@ wrapper is not a
+config-selectable algorithm and is rejected.
 
 >>> parseHashAlg "SHA-256"
 Right SHA256
@@ -449,12 +452,16 @@ Right SHA256
 Left "unknown integrity algorithm: frobnicate"
 -}
 parseHashAlg :: Text -> Either Text HashAlg
-parseHashAlg raw = case T.filter (/= '-') (T.toLower (T.strip raw)) of
+parseHashAlg raw = case T.toLower (T.strip raw) of
     "md5" -> Right MD5
     "sha1" -> Right SHA1
+    "sha-1" -> Right SHA1
     "sha256" -> Right SHA256
+    "sha-256" -> Right SHA256
     "sha384" -> Right SHA384
+    "sha-384" -> Right SHA384
     "sha512" -> Right SHA512
+    "sha-512" -> Right SHA512
     "blake2b" -> Right Blake2b
     _ -> Left ("unknown integrity algorithm: " <> raw)
 

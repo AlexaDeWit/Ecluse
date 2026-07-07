@@ -76,7 +76,7 @@ import Control.Retry (
     retrying,
  )
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
 import UnliftIO (timeout, tryAny)
 import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
@@ -676,28 +676,51 @@ renderDecision pd decision =
             Undecidable _ reason ->
                 subject <> " could not be evaluated: " <> reason
 
-{- | Render a duration as an approximate, human-friendly string for use in
-decision messages. Always non-negative.
+{- | Render a duration as an approximate, human-friendly string for a decision
+message: its two most-significant non-zero units, so a value just short of a
+threshold reads differently from the threshold itself (@89s@ is @"1 minute 29
+seconds"@, not the bare @"1 minute"@ a @90s@ minimum also rendered to). A long
+duration stays compact, since its lesser units are zero and dropped. Always
+non-negative.
 
 >>> renderDuration 604800
 "7 days"
 
 >>> renderDuration 90
-"1 minute"
+"1 minute 30 seconds"
 -}
 renderDuration :: NominalDiffTime -> Text
-renderDuration d =
-    let secs = max 0 (round (realToFrac d :: Double)) :: Integer
-     in pick units secs
+renderDuration d = case take 2 (durationComponents secs) of
+    [] -> "0 seconds"
+    parts -> T.unwords (map renderDurationPart parts)
   where
-    units :: [(Text, Integer)]
-    units =
-        [ ("day", 86400)
-        , ("hour", 3600)
-        , ("minute", 60)
-        ]
-    pick [] secs = plural secs "second"
-    pick ((unit, size) : rest) secs
-        | secs >= size = plural (secs `div` size) unit
-        | otherwise = pick rest secs
-    plural n unit = show n <> " " <> unit <> (if n == 1 then "" else "s")
+    secs = max 0 (round (nominalDiffTimeToSeconds d)) :: Integer
+
+{- | The unit ladder 'durationComponents' decomposes a second count against, the
+largest unit first. @second@ (size 1) is the floor, so any remainder is fully
+consumed and the smallest component is always whole seconds.
+-}
+durationLadder :: [(Text, Integer)]
+durationLadder =
+    [ ("day", 86400)
+    , ("hour", 3600)
+    , ("minute", 60)
+    , ("second", 1)
+    ]
+
+{- | The non-zero @(unit, count)@ components of a non-negative second count, the
+largest unit first: @90@ is @[("minute", 1), ("second", 30)]@, and @604800@ is
+@[("day", 7)]@ (a single component, its lesser units being zero). 'renderDuration'
+keeps the two most significant.
+-}
+durationComponents :: Integer -> [(Text, Integer)]
+durationComponents = go durationLadder
+  where
+    go [] _ = []
+    go ((unit, size) : rest) r =
+        let (q, r') = r `divMod` size
+         in [(unit, q) | q > 0] <> go rest r'
+
+-- Render one @(unit, count)@ component, pluralising the unit (@1 minute@, @30 seconds@).
+renderDurationPart :: (Text, Integer) -> Text
+renderDurationPart (unit, n) = show n <> " " <> unit <> (if n == 1 then "" else "s")
