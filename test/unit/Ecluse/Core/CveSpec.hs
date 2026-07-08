@@ -130,6 +130,27 @@ spec = do
                         cveDbClose db
                         fail "expected a corrupt artifact to be rejected, but it was accepted"
 
+        it "rejects a non-SQLite artifact as a value, without leaking the connection" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "not-a-database.db"
+                -- Arbitrary non-SQLite bytes: the header magic is absent, so the
+                -- first file-touching statement (the epoch-stamp PRAGMA) makes
+                -- SQLite raise SQLITE_NOTADB. That must surface as a rejection
+                -- value -- so the sync task remembers the ETag rather than
+                -- re-downloading the same hostile object every poll -- never an
+                -- uncaught exception that leaks the just-opened connection.
+                writeFileBS path "this is not an SQLite database, not even close"
+                openCveDb Npm path >>= \case
+                    Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
+                    Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
+                    Right db -> do
+                        cveDbClose db
+                        fail "expected a non-SQLite artifact to be rejected, but it was accepted"
+                -- The rejected artifact's connection must not leak: no descriptor
+                -- may still reference the file.
+                held <- openFdTargets
+                held `shouldSatisfy` not . any (path `isSuffixOf`)
+
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
             withFixtureOsvDb CorpusV1 $ \dbFile -> do
