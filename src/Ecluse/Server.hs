@@ -81,6 +81,7 @@ module Ecluse.Server (
     defaultRequestSizeLimit,
 ) where
 
+import Data.List (dropWhileEnd)
 import Network.HTTP.Types (Method, Status, hConnection, hContentType, methodHead, status200, status404, status501, status503)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
@@ -417,24 +418,23 @@ matchMount method mounts segments = asum (map match mounts)
             <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
 {- Strip a mount's prefix segments off the front of a request path. The root
-mount (an empty prefix) consumes nothing and always matches. A trailing empty
-segment left after the prefix -- the trailing slash of a bare @\/npm\/@ -- is
-dropped so it is not mistaken for an empty ecosystem path component.
+mount (an empty prefix) consumes nothing and always matches. Trailing empty
+segments left after the prefix -- the trailing slash(es) of a bare @\/npm\/@ or
+@\/npm\/\/@ -- are dropped so they are not mistaken for empty ecosystem path
+components.
 -}
 stripPrefixSegments :: [Text] -> [Text] -> Maybe [Text]
-stripPrefixSegments [] segs = Just (dropTrailingSlash segs)
+stripPrefixSegments [] segs = Just (dropTrailingSlashes segs)
 stripPrefixSegments (p : ps) (s : ss)
     | p == s = stripPrefixSegments ps ss
 stripPrefixSegments _ _ = Nothing
 
--- A single trailing empty segment (a bare-mount trailing slash, e.g. @\/npm\/@
--- arriving as @["npm",""]@) is dropped so the remainder is the empty path, not a
--- spurious empty component. A non-trailing empty segment is left untouched for
--- the router to reject.
-dropTrailingSlash :: [Text] -> [Text]
-dropTrailingSlash [""] = []
-dropTrailingSlash (x : xs) = x : dropTrailingSlash xs
-dropTrailingSlash [] = []
+-- Drop every trailing empty segment (the trailing slash(es) of a bare-mount path,
+-- e.g. @\/npm\/@ arriving as @["npm",""]@ or @\/npm\/\/@ as @["npm","",""]@), so a
+-- run of them normalises to the empty path rather than a spurious empty component.
+-- An /internal/ empty segment is left untouched for the router to reject.
+dropTrailingSlashes :: [Text] -> [Text]
+dropTrailingSlashes = dropWhileEnd (== "")
 
 {- Render a non-effectful in-mount classified 'Route' to a pure response through
 the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
