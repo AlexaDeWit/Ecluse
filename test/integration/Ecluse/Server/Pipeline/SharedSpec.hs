@@ -4,6 +4,7 @@ import Data.Aeson (Value (Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Ecluse.Server.Pipeline.TestSupport
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -42,7 +43,7 @@ mkEffectful name prec cfg align eval = do
         PreparedRule
             { prepName = name
             , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter)
+            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime)
             , prepEval = \_ pd -> eval pd
             }
 
