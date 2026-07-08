@@ -126,7 +126,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     digestBytes,
  )
-import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules (bootOrder, evalRulesInBootOrder)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext, ctxAdvisoryEtag))
 import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
@@ -757,13 +757,18 @@ gatePublic tracing metrics deps name ctx = \case
                     )
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
-version string (the map 'filterPlanFromDecisions' consumes). Each version is run
-through 'Ecluse.Core.Rules.evalRules', so a fail-closed rule that cannot be computed
+version string (the map 'filterPlanFromDecisions' consumes). The rule set is arranged
+into its boot order once and every version run through
+'Ecluse.Core.Rules.evalRulesInBootOrder', so a fail-closed rule that cannot be computed
 yields a 'Ecluse.Core.Rules.Types.Undecidable' decision. With only pure rules the
 per-version call short-circuits without launching any IO. -}
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
-    traverse (evalRules ctx (pdRules deps)) (infoVersions info)
+    traverse (evalRulesInBootOrder ctx ordered) (infoVersions info)
+  where
+    -- The boot order depends only on the rule set, not the version, so it is arranged
+    -- once for the whole sweep rather than re-sorted inside each per-version evaluation.
+    ordered = bootOrder (pdRules deps)
 
 {- Project each excluded version's 'Decision' to a 'VersionVerdict', keeping the
 version string so a denial's audit line can name it. The plan carries its

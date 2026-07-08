@@ -25,7 +25,7 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
-import Ecluse.Core.Rules (evalRules, inertRuleDeps, prepare)
+import Ecluse.Core.Rules (bootOrder, evalRulesInBootOrder, inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
  )
@@ -46,14 +46,16 @@ benchmarks loaded =
                ]
 
 {- | Evaluate the rule set against every version, forcing each decision. The engine
-'prepare's the rules -- a cheap, once-at-boot step for pure rules, a constant in the
-version count -- and then sweeps every version in 'IO', the per-request work a packument
-response performs.
+'prepare's and 'bootOrder's the rules once -- both constant in the version count -- and
+then sweeps every version in 'IO' through 'evalRulesInBootOrder', mirroring the serve
+path's per-request work exactly (see 'Ecluse.Core.Server.Pipeline.Packument'), so the
+measured sweep is the shipped shape rather than a per-version re-sort.
 -}
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do
     prepared <- prepare inertRuleDeps benchRules
-    sum <$> traverse (fmap decisionCode . evalRules benchEvalContext prepared) (Map.elems (infoVersions info))
+    let ordered = bootOrder prepared
+    sum <$> traverse (fmap decisionCode . evalRulesInBootOrder benchEvalContext ordered) (Map.elems (infoVersions info))
 
 -- | A distinct code per decision arm, forcing the engine's verdict to a constructor.
 decisionCode :: Decision -> Int

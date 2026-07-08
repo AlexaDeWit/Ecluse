@@ -56,6 +56,7 @@ module Ecluse.Core.Rules (
 
     -- * Evaluation
     evalRules,
+    evalRulesInBootOrder,
     renderDecision,
     renderDuration,
 
@@ -419,9 +420,31 @@ in boot order, and the moment the earliest decisive one is known every still-run
 strictly-later evaluation is cancelled. No IO an earlier decisive result would moot is
 ever launched, because a resilient run is started only once every rule before it is
 known non-decisive.
+
+'bootOrder' is computed on each call. A caller deciding __many versions against one
+fixed rule set__ -- the serve path sweeping every version of a packument -- should
+compute it __once__ and evaluate through 'evalRulesInBootOrder' instead, rather than
+re-sorting the invariant rule set on every version.
 -}
 evalRules :: EvalContext -> [PreparedRule] -> PackageDetails -> IO Decision
-evalRules ctx rules pd = step (bootOrder rules) []
+evalRules ctx rules = evalRulesInBootOrder ctx (bootOrder rules)
+
+{- | Evaluate a version against a rule set __already arranged into 'bootOrder'__: the
+per-version workhorse behind 'evalRules', which is exactly this after a one-off
+'bootOrder'. The decision semantics are identical to 'evalRules' (see its documentation);
+the sole difference is that the boot order is __supplied__ rather than recomputed.
+
+This exists for the caller that decides __many versions against one fixed rule set__ --
+the serve path deciding every version of a packument, up to
+'Ecluse.Core.Security.maxVersionCount' of them. 'bootOrder' depends only on the rule set,
+not on the version, so it is invariant across that sweep: computing it once here and
+reusing the ordered list spares the per-version re-sort 'evalRules' would otherwise repeat
+on every version. The list __must__ already be in 'bootOrder' -- an unordered list would
+be walked in the wrong precedence order -- which is why this is a separate entry point
+rather than the default.
+-}
+evalRulesInBootOrder :: EvalContext -> [PreparedRule] -> PackageDetails -> IO Decision
+evalRulesInBootOrder ctx ordered pd = step ordered []
   where
     -- 'reasons' accumulates non-decisive reasons in reverse boot order; the final
     -- deny-by-default list is reversed back into boot order.

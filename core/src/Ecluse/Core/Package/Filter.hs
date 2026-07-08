@@ -49,7 +49,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
+import Ecluse.Core.Rules (RuleDeps, bootOrder, evalRulesInBootOrder, prepare)
 import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
@@ -95,7 +95,11 @@ nothing survives.
 filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
 filterPlan deps ctx rules info = do
     prepared <- prepare deps rules
-    decisions <- traverse (evalRules ctx prepared) (infoVersions info)
+    -- The boot order is invariant across the version sweep (it depends only on the rule
+    -- set), so it is arranged once here rather than re-sorted inside each per-version
+    -- 'evalRulesInBootOrder'.
+    let ordered = bootOrder prepared
+    decisions <- traverse (evalRulesInBootOrder ctx ordered) (infoVersions info)
     pure (filterPlanFromDecisions decisions info)
 
 {- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
