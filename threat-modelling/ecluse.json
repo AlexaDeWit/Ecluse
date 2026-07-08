@@ -2667,12 +2667,12 @@
                 },
                 {
                   "number": 20,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Pathological OSV Payload (DoS)",
                   "type": "Denial of service",
                   "description": "OSV.dev or a compromised upstream could serve an overly large, deeply nested, or malformed JSON file, consuming excessive CPU/memory and crashing the Pilot.",
-                  "mitigation": "Partially implemented: Pilot parses the advisory archive as a stream in constant memory rather than loading it whole, and a non-2xx upstream response fails fast under bounded, jittered retry instead of being fed to the parser. Residual (tracked at #571): bound the HTTP response size and defend the decompression path against pathological archives.",
+                  "mitigation": "Pilot streams the archive and bounds each advisory as it is unzipped: an entry past a per-advisory byte cap (8 MiB) is drained to its boundary and dropped before it reaches the decoder, and an entry whose JSON does not decode is dropped, both logged and tallied, so a few poisoned records never halt ingestion. An advisory that fans out into an anomalous number of ranges is logged but still ingested. Deep nesting is bounded implicitly: the per-entry byte cap holds decode cost to a constant multiple of the input, and Pilot runs under the boot-resolved process heap ceiling (ECLUSE_MAX_HEAP_BYTES, else cgroup memory.max), so a small-but-deep payload fails as a bounded, clean process exit rather than exhausting the machine. A systemic drop rate (a mostly-unusable feed, the shape of a compromised or truncated export) aborts the compile without publishing, so the proxy keeps its last-good osv.db instead of adopting a hole-ridden one. Residual: an isolated depth bomb is a bounded Pilot crash rather than a per-record soft drop, and volumetric abuse of the fetch itself stays an operator-edge concern.",
                   "modelType": "STRIDE",
                   "id": "3735906e-a06a-4e0f-ba45-894ba5400ce8"
                 }

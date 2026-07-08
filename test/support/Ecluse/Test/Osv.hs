@@ -21,6 +21,7 @@ module Ecluse.Test.Osv (
     CorpusVersion (..),
     osvCorpusFiles,
     osvCorpusZip,
+    osvZipOf,
 
     -- * Hostile artifacts
     mkDbWithWrongEpoch,
@@ -80,6 +81,15 @@ is deterministic.
 osvCorpusZip :: CorpusVersion -> IO LByteString
 osvCorpusZip v = do
     entries <- osvCorpusFiles v
+    osvZipOf (map (first toText) entries)
+
+{- | Assemble an osv.dev-shaped export (a flat zip of advisory JSON files) from
+arbitrary (entry name, bytes) pairs, in memory. The entry timestamp is fixed so the
+archive is deterministic. Suites use this to build tampered or pathological archives
+the corpus does not carry.
+-}
+osvZipOf :: [(Text, LByteString)] -> IO LByteString
+osvZipOf entries =
     runConduit $
         yieldMany (map toZipEntry entries)
             .| void (zipStream defaultZipOptions)
@@ -87,7 +97,7 @@ osvCorpusZip v = do
   where
     toZipEntry (name, bytes) =
         ( ZipEntry
-            { zipEntryName = Left (toText name)
+            { zipEntryName = Left name
             , zipEntryTime = corpusTimestamp
             , zipEntrySize = Nothing
             , zipEntryExternalAttributes = Nothing

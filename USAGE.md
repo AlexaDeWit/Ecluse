@@ -50,6 +50,18 @@ advisory export (`--ecosystem`, default `npm`; `--source URL` overrides the conf
 the artifact to the vulnerability-database bucket, making one invocation a full sync cycle; `--upload`
 without a configured bucket aborts immediately.
 
+Ingest is bounded against a pathological or tampered advisory in the export (the public mirror is
+trusted in normal operation, so these are generous backstops, not a validation pass). A single
+over-large advisory (past an 8 MiB per-record cap) or one whose JSON does not decode is logged and
+dropped, and the compile keeps going: a few poisoned records never freeze the feed. An advisory that
+fans out into an unusually large number of ranges is logged as anomalous but still ingested. But if
+the run's drop rate is **systemic** (a feed that is mostly unusable, which is what a compromised or
+truncated export looks like), the compile aborts non-zero **without publishing**, so a running proxy
+keeps its last-good `osv.db` rather than adopting a fresh-looking artifact that silently omits
+advisories. Depth is bounded implicitly: the per-record byte cap holds decode cost finite, and Pilot
+runs under the same boot-resolved heap ceiling as every role (see `ECLUSE_MAX_HEAP_BYTES`), so a
+crafted small-but-deep payload fails as a clean, bounded process exit rather than exhausting memory.
+
 The default command runs the `proxy` process (the HTTP front door on `ECLUSE_PORT`, default
 `8080`) plus the mirror worker. The proxy scales horizontally behind a load balancer, but
 **Pilot and Dredger must run as singletons**: multiple instances race, duplicate API calls, and

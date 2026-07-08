@@ -16,12 +16,21 @@ import Paths_ecluse (version)
 import System.Directory (createDirectoryIfMissing, removeFile)
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
-import UnliftIO.Exception (bracket)
+import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.Osv.Schema (MetaKey (..), osvDbFileName, osvSchemaEpoch, renderMetaKey)
 import Ecluse.Pilot.Osv (ExtractedOsv (..))
 import Ecluse.Pilot.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
-import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
+import Ecluse.Pilot.Osv.Stream (
+    IngestStats (..),
+    PilotIngestAborted (..),
+    defaultIngestLimits,
+    newOsvIngest,
+    readIngestStats,
+    resetIngestStats,
+    streamOsvUrl,
+    systemicDrop,
+ )
 import Ecluse.Telemetry (Telemetry)
 
 {- | Compile an ecosystem's OSV advisory export into the SQLite artifact and
@@ -39,6 +48,7 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
 
     bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
         liftIO $ initSchema conn
+        ingest <- newOsvIngest defaultIngestLimits
 
         -- The fetch runs under a truncated exponential backoff (see
         -- 'Ecluse.Pilot.Osv.Retry'): a transient osv.dev failure is retried with
@@ -48,18 +58,42 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
         -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
         -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
         -- under the composite primary key, so a re-run would duplicate those ranges.)
+        -- The ingest tally is reset alongside the table so it reflects only the final
+        -- attempt.
         withOsvRetry defaultOsvRetryPolicy $ do
+            resetIngestStats ingest
             liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
             runConduit $
-                streamOsvUrl telemetry urlStr
+                streamOsvUrl telemetry ingest urlStr
                     .| CL.filter ((== ecosystem) . extEcosystem)
                     .| CL.chunksOf 2000
                     .| sinkSqlite conn
 
+        -- The stream drops an over-large or malformed advisory rather than halting, so a
+        -- few poisoned records never freeze the feed. But a systemically corrupt payload
+        -- must not become a fresh-looking artifact that silently omits advisories: on a
+        -- systemic drop rate, abandon the run before 'writeMeta' finalises it, so a
+        -- consumer keeps its last-good db instead.
+        stats <- readIngestStats ingest
+        when (systemicDrop stats) $ do
+            logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> renderDrops stats))
+            throwIO (PilotIngestAborted stats)
+
         rowCount <- liftIO $ writeMeta conn ecosystem urlStr
-        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem))
+        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
 
     pure dbFile
+
+-- A one-line summary of an ingest pass's drop tally for the boot log.
+renderDrops :: IngestStats -> Text
+renderDrops s =
+    "accepted "
+        <> show (statAccepted s)
+        <> ", dropped "
+        <> show (statDroppedOversize s)
+        <> " oversize / "
+        <> show (statDroppedMalformed s)
+        <> " malformed"
 
 initSchema :: Connection -> IO ()
 initSchema conn = do
