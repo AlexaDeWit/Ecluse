@@ -76,7 +76,7 @@ import Control.Retry (
     retrying,
  )
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
+import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
 import UnliftIO (timeout, tryAny)
 import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
@@ -324,6 +324,15 @@ data Resilience = Resilience
     (@ecluse.rule.breaker.state@). Inert ('Ecluse.Core.Breaker.noBreakerReporter') for an
     unobserved rule; the composition root installs the live one.
     -}
+    , resClock :: IO UTCTime
+    {- ^ The injected wall clock the breaker reads for its admission gate and its
+    cooldown arithmetic. 'Data.Time.getCurrentTime' in production, overridable under
+    test for deterministic breaker timing. Deliberately separate from the request
+    snapshot 'ctxNow' (which the age rules hold constant across a packument): the
+    breaker is a wall-clock device, and reading it fresh at the point a failure commits
+    is what makes the cooldown start when the failure is recorded, not when the retry
+    run began.
+    -}
     }
 
 {- | Prepare a resolved policy ('PrecededRule's) into the engine's runtime rules: each
@@ -373,6 +382,7 @@ resilienceFor deps = \case
                     , resAlignment = alignment
                     , resBreaker = breaker
                     , resBreakerReporter = rdBreakerReporter deps
+                    , resClock = getCurrentTime
                     }
 
 {- | Arrange a rule set into the single total order evaluation walks: __highest
@@ -502,15 +512,17 @@ exception, or the breaker already open) advances the breaker and resolves to
 @'Unavailable' transience alignment reason@, the alignment from the rule's 'Resilience'
 (fail-closed or fail-open).
 
-The breaker timing reads the 'EvalContext' clock, so it is deterministic under test.
+The breaker timing reads the injected resilience clock ('resClock'), read fresh at each
+breaker decision, so it is deterministic under test and independent of the request
+snapshot 'ctxNow' the age rules hold constant. Reading it again after the retry run means
+a tripped breaker's cooldown starts when the failure commits, not when the run began.
 Total -- it never throws; a rule failure becomes a result.
 -}
 runEffectfulRule :: EvalContext -> PreparedRule -> PackageDetails -> IO RuleEvaluation
 runEffectfulRule ctx rule pd = case prepResilience rule of
     Nothing -> Decided <$> prepEval rule ctx pd
     Just res -> do
-        let now = ctxNow ctx
-        admitted <- admitProbe res now
+        admitted <- admitProbe res =<< resClock res
         if not admitted
             then -- Breaker open and still cooling down: fast-fail without running the
             -- rule's IO, the cheap path a sustained outage stays on. An open breaker
@@ -518,7 +530,11 @@ runEffectfulRule ctx rule pd = case prepResilience rule of
                 pure (exhausted res (prepName rule) (transientCause (resConfig res)) "the rule source circuit breaker is open")
             else do
                 result <- attemptWithRetry res (prepEval rule ctx) pd
-                settleOutcome res (prepName rule) now result
+                -- Read the clock again, after the retry run: an exhausted result opens the
+                -- breaker for its cooldown from the instant the failure is committed here,
+                -- so the retry duration is not subtracted from the effective cooldown.
+                settledNow <- resClock res
+                settleOutcome res (prepName rule) settledNow result
 
 {- Settle a finished retry run against the breaker: a returned verdict resets the
 breaker and is passed on 'Decided'; an exhausted run advances the breaker and resolves

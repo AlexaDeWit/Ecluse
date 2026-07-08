@@ -4,6 +4,7 @@ import Data.Aeson (Value (String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
     ColorStrategy (ColorLog),
@@ -166,7 +167,7 @@ spec = do
                     PreparedRule
                         { prepName = "EffRule"
                         , prepPrecedence = 300
-                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter)
+                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime)
                         , prepEval = \_ _ -> pure (NoDecision "noop")
                         }
             evalTier [effectful] `shouldBe` Metric.Effectful
