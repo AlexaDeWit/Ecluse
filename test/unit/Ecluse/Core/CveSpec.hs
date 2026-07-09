@@ -1,12 +1,12 @@
 module Ecluse.Core.CveSpec (spec) where
 
 import Data.List (isSuffixOf)
-import Database.SQLite.Simple (Only, SQLError, close, execute_, fromOnly, query_)
+import Database.SQLite.Simple (Only, SQLError, close, execute_, fromOnly, open, query_)
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
-import UnliftIO.Exception (catchAny)
+import UnliftIO.Exception (bracket, catchAny)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), openCveDb, withCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection)
@@ -91,6 +91,22 @@ spec = do
 
         it "rejects an artifact compiled for a different ecosystem" $
             withFixtureOsvDb CorpusV1 (openCveDb PyPI >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
+
+        it "rejects an artifact with no meta table as a value, without leaking the connection" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "no-meta.db"
+                -- A structurally-sound artifact with the ranges table and the right epoch
+                -- stamp but no @meta@ table: the ecosystem query raises "no such table",
+                -- which acceptance must fold into a rejection value
+                -- (CveDbEcosystemMismatch Nothing) rather than an uncaught throw that would
+                -- re-download the artifact every poll and leak the just-opened connection.
+                bracket (open path) close $ \conn -> do
+                    execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
+                    execute_ conn "CREATE TABLE package_vulnerability_ranges (package_name TEXT, introduced_version TEXT, fixed_version TEXT, last_affected_version TEXT, severity REAL)"
+                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
+                -- The rejected artifact's connection must not leak.
+                held <- openFdTargets
+                held `shouldSatisfy` not . any (path `isSuffixOf`)
 
         it "withCveDb short-circuits a rejection without running the action" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do

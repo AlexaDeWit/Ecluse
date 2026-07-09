@@ -45,7 +45,7 @@ module Ecluse.Core.Cve.Sync (
 import Conduit (ConduitT, await, runResourceT, yield, (.|))
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
-import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS, WarningS), logFM, ls)
+import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
 import UnliftIO (MonadUnliftIO, tryAny)
@@ -206,7 +206,13 @@ runCveSync env schedule notifyFirstSync = do
         case (settled, delays) of
             (True, _) -> pure seen'
             (False, []) -> do
-                logFM WarningS (ls ("cve-sync[" <> eco <> "]: boot fetch did not produce an advisory database; continuing without one, polling"))
+                -- The boot budget is spent without an artifact. This ecosystem stays
+                -- not-ready (the readiness gate reads 'csReady'), so its rules deny by
+                -- default and no traffic is served against a missing advisory database;
+                -- the poll continues in case the artifact appears later. Logged at
+                -- 'ErrorS' because a persistent failure here is a real misconfiguration
+                -- (bucket, object key, or IAM), not a condition a healthy deploy hits.
+                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
                 pure seen'
             (False, d : rest) -> do
                 threadDelay d

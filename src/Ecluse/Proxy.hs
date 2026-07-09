@@ -413,15 +413,24 @@ sweepStaleTemps dataDir =
     )
         `catchAny` const pass
 
-{- Run the server and the mirror worker concurrently over one composition-root
-'Env', the shape the single-process program uses. The two are independent (each
-depends only on the handles in 'Env', not on each other), so splitting into
-separate binaries later is two thin entry points calling 'runServer' \/
-'runWorker' -- no rearchitecting. The server's settings (its derived mount bindings
-and port) are supplied by the composition root and threaded to 'runServer'.
+{- Run the server and the mirror worker over one composition-root 'Env', the shape
+the single-process program uses. The two are independent (each depends only on the
+handles in 'Env', not on each other), so splitting into separate binaries later is
+two thin entry points calling 'runServer' \/ 'runWorker' -- no rearchitecting. The
+server's settings (its derived mount bindings and port) are supplied by the
+composition root and threaded to 'runServer'.
+
+They are 'race_'d, not 'concurrently_'d, and the choice is a shutdown invariant. The
+worker loop never returns, so a 'concurrently_' would keep waiting on it after the
+server has gracefully drained and returned, which in turn wedges the composition
+root's outer 'race_' and leaves the telemetry and 'Env' brackets un-unwound: no
+flush, the process hanging until a second signal or the orchestrator's kill. 'race_'
+lets the server's graceful return cancel the worker and unwind those brackets (flush
+and exit cleanly), while a fault thrown by either side still propagates ('race_'
+re-raises it) so a genuine failure fails the process up rather than being swallowed.
 -}
 runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
-runServices serverConfig policies env = concurrently_ (runServer serverConfig env) (runWorker policies env)
+runServices serverConfig policies env = race_ (runServer serverConfig env) (runWorker policies env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.

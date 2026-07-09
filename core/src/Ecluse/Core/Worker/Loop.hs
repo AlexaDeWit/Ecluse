@@ -37,7 +37,10 @@ publish error, an undecodable body -- is caught and logged, then the loop backs 
 briefly and continues, so one bad iteration cannot kill the worker thread. A
 successful poll advances the heartbeat (whether or not the batch was empty), so a
 liveness probe sees the loop is alive; an idle queue is a healthy empty poll, not a
-stall.
+stall. The heartbeat advances only after a successful @receive@, so a worker that
+cannot poll at all (a persistently throwing @receive@) keeps retrying but never
+advances it: the heartbeat goes stale and @\/livez@ fails, surfacing a fully-dead
+worker for the orchestrator to restart.
 -}
 workerLoop :: WorkerM ()
 workerLoop = forever $ do

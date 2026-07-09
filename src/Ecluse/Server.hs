@@ -82,7 +82,7 @@ module Ecluse.Server (
 ) where
 
 import Data.List (dropWhileEnd)
-import Network.HTTP.Types (Method, Status, hConnection, hContentType, methodHead, status200, status404, status501, status503)
+import Network.HTTP.Types (Method, Status, hConnection, hContentType, methodHead, status200, status404, status500, status501, status503)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -606,9 +606,19 @@ runWarp cfg0 getApp = do
             Warp.setPort (scPort cfg)
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
+                -- Defence-in-depth for a fault that escapes the handler pre-commit: a
+                -- neutral JSON 500 (no exception detail) rather than warp's default body.
+                -- Routing an escaped fault through the app's katip/audit channel is the
+                -- typed request perimeter's job, tracked separately.
+                . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp
     withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings app)
+
+-- The neutral response for a fault that escapes to warp's own handler (see 'runWarp'):
+-- a deny-shaped 500 carrying no exception detail.
+onExceptionResponse :: Response
+onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
 {- Install the OS shutdown handler @warp@ asks for: on @SIGTERM@\/@SIGINT@, raise the
 drain (flip readiness to @503@ and start stamping @Connection: close@) and then run

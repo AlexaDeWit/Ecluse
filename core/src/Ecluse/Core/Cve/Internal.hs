@@ -61,8 +61,9 @@ data CveDbRejected
       attacker-authored SQL wearing the table's name.
       -}
       CveDbRangesNotATable
-    | {- | The artifact's @meta@ table names a different ecosystem (carried)
-      than the one this handle was asked to serve.
+    | {- | The artifact's @meta@ table names a different ecosystem (carried) than
+      the one this handle was asked to serve, or the @meta@ table is absent or
+      unreadable so the ecosystem cannot be confirmed ('Nothing').
       -}
       CveDbEcosystemMismatch (Maybe Text)
     deriving stock (Eq, Show)
@@ -160,20 +161,32 @@ checkIntegrity conn = do
 
 checkRangesTable :: Connection -> IO (Either CveDbRejected ())
 checkRangesTable conn = do
-    kinds <- query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'" :: IO [Only Text]
-    pure $
-        if map fromOnly kinds /= ["table"]
-            then Left CveDbRangesNotATable
-            else Right ()
+    -- 'sqlite_master' is present in any structurally-sound database (quick_check has
+    -- already passed), but fold any SQLite throw into the rejection so acceptance
+    -- stays total at the type: a read fault here is a refusal value the sync task
+    -- remembers, never an exception that unwinds and re-fetches the artifact every poll.
+    kinds <- try (query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'") :: IO (Either SQLError [Only Text])
+    pure $ case kinds of
+        Left err -> Left (CveDbIntegrityFailed ["ranges relation unreadable: " <> show err])
+        Right rows
+            | map fromOnly rows == ["table"] -> Right ()
+            | otherwise -> Left CveDbRangesNotATable
 
 checkMetaEcosystem :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 checkMetaEcosystem eco conn = do
-    named <- query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem)) :: IO [Only Text]
-    let found = fromOnly <$> listToMaybe named
-    pure $
-        if found == Just (ecosystemName eco)
-            then Right ()
-            else Left (CveDbEcosystemMismatch found)
+    -- A structurally-sound artifact can still lack the @meta@ table entirely, in
+    -- which case this query raises "no such table". Fold that throw into the same
+    -- ecosystem-cannot-be-confirmed refusal a present-but-wrong value yields
+    -- ('CveDbEcosystemMismatch' 'Nothing'), so a missing @meta@ table is a remembered
+    -- rejection value rather than an exception that re-fetches the artifact every poll.
+    named <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem))) :: IO (Either SQLError [Only Text])
+    pure $ case named of
+        Left _ -> Left (CveDbEcosystemMismatch Nothing)
+        Right rows ->
+            let found = fromOnly <$> listToMaybe rows
+             in if found == Just (ecosystemName eco)
+                    then Right ()
+                    else Left (CveDbEcosystemMismatch found)
 
 {- | Does any advisory for this package name this exact version string as a
 fixed bound? One indexed probe (@package_name, fixed_version@); deliberately
