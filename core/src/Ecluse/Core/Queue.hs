@@ -90,6 +90,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, rea
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import System.Timeout (timeout)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (Hash, PackageName)
@@ -567,8 +568,11 @@ artifact -- the same argument 'newBoundedInMemoryQueue' makes):
   invokes @onDrop@ with the running drop total. The callback fires on __every__
   drop (metric-grade); the caller owns any log rate-limiting.
 * __A backend failure inside the drain loop__ invokes @onDeliveryFailure@ with the
-  running failure total and the failure's detail, and the loop moves on to the next
-  job; the failed job is not redelivered here.
+  running failure total and the failure's detail, then the loop __backs off__ (bounded,
+  growing with consecutive failures) before the next job so a persistently-unreachable
+  backend is retried at a bounded rate rather than hot-looping; the failed job is not
+  redelivered here, and the monotonic failure count is the operator's degraded-hand-off
+  surface.
 * __Cancellation loses the buffer.__ The drain loop never returns, so the
   composition root races it against the services; shutdown cancels it and any
   still-buffered jobs are dropped -- the same safe loss.
@@ -600,18 +604,48 @@ newEnqueueBuffer depth onDrop onDeliveryFailure backend = do
         -- the caller owns any log rate-limiting.
         handOff job = do
             dropped <- atomically (writeOrDrop buffer dropCount job)
-            whenJust dropped onDrop
-    pure (backend{enqueue = handOff}, forever (deliverNext buffer failureCount onDeliveryFailure backend))
+            -- 'onDrop' is a best-effort observer (log/metric) and runs on the serve
+            -- hot path, so a throwing observer must never turn a safe drop into an
+            -- exception on the client response: guard it (async-safe 'tryAny').
+            whenJust dropped (void . tryAny . onDrop)
+    pure (backend{enqueue = handOff}, drainLoop buffer failureCount onDeliveryFailure backend)
 
-{- Deliver the next buffered job to the backend's own 'enqueue', blocking until
-one is buffered. A backend failure invokes the failure callback with the running
-failure total and the failure's detail; the failed job is not redelivered here
-(the safe loss 'newEnqueueBuffer' documents). -}
-deliverNext :: TBQueue MirrorJob -> TVar Int -> (Int -> Text -> IO ()) -> MirrorQueue -> IO ()
-deliverNext buffer failureCount onDeliveryFailure backend = do
-    job <- atomically (readTBQueue buffer)
-    tryAny (enqueue backend job) >>= \case
-        Left failure -> do
-            n <- atomically (bumpCount failureCount)
-            onDeliveryFailure n (displayExceptionT failure)
-        Right () -> pass
+{- The drain loop: deliver buffered jobs to the backend's own 'enqueue', forever. Each
+iteration blocks until a job is buffered, then delivers it. A delivery failure is
+reported through the best-effort failure callback (guarded, so a throwing observer
+cannot tear the loop down), then the loop __backs off__ before the next delivery so a
+persistently-unreachable backend is retried at a bounded rate rather than hot-looping
+through the buffer and shedding every job at once. The backoff grows with consecutive
+failures to a cap and resets on the next success; the failed job is not redelivered here
+(the safe loss 'newEnqueueBuffer' documents: it is re-enqueued on the next demand for its
+artifact, and the running failure count the callback carries is the operator's surface
+for a persistently-degraded hand-off). -}
+drainLoop :: TBQueue MirrorJob -> TVar Int -> (Int -> Text -> IO ()) -> MirrorQueue -> IO ()
+drainLoop buffer failureCount onDeliveryFailure backend = go 0
+  where
+    go consecutiveFailures = do
+        job <- atomically (readTBQueue buffer)
+        tryAny (enqueue backend job) >>= \case
+            Right () -> go 0
+            Left failure -> do
+                n <- atomically (bumpCount failureCount)
+                -- 'onDeliveryFailure' is a best-effort observer; guard it so a throwing
+                -- observer can never escape the loop and tear down the composition root.
+                void (tryAny (onDeliveryFailure n (displayExceptionT failure)))
+                threadDelay (drainBackoffMicros consecutiveFailures)
+                go (consecutiveFailures + 1)
+
+{- The bounded backoff between failed deliveries: doubling from 'drainBackoffBaseMicros'
+towards 'drainBackoffCapMicros' as consecutive failures mount, so a persistently-dead
+backend is retried at most once per the cap interval. The exponent is clamped so the
+doubling cannot overflow before the ceiling applies. -}
+drainBackoffMicros :: Int -> Int
+drainBackoffMicros consecutiveFailures =
+    min drainBackoffCapMicros (drainBackoffBaseMicros * (2 ^ min consecutiveFailures drainBackoffShiftClamp))
+
+-- The drain backoff's base delay (after the first failure), its ceiling, and the
+-- exponent clamp that keeps the doubling from overflowing before the ceiling applies.
+drainBackoffBaseMicros, drainBackoffCapMicros, drainBackoffShiftClamp :: Int
+drainBackoffBaseMicros = 200_000
+drainBackoffCapMicros = 30_000_000
+drainBackoffShiftClamp = 12

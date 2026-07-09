@@ -744,6 +744,19 @@ This is the same instinct as §10 (totality). A partial function crashes on inpu
 *it did not name*; a stringly throw discards the *cause* it did know. Both trade a
 value the type could have carried for a surprise at run time.
 
+**Rule 11.5, Catch on the unliftio combinators, never base `Control.Exception`.**
+Use `UnliftIO.Exception`; when catching broadly, reach for `tryAny` / `catchAny`,
+which catch *synchronous* exceptions but re-raise asynchronous ones. A base `catch` /
+`try` at `SomeException` also swallows the asynchronous exceptions the runtime delivers
+(cancellation from `race` / `concurrently`, a timeout, a `ThreadKilled`), silently
+defeating the structured-concurrency shutdown the effectful shell depends on (§11.3).
+The rule holds uniformly: the serve gate, the mirror worker, the advisory sync, and the
+credential breaker all catch on the sync-only combinators, so a blanket catch never
+turns a cancellation into a swallowed no-op or a mis-counted failure. When you must
+instead act on *every* exit including an async one (releasing a resource), reach for
+`finally` / `withException` / `bracket`, which are async-aware by construction, not a
+broad `catch`.
+
 ---
 
 ## 12. Tests
