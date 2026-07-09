@@ -53,8 +53,8 @@ spec :: Spec
 spec = do
     describe "the worker verifies what the public floor admits (the #409 invariant)" $ do
         it "every algorithm that meets the default public floor is computable" $
-            -- The load-bearing cross-module invariant: the floor admits by strength
-            -- ('meetsFloor'\/'integrityStrength'), the worker verifies by computation
+            -- The load-bearing cross-module invariant: the floor admits by algorithm
+            -- authority ('meetsFloor'\/'HashAlg' 'Ord'), the worker verifies by computation
             -- ('isComputable'\/'Ecluse.Core.Package.computeDigest'), and the second set must
             -- cover the first or an admitted public artifact is enqueued then permanently
             -- dropped (issue #409). 'computeDigest''s totality forces a compute arm for any
@@ -69,6 +69,11 @@ spec = do
             -- wrapper resolved via 'assertedAlg', never a floor candidate or a compute target.
             meetsFloor defaultMinIntegrity SRI `shouldBe` False
             isComputable SRI `shouldBe` False
+
+    describe "HashAlg Ord" $ do
+        it "uses the explicit checksum-authority order, not constructor order" $ do
+            let ranks = [SRI, MD5, SHA1, SHA256, SHA384, Blake2b, SHA512]
+            and (zipWith (<) ranks (drop 1 ranks)) `shouldBe` True
 
     describe "integrityStrength" $ do
         it "ranks the broken algorithms below SHA-256" $ do
@@ -89,19 +94,14 @@ spec = do
         it "ranks a bare SRI below every real algorithm (resolve it first)" $
             (integrityStrength SRI < integrityStrength MD5) `shouldBe` True
 
-        it "ranks SHA-512 and Blake2b as EQUAL -- the modern long digests share the top tier" $
-            -- The load-bearing invariant of the tier representation: a naive
-            -- one-constructor-per-algorithm enum would make these distinct and
-            -- silently change which digest wins a strongest-digest comparison. The
-            -- worker's tamper gate picks the strongest present digest, so a spurious
-            -- tie-break here could prefer the wrong algorithm. They must compare EQ.
+        it "groups SHA-512 and Blake2b in the same broad strength tier" $
+            -- 'HashAlg' 'Ord' makes the operational tie-break; 'Strength' keeps the
+            -- collision-resistance tier language for docs and diagnostics.
             (integrityStrength SHA512 `compare` integrityStrength Blake2b) `shouldBe` EQ
 
         it "is strictly increasing weakest-to-strongest: SRI < MD5 < SHA1 < SHA256 < SHA384 < SHA512" $ do
-            -- Pins the whole ranking in one assertion, so the tier representation can
-            -- never drift from the order the tamper gate and the admission floor rely
-            -- on. (Blake2b shares SHA-512's tier, asserted above, so it is left out of
-            -- this strict chain.)
+            -- Pins the broad tier representation. Blake2b shares SHA-512's tier,
+            -- asserted above, so it is left out of this strict chain.
             let ranks = map integrityStrength [SRI, MD5, SHA1, SHA256, SHA384, SHA512]
             and (zipWith (<) ranks (drop 1 ranks)) `shouldBe` True
 
@@ -121,9 +121,10 @@ spec = do
             meetsFloor defaultMinIntegrity SHA512 `shouldBe` True
             meetsFloor defaultMinIntegrity Blake2b `shouldBe` True
 
-        it "rejects SHA-384 when the floor is raised to SHA-512 (SHA-384 is below it)" $ do
+        it "rejects SHA-384 and Blake2b when the floor is raised to SHA-512" $ do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)
             meetsFloor sha512Floor SHA384 `shouldBe` False
+            meetsFloor sha512Floor Blake2b `shouldBe` False
 
         it "rejects an algorithm below the default floor (SHA-1, MD5)" $ do
             meetsFloor defaultMinIntegrity SHA1 `shouldBe` False
@@ -133,7 +134,6 @@ spec = do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)
             meetsFloor sha512Floor SHA256 `shouldBe` False
             meetsFloor sha512Floor SHA512 `shouldBe` True
-            meetsFloor sha512Floor Blake2b `shouldBe` True
 
     describe "mkMinIntegrity / parseMinIntegrity" $ do
         it "defaults to SHA-256" $
