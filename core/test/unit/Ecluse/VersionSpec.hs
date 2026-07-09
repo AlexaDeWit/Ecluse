@@ -81,6 +81,18 @@ spec = do
             -- And the existing normalisation of a bare trailing dot is preserved.
             mustParse PyPI "1.0."
 
+        describe "PEP 440 'r' post-release spelling" $ do
+            -- PEP 440 spells the post-release label post | rev | r, and its
+            -- reference implementation (packaging) normalises all three to post.
+            -- The 'r' spelling must parse and rank as a post-release rather than
+            -- be rejected (which would abstain from ordering and let selectLatest
+            -- repoint dist-tags.latest past it).
+            mustParse PyPI "1.0.r1"
+            mustParse PyPI "1.0r1"
+            mustParse PyPI "1.0-r1"
+            -- A bare 'r' with no number is post0, exactly as for 'post'/'rev'.
+            mustParse PyPI "1.0.r"
+
         describe "non-ASCII alphanumerics (#280)" $ do
             -- Python's packaging / Ruby's Gem::Version are ASCII-only; a
             -- Unicode-aware gate both over-accepts and (for "digits" outside
@@ -128,6 +140,12 @@ spec = do
             cmp PyPI "1.0a1" "1.0" `shouldBe` Just LT
         it "PyPI ranks a post-release above the final" $
             cmp PyPI "1.0.post1" "1.0" `shouldBe` Just GT
+        it "PyPI normalises the 'r' post-release spelling (1.0.r1 == 1.0.post1)" $
+            cmp PyPI "1.0.r1" "1.0.post1" `shouldBe` Just EQ
+        it "PyPI normalises the separatorless 'r' spelling (1.0r1 == 1.0.post1)" $
+            cmp PyPI "1.0r1" "1.0.post1" `shouldBe` Just EQ
+        it "PyPI still reads 'rev' as post, not r+ev (1.0.rev1 == 1.0.post1)" $
+            cmp PyPI "1.0.rev1" "1.0.post1" `shouldBe` Just EQ
         it "PyPI canonicalises a non-normalised spelling (1.0ALPHA1 == 1.0a1)" $
             cmp PyPI "1.0ALPHA1" "1.0a1" `shouldBe` Just EQ
         it "RubyGems ranks a letter (prerelease) segment below the release" $
