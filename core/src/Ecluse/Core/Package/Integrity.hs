@@ -6,19 +6,21 @@ to requiring a SHA-256-or-stronger digest, but they are floored __asymmetrically
 public floor is a __hard__ SHA-256 boundary (raisable, never lowerable), while the
 trusted floor is __operator-loosenable__ below SHA-256 for a legacy private mirror, where
 trust in the operator's own vetted source substitutes for cryptographic strength. This
-module is the one place that ranks algorithms by strength and decides what clears a
-floor, so the worker's tamper gate and the serve layer's two admission gates share a
-single notion of "strong enough" rather than each re-encoding the ranking.
+module applies the 'HashAlg' ordering that ranks algorithms by checksum authority and
+decides what clears a floor, so the worker's tamper gate and the serve layer's two
+admission gates share a single notion of "strong enough" rather than each re-encoding
+the ranking.
 
 == The strength ranking
 
-'integrityStrength' orders algorithms by collision resistance: the broken ones
-(MD5, SHA-1) rank below the SHA-256 floor; SHA-256 and the modern long digests rank
-at or above it. 'assertedAlg' resolves what a 'Hash' /claims/ -- its tag directly, or
-for a Subresource-Integrity string the algorithm named in its @\<alg\>-\<base64\>@
-prefix -- so an SRI is ranked and floored by the algorithm it embeds. The 'IntegrityFloor'
-class abstracts "the minimum algorithm a floor requires", so 'meetsFloor' and
-'classifyArtifacts' rank candidates against either floor through this one ranking.
+'HashAlg' 'Ord' is the operational total ordering: MD5 and SHA-1 rank below the
+SHA-256 floor; SHA-256 and the modern long digests rank at or above it; SHA-512 ranks
+above Blake2b as the npm/SRI-native top digest. 'assertedAlg' resolves what a 'Hash'
+/claims/ -- its tag directly, or for a Subresource-Integrity string the algorithm named
+in its @\<alg\>-\<base64\>@ prefix -- so an SRI is ranked and floored by the algorithm
+it embeds. The 'IntegrityFloor' class abstracts "the minimum algorithm a floor requires",
+so 'meetsFloor' and 'classifyArtifacts' rank candidates against either floor through this
+one ordering.
 
 == The public-integrity floor
 
@@ -90,11 +92,9 @@ import Ecluse.Core.Package (
     sriPrefix,
  )
 
-{- | The collision-resistance tier of a hash algorithm, with constructors ordered
-__weakest to strongest__ so the derived 'Ord' /is/ the strength ranking: two tiers
-compare by collision resistance, and equal-strength algorithms share a tier (so they
-compare 'EQ'). This is the one named ranking the worker's tamper gate and the serve
-layer's admission floor both consult.
+{- | The broad collision-resistance tier of a hash algorithm. This preserves the
+security-language grouping -- e.g. Blake2b and SHA-512 are both long modern digests --
+while the operational tie-break lives in 'HashAlg' 'Ord'.
 -}
 data Strength
     = {- | A bare 'SRI' wrapper asserts no algorithm at all -- below every real
@@ -120,16 +120,17 @@ data Strength
       Strongest
     deriving stock (Eq, Ord, Show)
 
-{- | The collision-resistance 'Strength' tier of an algorithm; __a stronger algorithm
-ranks higher__ under 'Strength''s 'Ord'.
+{- | The broad collision-resistance 'Strength' tier of an algorithm; __a stronger tier
+ranks higher__ under 'Strength''s 'Ord'. Use 'HashAlg' 'Ord' when a total checksum
+ordering is needed.
 
 The broken algorithms rank below the SHA-256 floor (@'integrityStrength' 'SHA256'@):
 MD5 and SHA-1 have practical collisions, so a match on one cannot prove the bytes
 were not substituted. SHA-256 and the longer digests rank at or above the floor:
-SHA-384 above it in a tier of its own, then SHA-512 and Blake2b sharing the top tier
-(equal strength). A bare 'SRI' ranks lowest of all -- it is a wrapper, not an algorithm,
-so resolve it with 'assertedAlg' before ranking; ranking below every real algorithm, an
-unresolved SRI never wins a strongest-digest comparison.
+SHA-384 above it in a tier of its own, then SHA-512 and Blake2b sharing the broad top
+tier. A bare 'SRI' ranks lowest of all -- it is a wrapper, not an algorithm, so resolve
+it with 'assertedAlg' before ranking; ranking below every real algorithm, an unresolved
+SRI never wins a strongest-digest comparison.
 
 >>> integrityStrength SHA512 > integrityStrength SHA256
 True
@@ -171,8 +172,8 @@ assertedAlg h = case hashAlg h of
 {- | The shared interface of an integrity floor: the minimum algorithm it requires. Both
 the hard-floored public 'MinIntegrity' and the loosenable trusted 'MinTrustedIntegrity'
 are floors, so 'meetsFloor' and 'classifyArtifacts' rank candidates against either through
-this one class -- backed by the single 'integrityStrength' ranking the worker's tamper gate
-also consults. The class only /reads/ a floor's algorithm; a newtype's construction
+this one class -- backed by the same 'HashAlg' ordering the worker's tamper gate also
+consults. The class only /reads/ a floor's algorithm; a newtype's construction
 invariant (the public hard-floor, the trusted loosenability) lives in its smart
 constructors, never here.
 -}
@@ -202,7 +203,7 @@ admitted on a SHA-1 digest could be substituted by a collision, defeating the ga
 -}
 mkMinIntegrity :: HashAlg -> Either Text MinIntegrity
 mkMinIntegrity alg
-    | integrityStrength alg >= integrityStrength SHA256 = Right (MinIntegrity alg)
+    | alg >= SHA256 = Right (MinIntegrity alg)
     | otherwise =
         Left
             ( "the minimum public integrity algorithm must be SHA-256 or stronger, not "
@@ -274,11 +275,11 @@ instance IntegrityFloor MinTrustedIntegrity where
     floorAlgorithm = unMinTrustedIntegrity
 
 {- | Whether an algorithm meets a floor: at least as strong as the floor's configured
-minimum, by the shared 'integrityStrength' ranking. The candidate algorithm is a
+minimum, by 'HashAlg' 'Ord'. The candidate algorithm is a
 /resolved/ one (from 'assertedAlg'), never a bare 'SRI'.
 -}
 meetsFloor :: (IntegrityFloor floor) => floor -> HashAlg -> Bool
-meetsFloor flr alg = integrityStrength alg >= integrityStrength (floorAlgorithm flr)
+meetsFloor flr alg = alg >= floorAlgorithm flr
 
 {- | How a version's artifacts stand against an integrity floor -- the three-way verdict
 an admission gate (public or trusted) acts on.

@@ -3,7 +3,7 @@
 module Ecluse.Worker.IntegritySpec (spec) where
 
 import Data.Text qualified as T
-import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SRI))
+import Ecluse.Core.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), hashValue, sriBody)
 import Ecluse.Core.Package qualified as Pkg
 import Ecluse.Core.Worker (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (unsafeHash)
@@ -79,6 +79,12 @@ spec = do
             verifyIntegrity (unsafeHash SHA1 trueSha1 :| [unsafeHash Blake2b trueBlake2b]) tarballBytes
                 `shouldBe` IntegrityVerified
 
+        it "prefers sha512 over a matching blake2b when both are present" $
+            -- SHA-512 is the top 'HashAlg' authority. A matching Blake2b must not rescue
+            -- bytes that fail the co-present SHA-512 digest.
+            verifyIntegrity (unsafeHash Blake2b trueBlake2b :| [unsafeHash SRI falseSri]) tarballBytes
+                `shouldBe` IntegrityMismatch "the SRI sha512 digest did not match the fetched bytes"
+
         it "verifies a sha256-only digest (the worker now computes sha256, the default floor)" $
             -- The #409 fix on the default config: sha256 is the default public floor and is
             -- now computable, so a sha256-only admitted artifact verifies rather than being
@@ -88,6 +94,13 @@ spec = do
         it "REJECTS a sha256 digest that does not match the fetched bytes (tamper guard)" $
             verifyIntegrity (unsafeHash SHA256 someSha256 :| []) tarballBytes
                 `shouldBe` IntegrityMismatch "the SHA256 digest did not match the fetched bytes"
+
+        it "prefers a computable sha256 over an equal-tier unresolvable SRI, independent of order" $ do
+            let realSha256 = unsafeHash SHA256 trueSha256
+                unresolvable = unresolvableSri
+
+            verifyIntegrity (unresolvable :| [realSha256]) tarballBytes `shouldBe` IntegrityVerified
+            verifyIntegrity (realSha256 :| [unresolvable]) tarballBytes `shouldBe` IntegrityVerified
 
         it "fails closed on an md5-only digest (the worker will not verify a broken hash)" $
             -- MD5 is cryptographically broken, so the worker deliberately will not compute it:
@@ -128,3 +141,9 @@ spec = do
             -- a case change must NOT verify, or the tamper gate is silently weakened.
             verifyIntegrity (unsafeHash SRI caseVariantSri :| []) tarballBytes
                 `shouldBe` IntegrityMismatch "the SRI sha512 digest did not match the fetched bytes"
+
+unresolvableSri :: Hash
+unresolvableSri =
+    (unsafeHash SRI trueSha256Sri)
+        { hashValue = "sha3-" <> sriBody trueSha256Sri
+        }

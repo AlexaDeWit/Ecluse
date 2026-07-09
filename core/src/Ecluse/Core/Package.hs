@@ -267,7 +267,12 @@ data Availability
       Yanked (Maybe Text)
     deriving stock (Eq, Show)
 
--- | A hash algorithm an integrity digest is computed with.
+{- | A hash algorithm an integrity digest is computed with.
+
+The 'Ord' instance is the integrity authority order, not constructor order:
+@SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@. A bare 'SRI' is a wrapper,
+not an algorithm; callers that care about its embedded algorithm should resolve it first.
+-}
 data HashAlg
     = SHA1
     | SHA256
@@ -279,7 +284,22 @@ data HashAlg
       @"sha512-…"@, carried whole.
       -}
       SRI
-    deriving stock (Bounded, Enum, Eq, Ord, Show)
+    deriving stock (Bounded, Enum, Eq, Show)
+
+instance Ord HashAlg where
+    compare a b = compare (hashAlgRank a) (hashAlgRank b)
+
+-- Explicit integrity ordering, weakest to strongest. The gaps are only for
+-- readability; order, not arithmetic distance, is the policy.
+hashAlgRank :: HashAlg -> Int
+hashAlgRank = \case
+    SRI -> 0
+    MD5 -> 10
+    SHA1 -> 20
+    SHA256 -> 30
+    SHA384 -> 40
+    Blake2b -> 50
+    SHA512 -> 60
 
 {- | An integrity digest of an artifact. __Opaque__: a 'Hash' is built only through
 'mkHash', which validates that the digest is well-formed, so every value of this type
