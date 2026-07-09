@@ -1,6 +1,7 @@
 module Ecluse.Registry.Npm.PublishSpec (spec) where
 
 import Data.Text qualified as T
+import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
@@ -10,10 +11,10 @@ import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorArtifact (..))
 import Ecluse.Core.Registry (
     PublishError (publishErrorMessage),
-    PublishFault (PublishRejected, PublishUrlUnformable),
+    PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
     RegistryClient (publishArtifact),
  )
-import Ecluse.Core.Registry.Npm (newNpmClient)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (npmBaseUrl), defaultNpmConfig, newNpmClient)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (unsafeHash, validSha1)
@@ -73,6 +74,17 @@ publishSpec = describe "publishArtifact idempotency" $ do
             outcome <- publishArtifact client isOdd v1 dummyArtifact dummyTarballBytes
             outcome `shouldSatisfy` isLeft
 
+    it "reports a transport failure as a PublishTransport value, never thrown" $ do
+        -- No server listens on this port, so httpLbs throws a connection failure;
+        -- publishArtifact must fold it into a PublishTransport value (a retryable
+        -- fault), honouring its total, never-thrown contract so the worker's
+        -- retry-vs-drop match stays exhaustive.
+        manager <- newManager defaultManagerSettings
+        let config = (defaultNpmConfig manager){npmBaseUrl = "http://127.0.0.1:1"}
+        client <- newNpmClient config
+        outcome <- publishArtifact client isOdd v1 dummyArtifact dummyTarballBytes
+        outcome `shouldSatisfy` isTransport
+
 isOdd :: PackageName
 isOdd = mkPackageName Npm Nothing "is-odd"
 
@@ -100,5 +112,12 @@ Forcing the message exercises the error-construction path.
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
+    Left (PublishTransport detail) -> Just detail
     Left (PublishUrlUnformable _) -> Nothing
     Right _ -> Nothing
+
+-- | Whether a publish outcome is the retryable transport fault (a value, not a throw).
+isTransport :: Either PublishFault a -> Bool
+isTransport = \case
+    Left (PublishTransport _) -> True
+    _ -> False

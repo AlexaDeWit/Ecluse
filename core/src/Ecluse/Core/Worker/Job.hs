@@ -20,7 +20,7 @@ import UnliftIO (tryAny, withRunInIO)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (pkgEcosystem, renderPackageName)
 import Ecluse.Core.Queue (MirrorArtifact (maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
-import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
+import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
@@ -284,6 +284,12 @@ publishVerified receipt job bytes = do
             -- success). The message is left un-acked, so it redelivers either way.
             releaseForRetry receipt
             pure (Retried ("registry rejected publish: " <> show err))
+        Left (PublishTransport detail) -> do
+            -- Transient: the write never reached the registry (a connection failure, a
+            -- timeout), so release the hold and let the un-acked message redeliver,
+            -- exactly as a registry rejection.
+            releaseForRetry receipt
+            pure (Retried ("publish transport failure: " <> detail))
         Left (PublishUrlUnformable urlErr) ->
             -- Non-retryable: 'processMessage' acks this to retire it, so there is no
             -- redelivery to hasten -- leave the hold be.

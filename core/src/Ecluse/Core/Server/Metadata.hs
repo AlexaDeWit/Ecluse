@@ -36,7 +36,7 @@ import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInval
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
  )
 import Ecluse.Core.Registry.Npm (NpmClientConfig)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, fetchNpmVersion)
@@ -269,3 +269,4 @@ metadataErrorCause = \case
     MetadataUndecodable -> Metric.Decode
     MetadataNameMismatch _ -> Metric.Decode
     MetadataBoundExceeded _ -> Metric.OtherCause
+    MetadataUrlUnformable _ -> Metric.OtherCause

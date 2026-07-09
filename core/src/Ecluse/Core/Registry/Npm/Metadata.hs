@@ -39,7 +39,6 @@ module Ecluse.Core.Registry.Npm.Metadata (
 import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
 import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
-import UnliftIO.Exception (handle)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -51,13 +50,13 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
     digestOf,
  )
 import Ecluse.Core.Registry.Npm (
+    FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     NpmClientConfig (npmBaseUrl, npmLimits),
-    ResponseBoundExceeded (ResponseBoundExceeded),
-    fetchMetadataForm,
+    fetchMetadataFormBounded,
  )
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
@@ -93,9 +92,10 @@ why it could not.
 
 The body is read bounded against the config's response budget (so an oversized upstream
 is refused fail-closed before it is buffered whole); a breach surfaces as
-'MetadataBoundExceeded'. A genuine transport fault is left to throw -- the serve path
-already brackets the unreachable-upstream case -- so this 'Either' carries only the
-parse-and-policy outcomes the serve path renders distinctly.
+'MetadataBoundExceeded' and an unformable upstream URL as 'MetadataUrlUnformable', both
+threaded straight from the bounded fetch's 'FetchFault' value. A genuine transport fault
+is left to throw -- the serve path already brackets the unreachable-upstream case -- so
+this 'Either' carries the parse-and-policy outcomes the serve path renders distinctly.
 
 The digest is computed here, over the strict body the bounded read already produced:
 the one place the wire bytes exist, so no later stage re-encodes the document just to
@@ -103,16 +103,25 @@ fingerprint it.
 -}
 fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing config name =
-    handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
-        let body = responseBody response
-        spanMetadataDecode tracing name $
-            pure
-                ( manifestOf (digestOf body) . first (enforceTarballScheme (npmBaseUrl config))
-                    <$> projectNpmManifest (npmLimits config) name body
-                )
+    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
+        Left fault -> pure (Left (fetchFaultError fault))
+        Right response ->
+            let body = responseBody response
+             in spanMetadataDecode tracing name $
+                    pure
+                        ( manifestOf (digestOf body) . first (enforceTarballScheme (npmBaseUrl config))
+                            <$> projectNpmManifest (npmLimits config) name body
+                        )
   where
     manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = raw, manifestDigest = digest}
+
+-- Map the bounded fetch's 'FetchFault' onto the serve path's 'MetadataError': a
+-- response-bound breach is 'MetadataBoundExceeded', an unformable upstream URL is
+-- 'MetadataUrlUnformable' (a config fault held distinct from a decode or an outage).
+fetchFaultError :: FetchFault -> MetadataError
+fetchFaultError = \case
+    FetchBoundExceeded err -> MetadataBoundExceeded err
+    FetchUrlUnformable urlErr -> MetadataUrlUnformable urlErr
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
@@ -150,10 +159,11 @@ A transport fault is left to throw, as 'fetchNpmManifest'.
 -}
 fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing config name version =
-    handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
-        spanMetadataDecode tracing name $
-            pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
+    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
+        Left fault -> pure (Left (fetchFaultError fault))
+        Right response ->
+            spanMetadataDecode tracing name $
+                pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails' (or the
 typed 'MetadataError'), without decoding the other versions. Pure and total.
