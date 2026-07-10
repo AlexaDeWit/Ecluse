@@ -100,7 +100,7 @@ filterPlan deps ctx rules info = do
 
 {- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
 evaluating the pure tier here. This is the path the __effectful__ tier feeds: it
-decides each version in IO (see "Ecluse.Core.Rules.Effectful"), then hands the decisions
+decides each version in IO (see "Ecluse.Core.Rules"), then hands the decisions
 here for the same pure survivor\/@latest@ resolution 'filterPlan' performs. The
 decision map is keyed by raw version string and __must__ cover exactly the
 packument's versions; a version with no decision is treated as not surviving.
