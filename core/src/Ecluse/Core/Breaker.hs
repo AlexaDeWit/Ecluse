@@ -90,7 +90,7 @@ recordFailure threshold cooldown now = \case
 after a transition commits, so a layer that cares (a state gauge) can record it.
 
 Deliberately __telemetry-agnostic__ -- it is just a @'Breaker' -> IO ()@ callback, so
-the breaker and its callers ("Ecluse.Core.Rules.Effectful", the credential refresher) stay
+the breaker and its callers ("Ecluse.Core.Rules", the credential refresher) stay
 free of any metric dependency; the composition root supplies the bridge to the
 instruments. 'noBreakerReporter' is the inert default: a breaker observed by it records
 nothing, which is also how a breaker constructed before the telemetry substrate exists

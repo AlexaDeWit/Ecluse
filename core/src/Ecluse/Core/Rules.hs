@@ -629,7 +629,8 @@ tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cf
 
 {- | The resilience knobs around an effectful rule's IO: a per-attempt timeout,
 how many retries to make on failure with the backoff before each, and the breaker
-threshold and cooldown. The breaker clock is the 'EvalContext'.
+threshold and cooldown. The breaker's timing reads the injected resilience clock
+('resClock') fresh at failure commit, not the request snapshot 'ctxNow'.
 -}
 data EffectfulConfig = EffectfulConfig
     { ecTimeout :: Int
