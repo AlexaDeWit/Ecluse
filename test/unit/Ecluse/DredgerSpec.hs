@@ -6,7 +6,7 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Dredger (dredgerApplication)
-import Ecluse.Server (mkServerConfig)
+import Ecluse.Runtime.Server (mkServerConfig)
 
 spec :: Spec
 spec = do

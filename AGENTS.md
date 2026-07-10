@@ -60,11 +60,12 @@ coordinates PR-sized work, independent evaluation, and handoff. The full workflo
 ## Project structure and code conventions
 
 ```text
-core/  ecluse-core: pure, ecosystem-agnostic capability core (Ecluse.Core.*)
-src/   ecluse: application shell that composes the core (Ecluse.*)
-app/   executable entry point (keep Main.hs thin)
-test/  unit and integration tests mirroring the library hierarchy
-docs/  architecture and design documents
+core/     ecluse-core: pure, ecosystem-agnostic capability core (Ecluse.Core.*)
+runtime/  ecluse-runtime: effectful edge — OTel SDK, warp, scribes, cloud adapters (Ecluse.Runtime.*)
+src/      ecluse: composition shell that assembles and runs the tiers (Ecluse.*)
+app/      executable entry point (keep Main.hs thin)
+test/     unit and integration tests mirroring the library hierarchy
+docs/     architecture and design documents
 ```
 
 - Follow [`STYLE.md`](STYLE.md) for Haskell and [`HADDOCK.md`](HADDOCK.md) for documentation.

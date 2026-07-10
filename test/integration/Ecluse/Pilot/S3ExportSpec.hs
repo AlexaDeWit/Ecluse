@@ -17,9 +17,10 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
+import Ecluse.Composition (parseEndpointUrl)
 import Ecluse.Config (AppConfig (..), Config (..), loadConfig)
 import Ecluse.Integration.Ministack (withMinistack)
-import Ecluse.Pilot.Export (exportToS3)
+import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
 -- We just need a basic spec to test bucket creation and export loop
@@ -70,7 +71,7 @@ spec = do
 
                     -- Run exportToS3 with Katip context
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 appCfg bucket dummyDb)
+                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dummyDb)
 
                     -- Verify upload
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))

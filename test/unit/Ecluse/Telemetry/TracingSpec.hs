@@ -49,12 +49,12 @@ import Ecluse.Core.Server.Response (
     Transience (WontResolve),
  )
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Telemetry (
+import Ecluse.Runtime.Telemetry (
     Telemetry (TelemetryEnabled),
     TelemetryProviders (TelemetryProviders),
     telemetryDisabled,
  )
-import Ecluse.Telemetry.Tracing (
+import Ecluse.Runtime.Telemetry.Tracing (
     JobSpanOutcome (JobSpanOutcome),
     dataPlaneInstrumentationConfig,
     ruleVerdictFields,

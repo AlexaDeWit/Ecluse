@@ -126,8 +126,9 @@ private state (an `amazonka` env, an HTTP manager).
 Backend choice is runtime, config-driven, single-binary: all adapters are compiled in,
 and one composition root reads the configured provider, calls the matching constructor,
 and stores the record in `Env`. Nothing downstream knows which backend it holds; it just
-applies the field. This keeps the SDK selection in one place and leaves room to split
-adapters into separate libraries later.
+applies the field. This keeps the SDK selection in one place, and the concrete adapters
+live in the `ecluse-runtime` library behind the core's handle interfaces, so `ecluse-core`
+carries no cloud SDK.
 
 *Alternatives considered.* A free monad and tagless-final both abstract the backend, but
 buy program-as-data or compile-time dispatch Écluse does not need: selection is at

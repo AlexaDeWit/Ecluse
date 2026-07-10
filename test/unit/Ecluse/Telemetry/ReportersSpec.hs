@@ -7,9 +7,9 @@ import Ecluse.Core.Breaker (Breaker (Closed, HalfOpen, Open), BreakerReporter (B
 import Ecluse.Core.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Telemetry.Instruments (newMetrics)
-import Ecluse.Telemetry.Reporters (
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry.Instruments (newMetrics)
+import Ecluse.Runtime.Telemetry.Reporters (
     breakerStateOf,
     deferredBreakerReporter,
     deferredRefreshReporter,

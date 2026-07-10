@@ -42,8 +42,8 @@ coverage:
 # Three uploads land per commit: ecluse-core-unit (flag: unit), ecluse-unit (flag:
 # unit), and ecluse-integration (flag: integration). Both unit suites upload under
 # the same `unit` flag so Codecov merges their reports into one flag total; the
-# `unit` paths now cover both src/ (app modules) and core/src/ (core modules) so
-# neither layer is silently excluded from the merged flag view.
+# `unit` paths cover src/ (composition shell), runtime/src/ (effectful edge), and
+# core/src/ (core) so no layer is silently excluded from the merged flag view.
 #
 # carryforward is a SAFETY NET here, not an active path — settled, not a defect.
 # The concern was: on a PR that *adds* a module, could a carried-forward stale flag
@@ -58,11 +58,13 @@ flags:
   unit:
     paths:
       - src/
+      - runtime/src/
       - core/src/
     carryforward: true
   integration:
     paths:
       - src/
+      - runtime/src/
       - core/src/
     carryforward: true
 

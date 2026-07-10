@@ -24,14 +24,14 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, n
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     QueueOptions (qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
     withMinistack,
  )
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Worker (admitAllPolicies)
 

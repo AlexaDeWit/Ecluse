@@ -10,7 +10,7 @@ bracket operations as records of functions (the Handle pattern), each parametric
 bracketed action's result so the span wraps the real work without seeing its shape. A
 consumer records through its port and never names an OpenTelemetry tracer; the
 application supplies the OTel-backed implementations behind them (see
-@Ecluse.Telemetry.Tracing@), and a test supplies a pass-through double that simply runs
+@Ecluse.Runtime.Telemetry.Tracing@), and a test supplies a pass-through double that simply runs
 the body.
 
 Two ports are defined: 'TracingPort' for the serve path's two spans and

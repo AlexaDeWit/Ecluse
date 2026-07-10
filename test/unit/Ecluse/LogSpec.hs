@@ -27,7 +27,7 @@ import UnliftIO (bracket, evaluate)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Log (
+import Ecluse.Runtime.Log (
     DdContext (..),
     DdSpan (..),
     LogFormat (..),

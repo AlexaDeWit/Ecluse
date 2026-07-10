@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Écluse: API reference</title>
-    <meta name="description" content="Écluse API reference: Haddock for the ecluse-core capability library and the ecluse application library." />
+    <meta name="description" content="Écluse API reference: Haddock for the ecluse-core capability core, the ecluse-runtime effectful edge, and the ecluse composition shell." />
     <link rel="canonical" href="https://ecluse-proxy.com/api/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Écluse" />
     <meta property="og:url" content="https://ecluse-proxy.com/api/" />
     <meta property="og:title" content="Écluse: API reference" />
-    <meta property="og:description" content="Écluse API reference: Haddock for the ecluse-core capability library and the ecluse application library." />
+    <meta property="og:description" content="Écluse API reference: Haddock for the ecluse-core capability core, the ecluse-runtime effectful edge, and the ecluse composition shell." />
     <link rel="icon" href="../favicon-32.png" sizes="32x32" />
     <link rel="stylesheet" href="../style.css" />
   </head>
@@ -43,11 +43,17 @@
           queue and credential handles, version and integrity, and the request
           pipeline. It names no backend and reads no environment.</p>
         </a>
+        <a class="card" href="ecluse-runtime/index.html">
+          <h3><code>ecluse-runtime</code></h3>
+          <p>The effectful edge: the OpenTelemetry SDK and OTLP export, the warp
+          server binding, the log scribes, and the cloud adapters (SQS, CodeArtifact,
+          and S3) that implement the core's handles.</p>
+        </a>
         <a class="card" href="ecluse/index.html">
           <h3><code>ecluse</code></h3>
-          <p>The application layer: the composition root and <code>run</code>
-          entry point, the server and worker, configuration, and the telemetry and
-          logging that back the core's ports.</p>
+          <p>The composition shell: the <code>run</code> entry point, configuration
+          loading and resolution, the composition root that assembles the runtime,
+          and the proxy, pilot, and dredger role runners.</p>
         </a>
         <a class="card" href="openapi/index.html">
           <h3>Capability manifest</h3>

@@ -27,7 +27,6 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
@@ -39,14 +38,15 @@ import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLim
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
-import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     endpointFor,
     freshQueueUrl,
     withMinistack,
  )
-import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an

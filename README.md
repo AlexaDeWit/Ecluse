@@ -110,7 +110,8 @@ DCO sign-off; participation is governed by the [Code of Conduct](CODE_OF_CONDUCT
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `core/`     | `ecluse-core` library: the pure, ecosystem-agnostic capability core (`Ecluse.Core.*`)                                    |
-| `src/`      | `ecluse` library: the application shell that composes the core into a running proxy (`Ecluse.*`)                         |
+| `runtime/`  | `ecluse-runtime` library: the effectful edge — OTel SDK, warp, scribes, and cloud adapters (`Ecluse.Runtime.*`)          |
+| `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit and integration tests                                                                                               |
 | `docs/`     | Architecture and design documents                                                                                        |

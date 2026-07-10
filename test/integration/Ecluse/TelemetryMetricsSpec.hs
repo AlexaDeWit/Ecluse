@@ -21,12 +21,12 @@ import Ecluse.Core.Telemetry.Metrics (
     StatusClass (Status2xx),
     Upstream (Public),
  )
-import Ecluse.Telemetry (
+import Ecluse.Runtime.Telemetry (
     TelemetrySwitch (TelemetryOff, TelemetryOn),
     telemetryMeterProvider,
     withTelemetry,
  )
-import Ecluse.Telemetry.Instruments (
+import Ecluse.Runtime.Telemetry.Instruments (
     newMetrics,
     recordCacheRequest,
     recordMirrorJobProcessed,

@@ -99,16 +99,16 @@ import Ecluse.Config (
     unUrl,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
-import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
-import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Registry.Npm qualified as Npm
 import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
 import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
+import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, splitHostPort, tarballHostGate)
@@ -140,7 +140,7 @@ measured dose-response kept climbing well past that and levelled only near 10
 per capability: a slot is held across every upstream leg plus GC pauses and
 scheduling delay, so the effective @W\/P@ is nearer 9-10. The floor keeps a tiny
 pod admitting a useful burst should the multiplier ever drop below it. The
-capability count must be the __post-runtime-posture__ one (see "Ecluse.Runtime"),
+capability count must be the __post-runtime-posture__ one (see "Ecluse.Rts"),
 so callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' has run.
 
 The returned line carries the decision's provenance for the standard boot log,
@@ -900,7 +900,7 @@ best-effort in-memory backend (with its 'MemoryQueueConfig'). The pure decision
 constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is due.
 -}
 data MirrorQueuePlan
-    = -- | The durable AWS SQS backend, built by @Ecluse.Core.Queue.Sqs.newSqsQueue@.
+    = -- | The durable AWS SQS backend, built by @Ecluse.Runtime.Queue.Sqs.newSqsQueue@.
       SqsBackend SqsConfig
     | {- | The bounded in-memory backend, built by
       'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort -- boot warns.
@@ -916,7 +916,7 @@ This is the pure half of the queue's backend choice -- the single place that kno
 which backends this binary can build. The AWS @sqs@ backend resolves to a
 'SqsBackend' carrying its 'SqsConfig' (the queue URL and region, with the provider
 knobs at their defaults); the composition root passes that to
-@Ecluse.Core.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
+@Ecluse.Runtime.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
 carrying its depth cap, built in-process with no cloud queue (@ECLUSE_QUEUE_URL@ and
 @AWS_REGION@ are not consulted for it) -- an explicit operator choice for a simple,
 single-node, or air-gapped deployment, never an automatic fallback (which would

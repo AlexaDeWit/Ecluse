@@ -418,7 +418,7 @@ tasks:
   docs:
     desc: Build hyperlinked, searchable Haddock HTML
     cmds:
-      - cabal haddock lib:ecluse lib:ecluse-core {{.HADDOCK_FLAGS}}
+      - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime {{.HADDOCK_FLAGS}}
       - |
         html=$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
         echo "Haddock: $html"; \
@@ -427,17 +427,18 @@ tasks:
   docs-check:
     desc: Build Haddock for the CI gate
     cmds:
-      - cabal haddock lib:ecluse lib:ecluse-core --haddock-quickjump --disable-documentation
+      - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --haddock-quickjump --disable-documentation
 
   docs-site:
     desc: Build Haddock + OpenAPI manifest and stage under ./_site/api
     cmds:
-      - cabal haddock lib:ecluse lib:ecluse-core --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}}
+      - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}}
       - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
       - |
         appidx=$(find {{.DOCS_BUILDDIR}} -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
         coreidx=$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
-        for pair in "ecluse:$appidx" "ecluse-core:$coreidx"; do \
+        runtimeidx=$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-runtime/doc/html/*/index.html' | head -n1); \
+        for pair in "ecluse:$appidx" "ecluse-core:$coreidx" "ecluse-runtime:$runtimeidx"; do \
           name=${pair%%:*}; idx=${pair#*:}; \
           if [ -z "$idx" ] || [ ! -f "$idx" ]; then \
             echo "docs-site: no Haddock index for '$name'" >&2; exit 1; \
