@@ -53,6 +53,7 @@ import Data.ByteArray qualified as BA
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
@@ -137,6 +138,14 @@ data MetadataError
       this request and dropped -- never served as the requested package.
       -}
       MetadataNameMismatch Text
+    | {- | The upstream request URL could not be formed from configuration (an empty or
+      unparseable base URL). A __config fault__, held distinct from a decode failure or a
+      transient outage -- mirroring the write path's
+      'Ecluse.Core.Registry.PublishUrlUnformable' -- so a misconfigured base URL is
+      reported as what it is, not laundered into a retryable degrade. Carries the
+      'Ecluse.Core.Registry.UrlFormationError'.
+      -}
+      MetadataUrlUnformable UrlFormationError
     deriving stock (Eq, Show)
 
 {- | The outcome of resolving one version's metadata for a policy decision: the projected

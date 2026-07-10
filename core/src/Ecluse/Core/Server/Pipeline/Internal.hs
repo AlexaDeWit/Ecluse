@@ -3,18 +3,21 @@ tests without widening that module's two-handler public API -- the @.Internal@ c
 as "Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
 module's stability promise.
 
-It holds the operator-facing warning helpers for two bad-upstream conditions the
-response-bound guards leave silent -- an upstream whose body does not decode into a
-usable packument ('logDecodeFailure'), and one whose packument self-reports a name for
-a /different/ package ('logNameMismatch') -- each surfaced at a 'WarningS' through the
-ambient @katip@ context before the contribution degrades. The conditions themselves are
-classified on the serve path as a typed 'Ecluse.Core.Registry.Metadata.MetadataError';
-this module only renders their warning lines. Alongside them sit the pure integrity-floor
-admission and the metric-label projections the serve path records.
+It holds the operator-facing warning helpers for the bad-upstream and misconfiguration
+conditions the response-bound guards leave silent -- an upstream whose body does not
+decode into a usable packument ('logDecodeFailure'), one whose packument self-reports a
+name for a /different/ package ('logNameMismatch'), and a mount whose configured base URL
+cannot be formed into a request ('logUpstreamUnformable') -- each surfaced at a
+'WarningS' through the ambient @katip@ context before the contribution degrades. The
+conditions themselves are classified on the serve path as a typed
+'Ecluse.Core.Registry.Metadata.MetadataError'; this module only renders their warning
+lines. Alongside them sit the pure integrity-floor admission and the metric-label
+projections the serve path records.
 -}
 module Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logNameMismatch,
+    logUpstreamUnformable,
 
     -- * Integrity-floor admission (pure)
     admitByIntegrity,
@@ -54,6 +57,7 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience))
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
 import Ecluse.Core.Server.Response (
@@ -111,6 +115,27 @@ logNameMismatch requested origin reported =
             <> sl "upstreamName" reported
     message :: Text
     message = "dropped an upstream contribution: its packument self-reported a name for a different package"
+
+{- | Log an unformable upstream request URL at 'WarningS' before the contribution
+degrades: the base URL configured for this origin is empty or could not be parsed into a
+request, so no fetch could even be attempted. A __configuration__ fault, surfaced
+distinctly from a decode failure or a transient outage (it carries its own
+'Ecluse.Core.Registry.Metadata.MetadataUrlUnformable') so an operator sees a misconfigured
+mount rather than an upstream that merely appears unreachable. The structured payload
+carries the origin and the rendered URL fault; same fail-closed degrade and payload
+convention as 'logNameMismatch'.
+-}
+logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
+logUpstreamUnformable name origin urlErr =
+    katipAddContext payload $ logFM WarningS (ls message)
+  where
+    payload =
+        sl "module" pipelineInternalModule
+            <> sl "package" (renderPackageName name)
+            <> sl "origin" origin
+            <> sl "urlError" (show urlErr :: Text)
+    message :: Text
+    message = "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
 
 {- | Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
 whose strongest digest meets the floor and projecting the rest to refusals. A version

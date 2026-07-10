@@ -14,12 +14,15 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     RegistryClient (fetchMetadata, parsePackageInfo, parseVersionDetails, parseVersionList),
     RegistryResponse (..),
+    UrlFormationError (EmptyBaseUrl),
  )
 
 import Ecluse.Core.Registry.Npm (
+    FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     NpmClientConfig (..),
     defaultNpmConfig,
     fetchMetadataForm,
+    fetchMetadataFormBounded,
     newNpmClient,
     newNpmPublishClient,
     publicRegistryBaseUrl,
@@ -85,6 +88,23 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             outcome <- try (fetchMetadataForm config Full noValidators isOdd)
             outcome `shouldSatisfy` threw
 
+    it "reports an over-cap body as a FetchBoundExceeded value, never thrown" $
+        -- The round-trip removal: the bounded primitive returns the breach as a value,
+        -- so the serve adapter threads it into a MetadataError with no throw-then-catch.
+        withStub status200 (toLazy oversizedBody) $ \stub -> do
+            base <- stubConfig stub
+            let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
+            outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+            outcome `shouldSatisfy` isBoundExceeded
+
+    it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
+        -- The read-path URL-formation fault is a value (mirroring the write path's
+        -- PublishUrlUnformable), not a thrown UrlFormationError laundered by a broad catch.
+        manager <- newManager defaultManagerSettings
+        let config = (defaultNpmConfig manager){npmBaseUrl = ""}
+        outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+        outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
+
 configAndWiringSpec :: Spec
 configAndWiringSpec = describe "config and handle wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
@@ -147,3 +167,9 @@ gzippedOversizedBody =
 
 threw :: Either SomeException RegistryResponse -> Bool
 threw = isLeft
+
+-- | Whether a bounded fetch returned the response-bound breach as a value.
+isBoundExceeded :: Either FetchFault RegistryResponse -> Bool
+isBoundExceeded = \case
+    Left (FetchBoundExceeded _) -> True
+    _ -> False

@@ -42,6 +42,8 @@ module Ecluse.Core.Registry.Npm (
 
     -- * Lower-level fetch
     fetchMetadataForm,
+    fetchMetadataFormBounded,
+    FetchFault (..),
 
     -- * First-party publish relay
     relayPublishDocument,
@@ -54,8 +56,8 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List.NonEmpty qualified as NE
 import Network.HTTP.Client (
     BodyReader,
+    HttpException,
     Manager,
-    Request,
     Response (responseStatus),
     brRead,
     httpLbs,
@@ -63,7 +65,7 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (throwIO)
+import UnliftIO (throwIO, try)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName)
@@ -71,7 +73,7 @@ import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes))
 import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (..),
-    PublishFault (PublishRejected, PublishUrlUnformable),
+    PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
     PublishRelayResponse (..),
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
@@ -190,15 +192,53 @@ newNpmPublishClient config mintToken =
     tarballNotHttps =
         ParseError "the requested version's dist.tarball is not an https URL on the upstream host"
 
+{- | Why a bounded metadata fetch could not produce a response body, reported as a
+__value__ so the serve read adapter maps each cause onto the response it renders rather
+than catching a typed throw two calls away. A genuine __transport__ fault (an unreachable
+upstream) is still thrown -- the read path already brackets it -- so this value carries
+the two faults the fetch can report before it commits to a body: an unformable request
+URL and a response-bound breach.
+-}
+data FetchFault
+    = -- | The request URL could not be formed from configuration (an empty or unparseable base URL).
+      FetchUrlUnformable UrlFormationError
+    | -- | The upstream body crossed the response-size bound and was refused fail-closed.
+      FetchBoundExceeded LimitError
+    deriving stock (Eq, Show)
+
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
-conditional-GET 'Validators'. The bounded-read fetch used by the handle's
-'Ecluse.Core.Registry.fetchMetadata'; the request pipeline calls this directly when it
-needs the full packument or wants to revalidate against an @ETag@.
+conditional-GET 'Validators', reporting the URL-formation and response-bound faults as a
+'FetchFault' __value__. This is the value-returning primitive the serve read adapter
+("Ecluse.Core.Registry.Npm.Metadata") threads straight into its typed
+'Ecluse.Core.Registry.Metadata.MetadataError', with no throw-then-catch round-trip; a
+genuine transport fault (an unreachable upstream) is still thrown, and folding that into
+this channel too is tracked in the deep error-handling follow-up.
 
 The body is read __chunk-by-chunk through 'Ecluse.Core.Security.boundedRead'__ against
-the config's 'npmLimits', not buffered whole: a hostile or compromised upstream
-returning a body larger than 'Ecluse.Core.Security.maxBodyBytes' is aborted
-__fail-closed__ rather than exhausting memory.
+the config's 'npmLimits', not buffered whole: a hostile or compromised upstream returning
+a body larger than 'Ecluse.Core.Security.maxBodyBytes' is refused __fail-closed__ as a
+'FetchBoundExceeded' rather than exhausting memory.
+-}
+fetchMetadataFormBounded ::
+    NpmClientConfig ->
+    MetadataForm ->
+    Validators ->
+    PackageName ->
+    IO (Either FetchFault RegistryResponse)
+fetchMetadataFormBounded config form validators name =
+    case metadataRequest (npmBaseUrl config) (npmToken config) form validators name of
+        Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
+        Right request ->
+            withResponse request (npmManager config) $ \response ->
+                first FetchBoundExceeded <$> readBoundedBody (npmLimits config) (responseBody response)
+
+{- | The throwing form of 'fetchMetadataFormBounded', used by the publish-side handle's
+'Ecluse.Core.Registry.fetchMetadata' and the worker's mirror-presence probe -- consumers
+that funnel every fetch fault into a single @tryAny@ and so want a throw. It re-raises a
+'FetchUrlUnformable' as its 'Ecluse.Core.Registry.UrlFormationError' and a
+'FetchBoundExceeded' as a 'ResponseBoundExceeded' -- the typed exceptions those consumers
+already expect -- at this boundary, rather than inside the shared bounded read where a
+value-returning caller would have to catch it back.
 -}
 fetchMetadataForm ::
     NpmClientConfig ->
@@ -206,14 +246,19 @@ fetchMetadataForm ::
     Validators ->
     PackageName ->
     IO RegistryResponse
-fetchMetadataForm config form validators name = do
-    request <- orThrow (metadataRequest (npmBaseUrl config) (npmToken config) form validators name)
-    withResponse request (npmManager config) $ \response ->
-        readBoundedBody (npmLimits config) (responseBody response)
+fetchMetadataForm config form validators name =
+    fetchMetadataFormBounded config form validators name >>= \case
+        Left (FetchUrlUnformable urlErr) -> throwIO urlErr
+        Left (FetchBoundExceeded limitErr) -> throwIO (ResponseBoundExceeded limitErr)
+        Right response -> pure response
 
-{- | Raised when an upstream metadata body breaches a 'Ecluse.Core.Security.Limits'
-ceiling: the body-size guard here, or: surfaced through the same type by the serve
-pipeline: the version-count or nesting-depth guard.
+{- | The thrown form of a response-bound breach: a body that crossed the
+'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its 'LimitError'. The bounded
+read itself now reports the breach as a __value__ ('readBoundedBody' returns an
+'Either'); this exception is what the deliberately-throwing consumers re-raise at their
+own boundary -- the throwing 'fetchMetadataForm', the publish relay ('readRelayResponse'),
+and the worker's bounded artifact fetch ("Ecluse.Core.Worker.Fetch") -- so a @tryAny@
+caller sees a typed breach rather than a truncated body.
 -}
 newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
     deriving stock (Eq, Show)
@@ -221,14 +266,13 @@ newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
 instance Exception ResponseBoundExceeded
 
 {- Read a response body chunk-by-chunk through 'boundedRead' against the budget,
-returning the whole body as a 'RegistryResponse' when within the cap. A body past
-'Ecluse.Core.Security.maxBodyBytes' aborts the read fail-closed and is raised as a typed
-'ResponseBoundExceeded' (never a truncated body). -}
-readBoundedBody :: Limits -> BodyReader -> IO RegistryResponse
+returning the whole body as a 'RegistryResponse' when within the cap, or the 'LimitError'
+as a __value__ when the body crosses 'Ecluse.Core.Security.maxBodyBytes' (never a
+truncated body). Returning the breach lets the serve read path thread it as a value; the
+throwing callers re-raise it as a 'ResponseBoundExceeded' at their own boundary. -}
+readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
 readBoundedBody limits bodyReader =
-    boundedRead limits (brRead bodyReader) >>= \case
-        Right body -> pure (RegistryResponse body)
-        Left err -> throwIO (ResponseBoundExceeded err)
+    fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)
 
 {- Publish a version's artifact: assemble the ecosystem-specific publish document
 from the artifact metadata and raw tarball bytes, then PUT it, treating a
@@ -247,10 +291,11 @@ publishArtifact' config mintToken name version artifact tarball = do
     let document = npmPublishDocument name version (maFilename artifact) (sriOf artifact) (sha1Of artifact) tarball
     case publishRequest (npmBaseUrl config) token name document of
         Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
-        Right request -> do
-            response <- httpLbs request (npmManager config)
-            let code = statusCode (responseStatus response)
-            pure (classifyPublish code)
+        Right request ->
+            try (httpLbs request (npmManager config)) <&> \case
+                Left (err :: HttpException) ->
+                    Left (PublishTransport ("publish transport failure: " <> show err))
+                Right response -> classifyPublish (statusCode (responseStatus response))
 
 {- Map a publish response status onto success or a 'PublishFault'. A 2xx or a
 @409@ (already present, immutable) is success; anything else is a retryable
@@ -282,24 +327,15 @@ relayPublishDocument config name document =
 {- Buffer the publication target's response to a relayed publish: the body read
 bounded against the budget, paired with the status the target answered. -}
 readRelayResponse :: Limits -> Response BodyReader -> IO PublishRelayResponse
-readRelayResponse limits response = do
-    RegistryResponse body <- readBoundedBody limits (responseBody response)
-    pure
-        PublishRelayResponse
-            { relayStatus = statusCode (responseStatus response)
-            , relayBody = LBS.fromStrict body
-            }
-
-{- Run a request-building 'Either' from a __read__ path, raising its
-'UrlFormationError' as the typed exception it is (no stringly @stringException@).
-Used by the metadata and artifact fetches, where an unformable URL is a config
-fault rather than a per-response condition; the write path instead returns it as
-a 'PublishUrlUnformable' value.
--}
-orThrow :: Either UrlFormationError Request -> IO Request
-orThrow = \case
-    Left err -> throwIO err
-    Right request -> pure request
+readRelayResponse limits response =
+    readBoundedBody limits (responseBody response) >>= \case
+        Left limitErr -> throwIO (ResponseBoundExceeded limitErr)
+        Right (RegistryResponse body) ->
+            pure
+                PublishRelayResponse
+                    { relayStatus = statusCode (responseStatus response)
+                    , relayBody = LBS.fromStrict body
+                    }
 
 -- Pick the SRI (@dist.integrity@) string from the admitted digests, if present.
 sriOf :: MirrorArtifact -> Maybe Text

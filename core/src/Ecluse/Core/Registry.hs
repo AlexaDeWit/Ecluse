@@ -128,9 +128,9 @@ data PublishRelayResponse = PublishRelayResponse
 
 {- | Why a publish could not complete, surfaced as a __value__ rather than thrown
 so the mirror worker decides retry vs. drop by an exhaustive pattern match rather
-than by catching (and re-classifying) an exception. The two cases differ in
-exactly that -- retryability -- which is the whole reason this is a value: one is
-worth redelivering and the other never is.
+than by catching (and re-classifying) an exception. The cases differ in exactly
+that -- retryability -- which is the whole reason this is a value: a registry
+rejection or a transport fault is worth redelivering, an unformable URL never is.
 -}
 data PublishFault
     = {- | The request URL could not be formed (e.g. an empty base URL) -- a
@@ -143,6 +143,13 @@ data PublishFault
       as a 'PublishError'. __Retryable__: the job is left un-acked and redelivered.
       -}
       PublishRejected PublishError
+    | {- | The write never reached the registry: the HTTP request threw before any
+      status returned (a connection failure, a TLS error, a timeout), carried as its
+      rendered detail. __Retryable__: the transport may recover, so the job is left
+      un-acked and redelivered, exactly as a 'PublishRejected'. Surfacing it as a value
+      is what lets 'publishArtifact' honour its total, never-thrown contract.
+      -}
+      PublishTransport Text
     deriving stock (Eq, Show)
 
 {- | The registry-protocol handle -- a record of functions over a backend whose
@@ -159,8 +166,8 @@ data RegistryClient = RegistryClient
     ecosystem-specific publish document from these inputs. Idempotent at the
     protocol level (versions are immutable), so a redelivered mirror job's
     re-publish is safe. A failure is reported as a 'PublishFault' __value__ --
-    'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) -- never thrown,
-    so the worker's retry-vs-drop decision is total at the call site.
+    'PublishRejected' or 'PublishTransport' (retry) or 'PublishUrlUnformable' (drop)
+    -- never thrown, so the worker's retry-vs-drop decision is total at the call site.
     -}
     , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
     {- ^ Project a fetched metadata response into the packument-level

@@ -123,7 +123,7 @@ import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest (manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
@@ -151,6 +151,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logDenials,
     logNameMismatch,
+    logUpstreamUnformable,
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
@@ -514,13 +515,15 @@ withPublicMetadataClient rt deps baseUrl =
 {- Log a per-origin metadata-fetch failure at the point and severity it has always been
 logged: a response-bound breach names the ceiling crossed ('logBreach'); an undecodable
 body is the silent-guard decode log ('logDecodeFailure'); a self-reported /different/ name
-is the name-mismatch log ('logNameMismatch'). Invoked once per real fetch, inside the
+is the name-mismatch log ('logNameMismatch'); an unformable configured base URL is the
+config-fault log ('logUpstreamUnformable'). Invoked once per real fetch, inside the
 single-flight leader, in the request's context. -}
 logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
 logMetadataFailure name baseUrl = \case
     MetadataBoundExceeded err -> logBreach name err
     MetadataUndecodable -> logDecodeFailure name
     MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
+    MetadataUrlUnformable urlErr -> logUpstreamUnformable name baseUrl urlErr
 
 {- Log a response-bound breach at 'WarningS' before the contribution is degraded
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
