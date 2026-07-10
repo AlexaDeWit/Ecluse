@@ -191,12 +191,15 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- | Consume an optional post-release (@.postN@, @.revN@, or @-N@) into @Just n@;
-'Nothing' if absent.
+{- | Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into
+@Just n@; 'Nothing' if absent. PEP 440 spells the post-release label @post@,
+@rev@, or @r@ (its reference implementation @packaging@ normalises all three to
+@post@), so each must be accepted here. The labels are tried @post@\/@rev@ before
+the single-letter @r@, so @revN@ is never mis-split as @r@ + @evN@.
 -}
 consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
-    case asum (map (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev"]) of
+    case asum (map (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev", "r"]) of
         Just afterLabel ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
              in (Just (numOr0 digits), rest)
