@@ -43,6 +43,7 @@ import Ecluse.Core.Package (
     mkPackageName,
  )
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
@@ -68,6 +69,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     evalTier,
     logDecodeFailure,
     logNameMismatch,
+    logUpstreamUnformable,
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
@@ -120,6 +122,23 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"upstreamName\":\"other\""
             logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
             logged `shouldSatisfy` T.isInfixOf "different package"
+
+    describe "logUpstreamUnformable" $
+        it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
+            -- The config-fault warning an operator sees when a mount's base URL cannot be
+            -- formed into a request. Run against a real JSONL scribe so the origin and the
+            -- rendered UrlFormationError are pinned against the bytes an operator reads;
+            -- distinct from a decode failure or a plain outage.
+            logged <- captureStdout $ do
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "http://upstream.test" EmptyBaseUrl)
+                void (closeScribes logEnv)
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
+            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
+            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
+            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
+            logged `shouldSatisfy` T.isInfixOf "could not be formed"
 
     -- The pure metric-label projections that classify a serve outcome into the bounded
     -- labels the catalogue records. Every branch is asserted directly, so the
