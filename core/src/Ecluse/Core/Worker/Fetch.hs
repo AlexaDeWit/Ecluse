@@ -8,10 +8,13 @@ import UnliftIO.Exception (try)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
 
 {- Fetch the artifact bytes from the public upstream at the job's authoritative
-URL into memory. Publishing is __publish-by-document__: the npm @PUT \/{pkg}@ carries
+URL into memory. The URL arrives as the job's validated 'RegistryUrl' witness, so
+the https guarantee is the argument type, not trust in the caller.
+Publishing is __publish-by-document__: the npm @PUT \/{pkg}@ carries
 the tarball base64-encoded under @_attachments@, so the whole artifact must be in
 hand to verify it and assemble the document. This path is therefore
 __bounded-buffered__, not streamed -- the bytes are necessarily held -- but the read
@@ -19,10 +22,10 @@ is capped (see 'workerArtifactLimits'), so an upstream returning an unbounded bo
 is refused fail-closed rather than exhausting memory. A network failure is returned
 as a transient reason ('Retried' at the call site), not thrown, so a flaky upstream
 redelivers rather than killing the iteration. -}
-fetchArtifactBytes :: Text -> WorkerM (Either Text ByteString)
+fetchArtifactBytes :: RegistryUrl -> WorkerM (Either Text ByteString)
 fetchArtifactBytes url = do
     manager <- asks wrManager
-    case artifactRequestByUrl "" Nothing url of
+    case artifactRequestByUrl "" Nothing (registryUrlText url) of
         Left urlErr -> pure (Left ("unformable artifact URL: " <> show urlErr))
         Right request ->
             try (liftIO (boundedFetch manager request)) <&> \case

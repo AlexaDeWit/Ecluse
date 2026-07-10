@@ -129,11 +129,11 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, n
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (RuleDeps (..))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (Origin (UntrustedOrigin), defaultLimits, thgPublicHost)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, pdPublicBaseUrl, pdRules)
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
+import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
@@ -529,24 +529,34 @@ workerPoliciesFor env bindings =
         , Just deps <- [bindingPackumentDeps binding]
         ]
 
-{- Build one mount's worker re-evaluation bundle from its packument-serve dependencies: the
-single-version resolver over the guarded public origin through the shared metadata cache
-(the same fetch-and-project the serve path runs, so the ingest decision does not diverge
-from the serve decision), the mount's prepared rules, and its injected clock. The metadata
-client is anonymous (no client credential reaches the public origin) and reuses the guarded
-data-plane manager, so the worker's re-fetch inherits the resolved-IP SSRF recheck. Its own
-failure and dropped-entry logs are elided (the worker logs its own re-evaluation outcome per
-job), while the upstream-fetch metrics still record through the shared instruments. -}
+{- Build one mount's worker re-evaluation bundle from its packument-serve dependencies:
+the single-version resolver over the guarded public origin through the shared metadata
+cache (the same fetch-and-project the serve path runs), the mount's prepared rules, its
+configured integrity floor, its tarball-host gate, and its injected clock -- every
+decision input taken from the mount's __own__ 'PackumentDeps', so the ingest decision
+cannot diverge from the serve decision. The metadata client is built through the same
+injected constructor the serve path uses ('pdNewMetadataClient', over the same shared
+manager 'srPublicManager' is wired to), anonymous (no client credential reaches the
+public origin), inheriting the resolved-IP SSRF recheck. Its own failure and
+dropped-entry logs are elided (the worker logs its own re-evaluation outcome per job),
+while the upstream-fetch metrics still record through the shared instruments. -}
 workerPolicyFor :: Env -> PackumentDeps -> WorkerPolicy
 workerPolicyFor env deps =
     WorkerPolicy
         { wpResolveVersion = fetchVersionDetails client
         , wpRules = pdRules deps
+        , wpMinIntegrity = pdMinIntegrity deps
+        , wpArtifactHostHonoured =
+            -- The same host-gate composition the serve path applies before its public
+            -- artifact fetch, closed against the public upstream host (the reference
+            -- host the public leg gates dist.tarball hosts by).
+            tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps))
         , wpNow = pdNow deps
         }
   where
     client =
-        newNpmMetadataClient
+        pdNewMetadataClient
+            deps
             (tracingPortOf (envTelemetry env))
             (metricsPortOf (envMetrics env))
             Public
@@ -554,12 +564,10 @@ workerPolicyFor env deps =
             (\_ _ -> pure ())
             (\_ _ -> pure ())
             (\_ -> pure ())
-            NpmClientConfig
-                { npmBaseUrl = pdPublicBaseUrl deps
-                , npmManager = envManager env
-                , npmToken = Nothing
-                , npmLimits = pdLimits deps
-                }
+            (pdLimits deps)
+            (envManager env)
+            (pdPublicBaseUrl deps)
+            Nothing
 
 {- Build the worker's publish-side registry client from the resolved per-ecosystem
 publish targets, over the given (trusted) manager.

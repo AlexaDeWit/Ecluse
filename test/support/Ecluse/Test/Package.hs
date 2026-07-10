@@ -10,6 +10,8 @@ appear across the queue, integrity, env, and worker specs.
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
     unsafeHash,
+    unsafeRegistryUrl,
+    unsafeSriHashes,
 
     -- * Canonical digest fixtures
     validSha1,
@@ -38,7 +40,9 @@ import Ecluse.Core.Package (
     PackageName,
     Trust (Untrusted),
     mkHash,
+    mkSriHashes,
  )
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Version (Version)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
@@ -49,6 +53,23 @@ nothing.
 -}
 unsafeHash :: HashAlg -> Text -> Hash
 unsafeHash alg = either error id . mkHash alg
+
+{- HLINT ignore unsafeSriHashes "Avoid restricted function" -}
+
+{- | Split a known-valid Subresource-Integrity wire string into its per-component
+hashes, for fixtures. Errors on a malformed component, so a typo in a fixture
+fails loudly.
+-}
+unsafeSriHashes :: Text -> NonEmpty Hash
+unsafeSriHashes = either error id . mkSriHashes
+
+{- HLINT ignore unsafeRegistryUrl "Avoid restricted function" -}
+
+{- | Build the https egress witness from a known-https fixture URL, for fixtures.
+Errors on a non-https value, so a typo fails loudly.
+-}
+unsafeRegistryUrl :: Text -> RegistryUrl
+unsafeRegistryUrl = either error id . mkRegistryUrl
 
 {- | Canonical well-formed digests -- each the empty-input digest of its algorithm,
 so every fixture 'Hash' is 'mkHash'-constructible and survives a validated decode

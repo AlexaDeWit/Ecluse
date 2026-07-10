@@ -13,6 +13,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
@@ -70,13 +71,16 @@ data WorkerRuntime = WorkerRuntime
 
 {- | The per-ecosystem re-evaluation bundle the worker re-runs current policy through
 before it mirrors a job: a resolver that fetches and projects the single version's
-metadata, the prepared rule set, and the wall-clock the age rules read.
+metadata, the prepared rule set, the integrity floor, the tarball-host gate, and the
+wall-clock the age rules read.
 
 The resolver is the __shared__ single-version fetch-and-project
 ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
-wired by the composition root), and the rules are the __same__ prepared rules the serve
-path gates with, so the worker's ingest decision and the serve-time decision run one
-codepath and any per-source breaker state is shared, never forked.
+wired by the composition root); the rules are the __same__ prepared rules the serve
+path gates with; and the floor and host gate are the mount's __own__ configured
+policy values -- so the worker's ingest decision and the serve-time decision run one
+codepath ('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any
+per-source breaker state is shared, never forked.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
@@ -87,6 +91,17 @@ data WorkerPolicy = WorkerPolicy
     , wpRules :: [PreparedRule]
     {- ^ The prepared rule set evaluated against the resolved version under current policy
     (the same rules the serve path gates the public version set with).
+    -}
+    , wpMinIntegrity :: MinIntegrity
+    {- ^ The mount's own public-integrity floor
+    ('Ecluse.Core.Server.Context.pdMinIntegrity'), re-applied at ingest through the
+    shared admission gate.
+    -}
+    , wpArtifactHostHonoured :: Text -> Bool
+    {- ^ The mount's own tarball-host gate
+    ('Ecluse.Core.Server.Context.tarballHostHonoured', closed against the public
+    upstream host), re-checked on the job's fetch URL: the queue payload is a trust
+    boundary.
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive

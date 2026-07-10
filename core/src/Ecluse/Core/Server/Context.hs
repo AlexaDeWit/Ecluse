@@ -27,6 +27,7 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
+    tarballHostHonoured,
 
     -- * Publish-serve dependencies
     PublishDeps (..),
@@ -59,7 +60,8 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (Limits, TarballHostGate, TarballHostPolicy)
+import Ecluse.Core.Security (Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -248,7 +250,49 @@ data PackumentDeps = PackumentDeps
     sources, rewriting each surviving version's artifact URL under the given mount
     base in the same pass.
     -}
+    , pdEgressUrl :: Text -> Either Text RegistryUrl
+    {- ^ Form the validated egress witness for an artifact URL about to leave the
+    process on a 'Ecluse.Core.Queue.MirrorJob'. The composition root wires the
+    https-only 'Ecluse.Core.Security.Egress.mkRegistryUrl'; the loopback test
+    harness substitutes its flag-gated dev former. On the production path every
+    public artifact URL was already normalised to https at projection, so a 'Left'
+    here is unreachable -- it fails the best-effort enqueue closed rather than
+    letting an unwitnessed URL travel to the worker.
+    -}
     }
+
+{- | Whether an artifact's @dist.tarball@ host may be fetched, given the origin's
+trust, the mount's tarball-host policy, and the host that served the packument it
+came from. Connects the pure 'Ecluse.Core.Security.tarballHostAllowed' to a mount's
+configured policy fields: the tarball host must be on the upstream allowlist and --
+under the secure-default 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the
+packument host; the opt-in 'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that
+last clause to any allowlisted host.
+
+The literal internal-range block is __origin-aware__: an
+'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
+range set plus the operator-configured @additionalBlockedRanges@, while an
+'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is
+exempt, since a private registry may legitimately live on an internal address
+(security.md invariant 3). The allowlist and same-host clauses still gate the
+trusted origin identically.
+
+This is the __one__ composition of the host gate over a mount's policy: the serve
+pipeline applies it before its public artifact fetch, and the composition root
+closes it (against the public upstream host) into the mirror worker's
+re-evaluation bundle, so the ingest-time host check can never drift from the
+serve-time one. The @packumentHost@ and @artifactHost@ are bare hosts, __already
+extracted__: the mount-constant ones live in the precomputed 'pdTarballHostGate',
+so the hot path parses no base URL and rebuilds no allowlist per request; only the
+dynamic artifact host is parsed at the call site.
+-}
+tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
+tarballHostHonoured origin deps =
+    tarballHostAllowed
+        origin
+        (pdTarballHostPolicy deps)
+        (thgAllowlist (pdTarballHostGate deps))
+        (pdAdditionalBlockedRanges deps)
 
 {- | The per-mount inputs the first-party publish handler needs: the publication
 target endpoint, the publish-scope allow-list (the anti-shadowing guard), the

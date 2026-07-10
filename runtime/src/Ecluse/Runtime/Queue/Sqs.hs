@@ -74,6 +74,7 @@ import Ecluse.Core.Package (
     mkHash,
     mkPackageName,
     mkScope,
+    mkSriHashes,
     pkgEcosystem,
     pkgNamespace,
     unScope,
@@ -90,6 +91,7 @@ import Ecluse.Core.Queue (
     mkReceiptHandle,
     unReceiptHandle,
  )
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 
 {- | Where an SQS-compatible endpoint lives, for pointing the backend at a
@@ -157,8 +159,8 @@ once here -- region-scoped, and pointed at 'sqsEndpoint' with its throwaway
 credentials when one is given, otherwise discovering the ambient AWS credential
 chain -- and captured by the returned handle's closures.
 -}
-newSqsQueue :: SqsConfig -> IO MirrorQueue
-newSqsQueue cfg = do
+newSqsQueue :: (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
+newSqsQueue egressUrl cfg = do
     env <- mkEnv cfg
     let run :: (AWS.AWSRequest a) => a -> IO (AWS.AWSResponse a)
         run = runResourceT . AWS.send env
@@ -169,7 +171,7 @@ newSqsQueue cfg = do
             , receive = do
                 response <- run (receiveRequest cfg)
                 let messages = fromMaybe [] (response ^. SQS.receiveMessageResponse_messages)
-                pure (mapMaybe toQueueMessage messages)
+                pure (mapMaybe (toQueueMessage egressUrl) messages)
             , ack = void . run . SQS.newDeleteMessage queueUrl . unReceiptHandle
             , extendVisibility = \receipt (Seconds secs) ->
                 void . run $
@@ -218,11 +220,11 @@ receiveRequest cfg =
 receipt handle (which SQS always supplies) is dropped rather than crashing the
 poll; likewise an undecodable body -- the visibility timeout then redelivers it,
 and a persistently bad message falls to the dead-letter queue. -}
-toQueueMessage :: SQS.Message -> Maybe QueueMessage
-toQueueMessage message = do
+toQueueMessage :: (Text -> Either Text RegistryUrl) -> SQS.Message -> Maybe QueueMessage
+toQueueMessage egressUrl message = do
     body <- message ^. SQS.message_body
     receipt <- message ^. SQS.message_receiptHandle
-    job <- rightToMaybe (decodeJob body)
+    job <- rightToMaybe (decodeJob egressUrl body)
     pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle receipt}
 
 {- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
@@ -241,7 +243,7 @@ encodeJob job =
             , "scope" .= (unScope <$> pkgNamespace name)
             , "name" .= unscopedName name
             , "version" .= renderVersion (jobVersion job)
-            , "artifactUrl" .= jobArtifactUrl job
+            , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
             , "mirrorTarget" .= jobMirrorTarget job
             , "artifact" .= encodeArtifact (jobArtifact job)
             , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
@@ -275,23 +277,35 @@ encodeArtifact artifact =
 
 {- | Decode an SQS message body back into a 'MirrorJob', or a human-readable error
 if the body is not the JSON object 'encodeJob' produces (a missing field, an
-unknown ecosystem, an empty hash list, malformed JSON).
+unknown ecosystem, an empty hash list, an artifact URL the egress former refuses,
+malformed JSON).
+
+The queue payload is a __trust boundary__, so the artifact URL is re-formed into
+its 'RegistryUrl' egress witness on decode through the given former -- the
+composition root passes the https-only 'Ecluse.Core.Security.Egress.mkRegistryUrl';
+the loopback test harnesses pass their flag-gated dev former. A URL the former
+refuses fails the decode, so a tampered or misproduced message can never hand the
+worker's fetch an unwitnessed URL (it redelivers and falls to the dead-letter
+queue, like any undecodable body).
 -}
-decodeJob :: Text -> Either Text MirrorJob
-decodeJob body =
+decodeJob :: (Text -> Either Text RegistryUrl) -> Text -> Either Text MirrorJob
+decodeJob egressUrl body =
     first toText (eitherDecodeStrict' (encodeUtf8 body))
-        >>= first toText . parseEither parseMirrorJob
+        >>= first toText . parseEither (parseMirrorJob egressUrl)
 
 -- Parse the top-level job object 'encodeJob' writes, delegating the nested
 -- carriers to 'parseArtifact' and 'parseTraceContext'.
-parseMirrorJob :: Aeson.Value -> Parser MirrorJob
-parseMirrorJob = withObject "MirrorJob" $ \o -> do
+parseMirrorJob :: (Text -> Either Text RegistryUrl) -> Aeson.Value -> Parser MirrorJob
+parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     ecoName <- o .: "ecosystem"
     eco <- maybe (fail (unknownEcosystem ecoName)) pure (parseEcosystem ecoName)
     scope <- o .:? "scope"
     rawName <- o .: "name"
     rawVersion <- o .: "version"
-    artifactUrl <- o .: "artifactUrl"
+    rawArtifactUrl <- o .: "artifactUrl"
+    -- Re-form the egress witness at the wire boundary: the type the worker's fetch
+    -- requires cannot be fabricated from an unvalidated payload string.
+    artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
     mirrorTarget <- o .: "mirrorTarget"
     artifact <- o .: "artifact" >>= parseArtifact
     -- The trace-context carrier is optional: a job from an older producer (or one
@@ -324,24 +338,32 @@ parseTraceContext = withObject "RemoteSpanContext" $ \t ->
 parseArtifact :: Aeson.Value -> Parser MirrorArtifact
 parseArtifact = withObject "MirrorArtifact" $ \o -> do
     filename <- o .: "filename"
-    rawHashes <- o .: "hashes" >>= traverse parseHash
+    rawHashes <- (o .: "hashes" :: Parser [Aeson.Value]) >>= traverse parseHashes
     size <- o .:? "size"
-    case nonEmpty rawHashes of
+    case nonEmpty (concatMap toList rawHashes) of
         Nothing -> fail "MirrorArtifact carries no integrity digest"
         Just hashes ->
             pure MirrorArtifact{maFilename = filename, maHashes = hashes, maSize = size}
 
--- Parse one algorithm-tagged digest from the artifact descriptor's hash list.
-parseHash :: Aeson.Value -> Parser Hash
-parseHash = withObject "Hash" $ \h -> do
+-- Parse one algorithm-tagged digest entry from the artifact descriptor's hash list.
+-- An entry usually yields one 'Hash'; an @sri@ entry whose value joins several
+-- components (a job enqueued by an older producer, which carried the wire string
+-- whole) is split into one single-component 'Hash' each ('mkSriHashes'), so an
+-- in-flight job survives the upgrade and the worker still verifies against exact
+-- components rather than a joined string.
+parseHashes :: Aeson.Value -> Parser (NonEmpty Hash)
+parseHashes = withObject "Hash" $ \h -> do
     algName <- h .: "alg"
     alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
     value <- h .: "value"
     -- The queue is a trust boundary: validate the digest on decode through the same
-    -- 'mkHash' the serve path uses, so the worker can never ingest a malformed digest
-    -- to verify the fetched bytes against. A malformed value fails the decode (the job
-    -- is left un-acked and redelivers, ultimately to the dead-letter queue).
-    either (fail . toString) pure (mkHash alg value)
+    -- constructors the serve path uses ('mkHash' / 'mkSriHashes'), so the worker can
+    -- never ingest a malformed digest to verify the fetched bytes against. A malformed
+    -- value fails the decode (the job is left un-acked and redelivers, ultimately to
+    -- the dead-letter queue).
+    case alg of
+        SRI -> either (fail . toString) pure (mkSriHashes value)
+        _ -> either (fail . toString) (pure . one) (mkHash alg value)
   where
     unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
 

@@ -24,11 +24,13 @@ import Ecluse.Core.Package (
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
     Hash,
+    HashAlg (SRI),
     PackageDetails (..),
     PackageName,
     Trust (Untrusted),
     mkPackageName,
  )
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -50,7 +52,8 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionPresent),
  )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
+import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
@@ -58,11 +61,12 @@ import Ecluse.Core.Worker (
     JobOutcome (Dropped, Retried),
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
+    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpMinIntegrity, wpNow, wpResolveVersion, wpRules),
     WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
  )
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 
 {- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__
@@ -182,7 +186,9 @@ jobWith url hashes =
     MirrorJob
         { jobPackage = pkg
         , jobVersion = ver
-        , jobArtifactUrl = url
+        , -- The flag-gated loopback former: these suites point jobs at in-process
+          -- http stubs, which the production https-only former would refuse.
+          jobArtifactUrl = loopbackRegistryUrl url
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         , jobArtifact =
             MirrorArtifact
@@ -328,14 +334,39 @@ denylist/advisory/config that has tightened to deny since the job was enqueued.
 denyRule :: PreparedRule
 denyRule = constRule "test-deny" (Deny "denied by current policy")
 
--- | An inert artifact for a projected version snapshot; the injected rules never inspect it.
+{- | A fail-closed cannot-vet rule: models the advisory database being absent, so a
+re-evaluation reaches an undecidable decision (the serve path's transient 503; the
+worker's leave-for-redelivery).
+-}
+cannotVetRule :: PreparedRule
+cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
+
+{- | A resolver whose resolved snapshot carries the given artifact, for the
+ingest-gate cases where current metadata has changed shape since the job was
+enqueued: a digest stripped or downgraded below the floor, a file renamed away.
+-}
+resolverWithArtifact :: Artifact -> PackageName -> Version -> IO VersionEvaluation
+resolverWithArtifact art rName rVersion =
+    pure (VersionPresent ((sampleDetails rName rVersion){pkgArtifacts = art :| []}))
+
+{- | Override the tarball-host gate of every policy in the map: the payload
+re-gating tests refuse (or admit) every host wholesale.
+-}
+withHostGate :: (Text -> Bool) -> WorkerPolicies -> WorkerPolicies
+withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
+
+{- | The artifact of a projected version snapshot. The injected rules never inspect
+it, but the shared admission oracle does: its filename must match the job fixture's
+'maFilename' (file selection) and it carries a floor-clearing sha512 SRI digest
+(the integrity-floor admission policy the worker now re-applies at ingest).
+-}
 sampleArtifact :: Artifact
 sampleArtifact =
     Artifact
         { artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
         , artKind = Tarball
-        , artHashes = []
+        , artHashes = [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
         , artSize = Nothing
         , artInterpreter = Nothing
         , artYanked = False
@@ -375,6 +406,8 @@ npmPolicies resolve rules =
         WorkerPolicy
             { wpResolveVersion = resolve
             , wpRules = rules
+            , wpMinIntegrity = defaultMinIntegrity
+            , wpArtifactHostHonoured = const True
             , wpNow = pure epoch
             }
 

@@ -94,17 +94,19 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (Hash, PackageName)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (Version)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the
-mirror target. The version was already gated by the rules at serve time (when
-the job was enqueued), so the worker does not re-run the rules; it fetches the
+mirror target. The version was gated by the rules at serve time (when the job was
+enqueued); the worker __re-evaluates current policy__ through the same shared
+admission oracle before mirroring (see "Ecluse.Core.Worker.Job"), then fetches the
 bytes, verifies them against the __serve-time-admitted__ integrity digest the job
 carries, and publishes.
 
 The integrity digest and the artifact descriptor are captured __at enqueue time__
-('jobArtifact'), not re-fetched: the worker mirrors exactly what the rules
+('jobArtifact'), not re-fetched: the worker mirrors exactly the bytes the rules
 admitted, so an upstream packument mutated in the enqueue → process window cannot
 substitute a different artifact for the one that was gated. The descriptor also
 carries the filename and declared size the worker needs to assemble the publish
@@ -115,8 +117,11 @@ data MirrorJob = MirrorJob
     -- ^ The package whose artifact is being mirrored.
     , jobVersion :: Version
     -- ^ The specific version to mirror.
-    , jobArtifactUrl :: Text
-    -- ^ Where to fetch the artifact bytes from (the public upstream).
+    , jobArtifactUrl :: RegistryUrl
+    {- ^ Where to fetch the artifact bytes from (the public upstream), carried as
+    the validated https egress witness rather than bare text; the SQS wire decode
+    re-forms it, since the queue payload is a trust boundary.
+    -}
     , jobMirrorTarget :: Text
     -- ^ The mirror-target endpoint the artifact is published to.
     , jobArtifact :: MirrorArtifact

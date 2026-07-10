@@ -19,11 +19,23 @@ import UnliftIO (tryAny, withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (pkgEcosystem, renderPackageName)
-import Ecluse.Core.Queue (MirrorArtifact (maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
+import Ecluse.Core.Package.Admission (
+    ArtifactAdmission (
+        AdmissionAdmit,
+        AdmissionBelowFloor,
+        AdmissionDenied,
+        AdmissionFileAbsent,
+        AdmissionIntegrityMissing,
+        AdmissionUndecidable
+    ),
+    admitArtifact,
+ )
+import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
 import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
-import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
+import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
+import Ecluse.Core.Security (hostAddress)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
@@ -197,49 +209,73 @@ alreadyMirrored job = do
             Left _ -> False
             Right versions -> jobVersion job `elem` versions
 
-{- Re-run current policy for the job's single version: look up the job's ecosystem bundle,
-resolve and project the version's metadata through the shared single-version fetch, and
-evaluate the prepared rules over it. A job for an ecosystem with no configured bundle is
-fail-closed (dropped) rather than mirrored unvetted. The outcomes mirror the serve path's
-degrade: a withdrawn/absent version is a non-retryable drop, unobtainable metadata a
-transient retry; a rule block (or deny-by-default) drops, and an uncomputable rule retries
-rather than dropping a serviceable job or publishing it unvetted. -}
+{- Re-run current policy for the job's single version through the shared admission
+gate ('Ecluse.Core.Package.Admission.admitArtifact' -- rules, the job's filename,
+the integrity floor), after re-checking the job's fetch URL against the mount's
+tarball-host gate (the queue payload is a trust boundary). A job for an ecosystem
+with no configured bundle is fail-closed (dropped) rather than mirrored unvetted.
+
+The outcomes mirror the serve path's degrade: a withdrawn/absent version (or a
+filename its current metadata no longer carries) is a non-retryable drop,
+unobtainable metadata a transient retry; a rule block, deny-by-default, refused host,
+or integrity-policy refusal drops, and an uncomputable rule retries rather than
+dropping a serviceable job or publishing it unvetted. -}
 reevaluatePolicy :: MirrorJob -> WorkerM ReevalOutcome
 reevaluatePolicy job = do
     policies <- asks wrPolicies
     case Map.lookup ecosystem policies of
         Nothing ->
             pure (ReevalDrop ("no rule policy is configured for the " <> ecosystemName ecosystem <> " ecosystem; refusing to mirror " <> renderJob job))
-        Just policy -> do
-            evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
-            case evaluation of
-                VersionMetadataUnavailable ->
-                    pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
-                VersionMissing ->
-                    pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
-                VersionPresent details -> do
-                    -- The back-fill path emits no per-decision audit line, so the
-                    -- advisory ETag is not resolved for its context.
-                    ctx <- liftIO (EvalContext <$> wpNow policy <*> pure Nothing)
-                    decision <- liftIO (evalRules ctx (wpRules policy) details)
-                    pure (outcomeOfDecision job decision)
+        Just policy
+            | not (wpArtifactHostHonoured policy (hostAddress (registryUrlText (jobArtifactUrl job)))) ->
+                pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> registryUrlText (jobArtifactUrl job) <> "); refusing to fetch or mirror it"))
+            | otherwise -> do
+                evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
+                case evaluation of
+                    VersionMetadataUnavailable ->
+                        pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
+                    VersionMissing ->
+                        pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
+                    VersionPresent details -> do
+                        -- The back-fill path emits no per-decision audit line, so the
+                        -- audit-only advisory ETag is not resolved for its context.
+                        ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
+                        admission <-
+                            liftIO
+                                ( admitArtifact
+                                    ctx
+                                    (wpRules policy)
+                                    (wpMinIntegrity policy)
+                                    (maFilename (jobArtifact job))
+                                    details
+                                )
+                        pure (outcomeOfAdmission job admission)
   where
     ecosystem = pkgEcosystem (jobPackage job)
 
--- Map a re-evaluation 'Decision' to a job outcome. An admit mirrors; a rule block or
--- deny-by-default drops (current policy denies the version, so it must not be frozen into
--- the trusted mirror store); an undecidable verdict (a fail-closed rule that could not be
--- computed) retries, so a transient advisory-source outage neither drops a serviceable job
--- nor publishes it unvetted (the serve path renders the same cause a transient 503).
-outcomeOfDecision :: MirrorJob -> Decision -> ReevalOutcome
-outcomeOfDecision job = \case
-    Admitted{} -> ReevalAdmit
-    Blocked ruleName reason ->
+-- The worker's projection of the shared 'ArtifactAdmission' (the serve gate renders
+-- the same verdicts as HTTP statuses): an admit mirrors; every deliberate refusal
+-- drops (never frozen into the rule-exempt mirror store); an undecidable verdict
+-- retries, so a transient advisory-source outage neither drops a serviceable job nor
+-- publishes it unvetted. Total over 'ArtifactAdmission', so a new admission outcome
+-- cannot be silently ignored here while the serve path handles it.
+outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
+outcomeOfAdmission job = \case
+    AdmissionAdmit _ -> ReevalAdmit
+    AdmissionDenied (Blocked ruleName reason) ->
         ReevalDrop ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
-    BlockedByDefault _ ->
+    AdmissionDenied _ ->
         ReevalDrop ("current policy denies " <> renderJob job <> ": no rule admits it")
-    Undecidable _ reason ->
+    AdmissionUndecidable (Undecidable _ reason) ->
         ReevalRetry ("current policy could not be evaluated for " <> renderJob job <> ": " <> reason)
+    AdmissionUndecidable _ ->
+        ReevalRetry ("current policy could not be evaluated for " <> renderJob job)
+    AdmissionFileAbsent ->
+        ReevalDrop ("the public upstream no longer offers the admitted artifact file of " <> renderJob job <> "; refusing to mirror a withdrawn artifact")
+    AdmissionBelowFloor ->
+        ReevalDrop ("current admission policy refuses " <> renderJob job <> ": its strongest integrity digest is below the configured public floor")
+    AdmissionIntegrityMissing ->
+        ReevalDrop ("current admission policy refuses " <> renderJob job <> ": it no longer carries any integrity digest")
 
 -- Fetch the artifact bytes, verify them against the job's serve-time-admitted integrity
 -- digest, and (only on a match) publish to the mirror target. Reached only on a current
@@ -248,7 +284,7 @@ outcomeOfDecision job = \case
 -- fails the job with no publish and alarms.
 mirrorArtifact :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 mirrorArtifact receipt job = do
-    logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactUrl job))
+    logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
     fetched <- fetchArtifactBytes (jobArtifactUrl job)
     case fetched of
         Left reason -> pure (Retried reason)

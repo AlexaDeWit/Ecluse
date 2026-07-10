@@ -117,7 +117,7 @@ import Ecluse.Core.Package (
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
-    HashAlg (SHA1, SRI),
+    HashAlg (SHA1),
     InvalidEntry (..),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
@@ -129,6 +129,7 @@ import Ecluse.Core.Package (
     mkHash,
     mkPackageName,
     mkScope,
+    mkSriHashes,
     renderPackageName,
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryResponse (responseBody))
@@ -526,7 +527,7 @@ projectArtifact version dist =
         { artFilename = tarballFilename (distTarball dist) version
         , artUrl = distTarball dist
         , artKind = Tarball
-        , artHashes = catMaybes [sriHash, sha1Hash]
+        , artHashes = sriHashes <> maybeToList sha1Hash
         , artSize = distUnpackedSize dist
         , artInterpreter = Nothing
         , artYanked = False
@@ -542,7 +543,11 @@ projectArtifact version dist =
     -- version to be classified NoIntegrity by Ecluse.Core.Package.Integrity.
     toHash :: HashAlg -> Text -> Maybe Hash
     toHash alg = rightToMaybe . mkHash alg
-    sriHash = distIntegrity dist >>= toHash SRI
+    -- A multi-component @integrity@ (rare on npm, legal SRI) is split into one
+    -- 'Hash' per component ('mkSriHashes'), so the strongest-digest selection at
+    -- the admission floor and the worker's tamper gate rank and verify each
+    -- component exactly -- never a joined string read two different ways.
+    sriHashes = maybe [] (foldMap toList . rightToMaybe . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
 {- The artifact filename for a tarball: the path segment after the URL's last

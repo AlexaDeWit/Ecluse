@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -135,7 +136,9 @@ configDrivenQueue container queueName = do
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
     case plan of
-        SqsBackend sqsConfig -> newSqsQueue sqsConfig{sqsWaitSeconds = 1}
+        -- The wire decode's egress former: the loopback dev former, since this
+        -- suite's artifact URLs are in-process http servers.
+        SqsBackend sqsConfig -> newSqsQueue (Right . loopbackRegistryUrl) sqsConfig{sqsWaitSeconds = 1}
         MemoryBackend _ -> fail "AwsEndToEndSpec fixture: expected the SQS backend, got the in-memory one"
 
 -- The environment layer the released image would run with to target a ministack SQS:
@@ -199,6 +202,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
                 , pdAssemble = assembleMergedPackument
+                , pdEgressUrl = Right . loopbackRegistryUrl
                 }
     pure
         MountBinding

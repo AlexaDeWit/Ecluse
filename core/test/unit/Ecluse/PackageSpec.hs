@@ -23,12 +23,20 @@ spec = do
             (hashAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==")
                 `shouldBe` Right SRI
 
-        it "accepts a multi-component integrity, validating every component" $
-            -- npm may serve "sha512-… sha256-…"; both components must be well-formed.
+        it "rejects a multi-component integrity (one Hash holds exactly one component)" $
+            -- npm may serve "sha512-… sha256-…" on the wire; that shape is split by
+            -- mkSriHashes into one Hash per component, never carried whole, so the
+            -- floor ranking and the worker's byte verification read the same
+            -- component. A joined string does not construct a single Hash.
             mkHash
                 SRI
                 "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
-                `shouldSatisfy` isRight
+                `shouldSatisfy` isLeft
+
+        it "rejects an SRI component padded with surrounding whitespace" $
+            -- The stored value is read verbatim by the first-dash accessors, so a
+            -- padded component would corrupt the resolved algorithm and body.
+            mkHash SRI " sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU= " `shouldSatisfy` isLeft
 
         it "accepts a well-formed sha384 SRI (a modelled algorithm)" $
             -- sha384 is a real, modelled SRI algorithm: validated and accepted as
@@ -77,9 +85,27 @@ spec = do
             -- not a valid SRI (sha1 is not an SRI algorithm), so it does not construct.
             mkHash SRI "sha1-2jmj7l5rSw0yVb/vlWAYkK/YBwk=" `shouldSatisfy` isLeft
 
-        it "rejects a multi-component integrity when any component is malformed" $
-            mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-short"
+    describe "mkSriHashes" $ do
+        it "splits a multi-component wire string into one Hash per component" $
+            (fmap hashValue <$> mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
+                `shouldBe` Right
+                    ( "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
+                        :| ["sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="]
+                    )
+
+        it "yields a singleton for the common single-component wire string" $
+            (fmap hashValue <$> mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==")
+                `shouldBe` Right ("sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==" :| [])
+
+        it "rejects the whole wire string when any component is malformed" $
+            -- All-or-nothing: a partially-valid attacker-shaped value never yields a
+            -- partial digest set the gates would then reason over.
+            mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-short"
                 `shouldSatisfy` isLeft
+
+        it "rejects an empty or all-whitespace wire string" $ do
+            mkSriHashes "" `shouldSatisfy` isLeft
+            mkSriHashes "   " `shouldSatisfy` isLeft
 
         it "never yields a Hash from non-digest text, for any algorithm" $
             -- The fail-closed property: a value built only from characters outside the hex

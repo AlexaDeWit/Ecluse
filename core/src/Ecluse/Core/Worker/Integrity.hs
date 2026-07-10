@@ -13,11 +13,10 @@ module Ecluse.Core.Worker.Integrity (
 ) where
 
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
-import Data.Foldable (maximumBy)
 import Data.Text qualified as T
 
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA256, SRI), computeDigest)
-import Ecluse.Core.Package.Integrity (assertedAlg, sriBody, sriPrefix)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SRI), computeDigest)
+import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest, sriBody, sriPrefix)
 
 {- | The result of verifying fetched bytes against the admitted integrity digests.
 A sum type, not a 'Bool', so the mismatch carries the detail an operator needs to
@@ -38,21 +37,22 @@ digest the version carries -- never against a weaker one while a stronger is pre
 A real npm version carries both a modern SRI @sha512@ digest and the legacy SHA-1
 @shasum@. Passing on /any/ match would let an artifact that matches the weak SHA-1
 but fails the strong @sha512@ through -- and SHA-1 collision resistance is broken, so
-that is exploitable. So the gate ranks the admitted digests by 'HashAlg' authority
-(@sha512@ > @blake2b@ > @sha384@ > @sha256@ > @sha1@ > @md5@), and
-checks the bytes against the strongest one present: the bytes pass __iff__ that digest
-matches.
-A weaker digest can neither override nor rescue a failed strong one.
+that is exploitable. So the gate verifies the bytes against the __one__ digest the
+shared selection names ('Ecluse.Core.Package.Integrity.authoritativeDigest' -- the
+same authority order the serve-side admission floor ranks by): the bytes pass __iff__
+that digest matches. A weaker digest can neither override nor rescue a failed strong
+one, and because the selection is shared, this gate and the admission floor can never
+rank the same digest set two different ways.
 
-The bytes are recomputed in the strongest digest's own algorithm through the shared
+The bytes are recomputed in that digest's own algorithm through the shared
 'Ecluse.Core.Package.computeDigest', the one definition of which algorithms Écluse can
 verify. That computable set covers every algorithm the public integrity floor admits, so an
-admitted artifact is always verifiable here. When an unresolvable SRI is ranked at the
-SHA-256 floor, an equal SHA-256 digest the worker can recompute is preferred; the gate
-only breaks ties at the same algorithm authority, never by dropping to a weaker
-algorithm. If the strongest authority contains no computable digest, the gate __fails
-closed__: a tampered artifact must never be admitted on the strength of a hash an
-attacker could forge.
+admitted artifact is always verifiable here. Each SRI 'Hash' carries exactly one
+@\<alg\>-\<base64\>@ component ('Ecluse.Core.Package.mkSriHashes' splits a joined wire
+string at construction), so the digest body compared is always a single component's,
+never a joined string. If the selected digest is in an algorithm the worker cannot
+recompute, the gate __fails closed__: a tampered artifact must never be admitted on
+the strength of a hash an attacker could forge.
 
 This is the tamper gate before a publish: a mismatch fails the job and never
 publishes a corrupt or substituted artifact into the private upstream.
@@ -66,7 +66,7 @@ Right (IntegrityMismatch "the SHA1 digest did not match the fetched bytes")
 -}
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
 verifyIntegrity hashes bytes =
-    let strongest = maximumBy compareVerificationCandidate hashes
+    let strongest = authoritativeDigest hashes
      in case matchesDigest (toLazy bytes) strongest of
             Nothing ->
                 -- Fail closed: the strongest present digest is in an algorithm we
@@ -80,39 +80,6 @@ verifyIntegrity hashes bytes =
             Just True -> IntegrityVerified
             Just False ->
                 IntegrityMismatch ("the " <> describeDigest strongest <> " digest did not match the fetched bytes")
-
-data VerificationRank = VerificationRank HashAlg Int
-    deriving stock (Eq, Show)
-
--- Algorithm authority, strongest first, with a deterministic tie-break inside an
--- equal algorithm authority. The first component uses 'HashAlg' 'Ord' so the tamper
--- gate and serve-admission floor agree on the real algorithm ordering. An SRI is
--- ranked by the algorithm it asserts ('assertedAlg' -- npm's
--- @sha512-...@ ranks as 'SHA512'); an SRI whose inner alg is unrecognised asserts
--- nothing and ranks at the SHA-256 floor tier (above the legacy SHA-1/MD5).
---
--- Inside that tier, a computable digest wins over an unresolvable one. This avoids
--- order-dependent over-rejection when a future SRI prefix ties a real SHA-256 digest,
--- while still refusing to drop below the strongest tier to a weaker computable hash.
-verificationRank :: Hash -> VerificationRank
-verificationRank h = case assertedAlg h of
-    Nothing -> VerificationRank SHA256 0
-    Just alg -> VerificationRank alg (verifiabilityRank alg)
-
-verifiabilityRank :: HashAlg -> Int
-verifiabilityRank alg
-    | isJust (computeDigest alg) = 1
-    | otherwise = 0
-
-compareVerificationCandidate :: Hash -> Hash -> Ordering
-compareVerificationCandidate a b =
-    compareVerificationRank (verificationRank a) (verificationRank b)
-
-compareVerificationRank :: VerificationRank -> VerificationRank -> Ordering
-compareVerificationRank (VerificationRank algA verifiabilityA) (VerificationRank algB verifiabilityB) =
-    case compare algA algB of
-        EQ -> compare verifiabilityA verifiabilityB
-        order -> order
 
 -- Whether the fetched bytes match the chosen digest: resolve its algorithm
 -- ('assertedAlg', 'Nothing' for an unresolvable SRI), recompute the bytes in that

@@ -43,8 +43,6 @@ digest, and only on the operator's own trusted source -- never on untrusted publ
 -}
 module Ecluse.Core.Package.Integrity (
     -- * Algorithm strength
-    Strength,
-    integrityStrength,
     assertedAlg,
 
     -- * Algorithm names and SRI strings
@@ -53,6 +51,9 @@ module Ecluse.Core.Package.Integrity (
     sriAlgorithm,
     sriPrefix,
     sriBody,
+
+    -- * The authoritative digest of a set
+    authoritativeDigest,
 
     -- * Integrity floors
     IntegrityFloor (..),
@@ -79,74 +80,21 @@ module Ecluse.Core.Package.Integrity (
     classifyArtifacts,
 ) where
 
+import Data.Foldable (maximumBy)
+
 import Ecluse.Core.Package (
     Artifact (artHashes),
     Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
+    HashAlg (SHA256, SRI),
     hashAlg,
     hashValue,
+    isComputable,
     parseHashAlg,
     renderHashAlg,
     sriAlgorithm,
     sriBody,
     sriPrefix,
  )
-
-{- | The broad collision-resistance tier of a hash algorithm. This preserves the
-security-language grouping -- e.g. Blake2b and SHA-512 are both long modern digests --
-while the operational tie-break lives in 'HashAlg' 'Ord'.
--}
-data Strength
-    = {- | A bare 'SRI' wrapper asserts no algorithm at all -- below every real
-      digest, so an unresolved SRI never wins a strongest-digest comparison.
-      -}
-      Unasserted
-    | -- | MD5: practical collisions; the weakest real algorithm.
-      Weakest
-    | -- | SHA-1: practical collisions.
-      Weak
-    | -- A future weak-but-not-broken algorithm would slot a new tier here, between
-      -- the broken algorithms and the SHA-256 floor -- an enum needs no renumbering,
-      -- unlike the old Int ranking, which reserved a numeric gap for exactly this.
-
-      -- | SHA-256: collision-resistant; the public-integrity floor.
-      Floor
-    | {- | SHA-384: above the floor but below the top tier. It is SHA-512 truncated, so
-      its 192-bit collision resistance sits below SHA-512's 256-bit and above SHA-256's
-      128-bit -- a tier of its own.
-      -}
-      Strong
-    | -- | The modern long digests SHA-512 and Blake2b -- equal strength, the top tier.
-      Strongest
-    deriving stock (Eq, Ord, Show)
-
-{- | The broad collision-resistance 'Strength' tier of an algorithm; __a stronger tier
-ranks higher__ under 'Strength''s 'Ord'. Use 'HashAlg' 'Ord' when a total checksum
-ordering is needed.
-
-The broken algorithms rank below the SHA-256 floor (@'integrityStrength' 'SHA256'@):
-MD5 and SHA-1 have practical collisions, so a match on one cannot prove the bytes
-were not substituted. SHA-256 and the longer digests rank at or above the floor:
-SHA-384 above it in a tier of its own, then SHA-512 and Blake2b sharing the broad top
-tier. A bare 'SRI' ranks lowest of all -- it is a wrapper, not an algorithm, so resolve
-it with 'assertedAlg' before ranking; ranking below every real algorithm, an unresolved
-SRI never wins a strongest-digest comparison.
-
->>> integrityStrength SHA512 > integrityStrength SHA256
-True
-
->>> integrityStrength SHA1 >= integrityStrength SHA256
-False
--}
-integrityStrength :: HashAlg -> Strength
-integrityStrength = \case
-    SRI -> Unasserted
-    MD5 -> Weakest
-    SHA1 -> Weak
-    SHA256 -> Floor
-    SHA384 -> Strong
-    SHA512 -> Strongest
-    Blake2b -> Strongest
 
 {- | The algorithm a 'Hash' asserts: its tag directly, or -- for an 'SRI' string -- the
 algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved are
@@ -168,6 +116,33 @@ assertedAlg :: Hash -> Maybe HashAlg
 assertedAlg h = case hashAlg h of
     SRI -> sriAlgorithm (hashValue h)
     alg -> Just alg
+
+{- | The __most authoritative__ digest of a set: ranked by the algorithm each digest
+asserts ('assertedAlg' -- an SRI ranks as its embedded algorithm), under the same
+'HashAlg' 'Ord' the admission floors rank candidates by, so the worker's tamper gate
+and the serve-side floor agree on one authority order rather than each re-encoding
+it. This is the digest fetched bytes must be verified against -- never a weaker one
+while a stronger is present, since a match on a weaker algorithm cannot rescue a
+failed strong one.
+
+A digest asserting no algorithm (an unresolvable SRI -- unconstructable today, since
+'Ecluse.Core.Package.mkHash' resolves every component, but ranked defensively) sits
+at the SHA-256 floor tier. __Inside__ an equal algorithm authority, a digest Écluse
+can recompute ('Ecluse.Core.Package.isComputable') wins over one it cannot, so a tie
+never over-rejects an artifact a co-present verifiable digest could prove; the
+selection never drops __below__ the strongest tier to a weaker computable algorithm.
+The final tie-break is 'maximumBy''s keep-latest, deterministic over the artifact's
+wire order.
+-}
+authoritativeDigest :: NonEmpty Hash -> Hash
+authoritativeDigest = maximumBy (comparing digestAuthority)
+  where
+    -- The two-level authority key: the asserted algorithm first (by the operational
+    -- 'HashAlg' ordering), then recomputability inside an equal algorithm.
+    digestAuthority :: Hash -> (HashAlg, Bool)
+    digestAuthority h = case assertedAlg h of
+        Nothing -> (SHA256, False)
+        Just alg -> (alg, isComputable alg)
 
 {- | The shared interface of an integrity floor: the minimum algorithm it requires. Both
 the hard-floored public 'MinIntegrity' and the loosenable trusted 'MinTrustedIntegrity'

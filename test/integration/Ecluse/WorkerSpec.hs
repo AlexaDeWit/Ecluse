@@ -22,6 +22,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (
@@ -172,7 +173,8 @@ job upstreamUrl sha1 =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
-        , jobArtifactUrl = upstreamUrl <> artifactPath
+        , -- The flag-gated loopback former: the job points at an in-process http stub.
+          jobArtifactUrl = loopbackRegistryUrl (upstreamUrl <> artifactPath)
         , jobMirrorTarget = "the-publish-client-base-url-is-used-instead"
         , jobArtifact =
             MirrorArtifact

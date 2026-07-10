@@ -110,6 +110,7 @@ library ecluse-core
     Ecluse.Core.Osv.Schema
     Ecluse.Core.Osv.Stream
     Ecluse.Core.Package
+    Ecluse.Core.Package.Admission
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.Merge
@@ -484,6 +485,7 @@ test-suite ecluse-core-unit
     Ecluse.Cve.SlotSpec
     Ecluse.CveSpec
     Ecluse.InFlightSpec
+    Ecluse.Package.AdmissionSpec
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
     Ecluse.Package.MergeSpec
@@ -967,6 +969,13 @@ executable bench-load
   import:          shared
   main-is:         Main.hs
   hs-source-dirs:  bench/load
+
+  -- The load harness drives in-process plain-http stub registries, so it needs the
+  -- flag-gated loopback egress former (Ecluse.Core.Security.Egress.DevHttp). A
+  -- release-posture build (the flag off -- the Nix docs/Haddock check included) has
+  -- no such module by design, so this dev-only tool is simply not buildable there.
+  if !flag(dev-http-egress)
+    buildable: False
   -- Mirrors the shipped server's RTS tuning (-A64m -n4m; see `executable ecluse`)
   -- so the load benchmarks measure the runtime posture the proxy actually ships
   -- with; -T additionally exposes the RTS stats the harness reports.

@@ -29,6 +29,7 @@ module Ecluse.Core.Rules.Types (
 
     -- * Evaluation
     EvalContext (..),
+    mkEvalContext,
     Reason,
     RuleVerdict (..),
     RuleEvaluation (..),
@@ -270,6 +271,20 @@ data EvalContext = EvalContext
     -}
     }
     deriving stock (Eq, Show)
+
+{- | Assemble the ambient evaluation context -- the __one__ assembly point for every
+consumer (the packument sweep, the tarball gate, and the mirror worker's ingest
+re-evaluation), so what feeds a decision is defined once, not at each call site.
+
+The contract the single point holds: 'ctxNow' must come from the injected clock the
+mount's decisions share ('Ecluse.Core.Server.Context.pdNow', which the worker's
+bundle reuses), never an ad-hoc 'Data.Time.getCurrentTime', so the age gate cannot
+drift between contexts; 'ctxAdvisoryEtag' is __audit-only__ (it never enters a rule's
+decision), so a consumer that emits no audit line passes 'Nothing' without changing
+any decision.
+-}
+mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
+mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
 
 -- | A human-facing reason a rule attaches to its result, kept for the audit trail.
 type Reason = Text

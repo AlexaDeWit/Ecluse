@@ -131,14 +131,17 @@ not here.
    floor, not a default. For packument merging and cross-upstream divergence, see
    [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams).
 
-   Algorithm strength and the floor predicate live in `Ecluse.Core.Package.Integrity`
-   (`integrityStrength`, `meetsFloor`); the worker's digest computation sits beside the
-   validation in `Ecluse.Core.Package` (`computeDigest`). The floor admits by strength and
-   the worker's tamper gate (`Ecluse.Core.Worker.verifyIntegrity`) verifies by computation,
-   and the computable set covers every algorithm the public floor admits, so an admitted
-   public artifact is always verifiable and reaches the mirror. That holds by construction:
-   `computeDigest` is total over the algorithm set, and a test pins that every
-   floor-clearing algorithm is computable.
+   The algorithm authority order is `HashAlg`'s `Ord` in `Ecluse.Core.Package`; the
+   floor predicate and the strongest-digest selection live in
+   `Ecluse.Core.Package.Integrity` (`meetsFloor`, `authoritativeDigest`); the worker's
+   digest computation sits beside the validation in `Ecluse.Core.Package`
+   (`computeDigest`). The floor admits by strength, the worker's
+   tamper gate (`Ecluse.Core.Worker.verifyIntegrity`) verifies the one digest the shared
+   selection names, and the computable set covers every algorithm the public floor admits,
+   so an admitted public artifact is always verifiable and reaches the mirror. That holds
+   by construction: the selection is one function both gates consult, `computeDigest` is
+   total over the algorithm set, and a property pins that any floor-admitted digest set
+   verifies its own bytes.
 
 ## Posture
 
@@ -361,7 +364,11 @@ container-role minting over a static secret, minimise its TTL. The mirror queue 
 the same trust boundary: a job is unauthenticated and directs the worker to
 fetch-and-publish, so anyone who can enqueue can make the worker write the trusted store;
 scope its IAM too (only the serve role enqueues, only the worker consumes) (register threat
-#7).
+#7). The worker narrows what a forged or stale job can do: the artifact URL is re-formed
+into its https-only `RegistryUrl` witness at the wire decode (an unformable URL fails the
+decode), the fetch host is re-checked against the mount's tarball-host gate at ingest, the
+version is re-decided through the shared admission gate, and the fetched bytes must match
+the job's serve-time-admitted digest before any publish.
 
 **Registry separation is defence-in-depth and auditability, not the perimeter** (register
 threat #10). The three-registry topology

@@ -127,7 +127,7 @@ import Ecluse.Core.Registry.Metadata (
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext, ctxAdvisoryEtag))
+import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
 import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
@@ -299,7 +299,7 @@ serveAdmittedPackument mode renderer deps name request respond rt = do
         -- The client's bearer, scanned out of the headers once; the private-origin fetch
         -- forwards it (the edge gate already compared it before admission).
         clientToken = forwardedToken request
-    evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pdAdvisoryEtag deps)
+    evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     (privResult, pubResult) <-
         concurrently
             (fetchPrivateOrigin deps rt clientToken name)
@@ -602,8 +602,8 @@ renderDivergence d =
 renderFingerprint :: IntegrityFingerprint -> Text
 renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashes fp)) <> "}"
 
-renderHash :: (Maybe HashAlg, Text) -> Text
-renderHash (alg, body) = maybe "none" renderHashAlg alg <> ":" <> body
+renderHash :: (Text, Maybe HashAlg, Text) -> Text
+renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
 
 {- Log the malformed packument entries an upstream served that the projection dropped
 rather than failing the whole document on, at 'WarningS', so an operator can see that an
