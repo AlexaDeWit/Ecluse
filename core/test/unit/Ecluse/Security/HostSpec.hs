@@ -9,7 +9,7 @@ import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Security (
     LoweredHostSet,
@@ -585,8 +585,14 @@ lowerCaseHostsSpec = describe "lowerCaseHosts" $ do
         lowerCaseHosts (Set.fromList ["EXAMPLE.com", "example.COM"])
             `shouldBe` lowerCaseHosts (Set.singleton "example.com")
 
+-- The "public host matched by an additional range" arm is rare: it needs a public IP
+-- literal whose own /32 is folded into the additional ranges, which lands in only ~5%
+-- of generated cases. At hspec-hedgehog's default 100 tests the 'H.cover 2' floor below
+-- straddled that rate and failed on unlucky seeds. Draw 1000 tests so the coverage
+-- estimate is stable without weakening the floor; 'modifyMaxSuccess' is how
+-- hspec-hedgehog sets Hedgehog's test count.
 propertiesSpec :: Spec
-propertiesSpec = describe "properties" $ do
+propertiesSpec = modifyMaxSuccess (const 1000) $ describe "properties" $ do
     it "isBlockedTarget blocks an internal host, or one matched by an additional range" $
         hedgehog $ do
             -- Generate addresses across the blocked ranges plus public ones, and a
