@@ -18,15 +18,15 @@ import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
-import Ecluse.Core.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Proxy (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, mountBindingFor, npmServerConfig, planCveSync, unconfiguredRegistry)
-import Ecluse.Server (MountBinding (..), application)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
+import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Server (MountBinding (..), application)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Cve (fakeCveLookup)
 
 newTestManager :: IO Manager
@@ -166,7 +166,7 @@ appConfigFrom envVars doc = case loadConfig envVars doc of
     Right c -> pure (configApp c)
     Left e -> fail ("Config error: " <> show e)
 
--- 'Ecluse.Pilot.Export.buildS3Env' discovers credentials from the process
+-- 'Ecluse.Runtime.Pilot.Export.buildS3Env' discovers credentials from the process
 -- environment; the plan only wires the transport (no request is made), so
 -- dummies satisfy it.
 setDummyAwsCredentials :: IO ()

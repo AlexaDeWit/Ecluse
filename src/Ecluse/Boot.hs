@@ -103,14 +103,14 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
-import Ecluse.Core.Queue.Sqs (newSqsQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
-import Ecluse.Log (moduleField, newLogEnv)
-import Ecluse.Runtime (applyRuntimePosture)
-import Ecluse.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
-import Ecluse.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
-import Ecluse.Telemetry.Resolve (prepareTelemetry)
+import Ecluse.Rts (applyRuntimePosture)
+import Ecluse.Runtime.Log (moduleField, newLogEnv)
+import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
+import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
+import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 
 {- | The boot context assembled once at start-up and handed to each subcommand: the
 validated configuration, the process logger, and the telemetry handle. 'withBootEnv'
@@ -145,7 +145,7 @@ withBootEnv action = do
     let env = configApp config
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     -- Resolve and apply the runtime posture before anything else spins up: this may
-    -- exec the binary in place (same PID; see Ecluse.Runtime) to enforce a heap
+    -- exec the binary in place (same PID; see Ecluse.Rts) to enforce a heap
     -- ceiling, so nothing stateful must precede it beyond config and the logger.
     applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (cfgCores env) (cfgMaxHeapBytes env)
     logBootInfo logEnv ("Loaded configuration: " <> show config)
@@ -175,7 +175,7 @@ buildMirrorQueue logEnv plan = do
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
 module -- the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),
-the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Core.Server.Pipeline.Internal" use. -}
+the same shape "Ecluse.Runtime.Telemetry.Resolve" and "Ecluse.Core.Server.Pipeline.Internal" use. -}
 logBootWarning :: LogEnv -> Text -> IO ()
 logBootWarning logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM WarningS (ls message))
@@ -219,7 +219,7 @@ orExit render = \case
 
 {- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
 the identity, normalise the @OTEL_*@ environment the SDK reads, and install the
-throttled export-error handler ("Ecluse.Telemetry.Resolve.prepareTelemetry"). A no-op
+throttled export-error handler ("Ecluse.Runtime.Telemetry.Resolve.prepareTelemetry"). A no-op
 when telemetry is off, so an unset @ECLUSE_TELEMETRY@ reads no process environment and
 configures nothing. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()

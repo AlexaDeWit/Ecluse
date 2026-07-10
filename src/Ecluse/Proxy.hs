@@ -111,13 +111,12 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
+    AppConfig (cfgAwsEndpointUrl, cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
  )
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
-import Ecluse.Core.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
@@ -137,20 +136,21 @@ import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, 
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
-import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Pilot.Export (buildS3Env)
-import Ecluse.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
-import Ecluse.Server qualified as Server
-import Ecluse.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Telemetry.Instruments (metricsPortOf)
-import Ecluse.Telemetry.Reporters (
+import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
+import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
+import Ecluse.Runtime.Pilot.Export (buildS3Env)
+import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Runtime.Server qualified as Server
+import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
+import Ecluse.Runtime.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredMirrorEnqueueFailure,
     deferredRefreshReporter,
     installMetrics,
     newDeferredMetrics,
  )
-import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings, tracingPortOf)
+import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings, tracingPortOf)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -382,7 +382,7 @@ planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
         let dataDir = cfgOsvDataDir appCfg
         createDirectoryIfMissing True dataDir
         sweepStaleTemps dataDir
-        awsEnv <- buildS3Env appCfg
+        awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= Composition.parseEndpointUrl)
         Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
 
 -- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync
@@ -438,7 +438,7 @@ config-derived 'ServerConfig'.
 This is the npm-aware composition site: 'mountBindingFor' mounts npm -- its path
 grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
 ("Ecluse.Core.Registry.Npm.Serve") -- into the otherwise ecosystem-neutral web layer
-('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
+('Ecluse.Runtime.Server.runServer'), so the agnostic server stays closed over the shared
 'Ecluse.Core.Server.Route.Route' set and only this one place names an ecosystem.
 Splitting the server into its own binary later reuses this same entry.
 -}
@@ -449,7 +449,7 @@ runServer cfg env = Server.runWarp cfg (Server.tracedApplication cfg env)
 or publish dependencies, so the packument route is the recognised-but-unserved @501@
 stub and a publish is @405@ (no publication target). Exposed so the composed front
 door can be driven directly without binding a socket (e.g. embedded in another @wai@
-application, or exercised in tests through 'Ecluse.Server.application') to assert the
+application, or exercised in tests through 'Ecluse.Runtime.Server.application') to assert the
 routing and the unwired-mount surface; a real launch derives its bindings from
 configuration in 'run'.
 -}
@@ -495,7 +495,7 @@ npmMount packumentDeps publishDeps =
 per-ecosystem re-evaluation bundles: the consume → re-evaluate → fetch → verify → publish →
 ack loop against the queue, the publish-side registry client, and the credential handle, in
 the worker monad ('Ecluse.Core.Worker.WorkerM') over the worker runtime
-('Ecluse.Env.workerRuntimeOf'). The bundles carry the same prepared rules and public origin
+('Ecluse.Runtime.Env.workerRuntimeOf'). The bundles carry the same prepared rules and public origin
 the serve path gates with, so the worker re-runs current policy against a job before
 mirroring it.
 

@@ -27,23 +27,34 @@ mirrored from the public registry.
 
 ## Codebase decomposition
 
-Écluse builds as two libraries behind one [`ecluse.cabal`](../ecluse.cabal), splitting the
-pure capability core from the composition shell:
+Écluse builds as three libraries behind one [`ecluse.cabal`](../ecluse.cabal), splitting
+the ecosystem-agnostic core, the effectful runtime edge, and the composition shell:
 
 - **`ecluse-core`** (`core/src`, `Ecluse.Core.*`): the ecosystem-agnostic core, the
-  domain model, registry adapters, version grammars, pure and effectful rule tiers,
-  credential refresh, queue and security primitives, the agnostic server layer (routing,
-  response model, streaming, conditional-GET, metadata cache, serve admission, request
-  pipeline), the telemetry instrument catalogue, and the mirror worker. It depends on the
-  OpenTelemetry API only, never the SDK, so it carries no process-global wiring.
-- **`ecluse`** (`src`, `Ecluse.*`): the shell that composes the core into a running
-  proxy, the config loader, the `Env` composition root, logging, the WAI `Application`,
-  and the telemetry SDK / OTLP export wiring.
+  domain model, registry protocol and version grammars, pure and effectful rule tiers,
+  the CVE advisory lookup and the OSV advisory-producer logic, credential-refresh policy,
+  queue and security primitives, the agnostic server layer (routing, response model,
+  streaming, conditional-GET, metadata cache, serve admission, request pipeline), the
+  telemetry instrument catalogue and its abstract ports, and the mirror worker. Its
+  effects are all local, injectable values (an http `Manager`, a SQLite handle); it
+  depends on the OpenTelemetry API only, never the SDK, and never on `warp` or `amazonka`,
+  so it carries no process-global wiring and no cloud SDK.
+- **`ecluse-runtime`** (`runtime/src`, `Ecluse.Runtime.*`): the effectful edge, the
+  capabilities that bind the process-global runtime substrate the core excludes: the
+  OpenTelemetry SDK / OTLP export wiring, the `warp` server binding, the `katip` log
+  scribes, the runtime `Env` handle bundle, and the cloud adapters (the AWS SQS queue,
+  the CodeArtifact credential mint, the S3 advisory-database sync and export) that
+  concretely implement the core's handle interfaces. It depends on `ecluse-core`.
+- **`ecluse`** (`src`, `Ecluse.*`): the composition shell, the config loader and
+  resolver, the `Composition` root and `Boot` bracket that assemble the runtime `Env`
+  from configuration, and the `proxy`/`pilot`/`dredger` role runners that wire the
+  capabilities together and run them. It depends on `ecluse-runtime` and `ecluse-core`.
 - **`ecluse` executable** (`app/Main.hs`): a multicall CLI router for the `serve`,
   `pilot`, and `dredger` roles.
 
-The build graph enforces the boundary: the core's unit suite does not depend on the
-application library, so a core module reaching into composition fails to compile.
+The build graph enforces the boundary: the dependency arrow points inward only
+(`ecluse` → `ecluse-runtime` → `ecluse-core`), and the core's unit suite depends on
+neither higher tier, so a core module reaching outward fails to compile.
 [`ecluse.cabal`](../ecluse.cabal) is the authoritative component and module map.
 
 ## Request lifecycle

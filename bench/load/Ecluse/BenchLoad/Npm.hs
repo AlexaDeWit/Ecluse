@@ -151,9 +151,9 @@ import Ecluse.Core.Worker (
     processBatch,
     runWorkerM,
  )
-import Ecluse.Env (newEnvWithAdmission)
-import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Env (newEnvWithAdmission)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Worker (admitAllPolicies)

@@ -40,10 +40,10 @@ import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Network.HTTP.Types.Status (statusCode)
 import Network.Wai.Test qualified as WaiTest
 
-import Ecluse.Config (Config (configApp), loadConfig)
+import Ecluse.Composition (parseEndpointUrl)
+import Ecluse.Config (AppConfig (cfgAwsEndpointUrl), Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
-import Ecluse.Core.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
@@ -59,15 +59,16 @@ import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLim
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
-import Ecluse.Env (newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (endpointFor, withMinistack)
-import Ecluse.Pilot.Export (buildS3Env)
-import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
+import Ecluse.Runtime.Env (newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Pilot.Export (buildS3Env)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
-import Ecluse.Core.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
+import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
 spec :: Spec
 spec =
@@ -85,7 +86,7 @@ spec =
                             appCfg <-
                                 either (fail . ("CveSyncSpec fixture env: " <>) . show) (pure . configApp) $
                                     loadConfig (s3EnvVars endpointUrl bucket) Nothing
-                            awsEnv <- buildS3Env appCfg
+                            awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl)
                             createBucketWithRetry awsEnv bucket 30
 
                             -- One proxy wiring: the slot, the fast-lane policy over it,

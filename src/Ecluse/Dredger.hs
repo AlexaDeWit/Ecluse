@@ -9,8 +9,8 @@ import Network.Wai (Application)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
-import Ecluse.Log (moduleField)
-import Ecluse.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 
 {- | The WAI application for the Dredger worker mode.
 It exposes liveness and readiness probes.

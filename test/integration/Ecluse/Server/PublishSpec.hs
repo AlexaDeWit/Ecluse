@@ -34,9 +34,9 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
-import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
-import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
 {- | An in-process publication-target double: it records the @Authorization@ header
 and the body of every @PUT@ it receives (so the credential-passthrough and

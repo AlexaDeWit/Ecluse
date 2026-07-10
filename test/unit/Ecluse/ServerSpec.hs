@@ -33,9 +33,9 @@ import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
-import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
 import Ecluse.Proxy (unconfiguredRegistry)
-import Ecluse.Server (
+import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
+import Ecluse.Runtime.Server (
     DrainSignal,
     InteractiveHalt (..),
     MountBinding (..),
@@ -53,7 +53,7 @@ import Ecluse.Server (
     serverMiddleware,
     withInteractiveHalt,
  )
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders -- it never fetches -- so a handle that

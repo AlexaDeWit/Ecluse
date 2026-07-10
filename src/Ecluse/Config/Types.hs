@@ -38,8 +38,8 @@ import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
-import Ecluse.Log (LogFormat)
-import Ecluse.Telemetry (TelemetrySwitch)
+import Ecluse.Runtime.Log (LogFormat)
+import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)

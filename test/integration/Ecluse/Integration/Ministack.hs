@@ -43,7 +43,7 @@ import UnliftIO.Exception (try)
 import System.Environment (setEnv)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
-import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 import Ecluse.Test.Containers (testContainerLabels)
 
 -- | The SQS gateway port @ministack@ serves on.

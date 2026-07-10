@@ -13,9 +13,9 @@ import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, 
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Core.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
-import Ecluse.Server (scPort)
-import Ecluse.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
+import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
+import Ecluse.Runtime.Server (scPort)
+import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Test.Package (unsafeHash, validSha1)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and

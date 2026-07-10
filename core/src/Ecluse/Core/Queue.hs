@@ -376,7 +376,7 @@ assignReceipts next (job : rest) =
         )
 
 {- | What the bounded in-memory backend needs: its depth cap and its idle-poll
-window. A record (like 'Ecluse.Core.Queue.Sqs.SqsConfig') so each knob is named rather
+window. A record (like the SQS backend's @SqsConfig@) so each knob is named rather
 than a bare 'Int'; build it with 'defaultMemoryQueueConfig' for the production poll
 window.
 -}
@@ -396,7 +396,7 @@ data MemoryQueueConfig = MemoryQueueConfig
 
 {- | A 'MemoryQueueConfig' for a given depth cap with the idle-poll window at its
 production default -- @20s@, mirroring the SQS long-poll cadence
-('Ecluse.Core.Queue.Sqs.defaultSqsConfig') and comfortably under the worker's @120s@
+(the SQS backend's @defaultSqsConfig@) and comfortably under the worker's @120s@
 heartbeat-staleness budget ('Ecluse.Core.Worker.workerHeartbeatStaleAfter'), so an idle
 'receive' returns a healthy empty poll long before @\/livez@ would flag the loop
 stalled. The depth cap stays the operator-tunable knob; the poll window is a fixed

@@ -43,7 +43,7 @@ is_external() { # true for targets that are not site-relative paths
 
 exempt() { # true for machine-generated interiors gated elsewhere
   case "$1" in
-    "$site_abs"/api/ecluse/* | "$site_abs"/api/ecluse-core/*) return 0 ;;
+    "$site_abs"/api/ecluse/* | "$site_abs"/api/ecluse-core/* | "$site_abs"/api/ecluse-runtime/*) return 0 ;;
     *) return 1 ;;
   esac
 }

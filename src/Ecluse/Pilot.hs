@@ -8,22 +8,28 @@ module Ecluse.Pilot (
     PilotUploadUnconfigured (..),
 ) where
 
-import Conduit (runResourceT)
-import Katip (LogEnv, Severity (InfoS), logFM, ls)
+import Conduit (MonadResource, runResourceT)
+import Control.Monad.Catch (MonadMask)
+import Katip (KatipContext, LogEnv, Severity (ErrorS, InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
-
+import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (concurrently_)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgOsvExportBaseUrl, cfgPort, cfgVulnerabilityDatabaseBucket))
-import Ecluse.Log (moduleField)
-import Ecluse.Pilot.Export (exportToS3, runExportLoop)
-import Ecluse.Pilot.Osv (osvExportUrl)
-import Ecluse.Pilot.Osv.Compile (compileOsvToSqlite)
-import Ecluse.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
-import Ecluse.Telemetry (Telemetry)
+import Ecluse.Composition (parseEndpointUrl)
+import Ecluse.Config (
+    AppConfig (cfgAwsEndpointUrl, cfgCveSyncInterval, cfgOsvDataDir, cfgOsvExportBaseUrl, cfgPort, cfgVulnerabilityDatabaseBucket),
+    Config (configApp),
+ )
+import Ecluse.Core.Osv.Advisory (osvExportUrl)
+import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
+import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Pilot.Export (exportToS3)
+import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 
 {- | The WAI application for the Pilot worker mode.
 It exposes liveness and readiness probes.
@@ -33,7 +39,7 @@ pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg
 
 {- | The entry point for the Pilot worker mode.
 Pilot runs as a standalone HTTP server that only exposes liveness and readiness
-probes. Its actual worker loop will ingest advisory databases.
+probes, while it concurrently runs the OSV export loop.
 -}
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
@@ -46,6 +52,33 @@ runPilot bootEnv = do
         concurrently_
             (runExportLoop (beTelemetry bootEnv) (beConfigFull bootEnv))
             (liftIO $ runWarp cfg (pilotApplication cfg))
+
+{- | The Pilot steady-state export loop: compile the npm OSV artifact and upload it
+to the configured S3 bucket, then wait the configured sync interval and repeat. With
+no bucket configured the loop idles. Orchestration over the OSV producer (the compile
+in "Ecluse.Core.Osv.Compile") and the S3 adapter ("Ecluse.Runtime.Pilot.Export"); it
+lives in the shell because it reads the composed configuration.
+-}
+runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Config -> m ()
+runExportLoop telemetry config = do
+    let appCfg = configApp config
+    case cfgVulnerabilityDatabaseBucket appCfg of
+        Nothing -> do
+            logFM InfoS "No S3 bucket configured for OSV database export; export loop disabled."
+            forever $ threadDelay (24 * 60 * 60 * 1000000)
+        Just bucketName -> do
+            logFM InfoS (ls ("S3 export loop starting up. Target bucket: " <> bucketName))
+            forever $ do
+                catchAny (runResourceT $ exportNpm telemetry appCfg bucketName) $ \e ->
+                    logFM ErrorS (ls ("Export failed: " <> show e :: String))
+                threadDelay ((round (cfgCveSyncInterval appCfg) :: Int) * 1000000)
+
+-- | Compile the npm OSV artifact and upload it to the given bucket: one full cycle.
+exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
+exportNpm telemetry appCfg bucketName = do
+    logFM InfoS "Starting npm OSV database compilation"
+    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (cfgOsvDataDir appCfg) "npm" (osvExportUrl (cfgOsvExportBaseUrl appCfg) "npm")
+    exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucketName dbPath
 
 {- | Options for the one-shot 'runPilotCompile' mode: which ecosystem's export
 to compile, where to fetch it from, and where the artifact lands.
@@ -90,9 +123,9 @@ runPilotCompile logEnv telemetry appCfg opts = do
     let url = fromMaybe (osvExportUrl (cfgOsvExportBaseUrl appCfg) (pcoEcosystem opts)) (pcoSource opts)
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
         runResourceT $ do
-            dbFile <- compileOsvToSqlite telemetry (pcoOutDir opts) (pcoEcosystem opts) url
+            dbFile <- compileOsvToSqlite (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
             when (pcoUpload opts) $
                 case cfgVulnerabilityDatabaseBucket appCfg of
                     Nothing -> throwIO PilotUploadUnconfigured
-                    Just bucket -> exportToS3 appCfg bucket dbFile
+                    Just bucket -> exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dbFile
             pure dbFile

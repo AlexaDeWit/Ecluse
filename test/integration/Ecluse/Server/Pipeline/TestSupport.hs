@@ -58,13 +58,13 @@ import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Version (Version)
-import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
-import Ecluse.Server (
+import Ecluse.Runtime.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Server (
     MountBinding (..),
     application,
     mkServerConfig,
  )
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime

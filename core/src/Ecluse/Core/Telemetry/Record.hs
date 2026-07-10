@@ -7,7 +7,7 @@ over that catalogue as records of @IO@ functions (the Handle pattern, as
 "Ecluse.Core.Registry" and "Ecluse.Core.Queue" use): one field per signal a consumer
 emits, each taking only the bounded label values its metric carries. A consumer records
 through its port and never names an OpenTelemetry instrument; the application supplies
-the OTel-backed implementations behind them (see @Ecluse.Telemetry.Instruments@). A test
+the OTel-backed implementations behind them (see @Ecluse.Runtime.Telemetry.Instruments@). A test
 supplies an inert or recording double.
 
 Two ports are defined: 'MetricsPort' for the serve path (serve decisions, the rule gate,
@@ -108,7 +108,7 @@ data MetricsPort = MetricsPort
 kept a separate record so the worker records exactly its own signals and the serve path
 exactly its own (the two consumers share no field). Both fields return 'IO', so the
 worker loop records through the port without naming a telemetry backend; the application
-supplies the OTel-backed implementation (see @Ecluse.Telemetry.Instruments@) and a test
+supplies the OTel-backed implementation (see @Ecluse.Runtime.Telemetry.Instruments@) and a test
 an inert or recording double.
 -}
 data WorkerMetricsPort = WorkerMetricsPort

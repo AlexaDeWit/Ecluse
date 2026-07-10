@@ -3,7 +3,7 @@ module Ecluse.RuntimeSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Runtime (
+import Ecluse.Rts (
     CgroupLimits (CgroupLimits, cgCpuCores, cgMemoryMaxBytes),
     Provenance (FromCgroup, FromConfig, FromRts),
     RtsPosture (..),

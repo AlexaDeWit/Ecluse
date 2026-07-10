@@ -45,7 +45,7 @@ lastPoll (WorkerHeartbeat var) = readTVarIO var
 considered stalled -- the staleness threshold the liveness probe applies.
 
 It is a generous multiple of the long-poll cadence: a healthy idle worker still
-completes a poll at least every 'Ecluse.Core.Queue.Sqs.sqsWaitSeconds' (≤ 20s by
+completes a poll at least every SQS long-poll window (@sqsWaitSeconds@, ≤ 20s by
 default), so a gap several times that is a genuine stall, not an idle queue. Set
 well above one poll window so liveness never flaps on normal scheduling jitter.
 -}

@@ -20,7 +20,7 @@ import Test.Hspec
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
 spec :: Spec
 spec = describe "osv.dev npm export (live oracle)" $

@@ -16,8 +16,8 @@ import Ecluse.Core.Telemetry.Metrics (
     Tier (Effectful, Structural),
     Upstream (Private, Public),
  )
-import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Telemetry.Instruments (
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry.Instruments (
     newMetrics,
     recordBreakerState,
     recordCacheEntries,

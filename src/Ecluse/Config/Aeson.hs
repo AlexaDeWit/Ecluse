@@ -23,8 +23,8 @@ import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn), parseDivergencePolicy)
 import Ecluse.Core.Security (parseBlockedRange)
-import Ecluse.Log (parseLogFormat)
-import Ecluse.Telemetry (parseTelemetrySwitch)
+import Ecluse.Runtime.Log (parseLogFormat)
+import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
 
 instance FromJSON MountConfig where
     parseJSON = withObject "MountConfig" mountConfigParser

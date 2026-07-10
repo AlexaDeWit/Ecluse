@@ -15,8 +15,8 @@ import Test.Hspec.Wai
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), pilotApplication, runPilotCompile)
-import Ecluse.Server (mkServerConfig)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Server (mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 spec :: Spec
