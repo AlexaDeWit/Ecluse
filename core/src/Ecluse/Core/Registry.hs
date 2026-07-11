@@ -45,6 +45,8 @@ module Ecluse.Core.Registry (
     PublishFault (..),
     UrlFormationError (..),
     PublishRelayResponse (..),
+    PublishRelayFault (..),
+    RegistryUnconfigured (..),
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
@@ -126,6 +128,36 @@ data FetchFault
       -}
       FetchTransport TransportFault
     deriving stock (Eq, Show)
+
+{- | Why a first-party publish relay produced no response from the publication
+target, reported as a __value__ so the serve path renders each cause directly:
+an unformable target URL is the operator-misconfiguration @500@, and a transport
+fault or an overstepped response bound is the target-unreachable @502@ (in both,
+the target's own answer never arrived whole). Total over the relay: no relay
+failure rides up outside the declared type.
+-}
+data PublishRelayFault
+    = -- | The publication target URL could not be formed from configuration.
+      RelayUrlUnformable UrlFormationError
+    | {- | The write never produced a usable response: the transport failed,
+      carried as the 'TransportFault' the adapter edge classified.
+      -}
+      RelayTransport TransportFault
+    | -- | The target's response body overstepped the response-size bound.
+      RelayBoundExceeded LimitError
+    deriving stock (Eq, Show)
+
+{- | The handle slot is filled but no backend is wired behind it: every effectful
+field of 'Ecluse.Proxy.unconfiguredRegistry' refuses with this typed throw. A
+composition fault with no per-request decision -- a justified typed exception
+rather than a value a caller might fall through -- recognised by the worker's
+supervision policy (it fails the process up rather than retrying forever) and by
+the request perimeter's escape classification.
+-}
+data RegistryUnconfigured = RegistryUnconfigured
+    deriving stock (Eq, Show)
+
+instance Exception RegistryUnconfigured
 
 {- | The response from the publication target after relaying a publish document.
 Kept in memory (no streaming) -- the relayed body is small (typically a JSON

@@ -57,7 +57,7 @@ import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy, MergePlan, SourceId)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
@@ -341,7 +341,7 @@ data PublishDeps = PublishDeps
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
-    , pubRelayPublish :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either UrlFormationError PublishRelayResponse)
+    , pubRelayPublish :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either PublishRelayFault PublishRelayResponse)
     -- ^ Relay a publish document to the publication target, returning its response.
     , pubCanonicaliseName :: Text -> Maybe PackageName
     {- ^ Canonicalise a raw package-name string to a 'PackageName', or 'Nothing' if

@@ -19,7 +19,6 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Types (mkStatus, status403, status405, status500, status502)
 import Network.Wai (Request, Response, ResponseReceived, consumeRequestBodyStrict)
-import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (
     PackageName,
@@ -27,7 +26,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderPackageName,
  )
-import Ecluse.Core.Registry (PublishRelayResponse (PublishRelayResponse), UrlFormationError)
+import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPublishDeps, bindingRenderer),
@@ -88,7 +87,10 @@ publishWithDeps renderer deps name request respond
             -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
             -- the client→proxy request-size cap.
             Nothing -> do
-                outcome <- tryAny (liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body)))
+                -- The relay reports its failures as the typed
+                -- 'PublishRelayFault' value, so the render below is a total
+                -- match -- nothing caught, and residue is the perimeter's.
+                outcome <- liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body))
                 liftIO (respond (renderRelay renderer deps outcome))
   where
     -- The publisher's bearer, scanned out of the headers once: the edge gate
@@ -108,18 +110,21 @@ inPublishScope scopes name = case pkgNamespace name of
 {- Render the relay outcome: the publication target's own status and body forwarded to
 the client on success (so the publisher sees the registry's real answer -- a success
 shape, a @409@, a @403@ the registry's own authorisation produced); a @502@ when the
-target could not be reached; a @500@ when its URL is unformable (misconfiguration). -}
+target's answer never arrived whole (a transport fault, or a response past the bound);
+a @500@ when its URL is unformable (misconfiguration). -}
 renderRelay ::
     MountRenderer ->
     PublishDeps ->
-    Either SomeException (Either UrlFormationError PublishRelayResponse) ->
+    Either PublishRelayFault PublishRelayResponse ->
     Response
 renderRelay renderer deps = \case
-    Right (Right (PublishRelayResponse code relayed)) ->
+    Right (PublishRelayResponse code relayed) ->
         jsonResponse (mkStatus code "") [] relayed
-    Right (Left _urlErr) ->
+    Left (RelayUrlUnformable _urlErr) ->
         renderedResponse status500 [] (renderError renderer (pubHelp deps) "the publication target URL is misconfigured")
-    Left _exc ->
+    Left (RelayTransport _fault) ->
+        renderedResponse status502 [] (renderError renderer (pubHelp deps) "the publication target could not be reached")
+    Left (RelayBoundExceeded _limit) ->
         renderedResponse status502 [] (renderError renderer (pubHelp deps) "the publication target could not be reached")
 
 -- A @405@ for a publish on a mount with no publication target configured: the

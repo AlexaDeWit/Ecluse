@@ -90,9 +90,11 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import GHC.Conc (getNumCapabilities)
-import Katip (SimpleLogPayload, katipAddNamespace, runKatipContextT)
+import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
 import UnliftIO (concurrently_, race_, throwIO)
@@ -123,6 +125,7 @@ import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
+    RegistryUnconfigured (RegistryUnconfigured),
  )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmPublishClient)
@@ -141,11 +144,12 @@ import Ecluse.Core.Supervision (
     superviseLoop,
  )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
-import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
@@ -237,6 +241,7 @@ runProxy bootEnv = do
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 , scCheckReady = cveSyncReady cveSyncPlan
+                , scOnException = warpExceptionHook logEnv
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
@@ -475,6 +480,22 @@ Splitting the server into its own binary later reuses this same entry.
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp cfg (Server.tracedApplication cfg env)
 
+{- Warp's exception hook over the process logger: a post-commit teardown the
+request perimeter rethrew, or a fault in warp's own connection handling, logged
+structured at 'ErrorS' with the request path when one is known.
+'Warp.defaultShouldDisplayException' filters the routine client-disconnect noise,
+so an aborted download does not spam the log. -}
+warpExceptionHook :: LogEnv -> Maybe Wai.Request -> SomeException -> IO ()
+warpExceptionHook logEnv mRequest err =
+    when (Warp.defaultShouldDisplayException err) $
+        runKatipContextT logEnv (mempty :: SimpleLogPayload) "server" $
+            katipAddContext payload $
+                logFM ErrorS "a fault escaped to the server (a post-commit teardown, or warp's own connection handling)"
+  where
+    payload =
+        sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
+            <> sl "detail" (displayExceptionT err)
+
 {- | The fallback server settings: a single npm mount with __no__ packument-serve
 or publish dependencies, so the packument route is the recognised-but-unserved @501@
 stub and a publish is @405@ (no publication target). Exposed so the composed front
@@ -647,10 +668,6 @@ with no backend wired in: a composition-root misconfiguration. A distinct typed
 exception (not a stringly @userError@), so the refusal is observable in a test,
 catchable by type, and never mistaken for a configured backend's own failure.
 -}
-data RegistryUnconfigured = RegistryUnconfigured
-    deriving stock (Eq, Show)
-
-instance Exception RegistryUnconfigured
 
 {- | A registry handle with no backend behind it: every effectful field __refuses
 loudly__ (a typed 'RegistryUnconfigured') and every pure @parse*@ field returns

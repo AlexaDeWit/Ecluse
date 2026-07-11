@@ -19,6 +19,9 @@ module Ecluse.Core.Fault (
     TransportFault (..),
     transportFault,
     TransportCause (..),
+
+    -- * The shared detail budget
+    boundedDetail,
 ) where
 
 import Data.Text qualified as T
@@ -63,7 +66,14 @@ pathological rendered exception (an embedded response body, a long certificate
 chain) cannot bloat a log line or a held error value.
 -}
 transportFault :: TransportCause -> Text -> TransportFault
-transportFault cause detail = TransportFault cause (T.take maxDetailChars detail)
+transportFault cause detail = TransportFault cause (boundedDetail detail)
+
+{- | Truncate a rendered detail to the shared log-line budget, so every fault
+vocabulary that carries diagnostic text (this one, the queue's, the request
+perimeter's) bounds it identically.
+-}
+boundedDetail :: Text -> Text
+boundedDetail = T.take maxDetailChars
 
 -- The rendered-detail budget: generous enough for any realistic client-library
 -- message, small enough that a held fault value stays log-line sized.

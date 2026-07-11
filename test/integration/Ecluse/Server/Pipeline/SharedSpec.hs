@@ -11,7 +11,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO (bracket)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (impureThrow, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
@@ -35,6 +35,7 @@ spec = do
     effectfulSpec
     boundsSpec
     boundsLogSpec
+    perimeterSpec
 
 mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
 mkEffectful name prec cfg align eval = do
@@ -119,6 +120,19 @@ tightLimits =
 
 withLimits :: Limits -> PackumentDeps -> PackumentDeps
 withLimits limits d = d{pdLimits = limits}
+
+{- | The typed impure exception the bottoming assembly hook plants: a stand-in
+for an invariant break inside the pure render.
+-}
+newtype AssembleBottom = AssembleBottom Text
+    deriving stock (Show)
+
+instance Exception AssembleBottom
+
+-- A deps transform breaking the pdAssemble never-throws contract on purpose,
+-- for the request-perimeter case: the assembled render bottoms when forced.
+withBottomingAssemble :: PackumentDeps -> PackumentDeps
+withBottomingAssemble d = d{pdAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}
 
 oversizedPackument :: Text -> LByteString
 oversizedPackument v =
@@ -280,3 +294,20 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
     it "tags every serve-path log line with the emitting module" $ do
         logged <- captureBreachLog versionFloodPackument
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+
+perimeterSpec :: Spec
+perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
+    it "answers a bottoming assembly with the mount-shaped neutral 500, never a torn session" $ do
+        -- Both origins serve happily; the assembly hook then bottoms when the
+        -- render forces it -- an invariant break escaping the handler pre-commit.
+        -- The perimeter must answer it: the session survives (an unanswered
+        -- escape would abort it), the status is the neutral 500, and the body is
+        -- the mount's own error shape carrying no fault detail.
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing withBottomingAssemble $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 500
+            (decodeUtf8 (simpleBody resp) :: Text) `shouldSatisfy` T.isInfixOf "internal server error"
+            (decodeUtf8 (simpleBody resp) :: Text) `shouldSatisfy` (not . T.isInfixOf "simulated render invariant break")

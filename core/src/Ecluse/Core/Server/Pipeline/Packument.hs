@@ -91,7 +91,7 @@ import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently, withRunInIO)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (catchAny, throwIO, tryAny)
 
 import Ecluse.Core.Credential (Secret)
 
@@ -143,6 +143,7 @@ import Ecluse.Core.Server.Context (
     ctxMount,
     ctxRuntime,
  )
+import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -864,11 +865,20 @@ packumentETag mountBaseUrl name sources =
 -- concurrent identical renders coalesce onto one leader. A changed input is a
 -- changed key, so the store cannot serve stale bytes; a different private view is
 -- a different key, so it cannot cross a client boundary.
+--
+-- The render is total by contract (a pure assembly over already-validated
+-- inputs), so a synchronous escape here is an invariant break: it is wrapped in
+-- the confined 'RenderEscape' marker -- on the miss leg only, a hit never runs
+-- this action -- so the request perimeter can name the leg it escaped from.
 servedBytes :: ServeRuntime -> PackumentDeps -> [Contribution] -> MergePlan -> ETag -> IO ByteString
 servedBytes rt deps sources plan etag =
     resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
-        pure $!
-            LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
+        markRenderEscape $
+            pure $!
+                LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
+  where
+    markRenderEscape :: IO ByteString -> IO ByteString
+    markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
 {- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
 @Value@s.

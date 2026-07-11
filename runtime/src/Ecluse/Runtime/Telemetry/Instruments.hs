@@ -58,6 +58,8 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * Mirror
     recordMirrorEnqueued,
     recordMirrorEnqueueFailure,
+    recordPublicRelayAnomaly,
+    recordRequestPerimeterFault,
     recordMirrorJobProcessed,
     recordMirrorPublishDuration,
 
@@ -89,11 +91,13 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause,
     CredentialResult,
     Decision,
-    Label (LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LMirrorResult, LProvider, LReasonClass, LRule, LStatusClass, LTier, LUpstream),
+    Label (LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LTier, LUpstream),
     MetricName (..),
     MirrorResult,
     Provider,
     ReasonClass,
+    RelayAnomaly,
+    RequestFaultCause,
     StatusClass,
     Tier,
     Upstream,
@@ -130,6 +134,8 @@ data Metrics = Metrics
     , mMetadataCacheResidentBytes :: Gauge Int64
     , mSingleVersionCacheResidentBytes :: Gauge Int64
     , mAssembledCacheResidentBytes :: Gauge Int64
+    , mServeRelayAnomalies :: Counter Int64
+    , mServePerimeterFaults :: Counter Int64
     , mMirrorEnqueued :: Counter Int64
     , mMirrorEnqueueFailures :: Counter Int64
     , mMirrorJobsProcessed :: Counter Int64
@@ -167,6 +173,8 @@ newMetrics telemetry = do
         <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
         <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
         <*> gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
+        <*> counter meter ServeRelayAnomalies "{relay}" "public relays that were not the admitted artifact, by class"
+        <*> counter meter ServePerimeterFaults "{fault}" "pre-commit handler escapes answered by the request perimeter, by cause"
         <*> counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
         <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
         <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
@@ -222,6 +230,8 @@ metricsPortOf m =
         , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
         , mpAssembledCacheResidentBytes = recordAssembledCacheResidentBytes m
         , mpMirrorEnqueued = recordMirrorEnqueued m
+        , mpPublicRelayAnomaly = recordPublicRelayAnomaly m
+        , mpRequestPerimeterFault = recordRequestPerimeterFault m
         , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
         }
 
@@ -338,6 +348,14 @@ recordMirrorEnqueued m = addOne (mMirrorEnqueued m) []
 -- | Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@).
 recordMirrorEnqueueFailure :: (MonadIO m) => Metrics -> m ()
 recordMirrorEnqueueFailure m = addOne (mMirrorEnqueueFailures m) []
+
+-- | Record one perimeter-answered handler escape (@ecluse.serve.perimeter.faults@) by cause.
+recordRequestPerimeterFault :: (MonadIO m) => Metrics -> RequestFaultCause -> m ()
+recordRequestPerimeterFault m cause = addOne (mServePerimeterFaults m) [LPerimeterCause cause]
+
+-- | Record one anomalous public relay (@ecluse.serve.relay.anomalies@) by class.
+recordPublicRelayAnomaly :: (MonadIO m) => Metrics -> RelayAnomaly -> m ()
+recordPublicRelayAnomaly m cls = addOne (mServeRelayAnomalies m) [LRelayAnomaly cls]
 
 -- | Record one processed mirror job (@ecluse.mirror.jobs.processed@) by its result.
 recordMirrorJobProcessed :: (MonadIO m) => Metrics -> MirrorResult -> m ()

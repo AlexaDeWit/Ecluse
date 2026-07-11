@@ -1,6 +1,7 @@
 module Ecluse.Rules.EffectfulSpec (spec) where
 
 import Control.Retry (simulatePolicy)
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, throwString)
@@ -38,6 +39,12 @@ ctxAt t = EvalContext t Nothing
 
 ctx :: EvalContext
 ctx = ctxAt now
+
+-- | A typed stand-in for a direct rule breaking its no-effects contract.
+newtype DirectRuleEscape = DirectRuleEscape Text
+    deriving stock (Eq, Show)
+
+instance Exception DirectRuleEscape
 
 {- | An IORef-backed clock a breaker test advances by hand: the read action and a setter,
 sharing one ref, so a test can simulate wall-clock time elapsing (during a retry run,
@@ -291,6 +298,27 @@ spec = do
             rule <- failingRule "EffDeny" 300 fastConfig FailDeny
             decision <- evalRules ctx [rule] (pkg Nothing 0)
             isAdmitted decision `shouldBe` False
+
+    describe "evalRules -- the direct-rule never-throws absorption" $ do
+        it "a throwing direct rule resolves fail-closed as Undecidable naming the rule" $ do
+            -- A direct rule declares no effects, so a throw is an invariant break;
+            -- the engine must absorb it (fail-closed, symmetric with the effectful
+            -- harness's fail-deny Unavailable) rather than let one request's
+            -- evaluation escape the serve path. The lower-precedence allow proves
+            -- the absorption is decisive: it is never consulted.
+            let bomb =
+                    PreparedRule
+                        { prepName = "DirectBomb"
+                        , prepPrecedence = 300
+                        , prepResilience = Nothing
+                        , prepEval = \_ _ -> throwIO (DirectRuleEscape "the rule threw")
+                        }
+            decision <- evalRules ctx [bomb, pureAt 200 (AllowScope (mkScope "myorg"))] (pkg (Just "myorg") 0)
+            case decision of
+                Undecidable transience reason -> do
+                    transience `shouldBe` WillResolve Nothing
+                    reason `shouldSatisfy` \r -> "DirectBomb" `T.isPrefixOf` r
+                other -> expectationFailure ("expected the fail-closed Undecidable, got " <> show other)
 
     describe "evalRules -- deterministic speculative parallelism" $ do
         it "credits the earliest-in-boot-order decisive rule, not the first to return" $ do

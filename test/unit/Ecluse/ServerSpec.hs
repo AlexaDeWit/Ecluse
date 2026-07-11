@@ -9,14 +9,19 @@ import Network.Wai (
     Application,
     Request (requestBodyLength, requestMethod),
     RequestBodyLength (ChunkedBody),
+    Response,
+    ResponseReceived,
     consumeRequestBodyStrict,
     defaultRequest,
     responseLBS,
+    responseStatus,
  )
+import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (throwIO, try)
 import UnliftIO.Timeout (timeout)
 
 import Data.Time (addUTCTime, getCurrentTime)
@@ -24,6 +29,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
@@ -31,7 +37,9 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
+import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
+import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Proxy (unconfiguredRegistry)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
@@ -50,6 +58,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     neverDraining,
     newDrainSignal,
+    perimeterGuard,
     serverMiddleware,
     withInteractiveHalt,
  )
@@ -233,6 +242,7 @@ statusForBody app body = do
 
 spec :: Spec
 spec = do
+    perimeterGuardSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
             it "answers /livez with 200" $
@@ -351,6 +361,14 @@ spec = do
                 -- A body whose every declared name matches the URL is not over-refused: it
                 -- reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
+
+        with (publishAppWith basePublishDeps{pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}) $
+            it "answers a relay contract escape with the perimeter's mount-shaped 500 (not a torn session, not a 502)" $
+                -- The relay reports its failures as typed values, so a throw here is
+                -- an invariant break. The typed request perimeter must answer it:
+                -- the session survives with the neutral 500 -- not the 502 a
+                -- classified relay fault renders, and not a session abort.
+                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
 
         with (publishAppWith basePublishDeps{pubTargetUrl = ""}) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
@@ -507,3 +525,52 @@ spec = do
             -- Give a cancelled watcher every chance to (wrongly) fire.
             threadDelay 50_000
             readIORef halted `shouldReturn` False
+
+-- | A typed stand-in for a relay implementation escaping its typed contract.
+newtype RelayContractEscape = RelayContractEscape Text
+    deriving stock (Show)
+
+instance Exception RelayContractEscape
+
+{- | Drive 'perimeterGuard' over a recording respond and observation channel:
+returns the statuses answered (in order), the classified causes observed, and
+the guard's own outcome (a rethrow arrives as 'Left').
+-}
+driveGuard :: ((Response -> IO ResponseReceived) -> IO ResponseReceived) -> IO ([Int], [RequestFaultCause], Either SomeException ())
+driveGuard handler = do
+    responses <- newIORef []
+    observed <- newIORef []
+    let respond response = do
+            modifyIORef' responses (<> [statusCode (responseStatus response)])
+            pure ResponseReceived
+    outcome <- try (void (perimeterGuard (\fault -> modifyIORef' observed (<> [rqCause fault])) npmRenderer respond handler))
+    (,,) <$> readIORef responses <*> readIORef observed <*> pure outcome
+
+perimeterGuardSpec :: Spec
+perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ do
+    it "passes a committed response through untouched, observing nothing" $ do
+        (statuses, observed, outcome) <- driveGuard (\respond -> respond (responseLBS status200 [] "ok"))
+        statuses `shouldBe` [200]
+        observed `shouldBe` []
+        outcome `shouldSatisfy` isRight
+
+    it "answers a recognised pre-commit escape with the neutral 500, observed as a GateFault" $ do
+        (statuses, observed, _) <- driveGuard (\_respond -> throwIO RegistryUnconfigured)
+        statuses `shouldBe` [500]
+        observed `shouldBe` [GateFault]
+
+    it "answers an unrecognised pre-commit escape with the neutral 500, observed as UnclassifiedFault" $ do
+        (statuses, observed, _) <- driveGuard (\_respond -> throwIO (RelayContractEscape "boom"))
+        statuses `shouldBe` [500]
+        observed `shouldBe` [UnclassifiedFault]
+
+    it "rethrows a post-commit escape: one response, nothing observed, the fault propagates" $ do
+        (statuses, observed, outcome) <- driveGuard $ \respond -> do
+            received <- respond (responseLBS status200 [] "committed")
+            _ <- throwIO (RelayContractEscape "post-commit teardown")
+            pure received
+        statuses `shouldBe` [200]
+        observed `shouldBe` []
+        case outcome of
+            Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
+            Right () -> expectationFailure "expected the post-commit escape to rethrow"

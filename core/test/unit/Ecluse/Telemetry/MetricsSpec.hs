@@ -63,6 +63,8 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.metadata_cache.resident_bytes"
                             , "ecluse.metadata_cache.version.resident_bytes"
                             , "ecluse.metadata_cache.assembled.resident_bytes"
+                            , "ecluse.serve.perimeter.faults"
+                            , "ecluse.serve.relay.anomalies"
                             , "ecluse.mirror.enqueued"
                             , "ecluse.mirror.enqueue.failures"
                             , "ecluse.mirror.jobs.processed"

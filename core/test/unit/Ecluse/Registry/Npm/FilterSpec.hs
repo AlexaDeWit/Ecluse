@@ -1,5 +1,6 @@
 module Ecluse.Registry.Npm.FilterSpec (spec) where
 
+import Control.Exception (evaluate)
 import Data.Aeson (Value (Array, Object, String), eitherDecodeStrict)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
@@ -309,6 +310,21 @@ propertiesSpec = describe "properties" $ do
                     case lookupTag "latest" o of
                         Just l -> assert (Set.member l survivingKeys)
                         Nothing -> annotateShow out >> failure
+
+    it "the assembled document forces deeply without bottoming (the pdAssemble never-throws contract)" $
+        -- The serve tail feeds the assembled document straight into the encoder,
+        -- so a lurking bottom in any branch would surface as a request-perimeter
+        -- escape at serve time. Force the whole 'Value' ('NFData') here instead,
+        -- across generated documents, so the contract is pinned where the
+        -- assembly logic lives.
+        hedgehog $ do
+            spec' <- forAll genPackumentSpec
+            (info, v) <- loadOrFail (renderPackument spec')
+            liftIO (applyTo ctx quarantine info v) >>= \case
+                NoSurvivors _ -> success
+                Assembled out -> do
+                    _ <- liftIO (evaluate (force out))
+                    success
 
 -- | One unscoped version, published 30 days ago (survives the quarantine).
 oneVersionPackument :: ByteString
