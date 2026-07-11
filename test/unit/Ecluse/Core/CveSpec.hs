@@ -63,6 +63,15 @@ lookupContract withLookup = do
 withFakeLookup :: (CveLookup -> IO ()) -> IO ()
 withFakeLookup use = use (fakeCveLookup corpusRows)
 
+-- Hand the body the fixture artifact's path and its accepted owning handle; a
+-- rejection of the fixture is a loud test failure. The body owns the close.
+withAcceptedDb :: (FilePath -> CveDb -> IO ()) -> IO ()
+withAcceptedDb body =
+    withFixtureOsvDb CorpusV1 $ \dbFile ->
+        openCveDb Npm dbFile >>= \case
+            Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
+            Right db -> body dbFile db
+
 withRealLookup :: (CveLookup -> IO ()) -> IO ()
 withRealLookup use =
     withFixtureOsvDb CorpusV1 $ \dbFile ->
@@ -198,33 +207,27 @@ spec = do
 
     describe "the confined query-fault channel" $ do
         it "re-raises a mid-query SQLite fault as CveQueryFault, tagged with the field asked" $
-            withFixtureOsvDb CorpusV1 $ \dbFile ->
-                openCveDb Npm dbFile >>= \case
-                    Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
-                    Right db -> do
-                        -- Break the accepted schema out from under the open handle
-                        -- through a second (unhardened) connection: the next query
-                        -- through the view is the infrastructural fault the confined
-                        -- channel carries -- unreachable from artifact content, which
-                        -- acceptance made total.
-                        saboteur <- open dbFile
-                        execute_ saboteur "DROP TABLE package_vulnerability_ranges"
-                        close saboteur
-                        probed <- try (cveRemediationProbe (cveDbLookup db) "corpus-vuln" "1.2.0")
-                        first cqfQuery probed `shouldBe` Left "remediation-probe"
-                        listed <- try (cveAdvisoriesFor (cveDbLookup db) "corpus-vuln")
-                        bimap cqfQuery (map arCveId) listed `shouldBe` Left "advisories-for"
-                        cveDbClose db
+            withAcceptedDb $ \dbFile db -> do
+                -- Break the accepted schema out from under the open handle
+                -- through a second (unhardened) connection: the next query
+                -- through the view is the infrastructural fault the confined
+                -- channel carries -- unreachable from artifact content, which
+                -- acceptance made total.
+                saboteur <- open dbFile
+                execute_ saboteur "DROP TABLE package_vulnerability_ranges"
+                close saboteur
+                probed <- try (cveRemediationProbe (cveDbLookup db) "corpus-vuln" "1.2.0")
+                first cqfQuery probed `shouldBe` Left "remediation-probe"
+                listed <- try (cveAdvisoriesFor (cveDbLookup db) "corpus-vuln")
+                bimap cqfQuery (map arCveId) listed `shouldBe` Left "advisories-for"
+                cveDbClose db
 
         it "cveDbClose never throws, a second close of the same handle included" $
-            withFixtureOsvDb CorpusV1 $ \dbFile ->
-                openCveDb Npm dbFile >>= \case
-                    Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
-                    Right db -> do
-                        cveDbClose db
-                        -- The close fault (the connection is already released) is
-                        -- absorbed inside the handle: total by construction.
-                        cveDbClose db
+            withAcceptedDb $ \_dbFile db -> do
+                cveDbClose db
+                -- The close fault (the connection is already released) is
+                -- absorbed inside the handle: total by construction.
+                cveDbClose db
 
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
