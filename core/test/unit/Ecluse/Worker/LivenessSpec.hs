@@ -37,7 +37,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package qualified as Pkg
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (receive),
     QueueMessage (msgReceipt),

@@ -4,8 +4,8 @@
 
 module Ecluse.WorkerSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
+import Crypto.Hash (Digest, SHA512, hashlazy)
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status201, status409, status503)
@@ -18,9 +18,8 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse (runWorker)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), mkPackageName)
+import Ecluse.Core.Package (HashAlg (SRI), mkPackageName)
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
  )
@@ -60,7 +59,7 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
+                        unwrapQ (enqueue queue (job upstreamUrl))
                         -- Run the supervised loop against the real queue until it has
                         -- published, then cancel it.
                         runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
@@ -78,9 +77,8 @@ spec =
                         -- The version's current-metadata digest (the set the worker
                         -- re-admits and verifies against) is well-formed but does not
                         -- match the served bytes: a tampered artifact. The worker must
-                        -- refuse to publish, even though the payload's own digest
-                        -- matches the bytes.
-                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
+                        -- refuse to publish.
+                        unwrapQ (enqueue queue (job upstreamUrl))
                         runLoopFor (admitAllPolicies (unsafeHash SRI mismatchSri :| [])) env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
@@ -93,7 +91,7 @@ spec =
                     withMirrorTarget status409 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
+                        unwrapQ (enqueue queue (job upstreamUrl))
                         runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
                         leftover <- unwrapQ (receive queue)
                         leftover `shouldBe` []
@@ -105,7 +103,7 @@ spec =
                     withMirrorTarget status503 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
+                        unwrapQ (enqueue queue (job upstreamUrl))
                         -- Observe the redelivery through the worker's /own/ second
                         -- publish attempt: a transient 503 is never acked, so the message
                         -- becomes visible again and the running loop re-consumes it and
@@ -162,10 +160,6 @@ spec =
 tarballBytes :: LByteString
 tarballBytes = "left-pad-artifact-bytes"
 
--- The true lower-cased hex SHA-1 of the served bytes.
-trueSha1 :: Text
-trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy tarballBytes :: Digest SHA1) :: ByteString)
-
 -- The true SRI (@sha512-<base64>@) of the served bytes: the digest the worker's
 -- re-evaluation re-admits from current metadata and verifies the fetched bytes against.
 trueSri :: Text
@@ -193,21 +187,17 @@ artifactPath = "/left-pad/-/left-pad-1.3.0.tgz"
 npmPublishPath :: ByteString
 npmPublishPath = "/left-pad"
 
--- A mirror job pointing at the upstream stub, carrying the given SHA-1 digest.
-job :: Text -> Text -> MirrorJob
-job upstreamUrl sha1 =
+-- A mirror job pointing at the upstream stub; the payload names the artifact by
+-- filename only (the digests the worker verifies against live on the policies).
+job :: Text -> MirrorJob
+job upstreamUrl =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
         , -- The flag-gated loopback former: the job points at an in-process http stub.
           jobArtifactUrl = loopbackRegistryUrl (upstreamUrl <> artifactPath)
         , jobMirrorTarget = "the-publish-client-base-url-is-used-instead"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = "left-pad-1.3.0.tgz"
-                , maHashes = unsafeHash SHA1 sha1 :| []
-                , maSize = Nothing
-                }
+        , jobArtifactFilename = "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }
 

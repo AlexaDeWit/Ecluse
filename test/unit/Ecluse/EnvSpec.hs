@@ -12,8 +12,8 @@ import UnliftIO.Exception (StringException, throwString)
 
 import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
-import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, receive)
+import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
 import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Core.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
@@ -21,7 +21,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
 import Ecluse.Runtime.Server (scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
-import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if
@@ -82,12 +82,7 @@ sampleJob =
         , jobVersion = ver
         , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = "thing-1.0.0.tgz"
-                , maHashes = unsafeHash SHA1 validSha1 :| []
-                , maSize = Just 42
-                }
+        , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
 

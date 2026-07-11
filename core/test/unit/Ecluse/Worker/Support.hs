@@ -9,23 +9,13 @@ import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
 import Data.Aeson (Key, Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
-import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy.Builder (toLazyText)
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
 import Katip (
     Environment (Environment),
-    Item (_itemMessage, _itemSeverity),
-    LogStr (unLogStr),
     Namespace (Namespace),
-    Scribe (Scribe, liPush, scribeFinalizer, scribePermitItem),
-    Severity (DebugS, WarningS),
-    closeScribes,
-    defaultScribeSettings,
     initLogEnv,
-    permitItem,
-    registerScribe,
  )
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
@@ -49,7 +39,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (receive),
     QueueMessage (msgReceipt),
@@ -60,6 +49,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
+    MirrorArtifact,
     ParseError (ParseError),
     PublishFault,
     RegistryClient (..),
@@ -202,11 +192,13 @@ it to prove presence is judged per version, never per package.
 otherVer :: Version
 otherVer = mkVersion Npm "0.9.0"
 
-{- | A mirror job whose artifact descriptor carries the given integrity hashes; its
-artifact URL is the stub upstream the test points it at.
+{- | A mirror job for the conventional @thing-1.0.0.tgz@ artifact at the given stub
+upstream. The payload names the artifact by filename only; the digests the worker
+verifies against live on the policies' resolved snapshot (see
+'admitPoliciesWithDigests'), never on the job.
 -}
-jobWith :: Text -> NonEmpty Hash -> MirrorJob
-jobWith url hashes =
+jobWith :: Text -> MirrorJob
+jobWith url =
     MirrorJob
         { jobPackage = pkg
         , jobVersion = ver
@@ -214,12 +206,7 @@ jobWith url hashes =
           -- http stubs, which the production https-only former would refuse.
           jobArtifactUrl = loopbackRegistryUrl url
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = "thing-1.0.0.tgz"
-                , maHashes = hashes
-                , maSize = Just (BS.length tarballBytes)
-                }
+        , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
 
@@ -227,8 +214,7 @@ jobWith url hashes =
 
 {- | What a publish captured: the raw verified bytes it was handed, and the artifact
 descriptor whose digests the real client's publish document is assembled from (the
-verification-source cases pin that descriptor to the re-admitted set, never the
-payload's).
+descriptor-sourcing case pins it to the re-admitted artifact's exactly).
 -}
 data PublishLog = PublishLog
     { plDocuments :: [ByteString]
@@ -389,11 +375,11 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 
 {- | The artifact of a projected version snapshot. The injected rules never inspect
 it, but the shared admission oracle does: its filename must match the job fixture's
-'maFilename' (file selection) and it carries the floor-clearing sha512 SRI of
-'tarballBytes'. The re-admitted artifact's digests are what the tamper gate
-verifies the fetched bytes against, so the current-metadata double must carry the
-true digest of the bytes the stub upstream serves (the faithful, immutable-version
-posture); a verification-source case swaps this set through
+'Ecluse.Core.Queue.jobArtifactFilename' (file selection) and it carries the
+floor-clearing sha512 SRI of 'tarballBytes'. The re-admitted artifact's digests are
+what the tamper gate verifies the fetched bytes against, so the current-metadata
+double must carry the true digest of the bytes the stub upstream serves (the
+faithful, immutable-version posture); a tamper case swaps this set through
 'admitPoliciesWithDigests'.
 -}
 sampleArtifact :: Artifact
@@ -506,36 +492,6 @@ runWM :: WorkerRuntime -> WorkerM a -> IO a
 runWM runtime action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runWorkerM logEnv mempty runtime action
-
-{- | 'runWM' against a capturing scribe: runs the action, drains the scribe, and
-returns the action's result with every (severity, message) pair it logged, oldest
-first. For the cases that assert a log line's presence or absence (the payload
-digest-divergence warning), where a scribe-less environment would observe nothing.
--}
-runWMCapturing :: WorkerRuntime -> WorkerM a -> IO (a, [(Severity, Text)])
-runWMCapturing runtime action = do
-    capturedRef <- newIORef []
-    let scribe =
-            Scribe
-                { liPush = \item -> atomicModifyIORef' capturedRef (\entries -> ((_itemSeverity item, itemText item) : entries, ()))
-                , scribeFinalizer = pass
-                , scribePermitItem = permitItem DebugS
-                }
-    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    logEnv <- registerScribe "capture" scribe defaultScribeSettings base
-    result <- runWorkerM logEnv mempty runtime action
-    -- katip pushes through a buffered per-scribe queue; close (and so drain) it
-    -- before reading, so every line the action logged is captured.
-    _ <- closeScribes logEnv
-    captured <- reverse <$> readIORef capturedRef
-    pure (result, captured)
-  where
-    itemText item = toStrict (toLazyText (unLogStr (_itemMessage item)))
-
--- | Whether a captured log line is the payload digest-divergence warning.
-isDivergenceWarning :: (Severity, Text) -> Bool
-isDivergenceWarning (severity, message) =
-    severity == WarningS && "diverges from the re-admitted artifact's" `T.isInfixOf` message
 
 {- | A typed stand-in for an exception escaping a dependency's typed contract (an
 invariant break), so the residue-supervision cases pin the escape channel without

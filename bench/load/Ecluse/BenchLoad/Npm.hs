@@ -111,10 +111,9 @@ import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageNam
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (
         MirrorJob,
-        jobArtifact,
+        jobArtifactFilename,
         jobArtifactUrl,
         jobMirrorTarget,
         jobPackage,
@@ -510,7 +509,6 @@ workerScenario =
         , scenarioBoot = \knobs k -> do
             counter <- newIORef (0 :: Int)
             let bytes = artifactBytes (lkPayloadBytes knobs)
-                size = fromIntegral (LBS.length bytes)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
                 queue <- newInMemoryQueue
@@ -531,7 +529,7 @@ workerScenario =
                               wrPolicies = admitAllPolicies (jobHashes bytes)
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
-                    job = mirrorJob artUrl (jobHashes bytes) size
+                    job = mirrorJob artUrl
                 k (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter))
         }
 
@@ -568,21 +566,17 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
                 t1 <- getMonotonicTime
                 go deadline ((t1 - t0) : acc)
 
--- A mirror job for the canned artifact at the given upstream URL, carrying its real
--- integrity digests so the worker's verify gate passes.
-mirrorJob :: Text -> NonEmpty Hash -> Int -> MirrorJob
-mirrorJob url hashes size =
+-- A mirror job for the canned artifact at the given upstream URL. The payload names
+-- the artifact by filename only; the digests the worker's verify gate passes on live
+-- on the injected policies ('admitAllPolicies').
+mirrorJob :: Text -> MirrorJob
+mirrorJob url =
     MirrorJob
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = loopbackRegistryUrl url
         , jobMirrorTarget = "https://mirror.bench/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = packageText <> "-1.0.0.tgz"
-                , maHashes = hashes
-                , maSize = Just size
-                }
+        , jobArtifactFilename = packageText <> "-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
 

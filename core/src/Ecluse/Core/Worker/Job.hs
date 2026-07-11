@@ -34,8 +34,8 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
-import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
+import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
+import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
 import Ecluse.Core.Security (hostAddress)
@@ -148,7 +148,7 @@ store; a version the upstream has since withdrawn is likewise dropped, while met
 cannot be re-fetched (or a rule that cannot be computed) leaves the job for redelivery. A
 current admit carries the re-admitted artifact's integrity digests to the tamper gate, so
 the fetched bytes are verified against the exact set the integrity floor cleared (the
-queue payload contributes no digest to the gate): a tampered or corrupt artifact fails
+queue payload carries no digest at all): a tampered or corrupt artifact fails
 the job with no publish, since the mirror is later served without the rules.
 
 The receipt handle is taken so a long publish can 'Ecluse.Core.Queue.extendVisibility'
@@ -204,9 +204,7 @@ reevaluateThenMirror receipt job =
             pure Succeeded
         False ->
             reevaluatePolicy job >>= \case
-                ReevalAdmit admitted -> do
-                    warnOnPayloadDigestDivergence job (maHashes admitted)
-                    mirrorArtifact receipt job admitted
+                ReevalAdmit admitted -> mirrorArtifact receipt job admitted
                 ReevalDrop reason -> pure (Dropped reason)
                 ReevalRetry reason -> pure (Retried reason)
 
@@ -266,7 +264,7 @@ reevaluatePolicy job = do
                                     ctx
                                     (wpRules policy)
                                     (wpMinIntegrity policy)
-                                    (maFilename (jobArtifact job))
+                                    (jobArtifactFilename job)
                                     details
                                 )
                         pure (outcomeOfAdmission job admission)
@@ -301,9 +299,10 @@ outcomeOfAdmission job = \case
 -- The re-admitted artifact's descriptor, derived entirely from current metadata: the
 -- floor-checked digest set the tamper gate verifies the fetched bytes against, and the
 -- filename and registry-declared size the publish document is assembled from. The
--- queue payload's descriptor contributes nothing here, so payload digest text can
--- never reach the trusted-tier publish document. The filename equals the payload's by
--- construction (admission selected the artifact by exactly that name).
+-- queue payload contributes nothing here (it carries no digest or size to
+-- contribute), so payload text can never reach the trusted-tier publish document.
+-- The filename equals the payload's by construction (admission selected the
+-- artifact by exactly that name).
 readmittedDescriptor :: Artifact -> NonEmpty Hash -> MirrorArtifact
 readmittedDescriptor artifact digests =
     MirrorArtifact
@@ -312,27 +311,9 @@ readmittedDescriptor artifact digests =
         , maSize = artSize artifact
         }
 
--- Alarm when the queue payload's digest set diverges from the re-admitted artifact's,
--- compared as sets: wire order and duplication of the same digests carry no meaning,
--- so only a genuinely different membership warns. Registry versions are immutable, so
--- the set captured at enqueue time and the current metadata's should be identical; a
--- divergence means a tampered payload or an upstream that republished the version,
--- either of which deserves an operator's eye. A warning, never a gate: the payload
--- contributes no digest to verification, so the job proceeds against the floor-checked
--- set regardless.
-warnOnPayloadDigestDivergence :: MirrorJob -> NonEmpty Hash -> WorkerM ()
-warnOnPayloadDigestDivergence job digests =
-    unless (sameDigestSet (maHashes (jobArtifact job)) digests) $
-        logFM WarningS (ls ("the queue payload's digest set for " <> renderJob job <> " diverges from the re-admitted artifact's; verifying the bytes against the re-admitted set"))
-
--- Set-wise equality over digest sets. 'Hash' carries no 'Ord', and a set holds at
--- most a handful of digests, so mutual membership beats building ordered sets.
-sameDigestSet :: NonEmpty Hash -> NonEmpty Hash -> Bool
-sameDigestSet a b = all (`elem` b) a && all (`elem` a) b
-
 -- Fetch the artifact bytes, verify them against the re-admitted artifact's digests
--- (the floor-checked, current-metadata set; the queue payload contributes no digest to
--- this gate), and (only on a match) publish to the mirror target. Reached only on a
+-- (the floor-checked, current-metadata set; the queue payload carries no digest at
+-- all), and (only on a match) publish to the mirror target. Reached only on a
 -- current policy admit. The integrity gate is the security crux: a tampered or corrupt
 -- artifact must never reach the private upstream, which is served without the rules,
 -- so a mismatch fails the job with no publish and alarms.
@@ -352,9 +333,9 @@ mirrorArtifact receipt job admitted = do
 -- Publish already-verified bytes to the mirror target: hold the message past the
 -- visibility window (a large-artifact publish may run long), publish through the
 -- composition-root publish client, which assembles the ecosystem-specific document
--- from the re-admitted artifact's descriptor (never the queue payload's, so payload
--- digest text cannot reach the trusted-tier packument), and classify the registry
--- outcome into a 'JobOutcome'.
+-- from the re-admitted artifact's descriptor (the queue payload carries no digest
+-- or size, so payload text cannot reach the trusted-tier packument), and classify
+-- the registry outcome into a 'JobOutcome'.
 publishVerified :: ReceiptHandle -> MirrorJob -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
 publishVerified receipt job admitted bytes = do
     holdForLongPublish receipt
