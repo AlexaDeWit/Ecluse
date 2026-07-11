@@ -5,18 +5,37 @@
 module Ecluse.Queue.SqsSpec (spec) where
 
 import Data.Text qualified as T
+import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
+import Katip (
+    ColorStrategy (ColorLog),
+    Environment (Environment),
+    LogEnv,
+    Namespace (Namespace),
+    Severity (DebugS),
+    Verbosity (V2),
+    closeScribes,
+    defaultScribeSettings,
+    initLogEnv,
+    permitItem,
+    registerScribe,
+ )
+import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
 import Test.Hspec
+import UnliftIO (bracket)
+import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkPackageName, mkScope)
-import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), RemoteSpanContext (..), Seconds (..))
+import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), QueueMessage (..), RemoteSpanContext (..), Seconds (..))
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Queue.Sqs (
+    ReceivedMessage (..),
     SqsConfig (..),
     decodeJob,
     defaultSqsConfig,
     encodeJob,
+    liftReceivedMessages,
     parseHashAlg,
  )
 import Ecluse.Test.Package (
@@ -308,3 +327,77 @@ spec = do
             parseHashAlg "crc32" `shouldBe` Nothing
             parseHashAlg "SHA1" `shouldBe` Nothing
             parseHashAlg "" `shouldBe` Nothing
+
+    describe "liftReceivedMessages -- delivering a batch and logging poison drops" $ do
+        it "delivers the well-formed sibling and drops each poison message in the batch" $ do
+            logEnv <- quietLogEnv
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
+            -- Only the well-formed message is delivered; the three poison ones are dropped
+            -- (omitted from the result and left un-acked for redelivery / dead-lettering).
+            map msgJob delivered `shouldBe` [npmJob]
+
+        it "logs each drop at Debug with its reason and message id, never the body" $ do
+            logEnv <- jsonLogEnv
+            logged <- captureStdout $ do
+                _ <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
+                void (closeScribes logEnv)
+            -- One Debug drop line per poison message, tagged with this module.
+            T.count "\"sev\":\"Debug\"" logged `shouldBe` 3
+            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Runtime.Queue.Sqs\""
+            logged `shouldSatisfy` T.isInfixOf "missing body"
+            logged `shouldSatisfy` T.isInfixOf "missing receipt"
+            logged `shouldSatisfy` T.isInfixOf "undecodable body"
+            logged `shouldSatisfy` T.isInfixOf "\"messageId\":\"m-no-body\""
+            logged `shouldSatisfy` T.isInfixOf "\"messageId\":\"m-no-receipt\""
+            logged `shouldSatisfy` T.isInfixOf "\"messageId\":\"m-bad-body\""
+            -- The untrusted body of the undecodable message never reaches the log.
+            logged `shouldNotSatisfy` T.isInfixOf "not-a-valid-body"
+
+{- | One well-formed message and one of each drop cause (missing body, missing
+receipt, undecodable body), each with a distinct message id so the drop log's id
+field is assertable. The well-formed and the missing-receipt entries carry valid
+bodies, isolating the receipt check from the decode.
+-}
+poisonBatch :: [ReceivedMessage]
+poisonBatch =
+    [ ReceivedMessage{rmBody = Just (encodeJob npmJob), rmReceipt = Just "receipt-good", rmMessageId = Just "m-good"}
+    , ReceivedMessage{rmBody = Nothing, rmReceipt = Just "receipt-1", rmMessageId = Just "m-no-body"}
+    , ReceivedMessage{rmBody = Just (encodeJob scopedJob), rmReceipt = Nothing, rmMessageId = Just "m-no-receipt"}
+    , ReceivedMessage{rmBody = Just "not-a-valid-body", rmReceipt = Just "receipt-3", rmMessageId = Just "m-bad-body"}
+    ]
+
+{- | A scribe-free 'LogEnv': the delivery test asserts on the returned batch, not on
+any log line, so a no-output environment satisfies the dependency.
+-}
+quietLogEnv :: IO LogEnv
+quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+
+{- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
+severity admitted, so a drop line's serialised bytes are assertable through
+'captureStdout'.
+-}
+jsonLogEnv :: IO LogEnv
+jsonLogEnv = do
+    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
+    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    registerScribe "stdout" scribe defaultScribeSettings base
+
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning what
+was written, and restore 'stdout' on every exit path, so a test can capture what a
+scribe emits without leaking it into the run.
+-}
+captureStdout :: IO () -> IO Text
+captureStdout act =
+    withSystemTempFile "ecluse-sqs-log.txt" $ \path tmpHandle ->
+        bracket (hDuplicate stdout) restore $ \_saved -> do
+            hFlush stdout
+            hDuplicateTo tmpHandle stdout
+            act
+            hFlush stdout
+            hClose tmpHandle
+            decodeUtf8 <$> readFileBS path
+  where
+    restore saved = do
+        hFlush stdout
+        hDuplicateTo saved stdout
+        hClose saved

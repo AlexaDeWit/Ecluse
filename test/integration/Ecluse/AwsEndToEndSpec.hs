@@ -140,10 +140,11 @@ configDrivenQueue container queueName = do
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
+    logEnv <- newTestLogEnv
     case plan of
         -- The wire decode's egress former: the loopback dev former, since this
         -- suite's artifact URLs are in-process http servers.
-        SqsBackend sqsConfig -> newSqsQueue (Right . loopbackRegistryUrl) sqsConfig{sqsWaitSeconds = 1}
+        SqsBackend sqsConfig -> newSqsQueue logEnv (Right . loopbackRegistryUrl) sqsConfig{sqsWaitSeconds = 1}
         MemoryBackend _ -> fail "AwsEndToEndSpec fixture: expected the SQS backend, got the in-memory one"
 
 -- The environment layer the released image would run with to target a ministack SQS:

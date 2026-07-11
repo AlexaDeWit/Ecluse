@@ -11,6 +11,8 @@ builds the plan at boot and runs one supervised sync task per handle.
 module Ecluse.Proxy.CveSync (
     CveSyncHandle (..),
     planCveSync,
+    sweepStaleTemps,
+    sweepStep,
     cveRuleDepsFor,
     cveSyncReady,
     cveSyncScheduleFor,
@@ -18,9 +20,11 @@ module Ecluse.Proxy.CveSync (
 
 import Amazonka qualified as AWS
 import Data.Map.Strict qualified as Map
+import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
+import Katip.Monadic (runKatipContextT)
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
-import UnliftIO.Exception (catchAny)
+import System.IO.Error (IOError, catchIOError)
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
@@ -32,6 +36,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (RuleDeps (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, s3CveFetch)
+import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
@@ -84,13 +89,13 @@ tasks start clean. Note the readiness consequence: an operator who mounts an
 ecosystem Pilot does not compile has declared an artifact that never arrives,
 and the pod honestly never reports ready.
 -}
-planCveSync :: AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
+planCveSync :: LogEnv -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
     Nothing -> pure Map.empty
     Just bucket -> do
         let dataDir = cfgOsvDataDir appCfg
         createDirectoryIfMissing True dataDir
-        sweepStaleTemps dataDir
+        sweepStaleTemps logEnv dataDir
         awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl)
         Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
 
@@ -111,13 +116,38 @@ cveSyncHandleFor appCfg awsEnv bucket eco = do
                 }
     pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
 
--- Sweep stray in-progress downloads an interrupted run left beside the
--- canonical artifacts (relevant to in-pod container restarts, where an
--- emptyDir survives). Best-effort: an unreadable dir is a fresh start.
-sweepStaleTemps :: FilePath -> IO ()
-sweepStaleTemps dataDir =
-    ( do
+{- | Sweep stray in-progress downloads an interrupted run left beside the canonical
+artifacts (relevant to in-pod container restarts, where an @emptyDir@ survives).
+Best-effort: a filesystem fault (a read-only or mispermissioned data dir) is logged
+at 'WarningS' against the affected path and the boot proceeds on a fresh-start
+assumption, since a truly unusable dir surfaces again when the sync task downloads.
+-}
+sweepStaleTemps :: LogEnv -> FilePath -> IO ()
+sweepStaleTemps logEnv dataDir =
+    sweepStep logEnv dataDir $ do
         entries <- listDirectory dataDir
-        forM_ [e | e <- entries, "tmp" `isExtensionOf` e] (\e -> removeFile (dataDir </> e) `catchAny` const pass)
-    )
-        `catchAny` const pass
+        traverse_ (removeStaleTemp logEnv dataDir) (filter (isExtensionOf "tmp") entries)
+
+-- Remove one stray @.tmp@ entry, tolerating a per-entry filesystem fault so a single
+-- unremovable file does not abort the rest of the sweep.
+removeStaleTemp :: LogEnv -> FilePath -> FilePath -> IO ()
+removeStaleTemp logEnv dataDir entry =
+    let path = dataDir </> entry in sweepStep logEnv path (removeFile path)
+
+{- | Run one best-effort step of the stale-temp sweep: an 'IOError' (a read-only or
+mispermissioned data dir) is logged at 'WarningS' against the affected path and
+swallowed so the boot proceeds, while any non-'IO' exception propagates rather than
+being hidden.
+-}
+sweepStep :: LogEnv -> FilePath -> IO () -> IO ()
+sweepStep logEnv path step = step `catchIOError` logSweepFailure logEnv path
+
+-- Warn that a stale-temp sweep step could not touch a path, so a read-only or
+-- mispermissioned OSV data dir is visible at boot. The path rides a structured field;
+-- the OS error detail is the operator's own filesystem, not untrusted input.
+logSweepFailure :: LogEnv -> FilePath -> IOError -> IO ()
+logSweepFailure logEnv path err =
+    runKatipContextT logEnv payload mempty (logFM WarningS (ls message))
+  where
+    payload = moduleField "Ecluse.Proxy.CveSync" <> sl "path" (toText path)
+    message = "could not sweep stale advisory temp files: " <> show err :: Text

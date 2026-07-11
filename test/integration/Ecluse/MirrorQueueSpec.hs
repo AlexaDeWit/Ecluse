@@ -23,6 +23,7 @@ import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout),
     defaultQueueOptions,
     freshQueue,
+    quietLogEnv,
     receiveUntil,
     unwrapQ,
     withMinistack,
@@ -95,8 +96,10 @@ spec =
 -- An SQS backend pointed at a loopback port with nothing listening (port 1 is in
 -- the privileged range and never bound), for the typed-fault classification case.
 deadEndpointQueue :: IO MirrorQueue
-deadEndpointQueue =
+deadEndpointQueue = do
+    logEnv <- quietLogEnv
     newSqsQueue
+        logEnv
         (Right . loopbackRegistryUrl)
         (defaultSqsConfig "http://127.0.0.1:1/000000000000/dead" "us-east-1")
             { sqsEndpoint =

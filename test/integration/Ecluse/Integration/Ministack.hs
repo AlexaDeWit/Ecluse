@@ -30,6 +30,9 @@ module Ecluse.Integration.Ministack (
 
     -- * Endpoint
     endpointFor,
+
+    -- * Logging
+    quietLogEnv,
 ) where
 
 import Amazonka qualified as AWS
@@ -37,6 +40,7 @@ import Amazonka.Auth qualified as AWS.Auth
 import Amazonka.SQS.CreateQueue qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
+import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Lens.Micro ((^.))
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
@@ -129,6 +133,14 @@ default that does not stall a test on an empty poll.
 defaultQueueOptions :: QueueOptions
 defaultQueueOptions = QueueOptions{qoVisibilityTimeout = Seconds 30, qoWaitSeconds = 2}
 
+{- | A scribe-free 'LogEnv' for wiring an SQS 'MirrorQueue' in the integration
+suite: the backend now takes a logger for its poison-message drop line, and these
+specs do not assert on it, so a no-output environment satisfies the dependency
+without cluttering the run.
+-}
+quietLogEnv :: IO LogEnv
+quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+
 {- | Create a fresh SQS queue in the @ministack@ container and bind a
 'MirrorQueue' to it with the given options. ministack may not have the SQS service
 up the instant the port opens, so the @CreateQueue@ call is retried.
@@ -136,9 +148,11 @@ up the instant the port opens, so the @CreateQueue@ call is retried.
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
     queueUrl <- freshQueueUrl container queueName
+    logEnv <- quietLogEnv
     -- The wire decode's egress former: the loopback dev former, since these
     -- suites' artifact URLs point at in-process http servers.
     newSqsQueue
+        logEnv
         (Right . loopbackRegistryUrl)
         (defaultSqsConfig queueUrl "us-east-1")
             { sqsEndpoint = Just (endpointFor container)

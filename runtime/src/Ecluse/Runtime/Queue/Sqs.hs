@@ -29,7 +29,9 @@ handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
 'MirrorJob' wire mapping is a plain JSON object, decoded on 'receive'; a body that
 fails to parse is dropped rather than yielded as a partial, so -- like any message
 left unprocessed -- it is not 'ack'ed and SQS redelivers it, ultimately to the
-dead-letter queue.
+dead-letter queue. Each drop (a missing body or receipt, or an undecodable body) is
+logged at 'DebugS' with its reason and the SQS message id when present, so a poison
+message is visible rather than cycling silently; the untrusted body is never logged.
 
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
 URL, or an endpoint override): like the OTLP telemetry endpoint (see
@@ -46,6 +48,10 @@ module Ecluse.Runtime.Queue.Sqs (
 
     -- * The backend
     newSqsQueue,
+
+    -- * Received-message lifting
+    ReceivedMessage (..),
+    liftReceivedMessages,
 
     -- * Job wire mapping
     encodeJob,
@@ -71,6 +77,8 @@ import Data.Aeson (
  )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Katip (LogEnv, Severity (DebugS), logFM, ls, sl)
+import Katip.Monadic (runKatipContextT)
 import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
@@ -104,6 +112,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Log (moduleField)
 
 {- | Where an SQS-compatible endpoint lives, for pointing the backend at a
 non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint. A
@@ -170,8 +179,8 @@ once here -- region-scoped, and pointed at 'sqsEndpoint' with its throwaway
 credentials when one is given, otherwise discovering the ambient AWS credential
 chain -- and captured by the returned handle's closures.
 -}
-newSqsQueue :: (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
-newSqsQueue egressUrl cfg = do
+newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
+newSqsQueue logEnv egressUrl cfg = do
     env <- mkEnv cfg
     -- Every operation reports its AWS failure as the handle's 'QueueFault' value:
     -- 'AWS.sendEither' keeps the error sum out of the exception channel, and the
@@ -184,10 +193,7 @@ newSqsQueue egressUrl cfg = do
             { enqueue = fmap void . run . SQS.newSendMessage queueUrl . encodeJob
             , receive = do
                 outcome <- run (receiveRequest cfg)
-                pure $
-                    outcome <&> \response ->
-                        let messages = fromMaybe [] (response ^. SQS.receiveMessageResponse_messages)
-                         in mapMaybe (toQueueMessage egressUrl) messages
+                traverse (liftReceivedMessages logEnv egressUrl . receivedMessages) outcome
             , ack = fmap void . run . SQS.newDeleteMessage queueUrl . unReceiptHandle
             , extendVisibility = \receipt (Seconds secs) ->
                 fmap void . run $
@@ -232,16 +238,87 @@ receiveRequest cfg =
   where
     Seconds visibilitySeconds = sqsVisibilityTimeout cfg
 
-{- Lift one SQS Message into a QueueMessage. A message missing its body or
-receipt handle (which SQS always supplies) is dropped rather than crashing the
-poll; likewise an undecodable body -- the visibility timeout then redelivers it,
-and a persistently bad message falls to the dead-letter queue. -}
-toQueueMessage :: (Text -> Either Text RegistryUrl) -> SQS.Message -> Maybe QueueMessage
-toQueueMessage egressUrl message = do
-    body <- message ^. SQS.message_body
-    receipt <- message ^. SQS.message_receiptHandle
-    job <- rightToMaybe (decodeJob egressUrl body)
+{- | The fields of a received SQS message the backend reads. Lifting them out of
+the @amazonka@ 'SQS.Message' keeps the 'QueueMessage' mapping (and its drop
+decision) free of the AWS type, so the receive path's drop behaviour is exercised
+directly in tests.
+-}
+data ReceivedMessage = ReceivedMessage
+    { rmBody :: Maybe Text
+    -- ^ The message body carrying the encoded 'MirrorJob' (SQS always supplies one).
+    , rmReceipt :: Maybe Text
+    -- ^ The receipt handle a later 'ack' deletes the message by (SQS always supplies one).
+    , rmMessageId :: Maybe Text
+    -- ^ The SQS-assigned message id, for the drop log; not part of the untrusted body.
+    }
+    deriving stock (Eq, Show)
+
+-- The read fields of an amazonka Message, lifted at the effectful edge ('receive').
+receivedFields :: SQS.Message -> ReceivedMessage
+receivedFields message =
+    ReceivedMessage
+        { rmBody = message ^. SQS.message_body
+        , rmReceipt = message ^. SQS.message_receiptHandle
+        , rmMessageId = message ^. SQS.message_messageId
+        }
+
+-- The received batch's messages, each reduced to the fields the backend reads.
+receivedMessages :: SQS.ReceiveMessageResponse -> [ReceivedMessage]
+receivedMessages response =
+    maybe [] (map receivedFields) (response ^. SQS.receiveMessageResponse_messages)
+
+-- Why a received message could not become a QueueMessage. A closed set with no
+-- payload, so a drop log never echoes any of the (untrusted) message contents.
+data SqsDropReason = MissingBody | MissingReceipt | UndecodableBody
+    deriving stock (Eq, Show)
+
+{- Lift one received message into a QueueMessage, or report why it cannot be. A
+message missing its body or receipt (which SQS always supplies), or one whose body
+does not decode, is dropped rather than crashing the poll: it is left un-acked, so
+the visibility timeout redelivers it and a persistently bad message falls to the
+dead-letter queue. -}
+toQueueMessage :: (Text -> Either Text RegistryUrl) -> ReceivedMessage -> Either SqsDropReason QueueMessage
+toQueueMessage egressUrl received = do
+    body <- maybeToRight MissingBody (rmBody received)
+    receipt <- maybeToRight MissingReceipt (rmReceipt received)
+    job <- first (const UndecodableBody) (decodeJob egressUrl body)
     pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle receipt}
+
+{- | Lift a received batch into deliverable 'QueueMessage's, logging each dropped
+message (a missing body or receipt, or an undecodable body) at 'DebugS' so a poison
+message is visible rather than cycling silently until the queue's max-receive count.
+A dropped message is omitted from the result and left un-'ack'ed, so redelivery and
+dead-letter behaviour are unchanged.
+-}
+liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> [ReceivedMessage] -> IO [QueueMessage]
+liftReceivedMessages logEnv egressUrl =
+    fmap catMaybes . traverse (liftReceivedMessage logEnv egressUrl)
+
+-- Deliver a received message, or log the drop at DebugS and yield Nothing.
+liftReceivedMessage :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceivedMessage -> IO (Maybe QueueMessage)
+liftReceivedMessage logEnv egressUrl received =
+    case toQueueMessage egressUrl received of
+        Right queueMessage -> pure (Just queueMessage)
+        Left reason -> Nothing <$ logSqsDrop logEnv reason (rmMessageId received)
+
+-- One DebugS line naming why a received message was dropped, and its SQS message id
+-- when present. The message body is untrusted payload and is never logged.
+logSqsDrop :: LogEnv -> SqsDropReason -> Maybe Text -> IO ()
+logSqsDrop logEnv reason messageId =
+    runKatipContextT logEnv payload mempty (logFM DebugS (ls message))
+  where
+    payload =
+        moduleField "Ecluse.Runtime.Queue.Sqs"
+            <> sl "reason" (dropReasonLabel reason)
+            <> foldMap (sl "messageId") messageId
+    message = "dropped an unusable SQS message: " <> dropReasonLabel reason
+
+-- The operator-facing phrase for each drop reason.
+dropReasonLabel :: SqsDropReason -> Text
+dropReasonLabel = \case
+    MissingBody -> "missing body"
+    MissingReceipt -> "missing receipt"
+    UndecodableBody -> "undecodable body"
 
 {- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
 'decodeJob': the package identity is split into its ecosystem, optional scope, and
