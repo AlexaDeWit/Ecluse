@@ -230,6 +230,16 @@ So `Ecluse.Core.Package` can contain just the core identity types, with logic
 split into `Ecluse.Core.Package.Logic` or similar, depending on size. Small,
 hyper-focused modules are easier to digest, test, and safely change.
 
+As a working threshold drawn from the codebase's own shape: when an edit leaves a
+module creeping past about 400 lines (roughly twice the repo median; healthy
+capability modules here cluster in the 150-400 band), treat that as the prompt to
+seriously consider a split. The deciding test is capability clusters, not the line
+count alone: split when the module holds two or more clusters whose definitions do
+not reference each other, with the module's own Haddock export groups, the mirrored
+spec's describe blocks, and disjoint importer sets as the evidence. A module that is
+one cohesive decision stays intact whatever its size; `Ecluse.Core.Security.Host`
+(one SSRF decision table under a shared property floor) is the canonical example.
+
 ### 4.2 One namespace per area; module name = file path
 
 - Each area of the system gets its own namespace, `Ecluse.Core.<Area>` in the
