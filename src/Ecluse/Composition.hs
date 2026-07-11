@@ -60,11 +60,19 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (CredentialProvider, Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Registry.Npm qualified as Npm
-import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
-import Ecluse.Core.Registry.Npm.Metadata qualified as NpmMetadata
-import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
-import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
+import Ecluse.Core.Registry.Adapter (
+    RegistryAdapter,
+    adapterArtifact,
+    adapterFor,
+    adapterMetadata,
+    adapterPublish,
+    artifactByFile,
+    artifactByUrl,
+    metadataAssemble,
+    metadataNewClient,
+    publishCanonicaliseName,
+    publishRelay,
+ )
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
@@ -108,7 +116,7 @@ composeBindings ::
     Config ->
     IO (Either [BootError] [MountBinding])
 composeBindings resolveAdapter clock ruleDepsFor providers config = do
-    let (pubErrs, pubDepsMap) = case sequence (Map.mapWithKey (\eco mcfg -> publishDepsFor eco app mcfg limits helpMessage) (cfgMounts app)) of
+    let (pubErrs, pubDepsMap) = case sequence (Map.mapWithKey (\eco mcfg -> publishDepsFor eco (adapterFor eco) app mcfg limits helpMessage) (cfgMounts app)) of
             Left errs -> (errs, Map.empty)
             Right m -> ([], m)
     -- Each resolved mount paired with its environment-layer 'MountConfig':
@@ -143,28 +151,34 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
     {- Resolve one mount to its binding, or the boot errors that block it. Both the
     credential reference and the adapter are checked even when one already failed,
     so a mount missing both reports both in one run rather than one at a time. The
-    resolved publish dependencies (shared across mounts) are passed to the adapter so
-    the binding carries the first-party publish wiring. -}
+    packument-serve dependencies are projected from the mount ecosystem's registered
+    adapter ('adapterFor'), so a mount whose ecosystem has none carries no deps and
+    resolves to the missing-adapter error; the resolved publish dependencies (shared
+    across mounts) are passed to the resolver so the binding carries the first-party
+    publish wiring. -}
     bindingFor :: Maybe PublishDeps -> Mount -> MountConfig -> IO (Either [BootError] MountBinding)
     bindingFor pubDeps mount mcfg = do
-        deps <- packumentDepsFor mount mcfg
-        pure $ case (credentialError providers mount, resolveAdapter (mountEcosystem mount) (Just deps) pubDeps) of
+        deps <- traverse (\adapter -> packumentDepsFor adapter mount mcfg) (adapterFor (mountEcosystem mount))
+        pure $ case (credentialError providers mount, resolveAdapter (mountEcosystem mount) deps pubDeps) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter (mountEcosystem mount) | isNothing mBinding])
 
-    {- Build a mount's 'PackumentDeps' from its registries, resolved rules, the
-    inbound edge token, the injected clock, and the operator help message. The
-    mount's externally-visible base URL drives the @dist.tarball@ rewrite: an
-    __absolute__ URL under @ECLUSE_PUBLIC_URL@ (@{public}\/npm\/{pkg}\/-\/{file}@)
-    when one is configured, so an @npm@ client fetches the artifact back through the
-    proxy on the gated path; otherwise the relative prefix path (@\/npm@), retained
-    for compatibility -- but note @npm@ cannot consume a relative @dist.tarball@ (it
-    reads a leading slash as a @file:@ path), so a real install path must set
-    @ECLUSE_PUBLIC_URL@ (see @mountBaseUrl@ and
-    @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
-    packumentDepsFor :: Mount -> MountConfig -> IO PackumentDeps
-    packumentDepsFor mount mcfg = do
+    {- Build a mount's 'PackumentDeps' from its ecosystem's registered adapter, its
+    registries, resolved rules, the inbound edge token, the injected clock, and the
+    operator help message. The ecosystem-shaped fields (the metadata client
+    constructor, the artifact request builders, the packument assembly) are the
+    adapter's capability fields carried over unchanged; everything else is the
+    mount's configuration. The mount's externally-visible base URL drives the
+    @dist.tarball@ rewrite: an __absolute__ URL under @ECLUSE_PUBLIC_URL@
+    (@{public}\/npm\/{pkg}\/-\/{file}@) when one is configured, so an @npm@ client
+    fetches the artifact back through the proxy on the gated path; otherwise the
+    relative prefix path (@\/npm@), retained for compatibility -- but note @npm@
+    cannot consume a relative @dist.tarball@ (it reads a leading slash as a @file:@
+    path), so a real install path must set @ECLUSE_PUBLIC_URL@ (see @mountBaseUrl@
+    and @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
+    packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
+    packumentDepsFor adapter mount mcfg = do
         -- Prepare the resolved policy into the engine's runtime rules, closing the
         -- injected 'RuleDeps' into them; an effectful rule (AllowIfRemediatesCve)
         -- gets its resilience policy and breaker allocated here, once per mount.
@@ -211,10 +225,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- carried onto every mount's deps so the serve path withholds a
                   -- contested version under fail-closed.
                   pdDivergencePolicy = cfgDivergencePolicy app
-                , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> NpmMetadata.newNpmMetadataClient t p u c f1 f2 f3 (Npm.NpmClientConfig b m s l)
-                , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
-                , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s
-                , pdAssemble = NpmFilter.assembleMergedPackument
+                , pdNewMetadataClient = metadataNewClient (adapterMetadata adapter)
+                , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
+                , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
+                , pdAssemble = metadataAssemble (adapterMetadata adapter)
                 , pdEgressUrl = mkRegistryUrl
                 }
 
@@ -261,15 +275,18 @@ when a target is set without a publish-scope allow-list, and\/or
 'PublishStaticCredentialNeedsEdge' when a static publish credential is set without a
 verifiable inbound edge -- reported together rather than one reboot at a time. The target's
 URL, the scopes, and the static fallback credential are the publish env layer; the
-response bounds ('Limits') and help message are shared with the read paths and passed in.
+response bounds ('Limits') and help message are shared with the read paths and passed in;
+the relay and the name canonicaliser are the ecosystem's own capability, projected from
+its registered adapter. A mount whose ecosystem has no adapter carries no publish deps
+(its errors above still accumulate, and its boot fails on the missing adapter regardless).
 -}
-publishDepsFor :: Ecosystem -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
-publishDepsFor eco app mcfg limits helpMessage = case mntPublicationTarget mcfg of
+publishDepsFor :: Ecosystem -> Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
+publishDepsFor eco mAdapter app mcfg limits helpMessage = case mntPublicationTarget mcfg of
     Nothing -> Right Nothing
     Just url -> case publishBootErrors eco mcfg inboundToken of
         [] ->
-            Right
-                ( Just
+            Right $
+                mAdapter <&> \adapter ->
                     PublishDeps
                         { pubTargetUrl = registryUrlText url
                         , pubScopes = mntPublishScopes mcfg
@@ -277,10 +294,9 @@ publishDepsFor eco app mcfg limits helpMessage = case mntPublicationTarget mcfg 
                         , pubInboundToken = inboundToken
                         , pubLimits = limits
                         , pubHelp = helpMessage
-                        , pubRelayPublish = \l m t s -> Npm.relayPublishDocument (Npm.NpmClientConfig t m s l)
-                        , pubCanonicaliseName = rightToMaybe . NpmProject.projectName
+                        , pubRelayPublish = publishRelay (adapterPublish adapter)
+                        , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
                         }
-                )
         errs -> Left errs
   where
     inboundToken :: Maybe Secret

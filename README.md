@@ -32,8 +32,9 @@ deny-by-default policy before any package is served. It checks a private upstrea
 falls back to the public registry with rules applied, and mirrors approved packages
 asynchronously, without hosting packages itself. The serve path is capacity-bounded:
 metadata requests are admitted up to a process-wide limit, and excess load is shed rather
-than queued. npm is the first supported ecosystem; the core is registry-agnostic, with PyPI
-and RubyGems on the roadmap.
+than queued. npm is the first supported ecosystem; the core is registry-agnostic, each
+ecosystem registers as a self-contained adapter (`Ecluse.Core.Registry.Adapter`), and PyPI
+and RubyGems are on the roadmap.
 
 [`docs/architecture.md`](docs/architecture.md) has the full design: the four-role registry
 model, the rules engine, the mirror queue, and the configuration reference. The threat model

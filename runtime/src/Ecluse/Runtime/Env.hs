@@ -54,10 +54,12 @@ module Ecluse.Runtime.Env (
 ) where
 
 import Katip (LogEnv, katipAddContext)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, Request)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (RegistryClient)
+import Ecluse.Core.Registry (RegistryClient, UrlFormationError)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission (ServeAdmission, unlimitedServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
@@ -266,17 +268,21 @@ gathers existing handles and wraps the instrument and telemetry handles in their
 ports -- so the core loop reads its backends through the core interface without depending
 on this application 'Env' (the analogue of 'serveRuntimeOf' for the serve path).
 
-The per-ecosystem re-evaluation bundles are passed in rather than read from the 'Env': they
-are derived from the served mounts (the same prepared rules and public origin the serve path
-gates with), which the composition root resolves alongside the handles, so the worker re-runs
-current policy against a job before mirroring it through one codepath with the serve gate.
+The artifact request builder and the per-ecosystem re-evaluation bundles are passed in
+rather than read from the 'Env': the builder is projected from the registered ecosystem
+adapter at the composition root (so the fetch step speaks the registry protocol without
+this runtime naming an ecosystem), and the bundles are derived from the served mounts
+(the same prepared rules and public origin the serve path gates with), which the
+composition root resolves alongside the handles, so the worker re-runs current policy
+against a job before mirroring it through one codepath with the serve gate.
 -}
-workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
-workerRuntimeOf policies env =
+workerRuntimeOf :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> Env -> WorkerRuntime
+workerRuntimeOf buildArtifactRequest policies env =
     WorkerRuntime
         { wrQueue = envQueue env
         , wrRegistry = envRegistry env
         , wrManager = envManager env
+        , wrBuildArtifactRequest = buildArtifactRequest
         , wrHeartbeat = envWorkerHeartbeat env
         , wrMetrics = workerMetricsPortOf (envMetrics env)
         , wrTracing = workerTracingPortOf (envTelemetry env)

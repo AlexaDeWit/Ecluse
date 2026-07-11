@@ -33,7 +33,9 @@ import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Registry.Adapter (adapterArtifact, artifactByUrl)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
@@ -351,7 +353,7 @@ against a condition-poller ('race_'); a hard timeout bounds the whole thing so a
 test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker (artifactByUrl (adapterArtifact npmAdapter)) policies env) (waitFor done)
   where
     -- The worker verifies the fetched bytes against the digests its re-evaluation
     -- re-admits from current metadata (the injected resolver), so the resolver must

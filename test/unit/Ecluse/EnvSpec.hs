@@ -16,6 +16,8 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
 import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
+import Ecluse.Core.Registry.Adapter (adapterArtifact, artifactByUrl)
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
@@ -189,7 +191,7 @@ spec = do
             env <- newTestEnv
             -- No re-evaluation policies are needed here: the queue is empty, so the loop
             -- only ever long-polls (no job to re-evaluate), which is what this asserts.
-            timeout 100000 (runWorker mempty env) `shouldReturn` Nothing
+            timeout 100000 (runWorker (artifactByUrl (adapterArtifact npmAdapter)) mempty env) `shouldReturn` Nothing
 
     describe "unconfiguredRegistry" $ do
         it "refuses every effectful call loudly rather than fabricating a result" $ do

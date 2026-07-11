@@ -60,6 +60,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError,
     VersionEvaluation (VersionPresent),
  )
+import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -76,7 +77,7 @@ import Ecluse.Core.Worker (
     WorkerM,
     WorkerPolicies,
     WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpMinIntegrity, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    WorkerRuntime (WorkerRuntime, wrBuildArtifactRequest, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
  )
@@ -279,6 +280,7 @@ withRuntimeRegistry mkClient policies metricsPort body = do
                 { wrQueue = queue
                 , wrRegistry = mkClient logRef
                 , wrManager = manager
+                , wrBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
                 , wrHeartbeat = heartbeat
                 , wrMetrics = metricsPort
                 , wrTracing = passthroughWorkerTracingPort
@@ -319,6 +321,7 @@ withQueueRuntime queue body = do
                 { wrQueue = queue
                 , wrRegistry = recordingClient logRef (Right ())
                 , wrManager = manager
+                , wrBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
                 , wrHeartbeat = heartbeat
                 , wrMetrics = noopWorkerMetricsPort
                 , wrTracing = passthroughWorkerTracingPort

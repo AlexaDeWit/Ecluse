@@ -12,16 +12,18 @@ module Ecluse.Core.Worker.Types (
 
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, Request)
 import UnliftIO (MonadUnliftIO)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (RegistryClient)
+import Ecluse.Core.Registry (RegistryClient, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Rules (PreparedRule)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
@@ -52,6 +54,12 @@ data WorkerRuntime = WorkerRuntime
     , wrManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ artifact fetch (over
     an https-only @dist.tarball@).
+    -}
+    , wrBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the
+    ecosystem's request formation, projected from its registered adapter at the
+    composition root so the fetch step speaks the registry protocol without naming
+    an ecosystem.
     -}
     , wrHeartbeat :: WorkerHeartbeat
     {- ^ The consume-loop heartbeat, advanced on every successful poll and read by the

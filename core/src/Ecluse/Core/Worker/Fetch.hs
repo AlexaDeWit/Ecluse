@@ -10,10 +10,9 @@ import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBod
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Worker.Types (WorkerM, wrManager)
+import Ecluse.Core.Worker.Types (WorkerM, wrBuildArtifactRequest, wrManager)
 
 {- Fetch the artifact bytes from the public upstream at the job's authoritative
 URL into memory. The URL arrives as the job's validated 'RegistryUrl' witness, so
@@ -29,7 +28,11 @@ redelivers rather than killing the iteration. -}
 fetchArtifactBytes :: RegistryUrl -> WorkerM (Either Text ByteString)
 fetchArtifactBytes url = do
     manager <- asks wrManager
-    case artifactRequestByUrl "" Nothing (registryUrlText url) of
+    buildRequest <- asks wrBuildArtifactRequest
+    -- The job's URL is authoritative and absolute (no base to resolve against)
+    -- and the public artifact fetch is anonymous, so the injected builder gets
+    -- an empty base and no token.
+    case buildRequest workerArtifactLimits manager "" Nothing (registryUrlText url) of
         Left urlErr -> pure (Left ("unformable artifact URL: " <> show urlErr))
         Right request ->
             try (liftIO (boundedFetch manager request)) <&> \case

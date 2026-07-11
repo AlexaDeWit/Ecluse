@@ -31,7 +31,9 @@ mirrored from the public registry.
 the ecosystem-agnostic core, the effectful runtime edge, and the composition shell:
 
 - **`ecluse-core`** (`core/src`, `Ecluse.Core.*`): the ecosystem-agnostic core, the
-  domain model, registry protocol and version grammars, pure and effectful rule tiers,
+  domain model, registry protocol and version grammars, the ecosystem adapter registry
+  (the per-ecosystem capability records the composition shell projects mount, publish,
+  and worker wiring from), pure and effectful rule tiers,
   the CVE advisory lookup and the OSV advisory-producer logic, credential-refresh policy,
   queue and security primitives, the agnostic server layer (routing, response model,
   streaming, conditional-GET, metadata cache, serve admission, request pipeline), the
@@ -139,7 +141,8 @@ flowchart TD
 - Re-specifying upstream registry protocols in the
   [capability manifest](architecture/api-surface.md): Écluse documents its coverage, not
   npm's full packument / registry contract, which clients hardcode.
-- Non-npm adapters: the mount model and `RegistryClient` handle accommodate them (see
+- Non-npm adapters: the ecosystem adapter registry, the mount model, and the
+  `RegistryClient` handle accommodate them (see
   [Multi-ecosystem mounts](architecture/web-layer.md#multi-ecosystem-mounts)), but only npm
   ships at launch. PyPI and RubyGems are planned.
 - Cloud IAM validation at the proxy edge (gateway concern).
