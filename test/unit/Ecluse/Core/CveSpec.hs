@@ -146,7 +146,6 @@ spec = do
                 held <- openFdTargets
                 held `shouldSatisfy` not . any (path `isSuffixOf`)
 
-
         it "ignores a malicious trigger: reads behave as on a clean artifact" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "trigger.db"
