@@ -21,7 +21,7 @@ import Network.Wai.Test (
     srequest,
  )
 import Test.Hspec
-import UnliftIO (throwString)
+import UnliftIO (throwIO)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
@@ -76,6 +76,14 @@ authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
 targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
 targetSaw target = reverse <$> readIORef (tgSeen target)
 
+{- | The typed trap the handle double throws when the publish path wrongly routes
+through a handle field this suite proves it never uses.
+-}
+newtype PublishPathViolation = PublishPathViolation Text
+    deriving stock (Eq, Show)
+
+instance Exception PublishPathViolation
+
 {- | A registry-handle double whose effectful fields refuse loudly: the publish path
 talks to the publication target via the npm client over the shared 'Manager', not the
 handle, so a handle that throws proves the publish never routes through it.
@@ -83,8 +91,8 @@ handle, so a handle that throws proves the publish never routes through it.
 fakeRegistry :: RegistryClient
 fakeRegistry =
     RegistryClient
-        { fetchMetadata = const (throwString "publish must not fetchMetadata")
-        , publishArtifact = \_ _ _ _ -> throwString "publish must not use the handle publishArtifact"
+        { fetchMetadata = const (throwIO (PublishPathViolation "publish must not fetchMetadata"))
+        , publishArtifact = \_ _ _ _ -> throwIO (PublishPathViolation "publish must not use the handle publishArtifact")
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "unused"))

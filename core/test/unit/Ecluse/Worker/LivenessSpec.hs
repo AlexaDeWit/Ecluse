@@ -92,7 +92,7 @@ spec = do
                 -- Run the consume loop briefly against the (empty) queue, then cancel
                 -- it. Even an empty long-poll is a healthy poll, so the heartbeat must
                 -- have advanced from 'Nothing'.
-                _ <- timeout 200000 (runWM runtime workerLoop)
+                _ <- timeout 200000 (runWM runtime (workerLoop testSupervision))
                 pollAfter <- lastPoll (wrHeartbeat runtime)
                 pollAfter `shouldSatisfy` isJust
     describe "heartbeatHealthy (the /livez staleness rule)" $ do

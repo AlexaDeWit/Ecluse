@@ -228,12 +228,13 @@ own handle. The record returns `IO` (per the
 
 ```haskell
 data MirrorQueue = MirrorQueue
-  { enqueue          :: MirrorJob -> IO ()        -- producer; best-effort (see below)
-  , receive          :: IO [QueueMessage]         -- consumer; one long-poll, [] on timeout
-  , ack              :: ReceiptHandle -> IO ()
-  , extendVisibility :: ReceiptHandle -> Seconds -> IO ()
+  { enqueue          :: MirrorJob -> IO (Either QueueFault ())         -- producer; best-effort (see below)
+  , receive          :: IO (Either QueueFault [QueueMessage])          -- consumer; one long-poll, Right [] on timeout
+  , ack              :: ReceiptHandle -> IO (Either QueueFault ())
+  , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either QueueFault ())
   }
 
+data QueueFault       = QueueFault { qfCause :: TransportCause, qfDetail :: Text }
 data QueueMessage     = QueueMessage { job :: MirrorJob, receipt :: ReceiptHandle }
 newtype ReceiptHandle = ReceiptHandle Text        -- opaque: SQS receipt handle | Pub/Sub ackId
 ```
@@ -244,6 +245,11 @@ receive → process → ack shape; their differences (visibility timeout vs ack
 deadline, batch limits, dead-letter wiring) stay behind the handle, and
 `ReceiptHandle` is opaque so neither leaks. Conventions:
 
+- **Every field reports its backend failure as a typed `QueueFault` value**, classified
+  into the core transport vocabulary (`Ecluse.Core.Fault`) at the adapter edge, so a
+  queue outage never rides the exception channel through a caller. Each fault is safe to
+  absorb: the serve path counts a failed enqueue, the worker logs a failed poll and backs
+  off (without advancing its liveness heartbeat), and a failed ack simply redelivers.
 - **`enqueue` is best-effort.** It runs on the hot path (enqueue, then serve), so a
   failure is logged/metered and never fails the client response; the artifact is already
   served, and a later pull re-enqueues.

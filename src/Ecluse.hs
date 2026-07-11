@@ -59,6 +59,9 @@ The library's vocabulary, roughly from the pure core outward:
   and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
 * __Mirror worker__: "Ecluse.Core.Worker" (the supervised consume loop that fetches,
   verifies against the job's integrity digest, and publishes an approved artifact).
+* __Supervision__: "Ecluse.Core.Supervision" (the one background-loop combinator every
+  long-running task runs under) and, in this module, the typed process perimeter
+  ('superviseProcess' and its 'exitCodeFor' table).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
 in the library, not in @app\/Main.hs@, so the composition root is a single
@@ -74,6 +77,11 @@ documentation conventions.
 module Ecluse (
     -- * Entry point
     run,
+
+    -- * The typed process supervisor
+    ProcessOutcome (..),
+    superviseProcess,
+    exitCodeFor,
 
     -- * Split-ready services
     runServer,
@@ -91,8 +99,14 @@ module Ecluse (
     unconfiguredRegistry,
 ) where
 
+import Control.Exception (AsyncException (ThreadKilled, UserInterrupt), SomeAsyncException)
+import Control.Exception qualified as Exception
+import Data.Text.IO qualified as TIO
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
 import Ecluse.Pilot
 import Ecluse.Proxy
@@ -100,9 +114,77 @@ import Ecluse.Proxy
 run :: IO ()
 run = do
     cmd <- execCLI
-    withBootEnv $ \bootEnv ->
-        case cmd of
-            RunProxy -> runProxy bootEnv
-            RunPilot -> runPilot bootEnv
-            RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beConfig bootEnv) opts)
-            RunDredger -> runDredger bootEnv
+    outcome <- superviseProcess (withBootEnv (dispatch cmd))
+    case outcome of
+        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
+        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
+        _ -> pass
+    exitWith (exitCodeFor outcome)
+  where
+    dispatch cmd bootEnv = case cmd of
+        RunProxy -> runProxy bootEnv
+        RunPilot -> runPilot bootEnv
+        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beConfig bootEnv) opts)
+        RunDredger -> runDredger bootEnv
+
+{- | How one whole service run ended: the typed outer perimeter of the process,
+each constructor owning one exit code ('exitCodeFor') so an orchestrator reads
+the ending from the status alone.
+-}
+data ProcessOutcome
+    = -- | The services drained and returned (a graceful shutdown): exit 0.
+      ShutdownRequested
+    | -- | A service failed up with the carried rendered fault: exit 1.
+      ServiceExited Text
+    | {- | The boot aborted ('BootAborted'; the boot phase already reported its
+      errors to standard error): exit 2.
+      -}
+      BootFault
+    | -- | The run was cancelled from outside (a kill, an interrupt): exit 3.
+      RunCancelled
+    deriving stock (Eq, Show)
+
+{- | Run the whole service under the typed process perimeter and classify its
+ending as a 'ProcessOutcome' -- the one place the process's exception channel is
+read, so nothing above it interprets exceptions.
+
+The classification, in order: a normal return is 'ShutdownRequested' (warp's
+graceful drain returns); 'BootAborted' is 'BootFault'; an 'ExitCode' rethrows
+(a deliberate exit request keeps its code, the local-dev halt's 130 included);
+the recognised kill deliveries ('ThreadKilled', 'UserInterrupt') are
+'RunCancelled'; any __other__ asynchronous exception is not ours to interpret
+and propagates -- so a 'System.Timeout.timeout' or an @async@ cancellation
+wrapped around 'run' by a test keeps its own semantics -- and every remaining
+synchronous escape is 'ServiceExited' with its rendered detail.
+
+This is the one deliberate base-'Exception.try' in the codebase: the process
+perimeter must observe asynchronous delivery to classify a kill, which the
+async-hygienic @unliftio@ catches deliberately refuse to hand over (they would
+rethrow the kill and the classification arm could never run). The rethrows go
+through the base 'Exception.throwIO' for the same reason: what leaves here
+async must leave async.
+-}
+superviseProcess :: IO () -> IO ProcessOutcome
+superviseProcess service =
+    Exception.try service >>= \case
+        Right () -> pure ShutdownRequested
+        Left err
+            | Just BootAborted <- fromException err -> pure BootFault
+            | Just (code :: ExitCode) <- fromException err -> Exception.throwIO code
+            | Just (killed :: AsyncException) <- fromException err ->
+                pure $ case killed of
+                    ThreadKilled -> RunCancelled
+                    UserInterrupt -> RunCancelled
+                    -- StackOverflow / HeapOverflow: resource exhaustion is a
+                    -- fault of the run, not a cancellation.
+                    other -> ServiceExited (displayExceptionT other)
+            | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
+            | otherwise -> pure (ServiceExited (displayExceptionT err))
+
+-- | The process exit status each 'ProcessOutcome' owns.
+exitCodeFor :: ProcessOutcome -> ExitCode
+exitCodeFor = \case
+    ShutdownRequested -> ExitSuccess
+    ServiceExited _ -> ExitFailure 1
+    BootFault -> ExitFailure 2
+    RunCancelled -> ExitFailure 3

@@ -15,7 +15,7 @@ module Ecluse.Core.Worker.Job (
 
 import Data.Map.Strict qualified as Map
 import Katip (Severity (DebugS, ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
-import UnliftIO (tryAny, withRunInIO)
+import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (pkgEcosystem, renderPackageName)
@@ -30,7 +30,7 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
+import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
 import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
@@ -84,10 +84,16 @@ jobResultMetric = \case
     Dropped _ -> Metric.Failed
     Retried _ -> Metric.Failed
 
+-- Acknowledge a terminally-processed message. A failed ack is absorbed after a
+-- warning: the message simply stays un-acked and redelivers, and idempotent
+-- publishing makes the repeat harmless -- exactly the retry-is-don't-ack shape,
+-- arrived at by accident rather than decision.
 ackMessage :: ReceiptHandle -> WorkerM ()
 ackMessage receipt = do
     queue <- asks wrQueue
-    liftIO (ack queue receipt)
+    acked <- liftIO (ack queue receipt)
+    whenLeft_ acked $ \fault ->
+        logFM WarningS (ls ("ack failed; the processed message will redeliver (harmless, publishing is idempotent): " <> qfDetail fault))
 
 {- | The terminal outcome of processing one mirror job, deciding whether the
 message is acked or left to redeliver.
@@ -342,7 +348,8 @@ publishVerified receipt job bytes = do
 holdForLongPublish :: ReceiptHandle -> WorkerM ()
 holdForLongPublish receipt = do
     queue <- asks wrQueue
-    _ <- tryAny (liftIO (extendVisibility queue receipt extendBy))
+    -- The fault channel is a value; a failed extend is the swallowed 'Left'.
+    _ <- liftIO (extendVisibility queue receipt extendBy)
     pass
   where
     -- The window one publish is given before the message could redeliver mid-write.
@@ -363,7 +370,8 @@ holdForLongPublish receipt = do
 releaseForRetry :: ReceiptHandle -> WorkerM ()
 releaseForRetry receipt = do
     queue <- asks wrQueue
-    _ <- tryAny (liftIO (extendVisibility queue receipt (Seconds 0)))
+    -- The fault channel is a value; a failed reset is the swallowed 'Left'.
+    _ <- liftIO (extendVisibility queue receipt (Seconds 0))
     pass
 
 -- A one-line identifier for a job, for log lines.

@@ -9,16 +9,18 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
-    OsvDbFetchFault (OsvDbTooLarge),
+    OsvDbCapExceeded (OsvDbCapExceeded),
+    OsvDbFetchFault (OsvDbTransport),
     SyncEnv (..),
     SyncOutcome (..),
     SyncSchedule (..),
@@ -42,17 +44,30 @@ withSyncEnv use =
                     }
         use dir slot envWith
 
+{- | A typed stand-in for an exception escaping the fetch's typed contract (a
+broken harness premise or a simulated invariant break), so no double throws a
+stringly exception.
+-}
+newtype SyncSpecEscape = SyncSpecEscape Text
+    deriving stock (Eq, Show)
+
+instance Exception SyncSpecEscape
+
 {- | A fetch whose HEAD answers the given ETag and whose download builds an
 artifact via the given writer, returning the same ETag.
 -}
 fetchServing :: Maybe Text -> (FilePath -> IO ()) -> CveFetch
 fetchServing mEtag write =
     CveFetch
-        { fetchHeadEtag = pure (DbEtag <$> mEtag)
+        { fetchHeadEtag = pure (Right (DbEtag <$> mEtag))
         , fetchDownload = \dest -> case mEtag of
-            Nothing -> throwString "download called with no object present"
-            Just etag -> write dest $> DbEtag etag
+            Nothing -> throwIO (SyncSpecEscape "download called with no object present")
+            Just etag -> write dest $> Right (DbEtag etag)
         }
+
+-- | The typed transport fault the failing-fetch doubles report.
+transportDown :: OsvDbFetchFault
+transportDown = OsvDbTransport (transportFault TransportUnreachable "transport down")
 
 -- | Does the slot's current generation answer the probe for this package?
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
@@ -81,8 +96,8 @@ spec = do
             withSyncEnv $ \_ _ envWith -> do
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure Nothing
-                            , fetchDownload = \_ -> throwString "must not download"
+                            { fetchHeadEtag = pure (Right Nothing)
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
                             }
                 syncStep (envWith fetch) Nothing >>= \case
                     SyncAbsent -> pass
@@ -92,8 +107,8 @@ spec = do
             withSyncEnv $ \_ _ envWith -> do
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Just (DbEtag "e1"))
-                            , fetchDownload = \_ -> throwString "must not download"
+                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
                             }
                 syncStep (envWith fetch) (Just (DbEtag "e1")) >>= \case
                     SyncUnchanged -> pass
@@ -131,14 +146,43 @@ spec = do
                 probesFor slot "pkg-a" `shouldReturn` Just True
                 doesFileExist (syncDbPath badEnv <> ".tmp") `shouldReturn` False
 
-        it "a download that fails mid-stream discards the partial temp file" $
+        it "a download that faults mid-stream is a SyncFetchFaulted outcome and the partial temp file is discarded" $
             withSyncEnv $ \_ _ envWith -> do
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Just (DbEtag "e1"))
+                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
                             , fetchDownload = \dest -> do
                                 writeFileBS dest "partial bytes"
-                                throwString "connection reset mid-stream"
+                                pure (Left transportDown)
+                            }
+                    env = envWith fetch
+                syncStep env Nothing >>= \case
+                    SyncFetchFaulted fault -> fault `shouldBe` transportDown
+                    other -> expectationFailure ("expected SyncFetchFaulted, got " <> show other)
+                doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+
+        it "a head fault is a SyncFetchFaulted outcome; nothing is downloaded" $
+            withSyncEnv $ \_ _ envWith -> do
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Left transportDown)
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
+                            }
+                syncStep (envWith fetch) Nothing >>= \case
+                    SyncFetchFaulted fault -> fault `shouldBe` transportDown
+                    other -> expectationFailure ("expected SyncFetchFaulted, got " <> show other)
+
+        it "residue: a download that throws past its typed contract still discards the partial temp file" $
+            withSyncEnv $ \_ _ envWith -> do
+                -- The fetch contract reports every failure as a value, so a throw
+                -- here is an invariant break; the onException guard must still
+                -- discard the partial download on its way up.
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
+                            , fetchDownload = \dest -> do
+                                writeFileBS dest "partial bytes"
+                                throwIO (SyncSpecEscape "connection reset mid-stream")
                             }
                     env = envWith fetch
                 syncStep env Nothing `shouldThrow` anyException
@@ -150,11 +194,11 @@ spec = do
                 downloads <- newIORef (0 :: Int)
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Just (DbEtag "e2"))
+                            { fetchHeadEtag = pure (Right (Just (DbEtag "e2")))
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithMalformedProvenance dest
-                                pure (DbEtag "e2")
+                                pure (Right (DbEtag "e2"))
                             }
                     env = envWith fetch
                 syncStep env (Just (DbEtag "e1")) >>= \case
@@ -190,7 +234,7 @@ spec = do
                 probesFor slot "pkg-b" `shouldReturn` Just True
 
     describe "runCveSync" $ do
-        it "the boot burst retries through transport faults until the artifact lands" $
+        it "the boot burst retries through typed fetch faults until the artifact lands" $
             withSyncEnv $ \_ slot envWith -> do
                 calls <- newIORef (0 :: Int)
                 notified <- newIORef (0 :: Int)
@@ -198,10 +242,11 @@ spec = do
                         CveFetch
                             { fetchHeadEtag = do
                                 n <- atomicModifyIORef' calls (\n -> (n + 1, n + 1))
-                                if n <= 2
-                                    then throwString "transport down"
-                                    else pure (Just (DbEtag "e1"))
-                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> DbEtag "e1"
+                                pure $
+                                    if n <= 2
+                                        then Left transportDown
+                                        else Right (Just (DbEtag "e1"))
+                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
                 withAsync (runQuiet (runCveSync (envWith flaky) schedule (modifyIORef' notified (+ 1)))) $ \_ -> do
@@ -215,9 +260,9 @@ spec = do
                         CveFetch
                             { fetchHeadEtag =
                                 readTVarIO published <&> \case
-                                    False -> Nothing
-                                    True -> Just (DbEtag "e1")
-                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> DbEtag "e1"
+                                    False -> Right Nothing
+                                    True -> Right (Just (DbEtag "e1"))
+                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
                     -- A short burst that will exhaust before publication, then a
                     -- fast poll that finds the artifact once it exists.
@@ -234,11 +279,11 @@ spec = do
                 downloads <- newIORef (0 :: Int)
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Just (DbEtag "bad"))
+                            { fetchHeadEtag = pure (Right (Just (DbEtag "bad")))
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithWrongEpoch dest
-                                pure (DbEtag "bad")
+                                pure (Right (DbEtag "bad"))
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
                 withAsync (runQuiet (runCveSync (envWith fetch) schedule pass)) $ \_ -> do
@@ -254,6 +299,8 @@ spec = do
             out <- runConduit (yieldMany (["ab", "cd"] :: [ByteString]) .| cappedAt 4 .| C.sinkList)
             mconcat out `shouldBe` ("abcd" :: ByteString)
 
-        it "throws OsvDbTooLarge the moment the stream oversteps the cap" $
+        it "throws the confined cap exception the moment the stream oversteps the cap" $
+            -- The conduit's mid-stream escape; the adapter boundary ('s3Download')
+            -- folds it into the 'OsvDbTooLarge' value on the 'CveFetch' channel.
             runConduit (yieldMany (["ab", "cde"] :: [ByteString]) .| cappedAt 4 .| C.sinkList)
-                `shouldThrow` (== OsvDbTooLarge 4)
+                `shouldThrow` (== OsvDbCapExceeded 4)

@@ -10,10 +10,6 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
-import Ecluse.Core.Queue (
-    MirrorQueue (receive),
-    enqueue,
- )
 import Ecluse.Core.Registry (
     PublishError (PublishError),
     PublishFault (PublishRejected, PublishUrlUnformable),
@@ -254,8 +250,8 @@ spec = do
             -- Mirrors the integrity-mismatch ack test for the deny path: a current-policy deny
             -- is non-retryable, so the job is acked (retired) rather than left to redeliver.
             withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                enqueue queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
-                messages <- receive queue
+                enqueue_ queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                messages <- receive_ queue
                 runWM runtime (processBatch messages)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -300,8 +296,8 @@ spec = do
 
         it "acks the skipped duplicate so it is retired from the queue" $
             withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                enqueue queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
-                messages <- receive queue
+                enqueue_ queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                messages <- receive_ queue
                 runWM runtime (processBatch messages)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -337,19 +333,19 @@ spec = do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue _logRef -> do
-                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    messages <- receive queue
+                    enqueue_ queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     -- A redelivery pass past the (immediate) visibility window yields
                     -- nothing: the job was acked.
-                    redelivered <- receive queue
+                    redelivered <- receive_ queue
                     redelivered `shouldBe` []
 
         it "does not ack a transiently-failed job, so it redelivers" $
             withUpstream $ \url ->
                 withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do
-                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    messages <- receive queue
+                    enqueue_ queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     -- The publish was rejected (retryable), so the job is left un-acked
                     -- and redelivers. The worker extended the message's visibility before
@@ -365,8 +361,8 @@ spec = do
             -- indefinitely. A second poll past the visibility window yields nothing.
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
-                    enqueue queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
-                    messages <- receive queue
+                    enqueue_ queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     -- Nothing was published (the mismatch refused the publish)...
                     published <- plDocuments <$> readIORef logRef
@@ -381,8 +377,8 @@ spec = do
             withUpstream $ \url -> do
                 (metricsPort, readResults) <- recordingWorkerMetricsPort
                 withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
-                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    messages <- receive queue
+                    enqueue_ queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Published])
 
@@ -390,7 +386,7 @@ spec = do
             withUpstream $ \url -> do
                 (metricsPort, readResults) <- recordingWorkerMetricsPort
                 withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
-                    enqueue queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
-                    messages <- receive queue
+                    enqueue_ queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])

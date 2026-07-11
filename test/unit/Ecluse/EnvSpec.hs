@@ -112,9 +112,9 @@ spec = do
 
         it "wires the queue handle through (a job enqueued via Env is received via Env)" $ do
             env <- newTestEnv
-            enqueue (envQueue env) sampleJob
+            enqueue (envQueue env) sampleJob >>= (`shouldBe` Right ())
             msgs <- receive (envQueue env)
-            map msgJob msgs `shouldBe` [sampleJob]
+            fmap (map msgJob) msgs `shouldBe` Right [sampleJob]
 
         it "exposes the shared HTTP manager it was built with" $ do
             -- A 'Manager' is opaque (no 'Eq'\/'Show' and no network-free

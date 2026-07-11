@@ -104,6 +104,7 @@ library ecluse-core
     Ecluse.Core.Cve.Slot
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
+    Ecluse.Core.Fault.Http
     Ecluse.Core.InFlight
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
@@ -150,6 +151,7 @@ library ecluse-core
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
     Ecluse.Core.Server.Stream
+    Ecluse.Core.Supervision
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
@@ -313,6 +315,7 @@ library ecluse-runtime
   import:          shared
   hs-source-dirs:  runtime/src
   exposed-modules:
+    Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Credential.CodeArtifact
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Env
@@ -527,6 +530,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
+    Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec

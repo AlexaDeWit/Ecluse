@@ -42,7 +42,6 @@ module Ecluse.Core.Registry.Npm (
 
     -- * Lower-level fetch
     fetchMetadataFormBounded,
-    classifyTransport,
 
     -- * First-party publish relay
     relayPublishDocument,
@@ -55,14 +54,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List.NonEmpty qualified as NE
 import Network.HTTP.Client (
     BodyReader,
-    HttpException (HttpExceptionRequest, InvalidUrlException),
-    HttpExceptionContent (
-        ConnectionClosed,
-        ConnectionFailure,
-        ConnectionTimeout,
-        InternalException,
-        ResponseTimeout
-    ),
+    HttpException,
     Manager,
     Response (responseStatus),
     brRead,
@@ -71,15 +63,10 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
-import Network.TLS qualified as TLS
 import UnliftIO (throwIO, try)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Fault (
-    TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
-    TransportFault,
-    transportFault,
- )
+import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName)
 import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes))
 import Ecluse.Core.Registry (
@@ -92,7 +79,6 @@ import Ecluse.Core.Registry (
     RegistryResponse (RegistryResponse),
     UrlFormationError,
  )
-import Ecluse.Core.Text (displayExceptionT)
 
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, publishRequest)
@@ -238,28 +224,6 @@ fetchMetadataFormBounded config form validators name =
                     Left httpErr -> Left (FetchTransport (classifyTransport httpErr))
                     Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
                     Right (Right response) -> Right response
-
-{- | Classify an @http-client@ exception into the core transport vocabulary
-("Ecluse.Core.Fault"), at the one edge where the library's exception type is in
-scope. Coarse by design: the 'TransportCause' is what a consumer or an operator
-branches on, and the rendered exception rides along as the bounded detail. A TLS
-refusal is recognised by the typed @tls@ exception @http-client@ wraps in its
-internal-exception channel, never by matching rendered text.
--}
-classifyTransport :: HttpException -> TransportFault
-classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
-  where
-    causeOf = \case
-        HttpExceptionRequest _ content -> case content of
-            ConnectionTimeout -> TransportTimeout
-            ResponseTimeout -> TransportTimeout
-            ConnectionFailure _ -> TransportUnreachable
-            ConnectionClosed -> TransportUnreachable
-            InternalException inner
-                | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
-                | otherwise -> TransportProtocol
-            _ -> TransportProtocol
-        InvalidUrlException _ _ -> TransportProtocol
 
 {- | The thrown form of a response-bound breach: a body that crossed the
 'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its 'LimitError'. The bounded

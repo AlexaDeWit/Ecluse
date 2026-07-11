@@ -131,10 +131,11 @@ spec =
 
                                 -- The byte cap against the real S3 leg: a fetch whose
                                 -- cap the published artifact's declared length
-                                -- oversteps fails fast, before any bytes sink.
+                                -- oversteps fails fast, before any bytes sink, as
+                                -- the typed value on the 'CveFetch' channel.
                                 let cappedFetch = s3CveFetch awsEnv bucket "npm-osv-schema3.db" 16
                                 fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
-                                    `shouldThrow` (== OsvDbTooLarge 16)
+                                    `shouldReturn` Left (OsvDbTooLarge 16)
   where
     withSystemTempDir = withSystemTempDirectory "ecluse-cve-sync-spec"
 

@@ -22,6 +22,7 @@ module Ecluse.Integration.Ministack (
     defaultQueueOptions,
     receiveUntil,
     receiveUntilWithin,
+    unwrapQ,
 
     -- * Endpoint
     endpointFor,
@@ -198,8 +199,20 @@ receiveUntilWithin :: Int -> MirrorQueue -> IO [QueueMessage]
 receiveUntilWithin = go
   where
     go 0 _ = fail "receiveUntilWithin: no message arrived within the retry budget"
-    go n queue = do
-        messages <- receive queue
-        if null messages
-            then threadDelay 500_000 >> go (n - 1) queue
-            else pure messages
+    go n queue =
+        receive queue >>= \case
+            -- A transient transport fault against the emulator retries like an
+            -- empty poll (production backs off and re-polls the same way); the
+            -- last attempt's fault fails loudly with its classified detail.
+            Left fault
+                | n > 1 -> threadDelay 500_000 >> go (n - 1) queue
+                | otherwise -> fail ("receive faulted against ministack: " <> show fault)
+            Right [] -> threadDelay 500_000 >> go (n - 1) queue
+            Right messages -> pure messages
+
+{- | Unwrap a typed queue outcome from a backend the test expects to be healthy:
+a 'Left' is a loud test failure carrying the classified fault. Shared by the
+queue and worker specs, which drive the real SQS backend directly.
+-}
+unwrapQ :: (Show e) => IO (Either e a) -> IO a
+unwrapQ act = act >>= either (\fault -> fail ("queue operation faulted: " <> show fault)) pure

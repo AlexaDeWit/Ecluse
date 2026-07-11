@@ -28,6 +28,7 @@ import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
     TransportFault (tfCause),
  )
+import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
@@ -38,7 +39,6 @@ import Ecluse.Core.Registry (
 
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
-    classifyTransport,
     defaultNpmConfig,
     fetchMetadataFormBounded,
     newNpmClient,

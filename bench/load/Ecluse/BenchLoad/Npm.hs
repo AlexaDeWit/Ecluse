@@ -554,8 +554,8 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
         if nowT >= deadline
             then pure (reverse acc)
             else do
-                enqueue queue job
-                messages <- receive queue
+                enqueue queue job >>= either (\f -> fail ("bench enqueue faulted: " <> show f)) pure
+                messages <- receive queue >>= either (\f -> fail ("bench receive faulted: " <> show f)) pure
                 t0 <- getMonotonicTime
                 runWorkerM logEnv mempty runtime (processBatch messages)
                 t1 <- getMonotonicTime

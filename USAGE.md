@@ -469,6 +469,17 @@ serve such a source, point it at the **private** upstream slot and loosen
   sync that never arrives, so the pod never reports ready. The npm liveness probe `GET /-/ping`
   answers locally with `200 {}`. **Pilot and Dredger** export the same `/livez` and `/readyz` on
   `ECLUSE_PORT`.
+- **Process exit codes.** The exit status states how a run ended, so an orchestrator or a
+  wrapper script can branch without parsing logs:
+
+  | Code | Meaning |
+  |---|---|
+  | `0` | Graceful shutdown: the drain completed and the services returned. |
+  | `1` | A service exited abnormally; the fault's detail is the last `ecluse: service exited:` line on standard error. |
+  | `2` | The boot aborted: configuration or wiring was rejected, with every problem already reported to standard error. Fix the configuration; a restart without changes will fail identically. |
+  | `3` | The run was cancelled from outside (a kill delivery that bypassed the graceful path). |
+  | `130` | The local-development halt (Ctrl-D on an interactive terminal), the conventional terminated-from-the-terminal status. |
+
 - **Logs.** One JSON object per line by default (`ECLUSE_LOG_FORMAT=json`), or `console` for local
   development. Bearer tokens render as a redacted placeholder, so token material never reaches a log
   field.

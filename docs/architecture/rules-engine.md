@@ -245,7 +245,7 @@ spikes), Écluse uses a decoupled ingestion pipeline, **Écluse Pilot**, a stand
 that pulls OSV's per-ecosystem advisory exports, compiles them into a read-only SQLite database
 (`osv.db`), and pushes it to a private S3/GCS bucket.
 
-The proxy runs one supervised sync task per configured mount ecosystem (`Ecluse.Core.Cve.Sync`), each
+The proxy runs one supervised sync task per configured mount ecosystem (`Ecluse.Runtime.Cve.Sync`), each
 polling the bucket's stable per-ecosystem key for ETag changes. The tasks are independent, so one
 ecosystem's missing artifact never holds back another's. At boot each attempts an eager first fetch,
 retried with incremental backoff and eventually allowed to fail, so a healthy deployment is

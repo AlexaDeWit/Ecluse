@@ -82,7 +82,6 @@ import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
-import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
@@ -105,7 +104,9 @@ import Ecluse.Core.Package.Admission (
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
+    QueueFault,
     enqueue,
+    qfDetail,
  )
 import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
@@ -156,7 +157,6 @@ import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
@@ -615,9 +615,9 @@ enqueueMirror rt deps name version artifact =
                     enqueueJob egressUrl hashes
   where
     enqueueJob egressUrl hashes traceContext = do
-        enqueued <- tryAny (enqueue (srQueue rt) (mirrorJob egressUrl hashes traceContext))
-        -- Best-effort: the hand-off outcome is counted but never propagated, so
-        -- a refused hand-off records a failure rather than failing or delaying
+        enqueued <- enqueue (srQueue rt) (mirrorJob egressUrl hashes traceContext)
+        -- Best-effort: the typed hand-off outcome is counted but never propagated,
+        -- so a refused hand-off records a failure rather than failing or delaying
         -- the serve. (Drops and backend delivery failures behind the buffered
         -- hand-off are counted by the composition root's buffer callbacks.)
         either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
@@ -645,11 +645,11 @@ enqueueMirror rt deps name version artifact =
     -- Project the swallowed enqueue outcome onto the producer span's status: a failure
     -- records the cause (so a trace explains why the mirror was not enqueued), a success
     -- leaves the status unset.
-    enqueueErrorDetail :: Either SomeException () -> Maybe Text
+    enqueueErrorDetail :: Either QueueFault () -> Maybe Text
     enqueueErrorDetail = either (Just . enqueueFailureDetail) (const Nothing)
 
-    enqueueFailureDetail :: SomeException -> Text
-    enqueueFailureDetail e = "mirror enqueue failed: " <> displayExceptionT e
+    enqueueFailureDetail :: QueueFault -> Text
+    enqueueFailureDetail fault = "mirror enqueue failed: " <> qfDetail fault
 
 {- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
 a cross-host @dist.tarball@ under the secure-default 'Ecluse.Core.Security.SameHostAsPackument',
