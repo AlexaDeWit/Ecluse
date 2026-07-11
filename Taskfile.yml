@@ -347,6 +347,35 @@ tasks:
     cmds:
       - find . -name '*.sh' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec shellcheck --severity=warning {} +
 
+  lint-spdx:
+    desc: Check SPDX licence headers on tracked Haskell sources
+    sources:
+      - '**/*.hs'
+      - 'LICENSES/**'
+      - 'flake.lock'
+      - exclude: 'dist-*/**'
+      - exclude: '.git/**'
+      - exclude: '.agents/**'
+      - exclude: 'coverage/**'
+      - exclude: '_site/**'
+      - exclude: 'scratchpad/**'
+    cmds:
+      # The file list comes from git at run time, never a static list, so the
+      # gate stays correct while concurrent work adds, moves, or splits modules.
+      - git ls-files -z -- '*.hs' | xargs -0 -r reuse lint-file
+
+  spdx-fix:
+    desc: Insert missing SPDX licence headers into tracked Haskell sources
+    cmds:
+      # Select-then-stamp: only tracked files missing the tag reach reuse, so a
+      # rerun never touches a stamped file. That is load-bearing, not merely an
+      # optimisation: fourmolu glues the header to a directly following comment
+      # block (it drops the blank separator in a pragma prologue), and
+      # re-annotating a glued block makes reuse rewrite it as "the header" and
+      # discard the original comment. git grep -L lists tracked files without
+      # the tag and exits 1 when every file carries it, hence the guard.
+      - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
+
   test-scripts:
     desc: Run the shell-script unit tests
     sources:
@@ -395,6 +424,7 @@ tasks:
       - sast
       - lint-workflows
       - lint-scripts
+      - lint-spdx
       - test-scripts
       - site-stub
 

@@ -319,6 +319,13 @@
           # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
           # GitHub code scanning; pinned here rather than relying on the runner's.
           pkgs.jq
+          # reuse: per-file SPDX licence headers (`task lint-spdx` stamps and
+          # gates via `reuse lint-file` / `reuse annotate`). A Python tool,
+          # justified over a hand-rolled shell gate because it is the SPDX/REUSE
+          # reference implementation; it stays scoped to tracked .hs files (no
+          # repo-wide REUSE regime) and lives in the dev shell only, never on
+          # the product path. See STYLE.md, "Licence headers".
+          pkgs.reuse
           pkgs.go-task
         ];
 
