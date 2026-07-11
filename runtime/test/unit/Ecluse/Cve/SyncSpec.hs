@@ -11,7 +11,7 @@ import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Core.Cve (CveDbRejected (CveDbWrongEpoch), CveLookup (cveRemediationProbe))
+import Ecluse.Core.Cve (CveDbRejected (CveDbMetaUnreadable, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
@@ -144,11 +144,13 @@ spec = do
                 syncStep env Nothing `shouldThrow` anyException
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
 
-        it "a malformed provenance row propagates, discards the temp, and keeps the last-good generation" $
+        it "a malformed provenance row is rejected, discards the temp, and keeps the last-good generation" $
             withSyncEnv $ \_ slot envWith -> do
                 void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
                 let env = envWith (fetchServing (Just "e2") mkDbWithMalformedProvenance)
-                syncStep env (Just (DbEtag "e1")) `shouldThrow` anyException
+                syncStep env (Just (DbEtag "e1")) >>= \case
+                    SyncRejected etag (CveDbMetaUnreadable _) -> etag `shouldBe` DbEtag "e2"
+                    other -> expectationFailure ("expected SyncRejected CveDbMetaUnreadable, got " <> show other)
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
                 probesFor slot "pkg-a" `shouldReturn` Just True
 

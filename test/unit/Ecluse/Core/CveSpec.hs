@@ -5,7 +5,7 @@ import Database.SQLite.Simple (Only, SQLError, close, execute_, fromOnly, open, 
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (bracket, catchAny)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), openCveDb, withCveDb)
@@ -117,11 +117,16 @@ spec = do
                 result `shouldBe` Left (CveDbWrongEpoch (osvSchemaEpoch + 1))
                 readIORef ran `shouldReturn` False
 
-        it "closes the connection when a malformed provenance row fails handle construction" $
+        it "rejects an artifact whose provenance rows are unreadable as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "malformed-meta.db"
                 mkDbWithMalformedProvenance path
-                openCveDb Npm path `shouldThrow` anyException
+                openCveDb Npm path >>= \case
+                    Left (CveDbMetaUnreadable problems) -> problems `shouldSatisfy` not . null
+                    Left other -> fail ("expected CveDbMetaUnreadable, got " <> show other)
+                    Right db -> do
+                        cveDbClose db
+                        fail "expected an artifact with malformed meta to be rejected, but it was accepted"
                 -- The failed construction must not leak its accepted
                 -- connection: no descriptor may still reference the artifact.
                 held <- openFdTargets

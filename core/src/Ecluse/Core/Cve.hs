@@ -103,9 +103,8 @@ data CveDb = CveDb
 
 {- | Open an @osv.db@ artifact and build the owning handle over it, or reject
 the artifact ('CveDbRejected') with its connection already closed. Throws on
-faults below the acceptance contract (an unreadable file, a malformed
-provenance row), and then too the connection is already closed: an exception
-never leaks it.
+faults below the acceptance contract (an unreadable file), and then too the
+connection is already closed: an exception never leaks it.
 -}
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile =
@@ -116,8 +115,12 @@ openCveDb eco dbFile =
             -- acceptance decodes only the ecosystem row, so a further meta row
             -- can still fail to decode here, and that failure must close the
             -- connection rather than leak it.
-            meta <- provenanceQuery conn `onException` close conn
-            pure (Right (mkCveDb conn meta))
+            res <- provenanceQuery conn `onException` close conn
+            case res of
+                Left rejection -> do
+                    close conn
+                    pure (Left rejection)
+                Right meta -> pure (Right (mkCveDb conn meta))
 
 mkCveDb :: Connection -> [(Text, Text)] -> CveDb
 mkCveDb conn meta =

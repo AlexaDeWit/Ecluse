@@ -16,7 +16,7 @@ module Ecluse.Core.Cve.Internal (
 ) where
 
 import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, open, query, query_)
-import UnliftIO.Exception (onException, try)
+import UnliftIO.Exception (onException, try, tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (MetaKey (MetaEcosystem), osvSchemaEpoch, renderMetaKey)
@@ -66,6 +66,11 @@ data CveDbRejected
       unreadable so the ecosystem cannot be confirmed ('Nothing').
       -}
       CveDbEcosystemMismatch (Maybe Text)
+    | {- | The artifact's @meta@ provenance rows are unreadable (e.g. a NULL or
+      BLOB value in a @TEXT NOT NULL@ column). The carried lines are the thrown
+      error.
+      -}
+      CveDbMetaUnreadable [Text]
     deriving stock (Eq, Show)
 
 {- | Open an artifact read-only-in-effect and accept or reject it.
@@ -215,6 +220,13 @@ advisoriesQuery conn name = do
 {- | The artifact's @meta@ provenance rows, key-sorted for a deterministic
 snapshot. An artifact with no @meta@ table would have failed acceptance, so
 this only ever runs on an accepted connection.
+
+Fold any decode throw into a rejection value rather than letting it propagate:
+a hostile artifact is refused, never a fault to unwind.
 -}
-provenanceQuery :: Connection -> IO [(Text, Text)]
-provenanceQuery conn = query_ conn "SELECT key, value FROM meta ORDER BY key"
+provenanceQuery :: Connection -> IO (Either CveDbRejected [(Text, Text)])
+provenanceQuery conn = do
+    res <- tryAny (query_ conn "SELECT key, value FROM meta ORDER BY key")
+    pure $ case res of
+        Left err -> Left (CveDbMetaUnreadable [show err])
+        Right rows -> Right rows
