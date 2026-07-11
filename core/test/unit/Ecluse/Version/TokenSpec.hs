@@ -16,19 +16,12 @@ spec = do
                 c <- forAll Gen.unicodeAll
                 isAsciiAlphaNum c === (isAscii c && isAlphaNum c)
 
-        it "returns True for ASCII letters and digits" $ do
-            all isAsciiAlphaNum ['a' .. 'z'] `shouldBe` True
-            all isAsciiAlphaNum ['A' .. 'Z'] `shouldBe` True
-            all isAsciiAlphaNum ['0' .. '9'] `shouldBe` True
+        it "returns True for ASCII letters and digits" $
+            hedgehog $ do
+                c <- forAll Gen.ascii
+                isAsciiAlphaNum c === isAlphaNum c
 
-        it "returns False for ASCII punctuation" $ do
-            isAsciiAlphaNum '-' `shouldBe` False
-            isAsciiAlphaNum '.' `shouldBe` False
-            isAsciiAlphaNum '_' `shouldBe` False
-            isAsciiAlphaNum ' ' `shouldBe` False
-
-        it "returns False for Unicode alphanumeric characters" $ do
-            isAsciiAlphaNum 'é' `shouldBe` False
-            isAsciiAlphaNum 'α' `shouldBe` False
-            isAsciiAlphaNum '１' `shouldBe` False -- Fullwidth digit 1
-            isAsciiAlphaNum '٤' `shouldBe` False -- Arabic-Indic digit 4
+        it "returns False for non-ASCII characters" $
+            hedgehog $ do
+                c <- forAll (Gen.filter (not . isAscii) Gen.unicodeAll)
+                isAsciiAlphaNum c === False
