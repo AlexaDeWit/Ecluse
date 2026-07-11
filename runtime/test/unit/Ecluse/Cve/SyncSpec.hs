@@ -18,7 +18,7 @@ import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
-    OsvDbFetchFault (OsvDbTooLarge),
+    OsvDbFetchFault (OsvDbNoEtag, OsvDbTooLarge),
     SyncEnv (..),
     SyncOutcome (..),
     SyncSchedule (..),
@@ -253,9 +253,32 @@ spec = do
                     readIORef downloads `shouldReturn` 1
                     probesFor slot "pkg" `shouldReturn` Nothing
 
-    describe "SyncOutcome and DbEtag" $ do
+        it "the poll triggers SyncUnchanged when the ETag is stable" $
+            withSyncEnv $ \_ _ envWith -> do
+                heads <- newIORef (0 :: Int)
+                downloads <- newIORef (0 :: Int)
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = do
+                                modifyIORef' heads (+ 1)
+                                pure (Just (DbEtag "e1"))
+                            , fetchDownload = \dest -> do
+                                modifyIORef' downloads (+ 1)
+                                mkMinimalValidDb dest "pkg"
+                                pure (DbEtag "e1")
+                            }
+                    schedule = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                withAsync (runQuiet (runCveSync (envWith fetch) schedule pass)) $ \_ -> do
+                    threadDelay 200_000
+                    -- Should have downloaded once in the boot burst (even with empty backoff)
+                    -- and then polled several times, finding it unchanged.
+                    readIORef downloads `shouldReturn` 1
+                    n <- readIORef heads
+                    n `shouldSatisfy` (> 2)
+
+    describe "Sync outcomes and faults Show instances" $ do
+        let (isNotNull :: [Char] -> Bool) = not . null
         it "Show SyncOutcome exercises all constructors" $ do
-            let (isNotNull :: [Char] -> Bool) = not . null
             show (SyncSwapped (DbEtag "e") [("k", "v")]) `shouldSatisfy` isNotNull
             show SyncUnchanged `shouldSatisfy` isNotNull
             show SyncAbsent `shouldSatisfy` isNotNull
@@ -263,6 +286,10 @@ spec = do
 
         it "Show DbEtag" $ do
             show (DbEtag "e") `shouldBe` ("DbEtag \"e\"" :: [Char])
+
+        it "Show OsvDbFetchFault" $ do
+            show (OsvDbTooLarge 1024) `shouldSatisfy` isNotNull
+            show OsvDbNoEtag `shouldSatisfy` isNotNull
 
     describe "cappedAt" $ do
         it "passes a stream that ends exactly at the cap through unchanged" $ do

@@ -3,8 +3,8 @@ module Ecluse.CveSpec (spec) where
 import Database.SQLite.Simple (close, open)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDbRejected (CveDbMetaUnreadable), insideAffectedRange)
-import Ecluse.Core.Cve.Internal (provenanceQuery)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDbRejected (..), insideAffectedRange, severityAtLeast)
+import Ecluse.Core.Cve.Internal (checkEpochStamp, checkIntegrity, checkMetaEcosystem, checkRangesTable, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 -- A builder for a fixed-bounded (half-open) interval, exposing only its bounds.
@@ -31,19 +31,67 @@ inside = insideAffectedRange Npm
 
 spec :: Spec
 spec = do
-    describe "provenanceQuery" $ do
-        it "returns Left CveDbMetaUnreadable when the connection is closed" $ do
+    describe "acceptance components (robustness under closed connection)" $ do
+        it "checkEpochStamp returns Left CveDbIntegrityFailed" $ do
             conn <- open ":memory:"
             close conn
-            res <- provenanceQuery conn
-            case res of
+            checkEpochStamp conn >>= \case
+                Left (CveDbIntegrityFailed _) -> pass
+                other -> fail ("expected Left CveDbIntegrityFailed, got " <> show other)
+
+        it "checkIntegrity returns Left CveDbIntegrityFailed" $ do
+            conn <- open ":memory:"
+            close conn
+            checkIntegrity conn >>= \case
+                Left (CveDbIntegrityFailed _) -> pass
+                other -> fail ("expected Left CveDbIntegrityFailed, got " <> show other)
+
+        it "checkRangesTable returns Left CveDbIntegrityFailed" $ do
+            conn <- open ":memory:"
+            close conn
+            checkRangesTable conn >>= \case
+                Left (CveDbIntegrityFailed _) -> pass
+                other -> fail ("expected Left CveDbIntegrityFailed, got " <> show other)
+
+        it "checkMetaEcosystem returns Left CveDbEcosystemMismatch Nothing" $ do
+            conn <- open ":memory:"
+            close conn
+            checkMetaEcosystem Npm conn >>= \case
+                Left (CveDbEcosystemMismatch Nothing) -> pass
+                other -> fail ("expected Left CveDbEcosystemMismatch Nothing, got " <> show other)
+
+        it "provenanceQuery returns Left CveDbMetaUnreadable" $ do
+            conn <- open ":memory:"
+            close conn
+            provenanceQuery conn >>= \case
                 Left (CveDbMetaUnreadable _) -> pass
                 other -> fail ("expected Left CveDbMetaUnreadable, got " <> show other)
 
-    describe "AdvisoryRange Show instance" $ do
-        it "exercises the constructor" $ do
-            let (isNotNull :: [Char] -> Bool) = not . null
+    describe "Show instances" $ do
+        let (isNotNull :: [Char] -> Bool) = not . null
+        it "AdvisoryRange exercises the constructor" $ do
             show (AdvisoryRange "CVE-1" (Just 5.0) (Just "0") (Just "1") Nothing) `shouldSatisfy` isNotNull
+
+        it "CveDbRejected exercises all constructors" $ do
+            show (CveDbWrongEpoch 1) `shouldSatisfy` isNotNull
+            show (CveDbIntegrityFailed ["p1"]) `shouldSatisfy` isNotNull
+            show CveDbRangesNotATable `shouldSatisfy` isNotNull
+            show (CveDbEcosystemMismatch (Just "bad")) `shouldSatisfy` isNotNull
+            show (CveDbEcosystemMismatch Nothing) `shouldSatisfy` isNotNull
+            show (CveDbMetaUnreadable ["err"]) `shouldSatisfy` isNotNull
+
+    describe "severityAtLeast" $ do
+        it "returns True when severity is Nothing (fail-closed)" $
+            severityAtLeast 5.0 Nothing `shouldBe` True
+
+        it "returns True when severity is equal to threshold" $
+            severityAtLeast 5.0 (Just 5.0) `shouldBe` True
+
+        it "returns True when severity is above threshold" $
+            severityAtLeast 5.0 (Just 7.5) `shouldBe` True
+
+        it "returns False when severity is below threshold" $
+            severityAtLeast 5.0 (Just 2.5) `shouldBe` False
 
     describe "insideAffectedRange" $ do
         describe "the half-open interval [introduced, fixed)" $ do

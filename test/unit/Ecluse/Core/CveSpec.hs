@@ -193,6 +193,7 @@ spec = do
             show (CveDbIntegrityFailed ["p1"]) `shouldSatisfy` isNotNull
             show CveDbRangesNotATable `shouldSatisfy` isNotNull
             show (CveDbEcosystemMismatch (Just "bad")) `shouldSatisfy` isNotNull
+            show (CveDbEcosystemMismatch Nothing) `shouldSatisfy` isNotNull
             show (CveDbMetaUnreadable ["err"]) `shouldSatisfy` isNotNull
 
     describe "the hardened connection" $ do
