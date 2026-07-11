@@ -254,12 +254,12 @@ spec = do
                     probesFor slot "pkg" `shouldReturn` Nothing
 
     describe "SyncOutcome and DbEtag" $ do
-        it "Show SyncOutcome" $ do
+        it "Show SyncOutcome exercises all constructors" $ do
             let (isNotNull :: [Char] -> Bool) = not . null
-            show (SyncSwapped (DbEtag "e") []) `shouldSatisfy` isNotNull
+            show (SyncSwapped (DbEtag "e") [("k", "v")]) `shouldSatisfy` isNotNull
             show SyncUnchanged `shouldSatisfy` isNotNull
             show SyncAbsent `shouldSatisfy` isNotNull
-            show (SyncRejected (DbEtag "e") (CveDbMetaUnreadable [])) `shouldSatisfy` isNotNull
+            show (SyncRejected (DbEtag "e") (CveDbMetaUnreadable ["err"])) `shouldSatisfy` isNotNull
 
         it "Show DbEtag" $ do
             show (DbEtag "e") `shouldBe` ("DbEtag \"e\"" :: [Char])

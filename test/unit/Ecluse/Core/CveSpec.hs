@@ -13,7 +13,7 @@ import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithMalformedEcosystem, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithEmptyMeta, mkDbWithMalformedEcosystem, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
@@ -98,6 +98,12 @@ spec = do
                 mkDbWithMalformedEcosystem path
                 openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
 
+        it "rejects an artifact with an empty meta table as a value" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "empty-meta.db"
+                mkDbWithEmptyMeta path
+                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
+
         it "rejects an artifact with no meta table as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-meta.db"
@@ -179,6 +185,15 @@ spec = do
                 -- may still reference the file.
                 held <- openFdTargets
                 held `shouldSatisfy` not . any (path `isSuffixOf`)
+
+    describe "CveDbRejected Show instance" $ do
+        it "exercises all constructors" $ do
+            let (isNotNull :: [Char] -> Bool) = not . null
+            show (CveDbWrongEpoch 1) `shouldSatisfy` isNotNull
+            show (CveDbIntegrityFailed ["p1"]) `shouldSatisfy` isNotNull
+            show CveDbRangesNotATable `shouldSatisfy` isNotNull
+            show (CveDbEcosystemMismatch (Just "bad")) `shouldSatisfy` isNotNull
+            show (CveDbMetaUnreadable ["err"]) `shouldSatisfy` isNotNull
 
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $

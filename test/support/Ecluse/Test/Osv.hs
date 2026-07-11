@@ -29,6 +29,7 @@ module Ecluse.Test.Osv (
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
     mkDbWithMalformedEcosystem,
+    mkDbWithEmptyMeta,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
 ) where
@@ -221,6 +222,26 @@ mkDbWithMalformedEcosystem path = withConnection path $ \conn -> do
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', X'DEADBEEF')"
+    setEpoch conn osvSchemaEpoch
+
+{- | An artifact with the right epoch and a real @meta@ table, but the table is
+EMPTY. Acceptance (specifically 'checkMetaEcosystem') must fold the missing
+ecosystem row into a rejection value (CveDbEcosystemMismatch Nothing) rather than
+returning success.
+-}
+mkDbWithEmptyMeta :: FilePath -> IO ()
+mkDbWithEmptyMeta path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
+        \)"
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     setEpoch conn osvSchemaEpoch
 
 {- | A structurally corrupt artifact: a valid, right-epoch database whose

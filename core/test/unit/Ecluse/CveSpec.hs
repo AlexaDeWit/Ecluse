@@ -1,8 +1,10 @@
 module Ecluse.CveSpec (spec) where
 
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Database.SQLite.Simple (close, open)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), insideAffectedRange)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDbRejected (CveDbMetaUnreadable), insideAffectedRange)
+import Ecluse.Core.Cve.Internal (provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 -- A builder for a fixed-bounded (half-open) interval, exposing only its bounds.
@@ -28,22 +30,37 @@ inside :: Text -> AdvisoryRange -> Bool
 inside = insideAffectedRange Npm
 
 spec :: Spec
-spec = describe "insideAffectedRange" $ do
-    describe "the half-open interval [introduced, fixed)" $ do
-        it "contains a version strictly between the bounds" $
-            inside "1.5.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` True
+spec = do
+    describe "provenanceQuery" $ do
+        it "returns Left CveDbMetaUnreadable when the connection is closed" $ do
+            conn <- open ":memory:"
+            close conn
+            res <- provenanceQuery conn
+            case res of
+                Left (CveDbMetaUnreadable _) -> pass
+                other -> fail ("expected Left CveDbMetaUnreadable, got " <> show other)
 
-        it "contains the introduced bound itself" $
-            inside "1.0.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` True
+    describe "AdvisoryRange Show instance" $ do
+        it "exercises the constructor" $ do
+            let (isNotNull :: [Char] -> Bool) = not . null
+            show (AdvisoryRange "CVE-1" (Just 5.0) (Just "0") (Just "1") Nothing) `shouldSatisfy` isNotNull
 
-        it "excludes a version below the introduced bound" $
-            inside "0.9.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
+    describe "insideAffectedRange" $ do
+        describe "the half-open interval [introduced, fixed)" $ do
+            it "contains a version strictly between the bounds" $
+                inside "1.5.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` True
 
-        it "excludes the fixed bound itself (the fix is not affected)" $
-            inside "2.0.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
+            it "contains the introduced bound itself" $
+                inside "1.0.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` True
 
-        it "excludes a version above the fixed bound" $
-            inside "2.1.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
+            it "excludes a version below the introduced bound" $
+                inside "0.9.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
+
+            it "excludes the fixed bound itself (the fix is not affected)" $
+                inside "2.0.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
+
+            it "excludes a version above the fixed bound" $
+                inside "2.1.0" (range (Just "1.0.0") (Just "2.0.0")) `shouldBe` False
 
     describe "open ends" $ do
         it "a missing introduced bound starts the range at the beginning" $
