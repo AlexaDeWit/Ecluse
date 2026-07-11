@@ -278,6 +278,28 @@ a neutral `404 Not Found` in `text/plain`, while every in-mount error renders th
 renderer. The denial-body shape and `ECLUSE_HELP_MESSAGE` handling are in
 [Rules Engine → Denial responses](rules-engine.md#denial-responses).
 
+### The typed request perimeter
+
+The pipeline reports every routine failure as a value, so an exception reaching the web layer is an
+escape from some dependency's typed contract. Each effectful route runs under a perimeter
+(`perimeterGuard` in `Ecluse.Runtime.Server`) that makes the disposition explicit rather than
+leaving it to warp's defaults:
+
+- **Pre-commit** (nothing has been written to the client): the escape is classified into the closed
+  `RequestFault` vocabulary (`Ecluse.Core.Server.Fault`) -- a recognised wiring/contract fault is a
+  `GateFault`, an escape from the response-assembly leg (wrapped in the confined `RenderEscape`
+  marker where the assembled render runs) is a `RenderFault`, anything else `UnclassifiedFault` --
+  counted on `ecluse.serve.perimeter.faults`, logged with an audit payload (path, cause, bounded
+  detail), and answered with the mount-shaped neutral `500`. No fault detail ever reaches a client.
+- **Post-commit** (the response has begun, tracked by the perimeter's respond wrapper): there is no
+  second response to give, so the escape rethrows; warp tears the connection down and the
+  `scOnException` hook records it through the structured logger (filtered through
+  `defaultShouldDisplayException`, so routine client disconnects stay quiet).
+
+Asynchronous exceptions are never caught: cancellation tears a request down like any thread. Warp's
+own `setOnExceptionResponse` remains only as the neutral-body backstop for faults with no mount
+context (middleware, warp itself).
+
 ## Middleware and helper libraries
 
 The dividing principle: adopt libraries for cross-cutting infrastructure identical for every service;

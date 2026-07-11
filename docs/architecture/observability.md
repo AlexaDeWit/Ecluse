@@ -102,6 +102,10 @@ not re-emit them. Names follow OTel semantic conventions for HTTP (`http.server.
   (counter; admit/deny/unavailable); `ecluse.registry.merge.divergence` (counter) ← the
   cross-upstream integrity-divergence alarm (threat #11), incremented once per contradicting
   version. The package and version are on the paired `WARNING` log line, never a metric label.
+  `ecluse.serve.perimeter.faults` (counter; cause gate/render/unclassified) counts pre-commit
+  handler escapes the typed request perimeter answered with the neutral 500 -- steady state is
+  zero, so any movement is an invariant break worth a look; the paired `ERROR` audit line carries
+  the request path and the bounded rendered detail (`perimeterCause`/`perimeterDetail` fields).
 - **Gate**, `ecluse.rule.denials` (counter; rule, reason-class); `ecluse.rule.eval.duration`
   (histogram; tier); `ecluse.rule.effectful.failures` (counter; rule, cause);
   `ecluse.rule.breaker.state` (gauge; source).

@@ -59,6 +59,9 @@ module Ecluse.Runtime.Server (
     runWarp,
     probeApplication,
 
+    -- * The typed request perimeter
+    perimeterGuard,
+
     -- * Graceful shutdown
     DrainSignal,
     newDrainSignal,
@@ -400,31 +403,16 @@ serve env binding classified request respond =
         Publish name -> guardedServe (servePublish name request)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
-    {- The typed request perimeter: run the effectful handler with a
-    commit-tracking respond, catching only __synchronous__ escapes (asynchronous
-    cancellation is not caught and tears the request down like any thread). The
-    handlers report every routine failure as a value, so what arrives here is an
-    escape from some dependency's typed contract. Pre-commit, it is classified
-    ('classifyEscape'), counted on the bounded @ecluse.serve.perimeter.faults@
-    metric, logged with its audit payload, and answered with the mount-shaped
-    neutral 500 -- no fault detail ever reaches the client. Post-commit there is
-    no second response to give: the escape rethrows, warp tears the connection
-    down, and the 'scOnException' hook logs it. -}
-    guardedServe handlerOn = do
-        committed <- newIORef False
-        let respondCommitted response = do
-                atomicWriteIORef committed True
-                respond response
-        run (handlerOn respondCommitted) `catchAny` \escape -> do
-            wasCommitted <- readIORef committed
-            if wasCommitted
-                then throwIO escape
-                else do
-                    let fault = classifyEscape escape
-                    mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
-                    run . katipAddContext (perimeterPayload fault) $
-                        logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
-                    respond (renderedError (bindingRenderer binding) status500 "internal server error")
+    -- One effectful route under the typed request perimeter: the handler is
+    -- discharged through 'run', and the perimeter's observation channel is the
+    -- bounded @ecluse.serve.perimeter.faults@ metric plus the audit log line.
+    guardedServe handlerOn =
+        perimeterGuard observeFault (bindingRenderer binding) respond (run . handlerOn)
+
+    observeFault fault = do
+        mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
+        run . katipAddContext (perimeterPayload fault) $
+            logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
 
     -- The perimeter audit payload: the request path, the bounded classified
     -- cause, and the rendered detail -- mirror fields of the denial audit line,
@@ -452,6 +440,44 @@ serve env binding classified request respond =
 
     isHead :: Bool
     isHead = requestMethod request == methodHead
+
+{- | The typed request perimeter over one effectful route: run the handler with a
+commit-tracking respond, catching only __synchronous__ escapes (asynchronous
+cancellation is not caught and tears the request down like any thread). The
+handlers report every routine failure as a value, so what arrives here is an
+escape from some dependency's typed contract.
+
+Pre-commit, the escape is classified ('Ecluse.Core.Server.Fault.classifyEscape'),
+handed to the injected observation channel (the composition wires the bounded
+@ecluse.serve.perimeter.faults@ metric and the audit log line), and answered with
+the mount-shaped neutral 500 -- no fault detail ever reaches the client.
+Post-commit -- the wrapped respond has already begun the response -- there is no
+second response to give: the escape rethrows, warp tears the connection down, and
+the 'scOnException' hook logs it. Exported for its spec; 'serve' wires it per
+request.
+-}
+perimeterGuard ::
+    -- | Observe a classified pre-commit fault (the metric and the audit line).
+    (RequestFault -> IO ()) ->
+    -- | The mount's renderer, shaping the neutral 500.
+    MountRenderer ->
+    -- | The client's respond continuation.
+    (Response -> IO ResponseReceived) ->
+    -- | The route's handler, discharged to 'IO', awaiting the tracked respond.
+    ((Response -> IO ResponseReceived) -> IO ResponseReceived) ->
+    IO ResponseReceived
+perimeterGuard observeFault renderer respond handlerOn = do
+    committed <- newIORef False
+    let respondCommitted response = do
+            atomicWriteIORef committed True
+            respond response
+    handlerOn respondCommitted `catchAny` \escape -> do
+        wasCommitted <- readIORef committed
+        if wasCommitted
+            then throwIO escape
+            else do
+                observeFault (classifyEscape escape)
+                respond (renderedError renderer status500 "internal server error")
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
 with, paired with the remainder classified through that mount's classifier.
