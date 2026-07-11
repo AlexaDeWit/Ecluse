@@ -183,6 +183,31 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "does not block a compatible public address (::1.1.1.1)" $
             isBlockedTarget noOptIn "::1.1.1.1" `shouldBe` False
 
+    describe "blocks NAT64-embedded IPv4 under the well-known prefix (64:ff9b::/96, RFC 6052)" $ do
+        -- On a fabric that runs NAT64, an address under the well-known prefix
+        -- routes to its embedded IPv4, so it must be decoded and tested against
+        -- the IPv4 ranges exactly as the mapped and compatible forms are.
+        it "blocks the instance-metadata address (64:ff9b::a9fe:a9fe)" $
+            isBlockedTarget noOptIn "64:ff9b::a9fe:a9fe" `shouldBe` True
+        it "blocks the instance-metadata address in dotted form (64:ff9b::169.254.169.254)" $
+            isBlockedTarget noOptIn "64:ff9b::169.254.169.254" `shouldBe` True
+        it "blocks NAT64 loopback (64:ff9b::127.0.0.1)" $
+            isBlockedTarget noOptIn "64:ff9b::127.0.0.1" `shouldBe` True
+        it "blocks the fully-expanded NAT64 metadata address (64:ff9b:0:0:0:0:a9fe:a9fe)" $
+            isBlockedTarget noOptIn "64:ff9b:0:0:0:0:a9fe:a9fe" `shouldBe` True
+        it "does not block a NAT64 embedding of a public address (64:ff9b::1.1.1.1)" $
+            isBlockedTarget noOptIn "64:ff9b::1.1.1.1" `shouldBe` False
+
+    describe "blocks NAT64-embedded IPv4 under the local-use prefix (64:ff9b:1::/48, RFC 8215)" $ do
+        -- The local-use prefix is a /48; any /96 within it embeds the IPv4 in
+        -- the low 32 bits, so the decode holds across the middle bits.
+        it "blocks the instance-metadata address (64:ff9b:1::169.254.169.254)" $
+            isBlockedTarget noOptIn "64:ff9b:1::169.254.169.254" `shouldBe` True
+        it "blocks an internal embedding under a non-zero /96 within the /48 (64:ff9b:1:aaaa::10.0.0.1)" $
+            isBlockedTarget noOptIn "64:ff9b:1:aaaa::10.0.0.1" `shouldBe` True
+        it "does not block a local-use embedding of a public address (64:ff9b:1::1.1.1.1)" $
+            isBlockedTarget noOptIn "64:ff9b:1::1.1.1.1" `shouldBe` False
+
     describe "treats malformed IPv6 literals as names (not blocked)" $ do
         -- Each malformed form must fail to parse as an IP, so it is not mistaken
         -- for an internal literal; the allowlist would still gate a real name.
@@ -299,8 +324,8 @@ __explicit expected table__ rather than any prior implementation. The internal
 block recognises a host as a literal with a deliberately lenient hand-rolled
 parser and delegates only the range membership to a library, so this corpus
 guards that the gate neither narrows nor widens: every internal range blocks, the
-IPv4-mapped smuggling forms decode and block, and the lenient/strict boundary
-spellings classify exactly as documented.
+IPv4-embedding smuggling forms (mapped, compatible, and NAT64) decode and block,
+and the lenient/strict boundary spellings classify exactly as documented.
 
 The boundary cases are the load-bearing ones. A leading-zero octet is coerced as
 __octal__, exactly as a libc resolver does, so it is /not/ its decimal digits:
@@ -325,11 +350,17 @@ classificationCorpusSpec =
             (if expected then "blocks " else "permits ")
                 <> (if T.null host then "<empty>" else host)
 
-    -- (host, expected-blocked). Grouped by intent; every internal range, both
-    -- IPv4-mapped spellings, the lenient/strict boundary, and externals/names.
+    -- (host, expected-blocked). Grouped by intent; every internal range, every
+    -- IPv4-embedding spelling, the lenient/strict boundary, and externals/names.
     corpus :: [(Text, Bool)]
     corpus =
-        internalV4 <> internalV6 <> mappedV4 <> lenientBoundary <> externals <> names
+        internalV4
+            <> internalV6
+            <> mappedV4
+            <> nat64Embedded
+            <> lenientBoundary
+            <> externals
+            <> names
 
     internalV4 =
         [ ("169.254.169.254", True) -- IMDSv4
@@ -367,6 +398,16 @@ classificationCorpusSpec =
         , ("::127.0.0.1", True) -- compatible loopback
         , ("0:0:0:0:0:0:127.0.0.1", True) -- compatible loopback, fully expanded
         , ("::1.1.1.1", False) -- compatible public stays permitted
+        ]
+
+    nat64Embedded =
+        [ ("64:ff9b::a9fe:a9fe", True) -- IMDSv4 under the NAT64 well-known prefix, hex spelling
+        , ("64:ff9b::169.254.169.254", True) -- IMDSv4 under the well-known prefix, dotted spelling
+        , ("64:ff9b::127.0.0.1", True) -- NAT64 loopback
+        , ("64:ff9b::1.1.1.1", False) -- NAT64 public stays permitted
+        , ("64:ff9b:1::169.254.169.254", True) -- IMDSv4 under the RFC 8215 local-use prefix
+        , ("64:ff9b:1:aaaa::10.0.0.1", True) -- RFC1918 under a non-zero /96 within the /48
+        , ("64:ff9b:1::1.1.1.1", False) -- local-use public stays permitted
         ]
 
     lenientBoundary =
