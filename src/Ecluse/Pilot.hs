@@ -10,13 +10,13 @@ module Ecluse.Pilot (
 
 import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadMask)
-import Katip (KatipContext, LogEnv, Severity (ErrorS, InfoS), logFM, ls)
+import Katip (KatipContext, LogEnv, Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (concurrently_)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (catchAny, throwIO)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Composition (parseEndpointUrl)
@@ -26,6 +26,12 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
+import Ecluse.Core.Supervision (
+    BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
+    FaultDisposition (Transient),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    superviseLoop,
+ )
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
@@ -58,20 +64,32 @@ to the configured S3 bucket, then wait the configured sync interval and repeat. 
 no bucket configured the loop idles. Orchestration over the OSV producer (the compile
 in "Ecluse.Core.Osv.Compile") and the S3 adapter ("Ecluse.Runtime.Pilot.Export"); it
 lives in the shell because it reads the composed configuration.
+
+The cycle runs under the shared supervision combinator: every fault is transient
+here (a failed export is retried; there is no per-cycle wiring fault to fail up
+on), and the backoff is pinned at the sync interval on both ends, so a failing
+export retries at exactly the cadence a succeeding one repeats at.
 -}
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Config -> m ()
 runExportLoop telemetry config = do
     let appCfg = configApp config
+        intervalMicros = (round (cfgCveSyncInterval appCfg) :: Int) * 1000000
     case cfgVulnerabilityDatabaseBucket appCfg of
         Nothing -> do
             logFM InfoS "No S3 bucket configured for OSV database export; export loop disabled."
             forever $ threadDelay (24 * 60 * 60 * 1000000)
         Just bucketName -> do
             logFM InfoS (ls ("S3 export loop starting up. Target bucket: " <> bucketName))
-            forever $ do
-                catchAny (runResourceT $ exportNpm telemetry appCfg bucketName) $ \e ->
-                    logFM ErrorS (ls ("Export failed: " <> show e :: String))
-                threadDelay ((round (cfgCveSyncInterval appCfg) :: Int) * 1000000)
+            void
+                $ superviseLoop
+                    SupervisionPolicy
+                        { spLabel = "pilot-export"
+                        , spClassify = const Transient
+                        , spBackoff = BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros}
+                        }
+                $ do
+                    runResourceT (exportNpm telemetry appCfg bucketName)
+                    threadDelay intervalMicros
 
 -- | Compile the npm OSV artifact and upload it to the given bucket: one full cycle.
 exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()

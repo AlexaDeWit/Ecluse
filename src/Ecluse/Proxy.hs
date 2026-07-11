@@ -115,7 +115,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
-import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
@@ -134,6 +134,12 @@ import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
+import Ecluse.Core.Supervision (
+    BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
+    FaultDisposition (Permanent, Transient),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    superviseLoop,
+ )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
@@ -287,7 +293,7 @@ runProxy bootEnv = do
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
         race_
             (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
-            (concurrently_ drainEnqueueBuffer (mapConcurrently_ id syncTasks))
+            (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
 
 {- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
 failures are logged rate-limited ('enqueueReportWorthy') and each counts an enqueue
@@ -316,14 +322,38 @@ enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 
 -- One advisory sync task per configured ecosystem: each runs under the boot log's
--- "cve-sync" namespace and flips its ecosystem's one-way readiness flag once its
--- first sync lands.
+-- "cve-sync" namespace, supervised by the shared combinator (residue restarts the
+-- task, which simply resumes from the remote artifact), and flips its ecosystem's
+-- one-way readiness flag once its first sync lands.
 cveSyncTasks :: Env -> SyncSchedule -> Map.Map Ecosystem CveSyncHandle -> [IO ()]
 cveSyncTasks builtEnv schedule plan =
-    [ runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
-        runCveSync (csEnv handle) schedule (atomically (writeTVar (csReady handle) True))
+    [ void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
+        superviseLoop
+            (transientPolicy ("cve-sync[" <> show (syncEcosystem (csEnv handle)) <> "]"))
+            (runCveSync (csEnv handle) schedule (atomically (writeTVar (csReady handle) True)))
     | handle <- Map.elems plan
     ]
+
+{- A policy for the shell's background loops with no wiring fault to fail up on:
+every synchronous escape is residue, retried from one second towards a
+30-second cap. -}
+transientPolicy :: Text -> SupervisionPolicy
+transientPolicy label =
+    SupervisionPolicy
+        { spLabel = label
+        , spClassify = const Transient
+        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
+        }
+
+{- The enqueue-buffer drain under the shared supervision combinator: its
+per-delivery pacing over the typed fault channel lives inside the buffer's own
+drain loop ('Ecluse.Core.Queue.newEnqueueBuffer'); this wrapper contains only
+residue, so one contract escape cannot silently end mirror-job delivery for the
+rest of the run. -}
+superviseDrain :: Env -> IO () -> IO ()
+superviseDrain builtEnv drain =
+    void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "mirror-enqueue-drain" $
+        superviseLoop (transientPolicy "mirror-enqueue-drain") (liftIO drain)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
 lookup borrows through that ecosystem's own slot when the sync plan carries
@@ -509,7 +539,26 @@ through 'Ecluse.Core.Worker.runWorkerM', the worker analogue of the serve path's
 runWorker :: WorkerPolicies -> Env -> IO ()
 runWorker policies env = do
     dd <- ddPayloadNow (envDdContext env)
-    runWorkerM (envLogEnv env) dd (workerRuntimeOf policies env) (katipAddNamespace "worker" workerLoop)
+    void (runWorkerM (envLogEnv env) dd (workerRuntimeOf policies env) (katipAddNamespace "worker" (workerLoop workerSupervision)))
+
+{- The worker's supervision policy: residue is transient (logged, retried with a
+bounded exponential backoff from one second), except the wiring faults no retry
+can fix -- an unconfigured registry handle or an unconfigured credential leaf
+reached at runtime -- which fail up through the services race and take the
+process down, so the orchestrator restarts it against corrected configuration
+instead of the loop retrying a permanently-broken wiring forever. -}
+workerSupervision :: SupervisionPolicy
+workerSupervision =
+    SupervisionPolicy
+        { spLabel = "worker"
+        , spClassify = classify
+        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
+        }
+  where
+    classify fault
+        | Just RegistryUnconfigured <- fromException fault = Permanent
+        | Just (Unconfigured _) <- fromException fault = Permanent
+        | otherwise = Transient
 
 {- | Resolve the worker's per-ecosystem re-evaluation bundles from the served mounts: for
 each mount that serves a packument (carries 'PackumentDeps'), a bundle keyed by the

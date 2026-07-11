@@ -49,7 +49,7 @@ import Data.Conduit.Combinators qualified as C
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
-import UnliftIO (MonadUnliftIO, tryAny)
+import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, catchAny, mask, onException, throwIO)
 
@@ -226,11 +226,12 @@ gives up after the schedule with a warning. The proxy serves regardless, since
 an empty slot only ever abstains into deny-by-default, and the poll keeps
 trying.
 
-Every iteration is supervised: a fetch fault arrives as a value in the step's
-outcome and is logged, and any residue an iteration still throws is caught and
-logged -- neither is ever fatal to the task. @notifyFirstSync@ runs after each
-successful swap (its consumer, the readiness signal, is an idempotent one-way
-flip).
+A fetch fault arrives as a value in the step's outcome and is logged here;
+residue (a filesystem fault on the temp path, a contract escape) propagates to
+the supervision the composition root wraps this task in
+('Ecluse.Core.Supervision.superviseLoop'), which restarts the task -- it simply
+resumes from the remote artifact. @notifyFirstSync@ runs after each successful
+swap (its consumer, the readiness signal, is an idempotent one-way flip).
 -}
 runCveSync :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> SyncSchedule -> IO () -> m ()
 runCveSync env schedule notifyFirstSync = do
@@ -240,7 +241,7 @@ runCveSync env schedule notifyFirstSync = do
     eco = show (syncEcosystem env) :: Text
 
     burst lastSeen delays = do
-        (settled, seen') <- supervisedStep env eco notifyFirstSync lastSeen
+        (settled, seen') <- loggedStep env eco notifyFirstSync lastSeen
         case (settled, delays) of
             (True, _) -> pure seen'
             (False, []) -> do
@@ -258,35 +259,32 @@ runCveSync env schedule notifyFirstSync = do
 
     poll lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (_, seen') <- supervisedStep env eco notifyFirstSync lastSeen
+        (_, seen') <- loggedStep env eco notifyFirstSync lastSeen
         poll seen'
 
--- One supervised step: (the burst may stop, the ETag now last seen). The fetch
--- reports its failures as the 'SyncFetchFaulted' outcome, so the 'tryAny' here
--- narrows to residue: a fault below the typed channels (a filesystem error on
--- the temp path, a contract escape) is logged and the schedule retries.
-supervisedStep :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> Text -> IO () -> Maybe DbEtag -> m (Bool, Maybe DbEtag)
-supervisedStep env eco notifyFirstSync lastSeen =
-    tryAny (liftIO (syncStep env lastSeen)) >>= \case
-        Left err -> do
-            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync attempt failed: " <> show err))
-            pure (False, lastSeen)
-        Right (SyncFetchFaulted fault) -> do
+-- One logged step: (the burst may stop, the ETag now last seen). 'syncStep' is
+-- total over the fetch and over verification, so this is a plain fold over
+-- 'SyncOutcome' -- nothing is caught, and residue propagates to the task's
+-- supervision at the composition root.
+loggedStep :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> Text -> IO () -> Maybe DbEtag -> m (Bool, Maybe DbEtag)
+loggedStep env eco notifyFirstSync lastSeen =
+    liftIO (syncStep env lastSeen) >>= \case
+        SyncFetchFaulted fault -> do
             -- Nothing was learned about the remote artifact: keep the last seen
             -- ETag, let the burst retry (or the poll try again next interval).
             logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
             pure (False, lastSeen)
-        Right (SyncSwapped etag meta) -> do
+        SyncSwapped etag meta -> do
             logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show meta))
             liftIO notifyFirstSync
             pure (True, Just etag)
-        Right SyncUnchanged -> do
+        SyncUnchanged -> do
             logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
             pure (True, lastSeen)
-        Right SyncAbsent -> do
+        SyncAbsent -> do
             logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
             pure (False, lastSeen)
-        Right (SyncRejected etag rejection) -> do
+        SyncRejected etag rejection -> do
             logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
             -- Remembered so the same bad artifact is not re-downloaded
             -- every poll; a fixed re-publish carries a new ETag. The burst

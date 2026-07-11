@@ -23,7 +23,7 @@ spec = do
             withQueueRuntime queue $ \runtime -> do
                 -- The backoff after a failed iteration is ~1s, so a ~2.5s window admits a
                 -- couple of attempts; assert at least a second poll occurred.
-                _ <- timeout 2_500_000 (runWM runtime workerLoop)
+                _ <- timeout 2_500_000 (runWM runtime (workerLoop testSupervision))
                 attempts <- readIORef calls
                 attempts `shouldSatisfy` (>= 2)
 
@@ -35,7 +35,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             queue <- throwingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do
-                _ <- timeout 2_500_000 (runWM runtime workerLoop)
+                _ <- timeout 2_500_000 (runWM runtime (workerLoop testSupervision))
                 attempts <- readIORef calls
                 attempts `shouldSatisfy` (>= 2)
 
@@ -49,5 +49,5 @@ spec = do
             calls <- newIORef (0 :: Int)
             queue <- faultingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do
-                _ <- timeout 2_500_000 (runWM runtime workerLoop)
+                _ <- timeout 2_500_000 (runWM runtime (workerLoop testSupervision))
                 lastPoll (wrHeartbeat runtime) `shouldReturn` Nothing

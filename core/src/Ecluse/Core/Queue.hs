@@ -101,6 +101,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault), transportFault)
 import Ecluse.Core.Package (Hash, PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
 import Ecluse.Core.Version (Version)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the
@@ -703,20 +704,14 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
                 -- 'onDeliveryFailure' is a best-effort observer; guard it so a throwing
                 -- observer can never escape the loop and tear down the composition root.
                 void (tryAny (onDeliveryFailure n (qfDetail fault)))
-                threadDelay (drainBackoffMicros consecutiveFailures)
+                threadDelay (backoffMicros drainBackoff consecutiveFailures)
                 go (consecutiveFailures + 1)
 
-{- The bounded backoff between failed deliveries: doubling from 'drainBackoffBaseMicros'
-towards 'drainBackoffCapMicros' as consecutive failures mount, so a persistently-dead
-backend is retried at most once per the cap interval. The exponent is clamped so the
-doubling cannot overflow before the ceiling applies. -}
-drainBackoffMicros :: Int -> Int
-drainBackoffMicros consecutiveFailures =
-    min drainBackoffCapMicros (drainBackoffBaseMicros * (2 ^ min consecutiveFailures drainBackoffShiftClamp))
-
--- The drain backoff's base delay (after the first failure), its ceiling, and the
--- exponent clamp that keeps the doubling from overflowing before the ceiling applies.
-drainBackoffBaseMicros, drainBackoffCapMicros, drainBackoffShiftClamp :: Int
-drainBackoffBaseMicros = 200_000
-drainBackoffCapMicros = 30_000_000
-drainBackoffShiftClamp = 12
+{- The bounded backoff between failed deliveries (the shared
+'Ecluse.Core.Supervision.BackoffSchedule' shape): from 200ms towards a 30s cap as
+consecutive failures mount, so a persistently-dead backend is retried at most
+once per the cap interval. This is the loop's own per-delivery pacing over the
+typed fault channel; the supervision combinator wrapping the whole loop paces
+only residue. -}
+drainBackoff :: BackoffSchedule
+drainBackoff = BackoffSchedule{bsBaseMicros = 200_000, bsCapMicros = 30_000_000}

@@ -57,6 +57,11 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Supervision (
+    BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
+    FaultDisposition (Transient),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+ )
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
@@ -441,6 +446,18 @@ throwingVersionClient =
     MetadataClient
         { fetchFullManifest = const (throwIO (SimulatedContractEscape "throwingVersionClient: fetchFullManifest is unused"))
         , fetchVersionMetadata = \_ _ -> throwIO (SimulatedContractEscape "simulated contract escape")
+        }
+
+{- | The loop tests' supervision policy: everything transient, retried at a fixed
+one-second pace -- the composition root's worker policy shape without the shell's
+wiring-fault classifications (which live with the shell's types).
+-}
+testSupervision :: SupervisionPolicy
+testSupervision =
+    SupervisionPolicy
+        { spLabel = "worker-test"
+        , spClassify = const Transient
+        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 1_000_000}
         }
 
 {- | Discharge a 'WorkerM' to 'IO' over the worker runtime against a scribe-less @katip@

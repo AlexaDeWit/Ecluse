@@ -151,6 +151,7 @@ library ecluse-core
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
     Ecluse.Core.Server.Stream
+    Ecluse.Core.Supervision
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
@@ -529,6 +530,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
+    Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
