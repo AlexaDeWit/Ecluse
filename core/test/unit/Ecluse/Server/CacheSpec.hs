@@ -7,13 +7,13 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (async, cancel, catchAny, concurrently, mapConcurrently, timeout, wait)
+import UnliftIO (async, cancel, concurrently, mapConcurrently, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString, try)
+import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
-import Ecluse.Core.Registry.Metadata (digestOf)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), digestOf)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
     CacheEntry (..),
@@ -31,14 +31,35 @@ import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Resolve through the cache with an inert metrics port, so these tests assert the
 cache's hit\/miss and single-flight behaviour without a telemetry backend. The inert
-port discards every recording, so it neither records nor affects the cache.
+port discards every recording, so it neither records nor affects the cache. The
+success-path adapter: these cases drive the cache with fetches that cannot fail, so
+the wrapper lifts them into the typed channel and a 'Left' is a test bug surfaced as
+'UnexpectedFault' (the typed-failure cases call "Ecluse.Core.Server.Cache" directly).
 -}
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadata = Cache.resolveMetadata noopMetricsPort
+resolveMetadata c source name fetch =
+    unwrapResolved =<< Cache.resolveMetadata noopMetricsPort c source name (Right <$> fetch)
 
 -- | As 'resolveMetadata', threading the single-flight handoff hook (an inert metrics port).
 resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadataWith afterClaim = Cache.resolveMetadataWith afterClaim noopMetricsPort
+resolveMetadataWith afterClaim c source name fetch =
+    unwrapResolved =<< Cache.resolveMetadataWith afterClaim noopMetricsPort c source name (Right <$> fetch)
+
+-- | The success-path wrappers' unwrap: a 'Left' from a cannot-fail fetch is a test bug.
+unwrapResolved :: Either MetadataError a -> IO a
+unwrapResolved = either (throwIO . UnexpectedFault) pure
+
+-- | The typed wrapper for a 'Left' no success-path case expects (see 'resolveMetadata').
+newtype UnexpectedFault = UnexpectedFault MetadataError
+    deriving stock (Show)
+
+instance Exception UnexpectedFault
+
+-- | The typed escape the invariant-channel case throws from inside a leader's fetch.
+data LeaderEscaped = LeaderEscaped
+    deriving stock (Eq, Show)
+
+instance Exception LeaderEscaped
 
 -- | Resolve through the assembled-representation store with an inert metrics port.
 resolveAssembled :: MetadataCache -> Text -> IO ByteString -> IO ByteString
@@ -165,8 +186,9 @@ spec = do
         it "re-fetches after a failed fetch rather than caching the failure" $ do
             c <- freshCache
             calls <- newIORef 0
-            let boom = atomicModifyIORef' calls (\n -> (n + 1, ())) >> throwString "boom"
-            _ <- resolveMetadata c publicSource (pkg "flaky") boom `catchAny` const (pure (entry (pkg "flaky") "raw"))
+            let failing = atomicModifyIORef' calls (\n -> (n + 1, ())) $> Left MetadataUndecodable
+            failed <- Cache.resolveMetadata noopMetricsPort c publicSource (pkg "flaky") failing
+            failed `shouldBe` Left MetadataUndecodable
             -- The failed fetch left nothing cached, so the next resolution fetches again.
             _ <- resolveMetadata c publicSource (pkg "flaky") (countingFetch calls (pkg "flaky") "raw")
             readIORef calls `shouldReturn` 2
@@ -259,6 +281,56 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "back-to-back") (countingFetch calls (pkg "back-to-back") "raw")
             _ <- resolveMetadata c publicSource (pkg "back-to-back") (countingFetch calls (pkg "back-to-back") "raw")
             readIORef calls `shouldReturn` 1
+
+    describe "resolveMetadata -- typed failure channel" $ do
+        it "hands the leader's Left to every coalesced follower, caching nothing" $ do
+            -- The leader's fetch reports a typed failure; every concurrent waiter must
+            -- receive that same value (never an exception, never a re-lead), and the
+            -- store must stay empty so the next resolution fetches afresh.
+            c <- freshCache
+            calls <- newIORef (0 :: Int)
+            started <- newEmptyMVar
+            release <- newEmptyMVar
+            let failing = do
+                    atomicModifyIORef' calls (\n -> (n + 1, ()))
+                    _ <- tryPutMVar started ()
+                    takeMVar release
+                    pure (Left MetadataUndecodable)
+            (results, ()) <-
+                concurrently
+                    (mapConcurrently (const (Cache.resolveMetadata noopMetricsPort c publicSource (pkg "shared-fault") failing)) [1 .. 8 :: Int])
+                    ( do
+                        takeMVar started
+                        threadDelay 30000 -- give the others time to coalesce
+                        putMVar release ()
+                    )
+            results `shouldBe` replicate 8 (Left MetadataUndecodable)
+            readIORef calls `shouldReturn` 1
+            cachedMetadata c publicSource (pkg "shared-fault") `shouldReturn` Nothing
+
+        it "re-raises a synchronously escaping leader to its followers (the invariant channel)" $ do
+            -- The fetch's contract is total, so a synchronous escape is an invariant
+            -- break: the follower must see the exception re-raised, not a value, and
+            -- the slot must still free for a later caller.
+            result <- timeout 5_000_000 $ do
+                c <- freshCache
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                let escaping = do
+                        putMVar started ()
+                        () <- takeMVar release
+                        throwIO LeaderEscaped
+                leader <- async (try (resolveMetadata c publicSource (pkg "escape") escaping) :: IO (Either LeaderEscaped CacheEntry))
+                takeMVar started
+                follower <- async (try (resolveMetadata c publicSource (pkg "escape") escaping) :: IO (Either LeaderEscaped CacheEntry))
+                threadDelay 30000 -- give the follower time to register on the marker
+                putMVar release ()
+                (,) <$> wait leader <*> wait follower
+            case result of
+                Nothing -> expectationFailure "wedged: an escaping leader parked its follower"
+                Just (leaderOutcome, followerOutcome) -> do
+                    leaderOutcome `shouldBe` Left LeaderEscaped
+                    followerOutcome `shouldBe` Left LeaderEscaped
 
     describe "resolveMetadata -- single-flight orphan window" $ do
         it "unblocks a waiting follower and lets a later caller re-lead when the leader is cancelled at the claim handoff" $ do
@@ -389,7 +461,7 @@ spec = do
             (port, readResidency) <- recordingResidencyPort
             c <- newMetadataCache (config 60 100)
             for_ [1 .. 4 :: Int] $ \i ->
-                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (entry (pkg (show i)) "raw"))
+                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "raw")))
             residency <- readResidency
             n <- cacheSize c
             residency `shouldBe` Just (n * entryWeight)

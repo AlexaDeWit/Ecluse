@@ -27,7 +27,7 @@ import Ecluse.Core.Registry (RegistryClient (fetchMetadata, parsePackageInfo), R
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmLimits, npmManager),
     defaultNpmConfig,
-    fetchMetadataForm,
+    fetchMetadataFormBounded,
     newNpmClient,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
@@ -88,9 +88,10 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         manager <- newManager tlsManagerSettings
         client <- newNpmClient (defaultNpmConfig manager)
         let isOdd = mkPackageName Npm Nothing "is-odd"
-        outcome <- try (fetchMetadata client isOdd)
+        outcome <- fetchMetadata client isOdd
         case outcome of
-            Left (_ :: SomeException) ->
+            Left _ ->
+                -- The typed channel reports the unreachable-registry case as a value.
                 pendingWith "npm registry unreachable (offline); smoke test skipped"
             Right response ->
                 case parsePackageInfo client isOdd response of
@@ -168,15 +169,18 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
 a bounded fetch then the decode, nesting, projection, and version-count steps of
 @Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest@ -- over a live full packument
 under the default 'Limits', returning the projected @(name, versionCount)@ on success.
-Throws (the bounded read's 'Ecluse.Core.Registry.Npm.ResponseBoundExceeded', a decode
-error, or a projection error) if any bound or step refuses the document -- so a default
-that was accidentally too tight surfaces as a failure, not a silent pass.
+Throws (a rendered 'Ecluse.Core.Registry.FetchFault', a decode error, or a projection
+error) if any bound or step refuses the document -- so a default that was accidentally
+too tight surfaces as a failure, not a silent pass.
 -}
 admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
 admissibleUnderDefaults manager name = do
     let config = (defaultNpmConfig manager){npmManager = manager, npmLimits = defaultLimits}
-    -- 1. Body bound: fetchMetadataForm reads through boundedRead against npmLimits.
-    response <- fetchMetadataForm config Full noValidators name
+    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against npmLimits,
+    -- reporting any fetch fault (a bound breach included) as a value this smoke helper renders.
+    response <-
+        fetchMetadataFormBounded config Full noValidators name
+            >>= either (\fault -> throwString ("bounded fetch refused: " <> show fault)) pure
     -- 2. Decode, then 3. nesting bound, 4. projection, 5. version-count bound -- the
     -- same chain the serve-path projection runs; any refusal throws and fails the smoke case.
     value <- either (\e -> throwString ("decode failed: " <> e)) pure (eitherDecodeStrict (responseBody response))

@@ -3,7 +3,9 @@ module Ecluse.Worker.JobSpec (spec) where
 import Data.Aeson (Value, eitherDecodeStrict')
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Test.Hspec
+import UnliftIO.Exception (try)
 
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
@@ -18,7 +20,7 @@ import Ecluse.Core.Registry (
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataUndecodable),
+    MetadataError (MetadataUndecodable, MetadataUnreachable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
@@ -274,11 +276,11 @@ spec = do
                 published `shouldBe` []
 
         it "falls through to the full pipeline when the probe cannot reach the mirror" $
-            -- A mirror outage means the probe cannot tell: the job must run the full
-            -- gated pipeline (here, to a publish), never be skipped or failed on the
-            -- probe alone.
+            -- A mirror outage means the probe cannot tell: the transport fault arrives
+            -- as a typed value and the job must run the full gated pipeline (here, to
+            -- a publish), never be skipped or failed on the probe alone.
             withUpstream $ \url ->
-                withRuntimeRegistry (`probeThrowingClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                withRuntimeRegistry (`probeUnreachableClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
@@ -320,9 +322,17 @@ spec = do
             fetchVersionDetails (versionClient (Left MetadataUndecodable)) pkg ver
                 `shouldReturn` VersionMetadataUnavailable
 
-        it "classifies a transport throw as unavailable (total, never an escaping exception)" $
-            fetchVersionDetails throwingVersionClient pkg ver
+        it "classifies an unreachable upstream as unavailable (transport in the typed channel)" $
+            fetchVersionDetails (versionClient (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))) pkg ver
                 `shouldReturn` VersionMetadataUnavailable
+
+        it "propagates a client that escapes its total contract (the invariant channel)" $ do
+            -- The typed channel reports every real failure, so nothing here catches:
+            -- a throw out of the fetch is an invariant break that must reach the
+            -- caller's supervision (the worker loop, or the serve boundary), never be
+            -- laundered into the transient degrade.
+            outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
+            outcome `shouldSatisfy` isLeft
     describe "processBatch -- ack semantics over the in-memory queue" $ do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->

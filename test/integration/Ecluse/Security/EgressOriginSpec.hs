@@ -6,15 +6,14 @@ import Network.HTTP.Types (status200, status302)
 import Network.Wai (responseLBS)
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 import Test.Hspec
-import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
-    fetchMetadataForm,
+    fetchMetadataFormBounded,
  )
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated),
@@ -45,7 +44,7 @@ spec = do
             withUpstream $ \port -> do
                 manager <- newManager defaultManagerSettings
                 response <- fetchMetadata manager port Nothing
-                responseBody response `shouldBe` toStrict (encode packument)
+                fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
         it "uses the same validating manager for a credential-forwarding (private-origin) fetch" $
             -- The split is the credential, not the manager: a token-forwarding read reaches
@@ -53,7 +52,7 @@ spec = do
             withUpstream $ \port -> do
                 manager <- newManager defaultManagerSettings
                 response <- fetchMetadata manager port (Just "tok")
-                responseBody response `shouldBe` toStrict (encode packument)
+                fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
     describe "no upstream redirect is followed (redirectCount = 0)" $
         it "does not chase a 302 to an off-allowlist location" $
@@ -62,15 +61,16 @@ spec = do
             -- the redirect target), so there is no hop to escape the allowlist or downgrade.
             withRedirector $ \port -> do
                 manager <- newManager defaultManagerSettings
-                result <- tryAny (fetchMetadata manager port Nothing)
+                result <- fetchMetadata manager port Nothing
                 case result of
                     Right response -> responseBody response `shouldNotBe` toStrict (encode packument)
+                    -- A fetch fault is equally safe: the redirect target was never reached.
                     Left _ -> pass
 
 -- Fetch the package's metadata through the npm client over the given manager and token.
-fetchMetadata :: Manager -> Port -> Maybe Text -> IO RegistryResponse
+fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
 fetchMetadata manager port token =
-    fetchMetadataForm (clientConfig manager port token) Abbreviated noValidators thing
+    fetchMetadataFormBounded (clientConfig manager port token) Abbreviated noValidators thing
 
 -- An npm client config pointed at the loopback upstream on @port@, its base URL built
 -- through the test-only plain-HTTP opt-in (a release build has no such constructor).

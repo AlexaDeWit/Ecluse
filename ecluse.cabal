@@ -103,6 +103,7 @@ library ecluse-core
     Ecluse.Core.Cve.Internal
     Ecluse.Core.Cve.Slot
     Ecluse.Core.Ecosystem
+    Ecluse.Core.Fault
     Ecluse.Core.InFlight
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
@@ -218,6 +219,7 @@ library ecluse-core
     , text                  ^>=2.1
     , text-short            ^>=0.1.6
     , time                  ^>=1.12
+    , tls                   ^>=2.2
     , universe-base         ^>=1.1
     , unliftio              ^>=0.2.25
     , vector                ^>=0.13
@@ -572,6 +574,7 @@ test-suite ecluse-core-unit
     , text              ^>=2.1
     , text-short        ^>=0.1.6
     , time              ^>=1.12
+    , tls               ^>=2.2
     , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13

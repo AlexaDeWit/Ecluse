@@ -607,7 +607,10 @@ instance Exception RegistryUnconfigured
 loudly__ (a typed 'RegistryUnconfigured') and every pure @parse*@ field returns
 'Left', so an unconfigured fetch\/publish or parse fails explicitly rather than
 silently returning a fabricated success. It holds the handle slot in the
-composition root where a configured backend is selected elsewhere.
+composition root where a configured backend is selected elsewhere. The fetch field's
+type carries a 'Ecluse.Core.Registry.FetchFault' channel, but this handle does not
+use it: an unwired backend is a composition fault with no per-request decision, so
+it stays a justified typed throw rather than a value a caller might fall through.
 -}
 unconfiguredRegistry :: RegistryClient
 unconfiguredRegistry =

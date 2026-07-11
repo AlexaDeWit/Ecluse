@@ -18,6 +18,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
@@ -41,6 +42,7 @@ import Ecluse.Core.Queue (
     newInMemoryQueue,
  )
 import Ecluse.Core.Registry (
+    FetchFault (FetchTransport),
     ParseError (ParseError),
     PublishFault,
     RegistryClient (..),
@@ -214,7 +216,7 @@ package it does not hold -- so every test drives the full pipeline unless it swa
 recordingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
 recordingClient logRef outcome =
     RegistryClient
-        { fetchMetadata = const (pure (RegistryResponse ""))
+        { fetchMetadata = const (pure (Right (RegistryResponse "")))
         , publishArtifact = \_ _ _ document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
             pure outcome
@@ -232,13 +234,14 @@ mirrorListingClient logRef outcome versions =
         { parseVersionList = const (Right versions)
         }
 
-{- | 'recordingClient' whose mirror-presence probe __throws__ (a mirror outage), for
-the probe-cannot-tell fall-through tests.
+{- | 'recordingClient' whose mirror-presence probe reports a __transport fault__ (a
+mirror outage) as the typed 'FetchTransport' value, for the probe-cannot-tell
+fall-through tests.
 -}
-probeThrowingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
-probeThrowingClient logRef outcome =
+probeUnreachableClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
+probeUnreachableClient logRef outcome =
     (recordingClient logRef outcome)
-        { fetchMetadata = const (throwString "probeThrowingClient: simulated mirror outage")
+        { fetchMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
         }
 
 -- ── building a worker runtime over doubles ──────────────────────────────────────
@@ -248,7 +251,7 @@ publish log, so its publishes still record), a real no-TLS manager (for the stub
 upstream), a fresh queue + heartbeat, the given worker metrics port, and the given
 per-ecosystem re-evaluation policies, then run the body against it. The queue and the
 publish log are returned so a test can drive and inspect them. The probe tests use this
-directly to swap in 'mirrorListingClient' or 'probeThrowingClient';
+directly to swap in 'mirrorListingClient' or 'probeUnreachableClient';
 'withRuntimePolicies' is this over 'recordingClient'.
 -}
 withRuntimeRegistry :: (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
@@ -428,12 +431,15 @@ versionClient result =
         , fetchVersionMetadata = \_ _ -> pure result
         }
 
--- | A 'MetadataClient' double whose single-version op throws, standing in for a transport fault.
+{- | A 'MetadataClient' double whose single-version op __escapes its total contract__
+(the typed channel reports every real failure, so a throw here is an invariant break),
+pinning that the classification boundary propagates rather than absorbs it.
+-}
 throwingVersionClient :: MetadataClient
 throwingVersionClient =
     MetadataClient
         { fetchFullManifest = const (throwString "throwingVersionClient: fetchFullManifest is unused")
-        , fetchVersionMetadata = \_ _ -> throwString "simulated transport fault"
+        , fetchVersionMetadata = \_ _ -> throwString "simulated contract escape"
         }
 
 {- | Discharge a 'WorkerM' to 'IO' over the worker runtime against a scribe-less @katip@

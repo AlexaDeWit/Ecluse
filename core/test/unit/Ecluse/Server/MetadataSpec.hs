@@ -3,8 +3,11 @@ module Ecluse.Server.MetadataSpec (spec) where
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Test.Hspec
+import UnliftIO (concurrently, mapConcurrently)
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
@@ -20,12 +23,13 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
-    MetadataError (MetadataUndecodable),
+    MetadataError (MetadataUndecodable, MetadataUnreachable),
     digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 
@@ -99,7 +103,7 @@ spec = do
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
 
-    describe "newMetadataClient -- failure propagation" $
+    describe "newMetadataClient -- failure propagation" $ do
         it "propagates a MetadataError from both operations and caches nothing on failure" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
@@ -115,6 +119,62 @@ spec = do
             -- A failed fetch caches nothing, so each op (the full leg, then the cold
             -- single-version leg) re-ran its fetch.
             readIORef calls `shouldReturn` 2
+
+        it "an unreachable upstream is not cached: the next resolve fetches afresh" $ do
+            -- The transport fault rides the same typed channel: the first resolve
+            -- reports it, nothing is cached, and a recovered upstream serves the next.
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                outage = unreachableFull calls
+                recovered = countingFull calls info
+            first' <- fetchFullManifest (publicClient cache outage (failingVersion calls)) name
+            isUnreachable first' `shouldBe` True
+            cachedMetadata cache source name `shouldReturn` Nothing
+            second' <- fetchFullManifest (publicClient cache recovered (failingVersion calls)) name
+            fmap (infoName . manifestInfo) second' `shouldBe` Right name
+            readIORef calls `shouldReturn` 2
+
+        it "records the Connection error cause for an unreachable upstream" $ do
+            -- The upstream-fetch error metric keeps its bounded cause: the transport
+            -- arm classifies as Connection, exactly as the thrown HttpException did.
+            calls <- newIORef (0 :: Int)
+            causes <- newIORef ([] :: [Metric.Cause])
+            cache <- newMetadataCache defaultCacheConfig
+            let port = noopMetricsPort{mpUpstreamFetchError = \_ cause -> atomicModifyIORef' causes (\cs -> (cause : cs, ()))}
+                client =
+                    newMetadataClient port Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog (unreachableFull calls) (failingVersion calls)
+            _ <- fetchFullManifest client name
+            readIORef causes `shouldReturn` [Metric.Connection]
+
+        it "logs a failure once per real fetch: coalesced followers never re-log" $ do
+            -- Eight concurrent resolutions coalesce onto one failing leader: every
+            -- caller receives the same typed Left, the fetch ran once, and the
+            -- failure log fired once (inside the leader), never per follower.
+            fetches <- newIORef (0 :: Int)
+            failureLogs <- newIORef (0 :: Int)
+            started <- newEmptyMVar
+            release <- newEmptyMVar
+            cache <- newMetadataCache defaultCacheConfig
+            let blockingOutage _name = do
+                    atomicModifyIORef' fetches (\n -> (n + 1, ()))
+                    _ <- tryPutMVar started ()
+                    takeMVar release
+                    pure (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))
+                countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
+                client =
+                    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) countingLog noInvalidLog noFetchLog blockingOutage (failingVersion fetches)
+            (results, ()) <-
+                concurrently
+                    (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
+                    ( do
+                        takeMVar started
+                        threadDelay 30000 -- give the others time to coalesce
+                        putMVar release ()
+                    )
+            map isUnreachable results `shouldBe` replicate 8 True
+            readIORef fetches `shouldReturn` 1
+            readIORef failureLogs `shouldReturn` 1
 
 name :: PackageName
 name = unscoped "is-odd"
@@ -169,6 +229,18 @@ failingFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
 failingFull calls _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left MetadataUndecodable)
+
+-- | A counting full-manifest fetch reporting an unreachable upstream (the transport arm).
+unreachableFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
+unreachableFull calls _name = do
+    atomicModifyIORef' calls (\n -> (n + 1, ()))
+    pure (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))
+
+-- | Whether a full-manifest outcome is the unreachable-upstream fault.
+isUnreachable :: Either MetadataError Manifest -> Bool
+isUnreachable = \case
+    Left (MetadataUnreachable _) -> True
+    _ -> False
 
 -- | A counting single-version fetch that always fails.
 failingVersion :: IORef Int -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))

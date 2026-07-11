@@ -25,9 +25,9 @@ The two operations are asymmetric __by design__:
   endpoint, or a selective parse) without changing this boundary.
 
 Both operations are total: a failure is reported as a 'MetadataError' __value__, not
-thrown, so the caller decides how each maps onto a served response. A genuine
-transport fault (an unreachable upstream) is the exception channel the caller already
-brackets; this 'Either' is the /parse and policy/ channel.
+thrown, so the caller decides how each maps onto a served response. A transport fault
+is in the same channel ('MetadataUnreachable'), so unobtainable metadata of every
+cause -- parse, policy, or an unreachable upstream -- arrives typed.
 -}
 module Ecluse.Core.Registry.Metadata (
     -- * The read handle
@@ -50,8 +50,8 @@ module Ecluse.Core.Registry.Metadata (
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Value)
 import Data.ByteArray qualified as BA
-import UnliftIO.Exception (tryAny)
 
+import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Security (LimitError)
@@ -97,9 +97,8 @@ data MetadataClient = MetadataClient
     {- ^ Fetch and project a package's __full manifest__: the packument-level
     'PackageInfo' (every version), the raw 'Value' it was decoded from (so the serve
     path can edit and re-serialize the document), and the wire bytes' 'ContentDigest'
-    (so the serve path can fingerprint the document without re-hashing it). A failed
-    fetch\/parse is a 'MetadataError'; a transport fault is thrown (the caller already
-    brackets it).
+    (so the serve path can fingerprint the document without re-hashing it). Every
+    failure -- fetch, transport, parse, or policy -- is a 'MetadataError' value.
     -}
     , fetchVersionMetadata :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     {- ^ Fetch the __single-version metadata__ for one @(package, version)@: that
@@ -146,6 +145,13 @@ data MetadataError
       'Ecluse.Core.Registry.UrlFormationError'.
       -}
       MetadataUrlUnformable UrlFormationError
+    | {- | The upstream could not be reached at all: the transport failed before a
+      usable body returned (a timeout, a refused connection, a TLS refusal), carried
+      as the adapter-classified 'TransportFault'. The __outage__ cause, held distinct
+      from a decode failure or a config fault so the serve path degrades it as the
+      transient it is.
+      -}
+      MetadataUnreachable TransportFault
     deriving stock (Eq, Show)
 
 {- | The outcome of resolving one version's metadata for a policy decision: the projected
@@ -161,9 +167,10 @@ data VersionEvaluation
       never-published version), a genuine absence distinct from unobtainable metadata.
       -}
       VersionMissing
-    | {- | The metadata could not be obtained at all: a transport fault, or any
-      'MetadataError' (a decode failure, a bound breach, or a self-reported name mismatch).
-      Transient: the one retryable outcome every unobtainable-metadata cause collapses to.
+    | {- | The metadata could not be obtained at all: any 'MetadataError' (an
+      unreachable upstream, a decode failure, a bound breach, or a self-reported name
+      mismatch). Transient: the one retryable outcome every unobtainable-metadata
+      cause collapses to.
       -}
       VersionMetadataUnavailable
     deriving stock (Eq, Show)
@@ -173,16 +180,15 @@ outcome into a 'VersionEvaluation': the one fetch-and-project step both the serv
 tarball gate and the mirror worker run before the rules engine, so a future rule that
 reads a new field sees the same projected 'PackageDetails' in either context.
 
-A transport fault (the exception channel the client leaves to its caller) and any
-'MetadataError' alike classify as 'VersionMetadataUnavailable', collapsing every
-unobtainable-metadata cause to the one transient outcome; a resolved-but-absent version is
-'VersionMissing'; a resolved version is 'VersionPresent'. Total: a fetch failure becomes a
-classified value, never an escaping exception.
+Any 'MetadataError' classifies as 'VersionMetadataUnavailable', collapsing every
+unobtainable-metadata cause -- an unreachable upstream included -- to the one transient
+outcome; a resolved-but-absent version is 'VersionMissing'; a resolved version is
+'VersionPresent'. Total by type: the fetch reports every failure in its 'Either', so
+this classification is a pure fold with nothing to catch.
 -}
 fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEvaluation
 fetchVersionDetails client name version =
-    tryAny (fetchVersionMetadata client name version) <&> \case
+    fetchVersionMetadata client name version <&> \case
         Left _ -> VersionMetadataUnavailable
-        Right (Left _) -> VersionMetadataUnavailable
-        Right (Right Nothing) -> VersionMissing
-        Right (Right (Just details)) -> VersionPresent details
+        Right Nothing -> VersionMissing
+        Right (Just details) -> VersionPresent details

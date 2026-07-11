@@ -193,16 +193,17 @@ reevaluateThenMirror receipt job =
 
 {- Ask the mirror target whether the job's version is already present, through the
 publish-side registry handle's read fields. __Positive confirmation only__: 'True' needs
-the mirror's own metadata to parse and to list the version; a fetch failure or an
+the mirror's own metadata to parse and to list the version; a fetch fault or an
 unparseable body (a mirror @404@ for a package not yet mirrored, an auth refusal, an
 outage) answers 'False', so the job falls through to the full gated pipeline. A false
 'False' costs one redundant download and an idempotent @409@ -- exactly the pre-probe
 behaviour -- so the probe can only ever save work, never lose a publish or admit one
-unvetted. -}
+unvetted. The fetch reports its failures as 'Ecluse.Core.Registry.FetchFault' values,
+so the fall-through is a total match, nothing caught. -}
 alreadyMirrored :: MirrorJob -> WorkerM Bool
 alreadyMirrored job = do
     client <- asks wrRegistry
-    probed <- tryAny (liftIO (fetchMetadata client (jobPackage job)))
+    probed <- liftIO (fetchMetadata client (jobPackage job))
     pure $ case probed of
         Left _ -> False
         Right response -> case parseVersionList client response of

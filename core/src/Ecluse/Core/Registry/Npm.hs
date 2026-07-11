@@ -41,9 +41,8 @@ module Ecluse.Core.Registry.Npm (
     newNpmPublishClient,
 
     -- * Lower-level fetch
-    fetchMetadataForm,
     fetchMetadataFormBounded,
-    FetchFault (..),
+    classifyTransport,
 
     -- * First-party publish relay
     relayPublishDocument,
@@ -56,7 +55,14 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List.NonEmpty qualified as NE
 import Network.HTTP.Client (
     BodyReader,
-    HttpException,
+    HttpException (HttpExceptionRequest, InvalidUrlException),
+    HttpExceptionContent (
+        ConnectionClosed,
+        ConnectionFailure,
+        ConnectionTimeout,
+        InternalException,
+        ResponseTimeout
+    ),
     Manager,
     Response (responseStatus),
     brRead,
@@ -65,12 +71,19 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
+import Network.TLS qualified as TLS
 import UnliftIO (throwIO, try)
 
 import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Fault (
+    TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
+    TransportFault,
+    transportFault,
+ )
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName)
 import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes))
 import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     ParseError (ParseError),
     PublishError (..),
     PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
@@ -79,6 +92,7 @@ import Ecluse.Core.Registry (
     RegistryResponse (RegistryResponse),
     UrlFormationError,
  )
+import Ecluse.Core.Text (displayExceptionT)
 
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, publishRequest)
@@ -115,10 +129,10 @@ data NpmClientConfig = NpmClientConfig
     , npmToken :: Maybe Secret
     -- ^ An injected bearer token to attach, or 'Nothing' for anonymous requests.
     , npmLimits :: Limits
-    {- ^ The response-bound budget enforced on a metadata fetch: 'fetchMetadataForm'
-    reads the body through 'Ecluse.Core.Security.boundedRead' against
-    'Ecluse.Core.Security.maxBodyBytes', aborting fail-closed past the cap rather than
-    buffering an unbounded body.
+    {- ^ The response-bound budget enforced on a metadata fetch:
+    'fetchMetadataFormBounded' reads the body through
+    'Ecluse.Core.Security.boundedRead' against 'Ecluse.Core.Security.maxBodyBytes',
+    aborting fail-closed past the cap rather than buffering an unbounded body.
     -}
     }
 
@@ -156,8 +170,8 @@ The effectful fields close over the config's 'Manager' and token and speak npm
 over HTTP; the @parse*@ fields are the pure projection from
 "Ecluse.Core.Registry.Npm.Project", re-exported through the handle. The handle's
 'Ecluse.Core.Registry.fetchMetadata' requests the 'Abbreviated' form
-unconditionally; the richer 'fetchMetadataForm' (for the full packument and
-relayed validators) is exposed separately for the request pipeline.
+unconditionally; the request pipeline reaches the richer forms (the full packument,
+relayed validators) through 'fetchMetadataFormBounded' directly.
 -}
 newNpmClient :: NpmClientConfig -> IO RegistryClient
 newNpmClient config = newNpmPublishClient config (pure (npmToken config))
@@ -176,7 +190,7 @@ newNpmPublishClient config mintToken =
         RegistryClient
             { fetchMetadata = \name -> do
                 token <- mintToken
-                fetchMetadataForm config{npmToken = token} Abbreviated noValidators name
+                fetchMetadataFormBounded config{npmToken = token} Abbreviated noValidators name
             , publishArtifact = publishArtifact' config mintToken
             , -- Each version's @dist.tarball@ scheme is normalised against the host this
               -- client reads from (same-host http upgraded, foreign-host http dropped) as
@@ -192,32 +206,22 @@ newNpmPublishClient config mintToken =
     tarballNotHttps =
         ParseError "the requested version's dist.tarball is not an https URL on the upstream host"
 
-{- | Why a bounded metadata fetch could not produce a response body, reported as a
-__value__ so the serve read adapter maps each cause onto the response it renders rather
-than catching a typed throw two calls away. A genuine __transport__ fault (an unreachable
-upstream) is still thrown -- the read path already brackets it -- so this value carries
-the two faults the fetch can report before it commits to a body: an unformable request
-URL and a response-bound breach.
--}
-data FetchFault
-    = -- | The request URL could not be formed from configuration (an empty or unparseable base URL).
-      FetchUrlUnformable UrlFormationError
-    | -- | The upstream body crossed the response-size bound and was refused fail-closed.
-      FetchBoundExceeded LimitError
-    deriving stock (Eq, Show)
-
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
-conditional-GET 'Validators', reporting the URL-formation and response-bound faults as a
-'FetchFault' __value__. This is the value-returning primitive the serve read adapter
-("Ecluse.Core.Registry.Npm.Metadata") threads straight into its typed
-'Ecluse.Core.Registry.Metadata.MetadataError', with no throw-then-catch round-trip; a
-genuine transport fault (an unreachable upstream) is still thrown, and folding that into
-this channel too is tracked in the deep error-handling follow-up.
+conditional-GET 'Validators', reporting __every__ fetch failure as a
+'Ecluse.Core.Registry.FetchFault' value: an unformable request URL, a response-bound
+breach, or a transport fault ('classifyTransport' folds the @http-client@ exception
+into the typed channel at this edge). Total: no fetch failure escapes as an
+exception, so the serve read adapter ("Ecluse.Core.Registry.Npm.Metadata") and the
+handle's 'Ecluse.Core.Registry.fetchMetadata' thread it straight into their own
+typed channels with no throw-then-catch round-trip.
 
 The body is read __chunk-by-chunk through 'Ecluse.Core.Security.boundedRead'__ against
 the config's 'npmLimits', not buffered whole: a hostile or compromised upstream returning
 a body larger than 'Ecluse.Core.Security.maxBodyBytes' is refused __fail-closed__ as a
-'FetchBoundExceeded' rather than exhausting memory.
+'FetchBoundExceeded' rather than exhausting memory. The transport wrap covers the
+__whole__ exchange, the body read included: metadata is buffered before anything is
+served, so a connection lost mid-body is still a pre-commit fault with a value
+representation, not a half-delivered response.
 -}
 fetchMetadataFormBounded ::
     NpmClientConfig ->
@@ -229,36 +233,41 @@ fetchMetadataFormBounded config form validators name =
     case metadataRequest (npmBaseUrl config) (npmToken config) form validators name of
         Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
         Right request ->
-            withResponse request (npmManager config) $ \response ->
-                first FetchBoundExceeded <$> readBoundedBody (npmLimits config) (responseBody response)
+            try (withResponse request (npmManager config) $ \response -> readBoundedBody (npmLimits config) (responseBody response))
+                <&> \case
+                    Left httpErr -> Left (FetchTransport (classifyTransport httpErr))
+                    Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
+                    Right (Right response) -> Right response
 
-{- | The throwing form of 'fetchMetadataFormBounded', used by the publish-side handle's
-'Ecluse.Core.Registry.fetchMetadata' and the worker's mirror-presence probe -- consumers
-that funnel every fetch fault into a single @tryAny@ and so want a throw. It re-raises a
-'FetchUrlUnformable' as its 'Ecluse.Core.Registry.UrlFormationError' and a
-'FetchBoundExceeded' as a 'ResponseBoundExceeded' -- the typed exceptions those consumers
-already expect -- at this boundary, rather than inside the shared bounded read where a
-value-returning caller would have to catch it back.
+{- | Classify an @http-client@ exception into the core transport vocabulary
+("Ecluse.Core.Fault"), at the one edge where the library's exception type is in
+scope. Coarse by design: the 'TransportCause' is what a consumer or an operator
+branches on, and the rendered exception rides along as the bounded detail. A TLS
+refusal is recognised by the typed @tls@ exception @http-client@ wraps in its
+internal-exception channel, never by matching rendered text.
 -}
-fetchMetadataForm ::
-    NpmClientConfig ->
-    MetadataForm ->
-    Validators ->
-    PackageName ->
-    IO RegistryResponse
-fetchMetadataForm config form validators name =
-    fetchMetadataFormBounded config form validators name >>= \case
-        Left (FetchUrlUnformable urlErr) -> throwIO urlErr
-        Left (FetchBoundExceeded limitErr) -> throwIO (ResponseBoundExceeded limitErr)
-        Right response -> pure response
+classifyTransport :: HttpException -> TransportFault
+classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
+  where
+    causeOf = \case
+        HttpExceptionRequest _ content -> case content of
+            ConnectionTimeout -> TransportTimeout
+            ResponseTimeout -> TransportTimeout
+            ConnectionFailure _ -> TransportUnreachable
+            ConnectionClosed -> TransportUnreachable
+            InternalException inner
+                | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
+                | otherwise -> TransportProtocol
+            _ -> TransportProtocol
+        InvalidUrlException _ _ -> TransportProtocol
 
 {- | The thrown form of a response-bound breach: a body that crossed the
 'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its 'LimitError'. The bounded
-read itself now reports the breach as a __value__ ('readBoundedBody' returns an
+read itself reports the breach as a __value__ ('readBoundedBody' returns an
 'Either'); this exception is what the deliberately-throwing consumers re-raise at their
-own boundary -- the throwing 'fetchMetadataForm', the publish relay ('readRelayResponse'),
-and the worker's bounded artifact fetch ("Ecluse.Core.Worker.Fetch") -- so a @tryAny@
-caller sees a typed breach rather than a truncated body.
+own boundary -- the publish relay ('readRelayResponse') and the worker's bounded
+artifact fetch ("Ecluse.Core.Worker.Fetch") -- so a @tryAny@ caller sees a typed
+breach rather than a truncated body.
 -}
 newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
     deriving stock (Eq, Show)
