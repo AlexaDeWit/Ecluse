@@ -10,8 +10,9 @@ import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
-import Network.HTTP.Types (methodGet, methodHead)
+import Network.HTTP.Types (methodGet, methodHead, status200, status404)
 import Network.HTTP.Types.Header (hIfNoneMatch)
+import Network.Wai (responseLBS)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 
@@ -172,6 +173,31 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
+
+    it "relays a public artifact 404 verbatim and enqueues nothing (the relay verdict gates the back-fill)" $ do
+        -- The packument admits the version, but the artifact slot answers 404:
+        -- the miss is relayed verbatim to the client, and the verdict refuses to
+        -- enqueue a mirror job the worker could only drop after a round trip.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status404 [] "gone")
+        queue <- newInMemoryQueue
+        withProxyEnvQueue queue privateUp publicUp Nothing $ \app env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 404
+            drainJobs env `shouldReturn` []
+
+    it "relays an oddly-shaped public 2xx verbatim (body untouched) and enqueues nothing" $ do
+        -- A 2xx that is visibly not the artifact (an HTML page where a tarball
+        -- was admitted): the bytes still relay verbatim -- the verdict is a
+        -- tripwire, never a validator -- but no mirror job is enqueued for it.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status200 [("Content-Type", "text/html")] "<html>not a tarball</html>")
+        queue <- newInMemoryQueue
+        withProxyEnvQueue queue privateUp publicUp Nothing $ \app env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` "<html>not a tarball</html>"
             drainJobs env `shouldReturn` []
 
     it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do

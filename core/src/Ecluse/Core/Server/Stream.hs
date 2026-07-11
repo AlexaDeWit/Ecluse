@@ -103,13 +103,16 @@ returning, a streamed (or failed) body closes it as the stream unwinds.
 
 The @accept@ predicate sees only the status (the hit\/miss decision a serve fetch
 makes); a passing response is relayed exactly as 'streamUpstream' would, the
-@relay@ choosing the client-facing status and headers.
+@relay@ choosing the client-facing status and headers. @relay@ runs in 'IO' --
+once, pre-commit, on the accepted status and headers -- so a caller can observe
+what it is about to relay (the public leg's relay verdict) without this
+function knowing about verdicts.
 -}
 streamUpstreamWhen ::
     Manager ->
     Request ->
     (Status -> Bool) ->
-    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
 streamUpstreamWhen manager request accept relay respond =
@@ -123,16 +126,17 @@ streamUpstreamWhen manager request accept relay respond =
   where
     stream upstream
         | not (accept upstreamStatus) = pure Nothing
-        | isNotModified upstreamStatus =
-            -- A 304 carries no body: relay it bodiless rather than pumping (the
-            -- upstream body reader is never read), the pass-through conditional-GET
-            -- not-modified relay.
-            Just <$> respond (responseLBS status headers "")
-        | otherwise =
-            Just <$> respond (responseStream status headers pump)
+        | otherwise = do
+            (status, headers) <- relay upstreamStatus (responseHeaders upstream)
+            if isNotModified upstreamStatus
+                then
+                    -- A 304 carries no body: relay it bodiless rather than pumping (the
+                    -- upstream body reader is never read), the pass-through conditional-GET
+                    -- not-modified relay.
+                    Just <$> respond (responseLBS status headers "")
+                else Just <$> respond (responseStream status headers pump)
       where
         upstreamStatus = responseStatus upstream
-        (status, headers) = relay upstreamStatus (responseHeaders upstream)
         pump = pumpBody (brRead (HTTP.responseBody upstream))
 
 {- | Probe an upstream __without pumping a body__ -- the bodiless relay a @HEAD@
@@ -161,7 +165,7 @@ probeUpstreamWhen ::
     Manager ->
     Request ->
     (Status -> Bool) ->
-    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
 probeUpstreamWhen manager request accept relay respond =
@@ -171,10 +175,10 @@ probeUpstreamWhen manager request accept relay respond =
   where
     probe upstream
         | not (accept upstreamStatus) = pure Nothing
-        | otherwise =
-            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
-             in -- A HEAD reply carries no body; the upstream body reader is never read.
-                Just <$> respond (responseLBS status headers "")
+        | otherwise = do
+            (status, headers) <- relay upstreamStatus (responseHeaders upstream)
+            -- A HEAD reply carries no body; the upstream body reader is never read.
+            Just <$> respond (responseLBS status headers "")
       where
         upstreamStatus = responseStatus upstream
 

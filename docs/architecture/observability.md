@@ -119,7 +119,11 @@ not re-emit them. Names follow OTel semantic conventions for HTTP (`http.server.
 - **Mirror** (what we know, not queue depth), `ecluse.mirror.enqueued`,
   `ecluse.mirror.enqueue.failures`, `ecluse.mirror.jobs.processed`
   (result published/failed, the idempotent already-present 409 counts as published),
-  `ecluse.mirror.publish.duration`.
+  `ecluse.mirror.publish.duration`. `ecluse.serve.relay.anomalies` (counter; cause
+  odd_shape/non_success) counts public artifact relays that were not the admitted
+  artifact, judged from status and headers alone at relay time -- the body still relays
+  verbatim, and such a relay enqueues no mirror job; the paired `WARNING` line carries
+  the package and version.
 - **Credentials**, `ecluse.credential.refresh` (counter; result, provider);
   `ecluse.credential.token.ttl.seconds` (gauge) ← alarms a stuck refresh.
 - **Runtime**, the GHC runtime-metrics instrumentation (GC pauses, heap).

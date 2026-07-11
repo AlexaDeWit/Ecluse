@@ -526,6 +526,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.FaultSpec
     Ecluse.Server.MetadataSpec
     Ecluse.Server.Pipeline.InternalSpec
+    Ecluse.Server.Pipeline.TarballSpec
     Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec

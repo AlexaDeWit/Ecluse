@@ -262,6 +262,23 @@ artifactUpstream version tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
 
+{- | A path-aware upstream double whose packument admits the given version but
+whose artifact slot answers the given __arbitrary response__ -- a 404, an
+oddly-shaped 2xx -- for the public-relay verdict cases (the packument leg gates,
+the artifact leg then relays whatever this answers).
+-}
+artifactUpstreamAnswering :: Text -> Response -> IO Upstream
+artifactUpstreamAnswering version artifactResponse = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then artifactResponse
+                    else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
+    mkUpstream seen app
+
 {- | A path-aware upstream double serving a __given__ packument body verbatim (its
 @dist.tarball@ already addressing this double via 'selfBaseUrl'), and the given
 artifact bytes on a tarball-slot path. For tests that shape the gating packument

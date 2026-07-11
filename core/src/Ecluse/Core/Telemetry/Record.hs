@@ -35,6 +35,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Decision,
     MirrorResult,
     ReasonClass,
+    RelayAnomaly,
     RequestFaultCause,
     StatusClass,
     Tier,
@@ -94,6 +95,10 @@ data MetricsPort = MetricsPort
     , mpAssembledCacheResidentBytes :: Int -> IO ()
     {- ^ Record the assembled-representation store's resident bytes
     (@ecluse.metadata_cache.assembled.resident_bytes@).
+    -}
+    , mpPublicRelayAnomaly :: RelayAnomaly -> IO ()
+    {- ^ Record one public artifact relay that was not the admitted artifact
+    (@ecluse.serve.relay.anomalies@) by its bounded class. Steady state is zero.
     -}
     , mpRequestPerimeterFault :: RequestFaultCause -> IO ()
     {- ^ Record one pre-commit handler escape the request perimeter answered

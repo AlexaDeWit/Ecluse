@@ -49,6 +49,7 @@ module Ecluse.Core.Telemetry.Metrics (
     CredentialResult (..),
     BreakerSource (..),
     RequestFaultCause (..),
+    RelayAnomaly (..),
 
     -- * Breaker state (a bounded gauge value, not a label)
     BreakerState (..),
@@ -124,6 +125,8 @@ data MetricName
       AssembledCacheResidentBytes
     | -- | @ecluse.serve.perimeter.faults@ -- pre-commit handler escapes the request perimeter answered (counter).
       ServePerimeterFaults
+    | -- | @ecluse.serve.relay.anomalies@ -- public relays that were not the admitted artifact (counter).
+      ServeRelayAnomalies
     | -- | @ecluse.mirror.enqueued@ -- mirror jobs enqueued (counter).
       MirrorEnqueued
     | -- | @ecluse.mirror.enqueue.failures@ -- mirror enqueue failures (counter).
@@ -160,6 +163,7 @@ metricName = \case
     SingleVersionCacheResidentBytes -> "ecluse.metadata_cache.version.resident_bytes"
     AssembledCacheResidentBytes -> "ecluse.metadata_cache.assembled.resident_bytes"
     ServePerimeterFaults -> "ecluse.serve.perimeter.faults"
+    ServeRelayAnomalies -> "ecluse.serve.relay.anomalies"
     MirrorEnqueued -> "ecluse.mirror.enqueued"
     MirrorEnqueueFailures -> "ecluse.mirror.enqueue.failures"
     MirrorJobsProcessed -> "ecluse.mirror.jobs.processed"
@@ -275,6 +279,16 @@ data RequestFaultCause = GateFault | RenderFault | UnclassifiedFault
 
 instance Universe RequestFaultCause where universe = universeGeneric
 
+{- | What a public artifact relay passed through when it was not the admitted
+artifact (@ecluse.serve.relay.anomalies@): a 2xx whose headers do not look like
+an artifact, or a non-success relayed verbatim. The unbounded detail rides the
+paired WARNING log line, never a label.
+-}
+data RelayAnomaly = RelayOddShape | RelayNonSuccess
+    deriving stock (Eq, Generic, Show)
+
+instance Universe RelayAnomaly where universe = universeGeneric
+
 -- | A metadata-cache lookup result.
 data CacheResult = Hit | Miss
     deriving stock (Eq, Generic, Show)
@@ -340,6 +354,7 @@ data Label
     | LBreakerSource BreakerSource
     | LTier Tier
     | LPerimeterCause RequestFaultCause
+    | LRelayAnomaly RelayAnomaly
     deriving stock (Eq, Show)
 
 -- | The 'LabelKey' a 'Label' is filed under.
@@ -360,6 +375,7 @@ labelKey = \case
     LBreakerSource{} -> KeyBreakerSource
     LTier{} -> KeyTier
     LPerimeterCause{} -> KeyCause
+    LRelayAnomaly{} -> KeyCause
 
 -- | Project a 'Label' to its @(key, value)@ wire pair.
 renderLabel :: Label -> (Text, Text)
@@ -417,6 +433,9 @@ labelValue = \case
         GateFault -> "gate"
         RenderFault -> "render"
         UnclassifiedFault -> "unclassified"
+    LRelayAnomaly a -> case a of
+        RelayOddShape -> "odd_shape"
+        RelayNonSuccess -> "non_success"
 
 {- | Classify an HTTP status code into its bounded 'StatusClass', so a status never
 becomes a per-code label.
