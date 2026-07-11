@@ -14,6 +14,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
+import Ecluse.Core.Queue (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry (
     PublishError (PublishError),
     PublishFault (PublishRejected, PublishUrlUnformable),
@@ -121,6 +122,25 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
+        it "hands the publish step the re-admitted descriptor, so payload digest text never reaches the document" $
+            -- The payload carries a divergent, well-formed digest set and a declared
+            -- size of its own; the publish must be handed the descriptor derived from
+            -- the re-admitted artifact (its digests, its filename, its declared size),
+            -- so payload text can never land in the trusted-tier publish document.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI falseSri :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    descriptors <- plArtifacts <$> readIORef logRef
+                    descriptors
+                        `shouldBe` [ MirrorArtifact
+                                        { maFilename = "thing-1.0.0.tgz"
+                                        , maHashes = unsafeHash SRI trueSri :| []
+                                        , maSize = Nothing
+                                        }
+                                   ]
+
         it "drops a job whose payload-only weak digest matches the bytes the re-admitted digest refuses" $
             -- The #781 regression: a payload carrying only a computable weak digest
             -- that matches the fetched bytes must not be mirrored when the
@@ -173,6 +193,26 @@ spec = do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
+    describe "processJob: the payload digest-divergence warning" $ do
+        it "does not warn when the payload carries the same digest set reordered or duplicated" $
+            -- Wire order and duplication of the same digests carry no meaning, so a
+            -- payload that is set-equal to the re-admitted digests is no divergence.
+            withUpstream $ \url ->
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSri, unsafeHash SHA1 trueSha1]) noopWorkerMetricsPort (Right ()) $ \runtime queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| [unsafeHash SRI trueSri, unsafeHash SHA1 trueSha1]))
+                    (outcome, logged) <- runWMCapturing runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    filter isDivergenceWarning logged `shouldBe` []
+
+        it "warns when the payload digest set genuinely differs from the re-admitted one" $
+            -- Warn-only observability: the job still publishes (the bytes verify
+            -- against the re-admitted set), but the anomaly is surfaced.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    (outcome, logged) <- runWMCapturing runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    logged `shouldSatisfy` any isDivergenceWarning
     describe "processJob: ingest-time policy re-evaluation" $ do
         it "drops a job whose version current policy denies, without publishing" $
             -- The drift-to-deny close: a version admitted at serve time but denied by current

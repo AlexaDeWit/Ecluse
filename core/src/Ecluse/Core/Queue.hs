@@ -101,10 +101,10 @@ re-admitted, and publishes.
 
 The artifact descriptor is captured __at enqueue time__ ('jobArtifact'): its
 filename names the artifact the worker's ingest re-evaluation selects and gates
-under current policy, and its digests and declared size feed the publish document.
-The queue payload is a trust boundary, so those captured digests are never what the
-fetched bytes are verified against; the tamper gate uses the re-admitted artifact's
-own set.
+under current policy. The queue payload is a trust boundary: the tamper gate and
+the publish document both use the descriptor the worker derives from the
+re-admitted artifact, so the payload's captured digests serve only the divergence
+check against that set.
 -}
 data MirrorJob = MirrorJob
     { jobPackage :: PackageName
@@ -120,8 +120,8 @@ data MirrorJob = MirrorJob
     -- ^ The mirror-target endpoint the artifact is published to.
     , jobArtifact :: MirrorArtifact
     {- ^ The serve-time-admitted artifact descriptor: the filename the worker's
-    ingest re-evaluation selects the artifact by, plus the digests and declared
-    size the publish document is assembled from.
+    ingest re-evaluation selects the artifact by, plus the captured digests its
+    divergence check compares against the re-admitted set.
     -}
     , jobTraceContext :: Maybe RemoteSpanContext
     {- ^ The trace context of the serve-time span that enqueued the job, captured
@@ -133,9 +133,11 @@ data MirrorJob = MirrorJob
     }
     deriving stock (Eq, Show)
 
-{- | The serve-time-admitted artifact descriptor carried on a 'MirrorJob': exactly
-the fields the worker needs to re-gate the job under current policy and assemble
-the publish document, captured when the version was gated.
+{- | An artifact descriptor: the filename, integrity digests, and declared size a
+mirror publish is assembled from. A 'MirrorJob' carries the __serve-time-admitted__
+capture, whose filename keys the worker's ingest re-evaluation; the worker derives
+a fresh descriptor from the artifact that re-evaluation re-admits, and that derived
+one feeds the tamper gate and the publish document.
 
 'maHashes' is a 'NonEmpty' because the serve path admits a public version only when
 it carries at least one integrity digest (the integrity-presence admission policy),
@@ -147,11 +149,11 @@ data MirrorArtifact = MirrorArtifact
     document.
     -}
     , maHashes :: NonEmpty Hash
-    {- ^ The serve-time-admitted integrity digests (at least one). They feed the
-    publish document (npm @dist.integrity@ \/ @shasum@); the tamper gate verifies
-    the fetched bytes against the re-admitted artifact's own digests, and the
-    worker warns when this captured set diverges from those (versions are
-    immutable, so a divergence is anomalous).
+    {- ^ The integrity digests (at least one). On the queue payload they serve only
+    the divergence warning against the re-admitted set (versions are immutable, so
+    a divergence is anomalous); on the worker-derived descriptor they are the
+    floor-checked set the tamper gate verifies and the publish document's npm
+    @dist.integrity@ \/ @shasum@ fields are picked from.
     -}
     , maSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte

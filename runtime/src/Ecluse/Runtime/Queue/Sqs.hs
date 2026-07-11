@@ -325,8 +325,8 @@ dropReasonLabel = \case
 bare name so it round-trips through 'mkPackageName', and the version keeps its raw
 string. The serve-time-admitted artifact descriptor ('jobArtifact') -- the filename,
 the integrity digests, and the declared size -- round-trips as a nested object so the
-worker has the filename its ingest re-evaluation gates by and the inputs to assemble
-the publish document.
+worker has the filename its ingest re-evaluation gates by and the captured digest
+set its divergence check compares against the re-admitted one.
 -}
 encodeJob :: MirrorJob -> Text
 encodeJob job =

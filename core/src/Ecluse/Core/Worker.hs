@@ -18,9 +18,10 @@ The worker is the consumer end of the demand-driven mirror queue (see
 4. __verifies__ those bytes against the integrity digests of the artifact the
    re-evaluation re-admitted (the floor-checked, current-metadata set; the queue
    payload contributes no digest to the gate),
-5. assembles the npm publish document and publishes it to the mirror target (the
-   publish-side registry handle on the 'WorkerRuntime', resolved at the composition
-   root with the bearer from the "Ecluse.Core.Credential" provider), and
+5. assembles the npm publish document from the re-admitted artifact's descriptor
+   and publishes it to the mirror target (the publish-side registry handle on the
+   'WorkerRuntime', resolved at the composition root with the bearer from the
+   "Ecluse.Core.Credential" provider), and
 6. acknowledges the job.
 
 See individual modules for detailed behaviour:

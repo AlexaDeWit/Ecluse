@@ -707,12 +707,12 @@ mirror target; it carries no credential (the worker mints its own).
 
 It also captures the __serve-time-admitted__ integrity digests, filename, and
 declared size on the job: the filename names the artifact the worker's ingest
-re-evaluation gates under current policy, and the digests and size let it assemble
-the publish document without re-fetching (the tamper gate itself verifies the
-fetched bytes against the re-admitted artifact's digests, never the payload's).
-The digests arrive as the admission gate's own floor-checked set
-('Ecluse.Core.Package.Admission.AdmissionAdmit' carries it, non-empty as a fact of
-admission), so nothing is re-derived here and a digest-less job is unrepresentable.
+re-evaluation gates under current policy, and the captured digests give that
+re-evaluation's divergence check its reference (the tamper gate and the publish
+document both use the descriptor the worker derives from the re-admitted artifact,
+never the payload's). The digests arrive as the admission gate's own floor-checked
+set ('Ecluse.Core.Package.Admission.AdmissionAdmit' carries it, non-empty as a fact
+of admission), so nothing is re-derived here and a digest-less job is unrepresentable.
 The artifact URL travels as the validated egress witness ('pdEgressUrl'): the projection
 already normalised it to https, so a witness that will not form is unreachable in
 production and fails the best-effort enqueue closed (counted, never served-blocking). -}
