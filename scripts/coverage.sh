@@ -167,6 +167,11 @@ case "$suite" in
       # library); the runtime-unit partition cannot. They are covered there.
       ./runtime/src/Ecluse/Runtime/Server.hs
       ./runtime/src/Ecluse/Runtime/Env.hs
+      # The middleware pieces and health probes are exercised through the composed
+      # application (shell fixtures) in the same ecluse-unit ServerSpec; the
+      # runtime-unit partition links only the drain and halt siblings, whose specs
+      # drive them directly.
+      ./runtime/src/Ecluse/Runtime/Server/Middleware.hs
       # The S3 export adapter is exercised only by the integration tier
       # (test/integration/Ecluse/Pilot/S3ExportSpec.hs).
       ./runtime/src/Ecluse/Runtime/Pilot/Export.hs

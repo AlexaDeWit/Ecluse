@@ -82,8 +82,8 @@ module Ecluse.Core.Package.Integrity (
 
 import Data.Foldable (maximumBy)
 
-import Ecluse.Core.Package (
-    Artifact (artHashes),
+import Ecluse.Core.Package (Artifact (artHashes))
+import Ecluse.Core.Package.Hash (
     Hash,
     HashAlg (SHA256, SRI),
     hashAlg,

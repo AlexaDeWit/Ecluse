@@ -40,9 +40,9 @@ import Ecluse.Core.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
-    newInMemoryQueue,
     queueFault,
  )
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)

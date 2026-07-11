@@ -39,9 +39,9 @@ import Ecluse.Core.Queue (
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
-    newInMemoryQueue,
     queueFault,
  )
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     ParseError (ParseError),

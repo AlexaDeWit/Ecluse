@@ -78,14 +78,8 @@ module Ecluse.Proxy (
     npmServerConfig,
     mountBindingFor,
     unconfiguredRegistry,
-    planCveSync,
-    CveSyncHandle (..),
-    cveRuleDepsFor,
-    cveSyncReady,
-    cveSyncScheduleFor,
 ) where
 
-import Amazonka qualified as AWS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -95,32 +89,26 @@ import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
-import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
-import System.FilePath (isExtensionOf, (</>))
 import UnliftIO (concurrently_, race_, throwIO)
 import UnliftIO.Async (mapConcurrently_)
-import UnliftIO.Exception (catchAny)
 
 import Ecluse.Boot
 import Ecluse.Composition (
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
-    connectionPoolSettings,
-    initCredentialProviders,
-    planMirrorQueue,
     planMounts,
     planPublishTargets,
-    renderBootError,
  )
-import Ecluse.Composition qualified as Composition
+import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.Credential (initCredentialProviders)
+import Ecluse.Composition.MirrorQueue (planMirrorQueue)
+import Ecluse.Composition.Sizing (connectionPoolSettings)
+import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgAwsEndpointUrl, cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
+    AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
  )
-import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
-import Ecluse.Core.Osv.Schema (osvDbFileName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry (
     ParseError (..),
@@ -131,7 +119,6 @@ import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmPublishClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (RuleDeps (..))
 import Ecluse.Core.Security (Origin (UntrustedOrigin), defaultLimits, thgPublicHost)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
@@ -146,9 +133,9 @@ import Ecluse.Core.Supervision (
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
+import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Runtime.Pilot.Export (buildS3Env)
 import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
@@ -359,94 +346,6 @@ superviseDrain :: Env -> IO () -> IO ()
 superviseDrain builtEnv drain =
     void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "mirror-enqueue-drain" $
         superviseLoop (transientPolicy "mirror-enqueue-drain") (liftIO drain)
-
-{- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
-lookup borrows through that ecosystem's own slot when the sync plan carries
-one, and abstains otherwise, so a mount's rules can never read a neighbouring
-ecosystem's advisory database.
--}
-cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> Ecosystem -> RuleDeps
-cveRuleDepsFor plan reporter eco =
-    RuleDeps
-        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco plan)
-        , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . csSlot) (Map.lookup eco plan)
-        , rdBreakerReporter = reporter
-        }
-
-{- | The readiness gate over the sync plan: ready once every configured
-ecosystem's advisory database has first-synced. The flags flip one way, so
-readiness never flaps on this; an empty plan (no bucket) is vacuously ready.
--}
-cveSyncReady :: Map.Map Ecosystem CveSyncHandle -> IO Bool
-cveSyncReady plan = allM (readTVarIO . csReady) (Map.elems plan)
-
-{- | The sync tasks' timing: the shipped boot burst over the configured poll
-interval. The microsecond conversion cannot wrap: the config decoder bounds
-the interval to @[1, maxBound div 1_000_000]@ seconds.
--}
-cveSyncScheduleFor :: AppConfig -> SyncSchedule
-cveSyncScheduleFor env =
-    SyncSchedule
-        { schedBootBackoff = bootBackoffDelays
-        , schedPollDelay = round (cfgCveDbPollInterval env) * 1_000_000
-        }
-
--- | One configured ecosystem's advisory-sync wiring.
-data CveSyncHandle = CveSyncHandle
-    { csSlot :: CveSlot
-    -- ^ The slot this ecosystem's mount rules borrow through.
-    , csReady :: TVar Bool
-    -- ^ The one-way first-sync readiness flag.
-    , csEnv :: SyncEnv
-    -- ^ The sync task's environment.
-    }
-
-{- | Build the advisory-sync plan from config: nothing without a configured
-vulnerability-database bucket; otherwise one 'CveSyncHandle' per configured
-mount ecosystem, each against its own stable per-ecosystem object key and
-canonical on-disk path under the OSV data dir. Prepares the data dir (created
-if missing; stray @.tmp@ downloads from an interrupted run swept) so the sync
-tasks start clean. Note the readiness consequence: an operator who mounts an
-ecosystem Pilot does not compile has declared an artifact that never arrives,
-and the pod honestly never reports ready.
--}
-planCveSync :: AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
-    Nothing -> pure Map.empty
-    Just bucket -> do
-        let dataDir = cfgOsvDataDir appCfg
-        createDirectoryIfMissing True dataDir
-        sweepStaleTemps dataDir
-        awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= Composition.parseEndpointUrl)
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
-
--- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync
--- environment against the ecosystem's stable object key and canonical on-disk
--- path under the OSV data dir.
-cveSyncHandleFor :: AppConfig -> AWS.Env -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg awsEnv bucket eco = do
-    slot <- newCveSlot
-    ready <- newTVarIO False
-    let key = osvDbFileName (ecosystemName eco)
-        syncEnv =
-            SyncEnv
-                { syncFetch = s3CveFetch awsEnv bucket (toText key) (cfgMaxOsvDbBytes appCfg)
-                , syncEcosystem = eco
-                , syncDbPath = cfgOsvDataDir appCfg </> key
-                , syncSlot = slot
-                }
-    pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
-
--- Sweep stray in-progress downloads an interrupted run left beside the
--- canonical artifacts (relevant to in-pod container restarts, where an
--- emptyDir survives). Best-effort: an unreadable dir is a fresh start.
-sweepStaleTemps :: FilePath -> IO ()
-sweepStaleTemps dataDir =
-    ( do
-        entries <- listDirectory dataDir
-        forM_ [e | e <- entries, "tmp" `isExtensionOf` e] (\e -> removeFile (dataDir </> e) `catchAny` const pass)
-    )
-        `catchAny` const pass
 
 {- Run the server and the mirror worker over one composition-root 'Env', the shape
 the single-process program uses. The two are independent (each depends only on the
@@ -693,12 +592,3 @@ unconfiguredRegistry =
 
     notConfigured :: ParseError
     notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}
-
-{- | A credential handle with no backend behind it: a static, non-expiring empty
-secret. It holds the 'CredentialProvider' slot in the composition root until a live
-backend is selected, for the mirror-target write and for the private-upstream read
-under the @service@ \/ @delegated-cache@ strategies. The default @passthrough@
-strategy needs no read credential at all (reads forward the caller's own token), so
-this empty placeholder is harmless on the serve path there. See
-@docs\/architecture\/access-model.md@.
--}

@@ -91,7 +91,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (isDoesNotExistError)
 import UnliftIO (throwIO, tryJust)
 
-import Ecluse.Composition (
+import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     memoryQueueDropWarning,
     mirrorQueuePlanWarning,
@@ -103,7 +103,8 @@ import Ecluse.Config (
     mountCollisionWarnings,
     renderConfigError,
  )
-import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))

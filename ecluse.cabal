@@ -114,9 +114,11 @@ library ecluse-core
     Ecluse.Core.Package
     Ecluse.Core.Package.Admission
     Ecluse.Core.Package.Filter
+    Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.Merge
     Ecluse.Core.Queue
+    Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
@@ -243,9 +245,14 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Proxy.CveSync
     Ecluse.Pilot
     Ecluse.Dredger
     Ecluse.Composition
+    Ecluse.Composition.BootError
+    Ecluse.Composition.Credential
+    Ecluse.Composition.MirrorQueue
+    Ecluse.Composition.Sizing
     Ecluse.Config
     Ecluse.CLI
     Ecluse.Config.Aeson
@@ -328,6 +335,9 @@ library ecluse-runtime
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
     Ecluse.Runtime.Server
+    Ecluse.Runtime.Server.Drain
+    Ecluse.Runtime.Server.Halt
+    Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Instruments
@@ -506,7 +516,10 @@ test-suite ecluse-core-unit
     Ecluse.Osv.CompileSpec
     Ecluse.Osv.RetrySpec
     Ecluse.Osv.SchemaSpec
+    Ecluse.Package.HashSpec
     Ecluse.PackageSpec
+    Ecluse.Queue.MemorySpec
+    Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
@@ -614,6 +627,11 @@ test-suite ecluse-unit
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
+    Ecluse.Composition.BootErrorSpec
+    Ecluse.Composition.CredentialSpec
+    Ecluse.Composition.MirrorQueueSpec
+    Ecluse.Composition.SizingSpec
+    Ecluse.Composition.Support
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec
@@ -626,6 +644,7 @@ test-suite ecluse-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
+    Ecluse.Proxy.CveSyncSpec
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
@@ -706,6 +725,8 @@ test-suite ecluse-runtime-unit
     Ecluse.Cve.SyncSpec
     Ecluse.LogSpec
     Ecluse.Queue.SqsSpec
+    Ecluse.Server.DrainSpec
+    Ecluse.Server.HaltSpec
     Ecluse.Telemetry.CorrelationSpec
     Ecluse.Telemetry.InstrumentsSpec
     Ecluse.Telemetry.ReportersSpec

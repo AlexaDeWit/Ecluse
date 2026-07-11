@@ -15,7 +15,7 @@ import UnliftIO.Exception (impureThrow, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
