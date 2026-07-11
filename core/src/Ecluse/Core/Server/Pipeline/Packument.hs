@@ -625,18 +625,27 @@ logInvalidEntries name baseUrl entries =
         sl "module" pipelineModule
             <> sl "package" (renderPackageName name)
             <> sl "upstream" baseUrl
-            <> sl "droppedVersionManifests" (countOf InvalidVersionManifest)
-            <> sl "droppedDistTags" (countOf InvalidDistTag)
-            <> sl "droppedPublishTimes" (countOf InvalidPublishTime)
+            <> sl "droppedVersionManifests" manifests
+            <> sl "droppedDistTags" distTags
+            <> sl "droppedPublishTimes" publishTimes
             <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
 
-    countOf :: InvalidEntryKind -> Int
-    countOf kind = foldl' (\acc e -> if invalidKind e == kind then acc + 1 else acc) 0 entries
+    (manifests, distTags, publishTimes, entriesLen) =
+        foldl'
+            ( \(m, d, p, l) e ->
+                let l' = l + 1
+                 in case invalidKind e of
+                        InvalidVersionManifest -> (m + 1, d, p, l')
+                        InvalidDistTag -> (m, d + 1, p, l')
+                        InvalidPublishTime -> (m, d, p + 1, l')
+            )
+            (0 :: Int, 0 :: Int, 0 :: Int, 0 :: Int)
+            entries
 
     message :: Text
     message =
-        "dropped " <> show (length entries) <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
-    plural = if length entries == 1 then "y" else "ies"
+        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
+    plural = if entriesLen == 1 then "y" else "ies"
 
 -- One dropped entry rendered for the operator: its kind, key, reason, and the raw
 -- value the upstream sent (truncated), so the actual offending bytes are visible.
