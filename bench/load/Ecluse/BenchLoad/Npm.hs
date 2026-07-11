@@ -141,7 +141,6 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
-        wrBuildArtifactRequest,
         wrHeartbeat,
         wrInjectTraceContext,
         wrManager,
@@ -519,7 +518,6 @@ workerScenario =
                             { wrQueue = queue
                             , wrRegistry = succeedingPublishClient counter
                             , wrManager = manager
-                            , wrBuildArtifactRequest = \_ _ t s -> artifactRequestByUrl t s
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort

@@ -17,12 +17,13 @@ import Katip (
     Namespace (Namespace),
     initLogEnv,
  )
-import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Client (Manager, Request, defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
@@ -54,6 +55,7 @@ import Ecluse.Core.Registry (
     PublishFault,
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
+    UrlFormationError,
  )
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
@@ -63,6 +65,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -76,8 +79,8 @@ import Ecluse.Core.Worker (
     JobOutcome (Dropped, Retried),
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpMinIntegrity, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrBuildArtifactRequest, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpResolveVersion, wpRules),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
  )
@@ -280,7 +283,6 @@ withRuntimeRegistry mkClient policies metricsPort body = do
                 { wrQueue = queue
                 , wrRegistry = mkClient logRef
                 , wrManager = manager
-                , wrBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
                 , wrHeartbeat = heartbeat
                 , wrMetrics = metricsPort
                 , wrTracing = passthroughWorkerTracingPort
@@ -321,7 +323,6 @@ withQueueRuntime queue body = do
                 { wrQueue = queue
                 , wrRegistry = recordingClient logRef (Right ())
                 , wrManager = manager
-                , wrBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
                 , wrHeartbeat = heartbeat
                 , wrMetrics = noopWorkerMetricsPort
                 , wrTracing = passthroughWorkerTracingPort
@@ -375,6 +376,13 @@ re-gating tests refuse (or admit) every host wholesale.
 withHostGate :: (Text -> Bool) -> WorkerPolicies -> WorkerPolicies
 withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 
+{- | Override the artifact request formation of every policy in the map: the
+builder-keying tests swap in a refusing builder to prove which bundle's formation
+a job rides.
+-}
+withArtifactRequest :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
+withArtifactRequest builder = Map.map (\p -> p{wpBuildArtifactRequest = builder})
+
 {- | The artifact of a projected version snapshot. The injected rules never inspect
 it, but the shared admission oracle does: its filename must match the job fixture's
 'Ecluse.Core.Queue.jobArtifactFilename' (file selection) and it carries the
@@ -424,16 +432,22 @@ presentResolver name version = pure (VersionPresent (sampleDetails name version)
 prepared rules, clocked at the fixed 'epoch' (the injected rules are not time-sensitive).
 -}
 npmPolicies :: (PackageName -> Version -> IO VersionEvaluation) -> [PreparedRule] -> WorkerPolicies
-npmPolicies resolve rules =
-    Map.singleton
-        Npm
-        WorkerPolicy
-            { wpResolveVersion = resolve
-            , wpRules = rules
-            , wpMinIntegrity = defaultMinIntegrity
-            , wpArtifactHostHonoured = const True
-            , wpNow = pure epoch
-            }
+npmPolicies resolve rules = Map.singleton Npm (npmPolicy resolve rules)
+
+{- | One npm re-evaluation bundle (the entry 'npmPolicies' keys under npm), for a test
+that assembles its own multi-ecosystem map. The request formation is npm's real
+by-URL builder, so the fetch path forms requests exactly as production does.
+-}
+npmPolicy :: (PackageName -> Version -> IO VersionEvaluation) -> [PreparedRule] -> WorkerPolicy
+npmPolicy resolve rules =
+    WorkerPolicy
+        { wpResolveVersion = resolve
+        , wpRules = rules
+        , wpMinIntegrity = defaultMinIntegrity
+        , wpArtifactHostHonoured = const True
+        , wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
+        , wpNow = pure epoch
+        }
 
 {- | The default admitting policy the integrity-gate and publish tests run under: the version
 resolves present and an always-admit rule clears it, so re-evaluation never blocks and the

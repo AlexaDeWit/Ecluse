@@ -145,7 +145,10 @@ data AdapterArtifact = AdapterArtifact
     -}
     , artifactByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
     {- ^ Build an artifact request at its authoritative upstream URL: how a
-    location the upstream chose is honoured.
+    location the upstream chose is honoured. The URL is complete on its own, so an
+    implementation must form the request from it alone: a caller may pass an empty
+    base URL (there is no base to resolve against) and an anonymous credential
+    ('Nothing'), as the mirror worker's fetch does.
     -}
     }
 

@@ -26,7 +26,8 @@ import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPr
 import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpMinIntegrity, wpNow, wpResolveVersion, wpRules))
+import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (sampleArtifact, sampleDetails)
 
 {- | An admit-everything worker re-evaluation policy for the npm ecosystem: every version
@@ -56,6 +57,9 @@ admitAllPolicies currentDigests =
             , wpRules = [allowAll]
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True
+            , -- npm's real by-URL request formation, as the composition root
+              -- projects it, so the fetch path forms requests as production does.
+              wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
             , wpNow = getCurrentTime
             }
   where

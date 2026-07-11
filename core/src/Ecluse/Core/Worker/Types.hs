@@ -55,12 +55,6 @@ data WorkerRuntime = WorkerRuntime
     {- ^ The validating-TLS data-plane manager for the __untrusted__ artifact fetch (over
     an https-only @dist.tarball@).
     -}
-    , wrBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the
-    ecosystem's request formation, projected from its registered adapter at the
-    composition root so the fetch step speaks the registry protocol without naming
-    an ecosystem.
-    -}
     , wrHeartbeat :: WorkerHeartbeat
     {- ^ The consume-loop heartbeat, advanced on every successful poll and read by the
     liveness probe.
@@ -83,16 +77,18 @@ data WorkerRuntime = WorkerRuntime
 
 {- | The per-ecosystem re-evaluation bundle the worker re-runs current policy through
 before it mirrors a job: a resolver that fetches and projects the single version's
-metadata, the prepared rule set, the integrity floor, the tarball-host gate, and the
-wall-clock the age rules read.
+metadata, the prepared rule set, the integrity floor, the tarball-host gate, the
+artifact request formation, and the wall-clock the age rules read.
 
 The resolver is the __shared__ single-version fetch-and-project
 ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
 wired by the composition root); the rules are the __same__ prepared rules the serve
-path gates with; and the floor and host gate are the mount's __own__ configured
-policy values -- so the worker's ingest decision and the serve-time decision run one
-codepath ('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any
-per-source breaker state is shared, never forked.
+path gates with; the floor and host gate are the mount's __own__ configured policy
+values; and the request formation is the mount ecosystem's own
+('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl') -- so the worker's ingest
+decision and the serve-time decision run one codepath
+('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any per-source
+breaker state is shared, never forked.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
@@ -115,6 +111,14 @@ data WorkerPolicy = WorkerPolicy
     ('Ecluse.Core.Server.Context.tarballHostHonoured', closed against the public
     upstream host), re-checked on the job's fetch URL: the queue payload is a trust
     boundary.
+    -}
+    , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the
+    mount ecosystem's own request formation
+    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'), so a job's bytes are
+    fetched with the same request formation the serve path streams with. Riding this
+    bundle means a job whose ecosystem has none never reaches a fetch: it is
+    fail-closed with the rest of the bundle.
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive

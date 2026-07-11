@@ -91,7 +91,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import GHC.Conc (getNumCapabilities)
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
-import Network.HTTP.Client (Manager, Request, newManager)
+import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
@@ -112,7 +112,7 @@ import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Config (
     AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
  )
-import Ecluse.Core.Credential (AuthToken (..), Secret, currentToken)
+import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
@@ -120,26 +120,23 @@ import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
     RegistryUnconfigured (RegistryUnconfigured),
-    UrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
-    adapterArtifact,
     adapterEcosystem,
     adapterFor,
     adapterPublish,
     adapterServe,
-    artifactByUrl,
     publishNewClient,
     serveClassifier,
     serveRenderer,
  )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Security (Limits, Origin (UntrustedOrigin), thgPublicHost)
+import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHost)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdBuildArtifactRequestByUrl, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -300,11 +297,8 @@ runProxy bootEnv = do
         -- shutdown. Each sync task runs its boot burst immediately, so a healthy
         -- deployment is rules-engine complete within seconds of boot.
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
-        -- The worker's artifact request formation, projected from the npm
-        -- adapter: the registered ecosystem whose jobs reach the mirror queue.
-        let buildArtifactRequest = artifactByUrl (adapterArtifact npmAdapter)
         race_
-            (runServices serverConfig buildArtifactRequest (workerPoliciesFor builtEnv bindings) builtEnv)
+            (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
             (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
 
 {- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
@@ -383,9 +377,9 @@ lets the server's graceful return cancel the worker and unwind those brackets (f
 and exit cleanly), while a fault thrown by either side still propagates ('race_'
 re-raises it) so a genuine failure fails the process up rather than being swallowed.
 -}
-runServices :: ServerConfig -> (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> Env -> IO ()
-runServices serverConfig buildArtifactRequest policies env =
-    race_ (runServer serverConfig env) (runWorker buildArtifactRequest policies env)
+runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
+runServices serverConfig policies env =
+    race_ (runServer serverConfig env) (runWorker policies env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.
@@ -465,15 +459,14 @@ mountOf adapter packumentDeps publishDeps =
         , bindingRenderer = serveRenderer (adapterServe adapter)
         }
 
-{- | Run the supervised mirror worker over the composition-root 'Env', the ecosystem's
-artifact request builder, and the per-ecosystem re-evaluation bundles: the
+{- | Run the supervised mirror worker over the composition-root 'Env' and the
+per-ecosystem re-evaluation bundles: the
 consume → re-evaluate → fetch → verify → publish →
 ack loop against the queue, the publish-side registry client, and the credential handle, in
 the worker monad ('Ecluse.Core.Worker.WorkerM') over the worker runtime
-('Ecluse.Runtime.Env.workerRuntimeOf'). The request builder is projected from the registered
-adapter's artifact capability, and the bundles carry the same prepared rules and public origin
-the serve path gates with, so the worker re-runs current policy against a job before
-mirroring it.
+('Ecluse.Runtime.Env.workerRuntimeOf'). The bundles carry the same prepared rules,
+artifact request formation, and public origin the serve path gates with, so the worker
+re-runs current policy against a job before mirroring it.
 
 This is the composition-root __hoist point__: it resolves the request-independent @dd@
 correlation object (the service identity; no span is active at the worker entry) and
@@ -482,10 +475,10 @@ through 'Ecluse.Core.Worker.runWorkerM', the worker analogue of the serve path's
 'Ecluse.Core.Server.Context.runHandler' boundary. The loop logic lives in
 "Ecluse.Core.Worker"; the single-process program runs this alongside 'runServer'.
 -}
-runWorker :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> Env -> IO ()
-runWorker buildArtifactRequest policies env = do
+runWorker :: WorkerPolicies -> Env -> IO ()
+runWorker policies env = do
     dd <- ddPayloadNow (envDdContext env)
-    void (runWorkerM (envLogEnv env) dd (workerRuntimeOf buildArtifactRequest policies env) (katipAddNamespace "worker" (workerLoop workerSupervision)))
+    void (runWorkerM (envLogEnv env) dd (workerRuntimeOf policies env) (katipAddNamespace "worker" (workerLoop workerSupervision)))
 
 {- The worker's supervision policy: residue is transient (logged, retried with a
 bounded exponential backoff from one second), except the wiring faults no retry
@@ -527,9 +520,9 @@ workerPoliciesFor env bindings =
 {- Build one mount's worker re-evaluation bundle from its packument-serve dependencies:
 the single-version resolver over the guarded public origin through the shared metadata
 cache (the same fetch-and-project the serve path runs), the mount's prepared rules, its
-configured integrity floor, its tarball-host gate, and its injected clock -- every
-decision input taken from the mount's __own__ 'PackumentDeps', so the ingest decision
-cannot diverge from the serve decision. The metadata client is built through the same
+configured integrity floor, its tarball-host gate, its ecosystem's artifact request
+formation, and its injected clock -- every decision input taken from the mount's __own__
+'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The metadata client is built through the same
 injected constructor the serve path uses ('pdNewMetadataClient', over the same shared
 manager 'srPublicManager' is wired to), anonymous (no client credential reaches the
 public origin), inheriting the resolved-IP SSRF recheck. Its own failure and
@@ -546,6 +539,10 @@ workerPolicyFor env deps =
             -- artifact fetch, closed against the public upstream host (the reference
             -- host the public leg gates dist.tarball hosts by).
             tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps))
+        , -- The mount's own request formation (the adapter's artifact capability,
+          -- projected onto these deps at the composition root), so a job's bytes
+          -- are fetched exactly as the serve path would fetch them.
+          wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
         , wpNow = pdNow deps
         }
   where

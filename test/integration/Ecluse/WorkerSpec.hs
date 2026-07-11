@@ -23,9 +23,7 @@ import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
  )
-import Ecluse.Core.Registry.Adapter (adapterArtifact, artifactByUrl)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
-import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -230,7 +228,7 @@ cancellation process shutdown uses. A hard timeout bounds the whole thing so a
 failing test cannot hang. -}
 runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
 runLoopUntil policies env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker (artifactByUrl (adapterArtifact npmAdapter)) policies env) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
 
 {- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
 condition (the redelivery case waiting on a /second/ publish -- two full
@@ -247,7 +245,7 @@ policies for a fixed wall-clock window, then cancel it -- for the cases that ass
 /negative/ (nothing published, an idle heartbeat) where there is no positive
 condition to wait on. -}
 runLoopFor :: WorkerPolicies -> Env -> Int -> IO ()
-runLoopFor policies env micros = void (timeout micros (runWorker (artifactByUrl (adapterArtifact npmAdapter)) policies env))
+runLoopFor policies env micros = void (timeout micros (runWorker policies env))
 
 -- Poll a condition until it holds, bounded so a failing test does not hang. The
 -- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not
