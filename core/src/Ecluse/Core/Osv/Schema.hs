@@ -70,7 +70,7 @@ and embeds only the epoch, so the key changes exactly when a reader could no
 longer use the file.
 
 >>> osvDbFileName "npm"
-"npm-osv-schema2.db"
+"npm-osv-schema3.db"
 -}
 osvDbFileName :: Text -> FilePath
 osvDbFileName ecosystem =
