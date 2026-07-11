@@ -252,7 +252,7 @@ spec = do
     notModifiedProxy :: HTTP.Manager -> Int -> Application
     notModifiedProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (\status headers -> pure (status, headers)) respond
+        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (curry pure) respond
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
@@ -270,7 +270,7 @@ spec = do
     probeProxy :: HTTP.Manager -> Int -> Application
     probeProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (\status headers -> pure (status, headers)) respond
+        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (curry pure) respond
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
@@ -281,7 +281,7 @@ spec = do
     conditionalProxy :: HTTP.Manager -> Int -> Application
     conditionalProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (\status headers -> pure (status, headers)) respond
+        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (curry pure) respond
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
