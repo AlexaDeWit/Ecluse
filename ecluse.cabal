@@ -114,6 +114,7 @@ library ecluse-core
     Ecluse.Core.Package
     Ecluse.Core.Package.Admission
     Ecluse.Core.Package.Filter
+    Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.Merge
     Ecluse.Core.Queue
@@ -514,6 +515,7 @@ test-suite ecluse-core-unit
     Ecluse.Osv.CompileSpec
     Ecluse.Osv.RetrySpec
     Ecluse.Osv.SchemaSpec
+    Ecluse.Package.HashSpec
     Ecluse.PackageSpec
     Ecluse.Queue.MemorySpec
     Ecluse.Queue.Support
