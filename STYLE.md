@@ -757,6 +757,17 @@ instead act on *every* exit including an async one (releasing a resource), reach
 `finally` / `withException` / `bracket`, which are async-aware by construction, not a
 broad `catch`.
 
+**Rule 11.6, Place a new failure mode in the fault-model vocabulary before choosing
+its shape.** The system-wide map of channels, confinements, and the two outer edges is
+[`docs/architecture/fault-model.md`](docs/architecture/fault-model.md). Before adding a
+throw, a catch, or an error type, name the failure's disposition there (Transient /
+Permanent / Cancelled for a loop; Deny / Propagate for a request; BootAbort / FailUp /
+Graceful for the process) and pick the matching shape: an `Either` on the field when a
+caller decides per call, a confined typed exception only when one named boundary absorbs
+it, and a classification at the adapter edge when a client library's exception must not
+travel. A new broad catch belongs in that document's stays-inner inventory or it does
+not belong in the code.
+
 ---
 
 ## 12. Tests

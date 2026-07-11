@@ -124,6 +124,7 @@ flowchart TD
 | [Configuration & Authentication](architecture/configuration.md) | Environment config, outbound registry credentials, and inbound client auth. |
 | [Access & Credential Model](architecture/access-model.md) | The per-mount credential strategy (`passthrough` / `service`), edge auth, and the no-private-cache posture. |
 | [Security Invariants](architecture/security.md) | Outbound-request and input-validation defences, canonicalisation, the host allowlist, internal-range blocking, response bounds. |
+| [Fault Model](architecture/fault-model.md) | Failures as typed values, the confined-exception pattern, the two outer edges (request perimeter, process supervisor), the disposition vocabulary, and the stays-inner catch inventory. |
 | [Threat Model](https://ecluse-proxy.com/threat-model.html) | The STRIDE register, generated from the Threat Dragon model (`threat-modelling/ecluse.json`); the single source of truth for the system's threats. |
 | [Observability](architecture/observability.md) | Opt-in OpenTelemetry/OTLP tracing and metrics; Datadog optional. |
 | [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
