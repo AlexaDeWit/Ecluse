@@ -109,7 +109,7 @@ review flag.
 | --- | --- |
 | `Ecluse.Core.Supervision.superviseLoop` | The combinator itself: the one shared catch every background loop runs under. |
 | `Ecluse.Runtime.Server.perimeterGuard` | The request edge itself. |
-| `Ecluse.Core.Server.Pipeline.Packument` per-origin fetches | The per-origin degrade boundary: the typed channels carry every routine failure, so what this absorbs is invariant-break residue, degraded to that origin contributing nothing rather than taking down the merge. |
+| `Ecluse.Core.Server.Pipeline.Origin` per-origin fetches | The per-origin degrade boundary: the typed channels carry every routine failure, so what this absorbs is invariant-break residue, degraded to that origin contributing nothing rather than taking down the merge. |
 | `Ecluse.Core.Server.Pipeline.Packument.markRenderEscape` | Not an absorb: the confined `RenderEscape` marker's wrap point (miss leg only). |
 | `Ecluse.Core.Server.Stream` connection opens | The recoverable-miss phase of the hit/miss split: an unopened connection is the fall-through channel; a post-commit pump failure deliberately propagates. |
 | `Ecluse.Core.Queue` observer guards (`onDrop`, `onDeliveryFailure`) | Best-effort observers (a log or metric hook) must never fail a serve or tear the drain loop. |

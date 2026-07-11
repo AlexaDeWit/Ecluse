@@ -146,6 +146,8 @@ library ecluse-core
     Ecluse.Core.Server.Fault
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
+    Ecluse.Core.Server.Pipeline.Diagnostics
+    Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Publish
@@ -758,6 +760,7 @@ test-suite ecluse-integration
     Ecluse.MirrorQueueSpec
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
+    Ecluse.Server.Pipeline.OriginSpec
     Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.Pipeline.SharedSpec
     Ecluse.Server.Pipeline.TarballSpec
