@@ -173,7 +173,10 @@ library ecluse-core
     Ecluse.Core.Version.Gem
     Ecluse.Core.Version.Pep440
     Ecluse.Core.Version.Semver
+  exposed-modules:
     Ecluse.Core.Version.Token
+
+  other-modules:
     Paths_ecluse
 
   autogen-modules: Paths_ecluse
@@ -526,6 +529,7 @@ test-suite ecluse-core-unit
     Ecluse.TextSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
+    Ecluse.Version.TokenSpec
     Ecluse.WireSpec
     Ecluse.Worker.IntegritySpec
     Ecluse.Worker.JobSpec
