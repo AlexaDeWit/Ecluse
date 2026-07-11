@@ -12,9 +12,10 @@ published under a non-canonical version string misses the probe and simply
 waits out the ordinary quarantine; the operator workaround is an explicit
 'Ecluse.Core.Rules.Types.AllowByIdentity' rule.
 
-An artifact is accepted or rejected at 'openCveDb' (epoch stamp, table shape,
-ecosystem), with rejection as a value: the caller keeps its last known-good
-handle and alarms. See "Ecluse.Core.Cve.Internal" for the hardening detail.
+An artifact is accepted or rejected at 'openCveDb' (epoch stamp, integrity,
+strict-schema conformance, ecosystem), with rejection as a value: the caller
+keeps its last known-good handle and alarms. See "Ecluse.Core.Cve.Internal"
+for the hardening detail.
 
 __Ownership is split at the type level__: 'openCveDb' yields a 'CveDb', the
 owning resource whose holder alone may 'cveDbClose'; consumers are handed only
@@ -102,20 +103,21 @@ data CveDb = CveDb
     }
 
 {- | Open an @osv.db@ artifact and build the owning handle over it, or reject
-the artifact ('CveDbRejected') with its connection already closed. Throws on
-faults below the acceptance contract (an unreadable file, a malformed
-provenance row), and then too the connection is already closed: an exception
-never leaks it.
+the artifact ('CveDbRejected') with its connection already closed. Nothing an
+artifact carries can make this throw: acceptance admits only a conformant
+@STRICT@ schema whose stored values the integrity walk verified, so the
+provenance decode below it is total. Faults below the artifact contract (an
+unopenable file) still throw, and then too the connection is already closed:
+an exception never leaks it.
 -}
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile =
     openHardenedConnection eco dbFile >>= \case
         Left rejection -> pure (Left rejection)
         Right conn -> do
-            -- Until the handle is handed over, this side owns the connection:
-            -- acceptance decodes only the ecosystem row, so a further meta row
-            -- can still fail to decode here, and that failure must close the
-            -- connection rather than leak it.
+            -- Until the handle is handed over, this side owns the connection;
+            -- the guard is the no-leak backstop for faults below the artifact
+            -- contract (acceptance has made the decode itself total).
             meta <- provenanceQuery conn `onException` close conn
             pure (Right (mkCveDb conn meta))
 

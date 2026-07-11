@@ -257,8 +257,10 @@ A newly detected `osv.db` is downloaded to a temp file, byte-bounded by `maxOsvD
 by the same acceptance that guards every open. Because the file is treated as untrusted even behind the
 bucket's access controls, the connection is hardened before its first query (`trusted_schema` off,
 `query_only` on, `cell_size_check` on, memory-mapped I/O disabled) and acceptance walks it cheapest-first:
-the epoch stamp, a `quick_check` structural-integrity scan, the table shape, and the ecosystem. A tampered
-or truncated artifact that parses as SQLite but is structurally unsound is refused here, before any lookup
+the epoch stamp, a `quick_check` integrity scan (which also verifies stored values against each `STRICT`
+table's declared column types), the required tables' strict-schema conformance, and the ecosystem. A
+tampered or truncated artifact that parses as SQLite but is structurally unsound, and equally one whose
+declarations or stored values would defeat the reader's row decoding, is refused here, before any lookup
 reads it. The accepted file is renamed atomically onto the canonical per-ecosystem path and shadow-swapped into the
 read path (`Ecluse.Core.Cve.Slot`): rule evaluations borrow the current generation through a bracketed
 read, the swap waits for the displaced generation's readers to drain, and the drained close releases
@@ -272,7 +274,7 @@ into deny-by-default.
 #### The artifact contract
 
 The object key is stable per ecosystem and embeds the table-schema epoch:
-`<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema1.db`). Per-ecosystem artifacts keep uploads
+`<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema3.db`). Per-ecosystem artifacts keep uploads
 independent: one ecosystem's failed compilation never holds back another's, and a Pilot restart
 loses at most one ecosystem's work. Pilot also filters flattened advisory rows to the target
 ecosystem before writing the artifact, so an OSV advisory that spans npm and another ecosystem does
@@ -289,8 +291,11 @@ not bump it: readers select explicit columns, so additions are invisible to old 
 catch-up window while a new rule waits for newly-populated data degrades per rule (as effectful-rule
 unavailability under that rule's failure alignment) rather than per database. A column exists exactly
 when the build populates it, so a NULL always means "no data known for this row", never "not
-populated yet". The artifact also carries a small `meta` key/value table of provenance (Pilot
-version, ecosystem, build timestamp, source URL, row count). Each denial's audit log line records
+populated yet". The tables are declared `STRICT`, and the reader accepts an artifact only after
+confirming that declaration and the required columns' types, so every value its queries decode is
+type-sound by construction; a lax or forged schema is refused as a rejection value, the ETag
+remembered like any other refusal. The artifact also carries a small `meta` key/value table of
+provenance (Pilot version, ecosystem, build timestamp, source URL, row count). Each denial's audit log line records
 the advisory database ETag active when the request was served (`active_advisory_db_etag`), resolved
 once per request onto the evaluation context. It names the database live at emit, deliberately not
 the one the verdict was evaluated against, since a shadow-swap can land mid-request; the log line's

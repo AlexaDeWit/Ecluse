@@ -28,6 +28,7 @@ module Ecluse.Test.Osv (
     mkDbWithViewShadowingRanges,
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
+    mkDbWithLaxSchema,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
 ) where
@@ -36,11 +37,11 @@ import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOpt
 import Conduit (runConduit, sinkLazy, yieldMany, (.|))
 import Data.ByteString qualified as BS
 import Data.Time (LocalTime (..), fromGregorian, midnight)
-import Database.SQLite.Simple (Connection, Only (Only), execute, execute_, withConnection)
+import Database.SQLite.Simple (Connection, Only (Only), Query (Query), execute, execute_, withConnection)
 import System.FilePath (takeFileName, (</>))
 import System.IO (SeekMode (AbsoluteSeek), hSeek, withBinaryFile)
 
-import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 
 data CorpusVersion = CorpusV1 | CorpusV2
     deriving stock (Bounded, Enum, Eq, Show)
@@ -115,21 +116,13 @@ minimal.
 -}
 mkDbWithWrongEpoch :: FilePath -> IO ()
 mkDbWithWrongEpoch path = withConnection path $ \conn -> do
-    execute_
-        conn
-        "CREATE TABLE package_vulnerability_ranges (\
-        \  package_name TEXT NOT NULL,\
-        \  cve_id TEXT NOT NULL,\
-        \  introduced_version TEXT,\
-        \  fixed_version TEXT,\
-        \  last_affected_version TEXT,\
-        \  severity REAL\
-        \)"
+    createRangesTable conn
     setEpoch conn (osvSchemaEpoch + 1)
 
 {- | An artifact with the right epoch whose ranges relation is a __view__:
 schema-borne SQL that a hardened reader (read-only,
 @PRAGMA trusted_schema = OFF@) must refuse to evaluate on the file's terms.
+Schema conformance refuses it as not a real @STRICT@ table.
 -}
 mkDbWithViewShadowingRanges :: FilePath -> IO ()
 mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
@@ -157,17 +150,8 @@ writes outright.
 -}
 mkDbWithMaliciousTrigger :: FilePath -> IO ()
 mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
-    execute_
-        conn
-        "CREATE TABLE package_vulnerability_ranges (\
-        \  package_name TEXT NOT NULL,\
-        \  cve_id TEXT NOT NULL,\
-        \  introduced_version TEXT,\
-        \  fixed_version TEXT,\
-        \  last_affected_version TEXT,\
-        \  severity REAL\
-        \)"
-    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    createRangesTable conn
+    createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', NULL, 7.5)"
     execute_
@@ -176,16 +160,33 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
         \BEGIN DELETE FROM package_vulnerability_ranges; END"
     setEpoch conn osvSchemaEpoch
 
-{- | An artifact acceptance passes (right epoch, real ranges table, npm @meta@
-row) whose @meta@ holds one extra row with a BLOB value. SQLite's TEXT
-affinity stores a blob verbatim, so the row survives the schema's @NOT NULL
-TEXT@ declaration yet defeats a @(Text, Text)@ decode of the provenance rows,
-after acceptance (which decodes only the ecosystem row) has already
-succeeded. Handle construction must fail without leaking the accepted
-connection.
+{- | An artifact forged to look conformant whose stored @meta@ values violate
+the declaration: the @meta@ table is authored __lax__ (TEXT affinity stores a
+BLOB verbatim, so the hostile row can exist at all), then the stored
+@CREATE TABLE@ text is rewritten to the canonical @STRICT@ DDL under
+@PRAGMA writable_schema@. The declaration alone therefore passes schema
+conformance; only the integrity walk (@PRAGMA quick_check@), verifying stored
+values against the @STRICT@ declaration, catches the BLOB. The reader must
+refuse it as a rejection value, never a thrown decode error.
 -}
 mkDbWithMalformedProvenance :: FilePath -> IO ()
 mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
+    createRangesTable conn
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('zz-opaque', X'DEADBEEF')"
+    execute_ conn "PRAGMA writable_schema = ON"
+    execute conn "UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'meta'" (Only metaTableDdl)
+    execute_ conn "PRAGMA writable_schema = OFF"
+    setEpoch conn osvSchemaEpoch
+
+{- | An artifact whose tables carry the right names and columns but without
+@STRICT@ (the epoch-2 shape): the declared types are affinity hints, not
+enforced storage types, so the reader cannot trust its decodes. Schema
+conformance must refuse it as a value.
+-}
+mkDbWithLaxSchema :: FilePath -> IO ()
+mkDbWithLaxSchema path = withConnection path $ \conn -> do
     execute_
         conn
         "CREATE TABLE package_vulnerability_ranges (\
@@ -198,7 +199,6 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
-    execute_ conn "INSERT INTO meta (key, value) VALUES ('zz-opaque', X'DEADBEEF')"
     setEpoch conn osvSchemaEpoch
 
 {- | A structurally corrupt artifact: a valid, right-epoch database whose
@@ -213,17 +213,8 @@ b-tree root is page 2; a handful of rows keep that page a populated leaf.
 mkDbWithCorruptPage :: FilePath -> IO ()
 mkDbWithCorruptPage path = do
     withConnection path $ \conn -> do
-        execute_
-            conn
-            "CREATE TABLE package_vulnerability_ranges (\
-            \  package_name TEXT NOT NULL,\
-            \  cve_id TEXT NOT NULL,\
-            \  introduced_version TEXT,\
-            \  fixed_version TEXT,\
-            \  last_affected_version TEXT,\
-            \  severity REAL\
-            \)"
-        execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+        createRangesTable conn
+        createMetaTable conn
         execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
         for_ [1 .. 32 :: Int] $ \i ->
             execute
@@ -246,21 +237,18 @@ this builder exists for mechanics tests below the app tier.
 -}
 mkMinimalValidDb :: FilePath -> Text -> IO ()
 mkMinimalValidDb path pkg = withConnection path $ \conn -> do
-    execute_
-        conn
-        "CREATE TABLE package_vulnerability_ranges (\
-        \  package_name TEXT NOT NULL,\
-        \  cve_id TEXT NOT NULL,\
-        \  introduced_version TEXT,\
-        \  fixed_version TEXT,\
-        \  last_affected_version TEXT,\
-        \  severity REAL\
-        \)"
-    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    createRangesTable conn
+    createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute conn "INSERT INTO meta (key, value) VALUES ('source_url', ?)" (Only pkg)
     execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', NULL, NULL)" (Only pkg)
     setEpoch conn osvSchemaEpoch
+
+-- The canonical tables, verbatim from the schema contract, so a builder here
+-- can never drift from what acceptance requires.
+createRangesTable, createMetaTable :: Connection -> IO ()
+createRangesTable conn = execute_ conn (Query rangesTableDdl)
+createMetaTable conn = execute_ conn (Query metaTableDdl)
 
 setEpoch :: Connection -> Int -> IO ()
 setEpoch conn epoch = execute_ conn (fromString ("PRAGMA user_version = " <> show epoch))

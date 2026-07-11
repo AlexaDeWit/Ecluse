@@ -333,7 +333,7 @@ need distinct, tightly scoped egress, and **both must run as singletons** (one r
 
 - **Écluse Pilot**: no public ingress. Egress to `osv.dev` (raw advisories), the instance-metadata
   endpoint (credentials), and your object store (S3/GCS) with `s3:PutObject` to upload `osv.db`.
-  The object is named `<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema1.db`, `N` = the
+  The object is named `<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema3.db`, `N` = the
   table-schema epoch); the key is stable per ecosystem, so bucket policies and the proxy's ETag
   polling can target it. On `osv.dev` `5xx`/`408`/`429`, Pilot retries with capped, jittered
   backoff, then logs and waits the full `ECLUSE_CVE_SYNC_INTERVAL`, so a transient outage can't get

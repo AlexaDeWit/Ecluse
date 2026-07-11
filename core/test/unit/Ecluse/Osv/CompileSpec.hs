@@ -57,13 +57,15 @@ spec = describe "SQLite OSV Compilation" $ do
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
         metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
         indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
+        strictTables <- query_ conn "SELECT name FROM pragma_table_list WHERE name IN ('package_vulnerability_ranges', 'meta') AND strict = 1 ORDER BY name" :: IO [Only Text]
+        dedupIndexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'uq_%'" :: IO [Only Text]
         close conn
         catchIOError (removeFile dbFile) (const $ pure ())
 
         -- The file-name literal and the meta keys below pin the artifact's wire
         -- contract, the forms a reader depends on, not the constants that
         -- produced them.
-        takeFileName dbFile `shouldBe` "npm-osv-schema2.db"
+        takeFileName dbFile `shouldBe` "npm-osv-schema3.db"
         -- The sample carries a CVSS 3.1 vector (5.9); the computed base score is
         -- stored, in preference to the "MODERATE" label.
         rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9)]
@@ -71,6 +73,11 @@ spec = describe "SQLite OSV Compilation" $ do
         -- The reader's lookups ride these: by-package fetch and the exact
         -- (name, fixed) remediation probe.
         map fromOnly indexes `shouldBe` ["idx_package_fixed", "idx_package_name"]
+        -- The reader accepts an artifact only if both tables are STRICT; a
+        -- freshly compiled artifact must satisfy its own contract.
+        map fromOnly strictTables `shouldBe` ["meta", "package_vulnerability_ranges"]
+        -- The dedup guard behind INSERT OR IGNORE (the former composite PK).
+        map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
 
         let meta = Map.fromList metaRows
         Map.keys meta `shouldBe` ["built_at", "ecosystem", "pilot_version", "row_count", "source_url"]
