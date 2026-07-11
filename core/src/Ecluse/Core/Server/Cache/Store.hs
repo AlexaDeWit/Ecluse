@@ -46,7 +46,6 @@ module Ecluse.Core.Server.Cache.Store (
 
     -- * Read-only views
     lookupStore,
-    storeSize,
 
     -- * Occupancy
     CacheOccupancy (..),
@@ -296,10 +295,6 @@ serve path).
 -}
 lookupStore :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
 lookupStore sf key = fmap wValue <$> Cache.lookup (sfStore sf) key
-
--- | The number of entries currently held (including any not-yet-purged expired).
-storeSize :: SingleFlight e k v -> IO Int
-storeSize sf = Cache.size (sfStore sf)
 
 -- The outcome of the one atomic resolve decision: a fresh hit (carrying the weighted entry
 -- so the caller can bump its recency), follow an in-flight fetch, or lead a new one.

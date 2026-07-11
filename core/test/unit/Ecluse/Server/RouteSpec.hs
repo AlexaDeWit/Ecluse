@@ -4,17 +4,11 @@
 
 module Ecluse.Server.RouteSpec (spec) where
 
-import Hedgehog (forAll)
-import Hedgehog qualified as H
-import Hedgehog.Gen qualified as Gen
-import Hedgehog.Range qualified as Range
-import Network.HTTP.Types.Method (methodGet, methodPut)
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Server.Route (Filename (Filename), Route (..), denyAll, encodeComponent, isSafeComponent)
+import Ecluse.Core.Server.Route (Filename (Filename), Route (..), encodeComponent, isSafeComponent)
 import Ecluse.Core.Version (Version, mkVersion)
 
 -- | An unscoped package identity, for building 'Tarball' routes in the assertions.
@@ -25,31 +19,15 @@ unscoped = mkPackageName Npm Nothing
 npmVersion :: Text -> Version
 npmVersion = mkVersion Npm
 
-{- | The agnostic routing layer: the shared 'Route' set, the deny-by-default
-classifier, and the ecosystem-independent component-safety gate.
+{- | The agnostic routing layer: the shared 'Route' set and the ecosystem-independent
+component-safety gate.
 
 No ecosystem path grammar lives here -- that is each adapter's classifier (e.g.
 "Ecluse.Core.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
-default classifier denies everything, and 'isSafeComponent' is the shared
-traversal gate.
+'Route' vocabulary and 'isSafeComponent', the shared traversal gate.
 -}
 spec :: Spec
 spec = do
-    describe "denyAll -- the agnostic default classifier" $ do
-        it "denies a package-shaped path (no ecosystem grammar is built in)" $
-            denyAll methodGet ["is-odd"] `shouldBe` Unsupported
-        it "denies a meta-route-shaped path" $
-            denyAll methodGet ["-", "ping"] `shouldBe` Unsupported
-        it "denies the empty path" $
-            denyAll methodGet [] `shouldBe` Unsupported
-        it "denies a PUT (a publish) too -- it knows no write grammar either" $
-            denyAll methodPut ["is-odd"] `shouldBe` Unsupported
-        it "denies every path it is given, under any method (deny by default)" $
-            hedgehog $ do
-                method <- forAll (Gen.element [methodGet, methodPut, "HEAD", "DELETE"])
-                segs <- forAll (Gen.list (Range.linear 0 5) (Gen.text (Range.linear 0 8) Gen.unicode))
-                denyAll method segs H.=== Unsupported
-
     describe "Filename -- the agnostic artifact-name type" $ do
         -- The verbatim on-the-wire name a 'Tarball' route carries is held as a
         -- distinct type (not a bare 'Text') because it is authoritative for fetching

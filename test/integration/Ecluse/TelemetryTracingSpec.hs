@@ -4,6 +4,7 @@
 
 module Ecluse.TelemetryTracingSpec (spec) where
 
+import Data.Aeson (encode)
 import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Text qualified as T
@@ -19,7 +20,9 @@ import Katip (
     Severity (InfoS),
     SimpleLogPayload,
     ThreadIdText (ThreadIdText),
+    Verbosity (V2),
     initLogEnv,
+    itemJson,
     logStr,
  )
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest)
@@ -44,9 +47,7 @@ import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (
     DdContext (..),
     DdSpan (DdSpan),
-    LogFormat (JsonLog),
     ddField,
-    renderLogLine,
  )
 import Ecluse.Runtime.Server (tracedApplication)
 import Ecluse.Runtime.Telemetry (
@@ -101,8 +102,8 @@ spec =
                     Just (DdSpan tid sid) -> do
                         tid `shouldSatisfy` isNonZeroDecimal
                         sid `shouldSatisfy` isNonZeroDecimal
-                        -- And the id lands on a rendered JSONL line under dd.trace_id.
-                        renderLogLine JsonLog (ddLogItem ctx)
+                        -- And the id lands in the serialised JSONL payload under dd.trace_id.
+                        decodeUtf8 (encode (itemJson V2 (ddLogItem ctx)))
                             `shouldSatisfy` T.isInfixOf ("\"trace_id\":\"" <> tid <> "\"")
 
 {- Drive one request through the in-process traced Écluse application, pointing the

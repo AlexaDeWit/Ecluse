@@ -21,7 +21,6 @@ import Ecluse.Core.Server.Cache (
     CacheEntry (..),
     MetadataCache,
     Source (..),
-    cacheSize,
     cachedMetadata,
     defaultCacheConfig,
     newMetadataCache,
@@ -119,6 +118,17 @@ recordingResidencyPort :: IO (MetricsPort, IO (Maybe Int))
 recordingResidencyPort = do
     seen <- newIORef Nothing
     let port = noopMetricsPort{mpCacheResidentBytes = writeIORef seen . Just}
+    pure (port, readIORef seen)
+
+{- | A metrics port that captures the most-recent full-packument entry-count gauge value it
+is handed, alongside a reader for it. Every other field is inert. Lets a test assert the
+held-entry count the cache last reported on a leader insert, the live occupancy path that
+replaces a direct size poll.
+-}
+recordingEntriesPort :: IO (MetricsPort, IO (Maybe Int))
+recordingEntriesPort = do
+    seen <- newIORef Nothing
+    let port = noopMetricsPort{mpCacheEntries = writeIORef seen . Just}
     pure (port, readIORef seen)
 
 -- | A fresh cache with a generous TTL and ample room.
@@ -230,27 +240,27 @@ spec = do
         it "counts the two sources of one package as two entries against the bound" $ do
             -- The size bound is over (source, package) entries: caching one package
             -- from both origins occupies two slots, exercising the per-source key under
-            -- the bound.
+            -- the bound. Observed through the entry-count gauge the cache reports on each
+            -- leader insert (the live occupancy path).
+            (port, readEntries) <- recordingEntriesPort
             c <- newMetadataCache (config 60 4)
             for_ [1 .. 10 :: Int] $ \i -> do
-                _ <- resolveMetadata c privateSource (pkg (show i)) (pure (entry (pkg (show i)) "priv"))
-                resolveMetadata c publicSource (pkg (show i)) (pure (entry (pkg (show i)) "pub"))
-            n <- cacheSize c
-            n `shouldSatisfy` (<= 4)
+                _ <- Cache.resolveMetadata port c privateSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "priv")))
+                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "pub")))
+            n <- readEntries
+            n `shouldSatisfy` maybe False (<= 4)
 
     describe "resident-byte budget" $
         it "reports the resident bytes through the residency gauge" $ do
             -- The residency gauge reflects the held entries' summed weight: after resolving
-            -- a few distinct packages (under both bounds), the last reported value equals the
-            -- entry count times the per-entry weight.
+            -- four distinct packages (both bounds generous, so all are held), the last
+            -- reported value equals the entry count times the per-entry weight.
             (port, readResidency) <- recordingResidencyPort
             c <- newMetadataCache (config 60 100)
             for_ [1 .. 4 :: Int] $ \i ->
                 Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "raw")))
             residency <- readResidency
-            n <- cacheSize c
-            residency `shouldBe` Just (n * entryWeight)
-            n `shouldBe` 4
+            residency `shouldBe` Just (4 * entryWeight)
 
     describe "resolveAssembled -- the assembled-representation store" $ do
         it "serves the stored bytes on a repeat key without re-rendering" $ do

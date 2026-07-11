@@ -80,7 +80,6 @@ module Ecluse.Core.Registry.Npm.Wire (
     -- * Errors
     ErrorResponse (..),
     ErrorBody (..),
-    errorMessage,
 ) where
 
 import Data.Aeson (
@@ -480,8 +479,7 @@ __Lenient:__ the documented shape is an object @{ message?, error?, ok?: false
 inconsistent -- its per-version 404 is a bare JSON __string__
 (@"version not found: ^3.0.0"@), not an object. This type tolerates both: the
 object form keeps its fields in an 'ErrorBody', and a bare string is captured
-whole as 'ErrorString'. Read the human-facing reason via 'errorMessage', which
-applies npm's "@message@, then @error@" precedence across both shapes.
+whole as 'ErrorString'.
 -}
 data ErrorResponse
     = -- | The documented object form @{ message?, error? }@.
@@ -511,15 +509,6 @@ instance FromJSON ErrorResponse where
                     <$> o .:? "message"
                     <*> o .:? "error"
         other -> typeMismatchOneOf "ErrorResponse (object or string)" other
-
-{- | The human-facing reason carried by an error body, applying npm's documented
-precedence: prefer @message@, then @error@, and for the bare-string form the
-string itself. 'Nothing' only when an object form carried neither field. Total.
--}
-errorMessage :: ErrorResponse -> Maybe Text
-errorMessage = \case
-    ErrorString msg -> Just msg
-    ErrorObject body -> errMessage body <|> errError body
 
 {- Fail a lenient string-or-object decoder with a descriptive message,
 naming the accepted shapes and reporting what was actually found. A small wrapper

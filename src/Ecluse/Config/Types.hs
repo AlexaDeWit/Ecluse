@@ -10,13 +10,10 @@ module Ecluse.Config.Types (
     unUrl,
     QueueBackend (..),
     parseQueueBackend,
-    renderQueueBackend,
     CredentialBackend (..),
     parseCredentialBackend,
-    renderCredentialBackend,
     MirrorCredentialProvider (..),
     parseMirrorCredentialProvider,
-    renderMirrorCredentialProvider,
     MountConfig (..),
     AppConfig (..),
     MountRegistries (..),
@@ -40,7 +37,7 @@ import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire)
 import Ecluse.Runtime.Log (LogFormat)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
@@ -74,9 +71,6 @@ instance WireVocab QueueBackend where
 parseQueueBackend :: Text -> Either Text QueueBackend
 parseQueueBackend = parseWire
 
-renderQueueBackend :: QueueBackend -> Text
-renderQueueBackend = renderWire
-
 data CredentialBackend
     = CodeArtifactCredential
     | StaticCredential
@@ -94,9 +88,6 @@ instance WireVocab CredentialBackend where
 parseCredentialBackend :: Text -> Either Text CredentialBackend
 parseCredentialBackend = parseWire
 
-renderCredentialBackend :: CredentialBackend -> Text
-renderCredentialBackend = renderWire
-
 newtype MirrorCredentialProvider = MirrorCredentialProvider CredentialBackend
     deriving stock (Eq)
 
@@ -111,9 +102,6 @@ instance WireVocab MirrorCredentialProvider where
 parseMirrorCredentialProvider :: Text -> Either Text CredentialBackend
 parseMirrorCredentialProvider raw =
     (\(MirrorCredentialProvider backend) -> backend) <$> parseWire raw
-
-renderMirrorCredentialProvider :: CredentialBackend -> Text
-renderMirrorCredentialProvider = renderWire . MirrorCredentialProvider
 
 data MountConfig = MountConfig
     { mntPrivateUpstream :: Maybe RegistryUrl

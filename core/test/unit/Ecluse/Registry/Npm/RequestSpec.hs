@@ -28,13 +28,11 @@ import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated),
     Validators (..),
     artifactFileUrl,
-    artifactRequest,
     artifactRequestByFile,
     artifactRequestByUrl,
     metadataRequest,
     noValidators,
  )
-import Ecluse.Core.Version (Version, mkVersion)
 
 import Ecluse.Test.Stub (
     stubBaseUrl,
@@ -122,9 +120,6 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
     it "a credential-less metadata request also disables redirect following (0)" $ do
         expectRedirectCount 0 (metadataRequest "https://reg.test" Nothing Abbreviated noValidators isOdd)
 
-    it "a token-bearing artifact request has redirectCount 0" $ do
-        expectRedirectCount 0 (artifactRequest "https://reg.test" (Just (mkSecret "tok")) isOdd v1)
-
     it "a token-bearing by-filename artifact request has redirectCount 0 (the private tarball leg)" $ do
         expectRedirectCount 0 (artifactRequestByFile "https://reg.test" (Just (mkSecret "tok")) isOdd "is-odd-1.0.0.tgz")
 
@@ -137,24 +132,7 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
         Right req -> Client.redirectCount req `shouldBe` want
 
 artifactSpec :: Spec
-artifactSpec = describe "artifactRequest" $ do
-    it "addresses the version's tarball under the package's /-/ path" $ do
-        case artifactRequest "https://reg.test" Nothing isOdd v1 of
-            Right req -> Client.path req `shouldBe` "/is-odd/-/is-odd-1.0.0.tgz"
-            Left err -> fail (show err)
-
-    it "uses the %2F-encoded path but the scope-free tarball filename for a scoped name" $ do
-        case artifactRequest "https://reg.test" Nothing babelCodeFrame v1 of
-            Right req -> Client.path req `shouldBe` "/@babel%2Fcode-frame/-/code-frame-1.0.0.tgz"
-            Left err -> fail (show err)
-
-    it "marks the artifact request non-decompressing so a .tgz streams byte-for-byte" $ do
-        case artifactRequest "https://reg.test" Nothing isOdd v1 of
-            Left err -> fail ("artifactRequest failed: " <> show err)
-            Right req -> do
-                Client.decompress req "application/gzip" `shouldBe` False
-                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
-
+artifactSpec = describe "artifact request building" $ do
     it "artifactRequestByFile fetches by the preserved filename, non-decompressing" $ do
         case artifactRequestByFile "https://reg.test" Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
             Left err -> fail ("artifactRequestByFile failed: " <> show err)
@@ -190,9 +168,6 @@ urlFailureSpec = describe "URL-formation failures" $ do
     it "metadataRequest refuses an empty base URL as a UrlFormationError, not a publish error" $ do
         metadataRequest "" Nothing Abbreviated noValidators isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
-    it "artifactRequest refuses an empty base URL as a UrlFormationError" $ do
-        artifactRequest "" Nothing isOdd v1 `shouldSatisfy` urlErrorWas EmptyBaseUrl
-
     it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
         artifactRequestByFile "" Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
@@ -219,9 +194,6 @@ babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"
 
 onceDecodedTraversal :: PackageName
 onceDecodedTraversal = mkPackageName Npm Nothing "foo%2e%2e%2fbar"
-
-v1 :: Version
-v1 = mkVersion Npm "1.0.0"
 
 urlErrorWas :: UrlFormationError -> Either UrlFormationError a -> Bool
 urlErrorWas expected = either (== expected) (const False)

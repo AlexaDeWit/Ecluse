@@ -30,7 +30,6 @@ buffered, is the separate mirroring concern, not this.
 -}
 module Ecluse.Core.Server.Stream (
     -- * Streaming a response through
-    streamUpstream,
     streamUpstreamWhen,
 
     -- * Probing without a body (HEAD)
@@ -42,39 +41,13 @@ module Ecluse.Core.Server.Stream (
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString)
-import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus, withResponse)
+import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (Response, ResponseReceived, responseLBS, responseStream)
 import UnliftIO.Exception (finally, tryAny)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
-
-{- | Stream an upstream response through to the client with constant memory.
-
-The upstream connection is opened with @withResponse@ __bracketed around the
-@respond@ call__, so it lives exactly as long as the streamed body and is released
-only after Warp returns 'ResponseReceived' -- the WAI streaming-lifetime contract.
-The body is pumped chunk-by-chunk via 'pumpBody', whose @write@ blocks on the
-socket, so upstream is read only as fast as the client drains (backpressure).
-
-The @relay@ argument chooses the client-facing status and headers from upstream's,
-so the caller controls what is forwarded (relaying an artifact's status and
-content headers unchanged, passing a @304@ straight back, or filtering hop-by-hop
-headers) without this helper hard-coding a policy.
--}
-streamUpstream ::
-    Manager ->
-    Request ->
-    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
-    (Response -> IO ResponseReceived) ->
-    IO ResponseReceived
-streamUpstream manager request relay respond =
-    withResponse request manager $ \upstream ->
-        let (status, headers) = relay (responseStatus upstream) (responseHeaders upstream)
-         in respond $
-                responseStream status headers $ \write flush ->
-                    pumpBody (brRead (HTTP.responseBody upstream)) write flush
 
 {- | Stream an upstream response through __only when__ its status passes the
 @accept@ predicate, keeping a recoverable miss distinct from an unrecoverable
@@ -106,8 +79,8 @@ The connection is released on every path: a rejected status closes it before
 returning, a streamed (or failed) body closes it as the stream unwinds.
 
 The @accept@ predicate sees only the status (the hit\/miss decision a serve fetch
-makes); a passing response is relayed exactly as 'streamUpstream' would, the
-@relay@ choosing the client-facing status and headers. @relay@ runs in 'IO' --
+makes); a passing response is relayed with the @relay@ choosing the client-facing
+status and headers. @relay@ runs in 'IO' --
 once, pre-commit, on the accepted status and headers -- so a caller can observe
 what it is about to relay (the public leg's relay verdict) without this
 function knowing about verdicts.

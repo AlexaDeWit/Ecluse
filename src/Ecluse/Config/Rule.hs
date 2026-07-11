@@ -13,7 +13,6 @@ module Ecluse.Config.Rule (
     knownRuleTypes,
     resolvePolicy,
     RulePatch (..),
-    emptyPatch,
     RuleEntry (..),
 ) where
 
@@ -62,10 +61,6 @@ quote t = "\"" <> t <> "\""
 
 newtype RulePatch = RulePatch (Map Text RuleEntry)
     deriving stock (Eq, Show)
-
--- | An empty patch that does not override any rules.
-emptyPatch :: RulePatch
-emptyPatch = RulePatch Map.empty
 
 data RuleEntry = RuleEntry
     { entryType :: Maybe Text

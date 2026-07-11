@@ -257,7 +257,7 @@ resolveJson = resolveJsonOver defaultPolicy
 resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
 resolveJsonOver base body = case eitherDecodeStrict body :: Either String Value of
     Left e -> Left [MalformedRule "<decode>" (T.pack e)]
-    Right (Object o) -> case parseEither (\obj -> obj .:? "rules" .!= emptyPatch) o of
+    Right (Object o) -> case parseEither (\obj -> obj .:? "rules" .!= RulePatch Map.empty) o of
         Left err -> Left [MalformedRule "<parse>" (T.pack err)]
         Right patch -> sortOn rulePrecedence . Map.elems . policyRules <$> resolvePolicy base patch
     Right _ -> Left [MalformedRule "<parse>" "expected object"]

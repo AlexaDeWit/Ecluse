@@ -29,7 +29,6 @@ import Ecluse.Core.Credential.Refresh
 import Ecluse.Core.Credential.Refresh.Internal (
     CacheState (..),
     ServeAction (..),
-    admitMint,
     decide,
     onMintFailure,
     onMintSuccess,
@@ -543,23 +542,6 @@ spec = do
             csRefreshDue st1 `shouldBe` csRefreshDue st0
             csRefreshing st1 `shouldBe` True
 
-    describe "admitMint" $ do
-        it "denies a mint while the breaker is open and still in cooldown" $ do
-            stateVar <- newTVarIO aCacheState{csBreaker = Open (addUTCTime 30 t0)}
-            atomically (admitMint stateVar t0) `shouldReturn` False
-            -- The breaker is left open (unchanged) for the next attempt.
-            csBreaker <$> readTVarIO stateVar `shouldReturn` Open (addUTCTime 30 t0)
-
-        it "admits a probe and half-opens once the cooldown has elapsed" $ do
-            stateVar <- newTVarIO aCacheState{csBreaker = Open t0}
-            atomically (admitMint stateVar (addUTCTime 1 t0)) `shouldReturn` True
-            csBreaker <$> readTVarIO stateVar `shouldReturn` HalfOpen
-
-        it "admits a closed breaker, leaving it unchanged" $ do
-            stateVar <- newTVarIO aCacheState{csBreaker = Closed 1}
-            atomically (admitMint stateVar t0) `shouldReturn` True
-            csBreaker <$> readTVarIO stateVar `shouldReturn` Closed 1
-
     describe "releaseSingleFlight" $ do
         it "clears the single-flight flag" $ do
             stateVar <- newTVarIO aCacheState{csRefreshing = True}
@@ -739,8 +721,8 @@ mRefreshDueAt issuedAt token = case authExpiresAt token of
     clamp01 = max 0 . min 1
 
 {- | Whether the breaker admits a mint at @now@, and the breaker state it leaves
-behind (mirrors @admitMint@: an elapsed 'MOpen' flips to half-open and admits;
-otherwise an open breaker denies; closed/half-open always admit).
+behind (mirrors the breaker admission gate: an elapsed 'MOpen' flips to half-open
+and admits; otherwise an open breaker denies; closed/half-open always admit).
 -}
 mAdmit :: UTCTime -> MBreaker -> (Bool, MBreaker)
 mAdmit now = \case

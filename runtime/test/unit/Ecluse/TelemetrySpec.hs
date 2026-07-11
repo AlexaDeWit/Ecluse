@@ -36,7 +36,6 @@ import Ecluse.Runtime.Telemetry (
     observeMetricExporter,
     observeSpanExporter,
     parseTelemetrySwitch,
-    renderTelemetrySwitch,
     telemetryDisabled,
     telemetryEnabled,
     telemetryMeterProvider,
@@ -70,11 +69,9 @@ spec = do
 
 switchSpec :: Spec
 switchSpec = describe "TelemetrySwitch" $ do
-    it "round-trips each mode through parse/render" $ do
+    it "parses each accepted mode" $ do
         parseTelemetrySwitch "off" `shouldBe` Right TelemetryOff
         parseTelemetrySwitch "on" `shouldBe` Right TelemetryOn
-        renderTelemetrySwitch TelemetryOff `shouldBe` "off"
-        renderTelemetrySwitch TelemetryOn `shouldBe` "on"
 
     it "rejects an unknown value, naming the accepted set" $
         parseTelemetrySwitch "maybe"

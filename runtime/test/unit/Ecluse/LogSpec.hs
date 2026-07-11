@@ -35,7 +35,6 @@ import Ecluse.Runtime.Log (
     DdContext (..),
     DdSpan (..),
     LogFormat (..),
-    auditContext,
     ddField,
     ddObject,
     formatDdSpanId,
@@ -43,8 +42,6 @@ import Ecluse.Runtime.Log (
     newLogEnv,
     newScribe,
     parseLogFormat,
-    renderLogFormat,
-    renderLogLine,
  )
 
 -- | A fixed instant, so a rendered line is deterministic across runs.
@@ -52,9 +49,8 @@ fixedTime :: UTCTime
 fixedTime = UTCTime (fromGregorian 2026 6 22) 0
 
 {- | Build a log 'Item' with the given structured payload and message, holding
-every other field fixed. This is the unit the scribe serialises; rendering it
-through 'renderLogLine' reproduces exactly what the scribe would write, with no
-stdout dependency.
+every other field fixed. This is the unit the scribe serialises; decoding it
+through 'itemJson' asserts on the serialised structure with no stdout dependency.
 -}
 item :: SimpleLogPayload -> Text -> Item SimpleLogPayload
 item payload message =
@@ -91,7 +87,10 @@ dataField key logItem = do
 
 -- | The structured-context fields the audit trail attaches to a denial.
 deniedContext :: SimpleLogPayload
-deniedContext = auditContext "@evil/pkg" "1.0.0" "DenyInstallTimeExecution"
+deniedContext =
+    sl "package" ("@evil/pkg" :: Text)
+        <> sl "version" ("1.0.0" :: Text)
+        <> sl "rule" ("DenyInstallTimeExecution" :: Text)
 
 -- | The nested @dd@ correlation object of a serialised item's @data@ payload.
 ddObjectOf :: Item SimpleLogPayload -> Maybe Object
@@ -136,44 +135,22 @@ spec = do
             parseLogFormat "yaml"
                 `shouldBe` Left "unknown log format \"yaml\" (expected one of: json, console)"
 
-        it "round-trips through renderLogFormat" $ do
-            renderLogFormat JsonLog `shouldBe` "json"
-            renderLogFormat ConsoleLog `shouldBe` "console"
-            parseLogFormat (renderLogFormat JsonLog) `shouldBe` Right JsonLog
-            parseLogFormat (renderLogFormat ConsoleLog) `shouldBe` Right ConsoleLog
-
-    describe "renderLogLine (format selection)" $ do
-        it "JsonLog emits a single compact JSON object (one line, no pretty-print)" $ do
-            let line = renderLogLine JsonLog (item deniedContext "denied")
-            -- One JSON object: a single '{'…'}' with nothing outside it, and no
-            -- embedded physical newline -- the JSONL one-line guarantee.
-            T.isPrefixOf "{" line `shouldBe` True
-            T.isSuffixOf "}" line `shouldBe` True
-            T.count "\n" line `shouldBe` 0
-            -- It is valid JSON that round-trips to the expected payload fields.
-            dataField "rule" (item deniedContext "denied") `shouldBe` Just "DenyInstallTimeExecution"
-
-        it "ConsoleLog emits the human-readable bracketed form, not JSON" $ do
-            let line = renderLogLine ConsoleLog (item deniedContext "denied")
-            T.isPrefixOf "[" line `shouldBe` True
-            line `shouldSatisfy` T.isInfixOf "denied"
-            -- The console form is not a JSON object.
-            T.isPrefixOf "{" line `shouldBe` False
-
-    describe "renderLogLine (JSONL one-line / escaping, table-driven)" $
+    describe "JsonLog stays one physical line (embedded newlines escaped)" $
         for_ escapeCases $ \(label, raw) ->
-            it ("escapes an embedded newline in: " <> toString label) $ do
-                let line = renderLogLine JsonLog (item mempty raw)
-                -- The message spans no physical line: any embedded newline is
-                -- escaped to the two characters '\' 'n', so the record stays one
-                -- line for a line-delimited collector.
-                T.count "\n" line `shouldBe` 0
-                line `shouldSatisfy` T.isInfixOf "\\n"
-                -- And the line is still one well-formed JSON object whose decoded
-                -- "msg" recovers the original text with its real newline.
-                topField "msg" (item mempty raw) `shouldBe` Just raw
+            it ("keeps one physical line for: " <> toString label) $ do
+                captured <- captureStdout $ do
+                    logEnv <- newLogEnv JsonLog (Environment "test")
+                    runKatipT logEnv $ logF (mempty :: SimpleLogPayload) (Namespace ["serve"]) WarningS (logStr raw)
+                    _ <- closeScribes logEnv
+                    pure ()
+                -- The scribe terminates each event with one trailing newline, so a message
+                -- carrying embedded newlines still emits as a single physical JSONL line,
+                -- its newline escaped to the two characters '\' 'n' inside the JSON string.
+                case filter (not . T.null) (T.lines captured) of
+                    [line] -> line `shouldSatisfy` T.isInfixOf "\\n"
+                    other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))
 
-    describe "renderLogLine (expected keys)" $
+    describe "serialised item (expected keys)" $
         it "carries the standard katip keys and the structured data object" $ do
             let it' = item deniedContext "denied"
             topField "msg" it' `shouldBe` Just "denied"
@@ -183,30 +160,32 @@ spec = do
             dataField "version" it' `shouldBe` Just "1.0.0"
             dataField "rule" it' `shouldBe` Just "DenyInstallTimeExecution"
 
-    describe "auditContext" $
-        it "attaches package, version, and rule under the data object" $ do
-            let it' = item (auditContext "left-pad" "1.3.0" "AllowScope") "admitted"
-            dataField "package" it' `shouldBe` Just "left-pad"
-            dataField "version" it' `shouldBe` Just "1.3.0"
-            dataField "rule" it' `shouldBe` Just "AllowScope"
-
     describe "secrets never reach a log field" $ do
         it "a Secret embedded in a payload renders only its redaction, never the token" $ do
             -- The realistic leak path: code logs a value built from a Secret. The
             -- Secret's Show is a fixed placeholder, so the token text cannot reach
             -- a structured field. This is the load-bearing redaction
-            -- (observability.md: token material must never reach a log).
+            -- (observability.md: token material must never reach a log), asserted
+            -- through the real scribe's emitted output.
             let token = "super-secret-token"
                 leaky = sl "credential" (T.pack (show (mkSecret token)))
-                line = renderLogLine JsonLog (item leaky "using credential")
-            line `shouldSatisfy` (not . T.isInfixOf token)
-            line `shouldSatisfy` T.isInfixOf "REDACTED"
+            captured <- captureStdout $ do
+                logEnv <- newLogEnv JsonLog (Environment "test")
+                runKatipT logEnv $ logF leaky (Namespace ["serve"]) WarningS (logStr ("using credential" :: Text))
+                _ <- closeScribes logEnv
+                pure ()
+            captured `shouldSatisfy` (not . T.isInfixOf token)
+            captured `shouldSatisfy` T.isInfixOf "REDACTED"
 
         it "holds for the console format too" $ do
             let token = "another-secret"
                 leaky = sl "credential" (T.pack (show (mkSecret token)))
-                line = renderLogLine ConsoleLog (item leaky "using credential")
-            line `shouldSatisfy` (not . T.isInfixOf token)
+            captured <- captureStdout $ do
+                logEnv <- newLogEnv ConsoleLog (Environment "test")
+                runKatipT logEnv $ logF leaky (Namespace ["serve"]) WarningS (logStr ("using credential" :: Text))
+                _ <- closeScribes logEnv
+                pure ()
+            captured `shouldSatisfy` (not . T.isInfixOf token)
 
     describe "newScribe" $
         it "constructs a scribe for each format without throwing" $ do
@@ -267,14 +246,12 @@ spec = do
             ddObject (DdContext "ecluse" Nothing Nothing Nothing)
                 `shouldBe` object ["service" .= ("ecluse" :: Text)]
 
-        it "carries the dd object on one compact JSON line under data.dd" $ do
+        it "carries the dd object under data.dd" $ do
             let logItem =
                     item
                         (ddField (DdContext "ecluse" (Just "prod") (Just "1.4.2") (Just (DdSpan "42" "7"))))
                         "denied"
-                rendered = renderLogLine JsonLog logItem
                 dd = ddObjectOf logItem
-            length (T.lines rendered) `shouldBe` 1
             (dd >>= ddStr "service") `shouldBe` Just "ecluse"
             (dd >>= ddStr "env") `shouldBe` Just "prod"
             (dd >>= ddStr "version") `shouldBe` Just "1.4.2"

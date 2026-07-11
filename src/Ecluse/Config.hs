@@ -29,7 +29,6 @@ module Ecluse.Config (
     renderConfigError,
     loadConfig,
     mountCollisionWarnings,
-    validateDefaultConfig,
 ) where
 
 import Data.Aeson (Result (..), Value (..), fromJSON)
@@ -59,22 +58,6 @@ defaultPolicy =
                 Right globalRules -> either (error . show) id (resolvePolicy emptyPolicy globalRules)
                 Left e -> error ("Invalid default policy JSON: " <> T.pack e)
             Left e -> error ("Invalid default policy YAML: " <> show e)
-
-{- | Validate the embedded default configuration as a self-contained backbone: that
-it decodes as YAML, parses into an 'AppConfig', and resolves its rule policy without
-'error'. This is the __default-alone-safe subset__ of 'loadConfig'; it deliberately
-omits mount resolution, which needs each mount's @privateUpstream@ from the operator
-overlay and so is not a property of the shipped baseline. Exported so a test pins the
-shipped default as a valid backbone rather than a malformed one surfacing only at
-process start.
--}
-validateDefaultConfig :: Either [ConfigError] (AppConfig, RulePolicy)
-validateDefaultConfig = do
-    ast <- parseDefaultAst
-    appConfig <- parseAppConfig ast
-    patch <- first (\e -> [ParseError ("config/default.yaml has invalid rules: " <> T.pack e)]) (parseRulesPatch ast)
-    policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
-    Right (appConfig, policy)
 
 {- | Load the full configuration: defaults, the optional operator document, and the
 environment overlay, merged strongest-last, then parsed, activated, and resolved.

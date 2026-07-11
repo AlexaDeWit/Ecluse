@@ -10,9 +10,9 @@ import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
-import UnliftIO.Exception (bracket, catchAny, try)
+import UnliftIO.Exception (bracket, catchAny, finally, try)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (cqfQuery), openCveDb, withCveDb)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (cqfQuery), openCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
@@ -78,10 +78,10 @@ withAcceptedDb body =
 
 withRealLookup :: (CveLookup -> IO ()) -> IO ()
 withRealLookup use =
-    withFixtureOsvDb CorpusV1 $ \dbFile ->
-        withCveDb Npm dbFile use >>= \case
-            Right () -> pass
+    withFixtureOsvDb CorpusV1 $
+        openCveDb Npm >=> \case
             Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
+            Right db -> use (cveDbLookup db) `finally` cveDbClose db
 
 spec :: Spec
 spec = do
@@ -141,15 +141,6 @@ spec = do
                     execute_ conn (Query metaTableDdl)
                 openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
 
-        it "withCveDb short-circuits a rejection without running the action" $
-            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
-                let path = dir </> "wrong-epoch.db"
-                mkDbWithWrongEpoch path
-                ran <- newIORef False
-                result <- withCveDb Npm path (\_ -> writeIORef ran True)
-                result `shouldBe` Left (CveDbWrongEpoch (osvSchemaEpoch + 1))
-                readIORef ran `shouldReturn` False
-
         it "rejects an artifact whose stored meta values violate the strict declaration, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "malformed-meta.db"
@@ -173,9 +164,11 @@ spec = do
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "trigger.db"
                 mkDbWithMaliciousTrigger path
-                withCveDb Npm path (\l -> cveRemediationProbe l "trigger-pkg" "1.0.0" `shouldReturn` True) >>= \case
+                openCveDb Npm path >>= \case
                     Left rejection -> fail ("trigger artifact unexpectedly rejected: " <> show rejection)
-                    Right () -> pass
+                    Right db ->
+                        (cveRemediationProbe (cveDbLookup db) "trigger-pkg" "1.0.0" `shouldReturn` True)
+                            `finally` cveDbClose db
 
         it "rejects an artifact whose b-tree pages are structurally corrupt" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do

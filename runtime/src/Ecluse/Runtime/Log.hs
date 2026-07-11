@@ -42,7 +42,6 @@ module Ecluse.Runtime.Log (
     -- * Log format
     LogFormat (..),
     parseLogFormat,
-    renderLogFormat,
 
     -- * Pipeline construction
     newLogEnv,
@@ -50,7 +49,6 @@ module Ecluse.Runtime.Log (
     formatterFor,
 
     -- * Structured context
-    auditContext,
     moduleField,
 
     -- * Datadog trace correlation
@@ -60,19 +58,13 @@ module Ecluse.Runtime.Log (
     ddObject,
     formatDdTraceId,
     formatDdSpanId,
-
-    -- * Rendering (for serialise-and-assert)
-    renderLogLine,
 ) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString qualified as BS
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Builder qualified as TB
 import Katip (
     ColorStrategy (ColorLog),
     Environment,
-    Item,
     LogEnv,
     LogItem,
     Namespace (Namespace),
@@ -88,7 +80,7 @@ import Katip (
  )
 import Katip.Scribes.Handle (ItemFormatter, bracketFormat, jsonFormat, mkHandleScribeWithFormatter)
 
-import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | The on-the-wire shape of the log stream, selected by configuration. A sum
 type rather than a 'Bool' so each case names its intent and a new shape is a new
@@ -124,10 +116,6 @@ Left "unknown log format \"yaml\" (expected one of: json, console)"
 parseLogFormat :: Text -> Either Text LogFormat
 parseLogFormat = parseWire
 
--- | The wire name of a 'LogFormat' (the inverse of 'parseLogFormat').
-renderLogFormat :: LogFormat -> Text
-renderLogFormat = renderWire
-
 {- | Build the application 'LogEnv': a @katip@ environment under the @ecluse@
 namespace with a single stdout scribe in the chosen 'LogFormat'. This is the value
 the composition root holds and every later layer logs through.
@@ -159,34 +147,11 @@ newScribe format =
 
 {- | The @katip@ 'ItemFormatter' a 'LogFormat' wires into its scribe: the compact
 one-line JSON encoder for 'JsonLog', the bracketed human form for 'ConsoleLog'.
-
-Exposed so a test can render an item through the exact formatter the scribe uses,
-asserting on the serialised line without writing to stdout (see 'renderLogLine').
 -}
 formatterFor :: (LogItem a) => LogFormat -> ItemFormatter a
 formatterFor = \case
     JsonLog -> jsonFormat
     ConsoleLog -> bracketFormat
-
-{- | The structured context for an audit event -- a denial or other rule decision --
-carrying the @package@, @version@, and @rule@ the operator needs to explain a 403
-from the log line alone. These are the high-cardinality identifiers that belong on
-the log line, never on a metric label (see
-@docs\/architecture\/observability.md@ → "Cardinality and attributes").
-
-Attach it to a log call as the structured payload; @katip@ renders the three keys
-into the line's @data@ object.
--}
-auditContext ::
-    -- | The package the decision concerns.
-    Text ->
-    -- | The package version.
-    Text ->
-    -- | The name of the rule that decided.
-    Text ->
-    SimpleLogPayload
-auditContext package version rule =
-    sl "package" package <> sl "version" version <> sl "rule" rule
 
 {- | The structured context naming the __source module__ a log line was emitted
 from, so every JSON record carries a @module@ field (e.g.
@@ -274,16 +239,3 @@ low64Bits = BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 . lastBytes
   where
     lastBytes :: Int -> ByteString -> ByteString
     lastBytes n bytes = BS.drop (max 0 (BS.length bytes - n)) bytes
-
-{- | Render a single log 'Item' to the exact text the scribe for this 'LogFormat'
-writes for it -- the formatter output for one item, without the trailing newline
-the handle scribe appends to separate physical lines.
-
-This is what the unit tests assert on: it reproduces the scribe's serialisation
-with no stdout dependency, so a 'JsonLog' line can be checked for being a single
-compact object with escaped newlines, and a 'ConsoleLog' line for the
-human-readable form.
--}
-renderLogLine :: (LogItem a) => LogFormat -> Item a -> Text
-renderLogLine format item =
-    TL.toStrict (TB.toLazyText (formatterFor format False V2 item))

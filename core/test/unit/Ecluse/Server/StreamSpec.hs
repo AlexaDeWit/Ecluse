@@ -24,7 +24,7 @@ import Test.Hspec
 import UnliftIO (concurrently)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstreamWhen)
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
@@ -120,16 +120,16 @@ spec = do
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 0
 
-    describe "streamUpstream -- end to end over an in-process upstream" $
+    describe "streamUpstreamWhen -- large body, end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
             -- A 4 MiB body streamed from an in-process Warp upstream, through the
-            -- proxy's streamUpstream, and pulled back by a real client. It must
-            -- arrive intact via the full http-client wiring; the pump test above is
-            -- the unit proof that this path never buffers the body whole.
+            -- proxy's streamUpstreamWhen (a passing predicate), and pulled back by a real
+            -- client. It must arrive intact via the full http-client wiring; the pump test
+            -- above is the unit proof that this path never buffers the body whole.
             let bigBody = BS.replicate (4 * 1024 * 1024) 0x7a
             manager <- newManager defaultManagerSettings
             testWithApplication (pure (upstreamApp bigBody)) $ \upPort ->
-                testWithApplication (pure (proxyApp manager upPort)) $ \proxyPort -> do
+                testWithApplication (pure (conditionalProxy manager upPort)) $ \proxyPort -> do
                     req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
                     resp <- httpLbs req manager
                     toStrict (responseBody resp) `shouldBe` bigBody
@@ -228,12 +228,6 @@ spec = do
     upstreamApp :: ByteString -> Application
     upstreamApp body _req respond =
         respond (responseStream status200 [] (\write flush -> writeChunks write flush (chunk 65536 body)))
-
-    -- The proxy: open the upstream and stream it through, relaying status+headers.
-    proxyApp :: HTTP.Manager -> Int -> Application
-    proxyApp manager upPort _req respond = do
-        upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        streamUpstream manager upReq (,) respond
 
     -- An upstream that answers 200 with a body and a content header to relay.
     headeredUpstream :: Application

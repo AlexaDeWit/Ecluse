@@ -449,26 +449,20 @@ errorResponseSpec = describe "ErrorResponse" $ do
         -- npm's per-version 404 is a bare JSON string, not an object (§3).
         err <- decodeFixture @ErrorResponse "error-version-not-found.json"
         err `shouldBe` ErrorString "version not found: ^3.0.0"
-        errorMessage err `shouldBe` Just "version not found: ^3.0.0"
 
     it "decodes the {error} object form (unknown package)" $ do
         err <- decodeFixture @ErrorResponse "error-not-found.json"
         err `shouldBe` ErrorObject ErrorBody{errMessage = Nothing, errError = Just "Not found"}
-        errorMessage err `shouldBe` Just "Not found"
 
-    it "decodes the {message} object form and prefers message over error" $ do
+    it "decodes the {message} object form" $ do
         err <- decodeFixture @ErrorResponse "error-method-not-allowed.json"
         err `shouldBe` ErrorObject ErrorBody{errMessage = Just "GET is not allowed", errError = Nothing}
-        errorMessage err `shouldBe` Just "GET is not allowed"
 
-    it "prefers message over error when an object carries both" $ do
-        -- npm's precedence is "message, then error"; with both present the
-        -- message must win.
+    it "decodes an object carrying both message and error fields" $ do
         err <- decodeFixture @ErrorResponse "error-both-fields.json"
         err
             `shouldBe` ErrorObject
                 ErrorBody{errMessage = Just "you must be logged in", errError = Just "Unauthorized"}
-        errorMessage err `shouldBe` Just "you must be logged in"
 
 {- | The wire types appear inside JSON arrays on the registry (maintainer and
 signature lists, and @versions@\/@dist-tags@ are objects of them), so each must
@@ -535,7 +529,6 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
                        , ErrorObject ErrorBody{errMessage = Nothing, errError = Just "Not found"}
                        , ErrorObject ErrorBody{errMessage = Just "nope", errError = Nothing}
                        ]
-        map errorMessage errs `shouldBe` [Just "version not found", Just "Not found", Just "nope"]
 
 {- | The wire decoders eat __untrusted__ upstream JSON, so every one must be
 __total__: an arbitrary input may never make a decoder bottom (throw, or hit a

@@ -24,16 +24,14 @@ for the hardening detail.
 __Ownership is split at the type level__: 'openCveDb' yields a 'CveDb', the
 owning resource whose holder alone may 'cveDbClose'; consumers are handed only
 its 'CveLookup' view, so nothing evaluating rules can release a shared
-connection. A lexically-scoped use (a test, a one-shot check) brackets with
-'withCveDb'; a dynamically-scoped owner (the background sync's shadow-swap,
-which retires an artifact only when no evaluation still reads it) holds the
-'CveDb' and closes explicitly.
+connection. The owner (the background sync's shadow-swap, which retires an
+artifact only when no evaluation still reads it) holds the 'CveDb' and closes it
+explicitly.
 -}
 module Ecluse.Core.Cve (
     -- * The owning resource
     CveDb (..),
     openCveDb,
-    withCveDb,
 
     -- * The consumer view
     CveLookup (..),
@@ -55,7 +53,7 @@ module Ecluse.Core.Cve (
     severityAtLeast,
 ) where
 
-import UnliftIO.Exception (catch, catchAny, finally, onException, throwIO)
+import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -178,16 +176,6 @@ mkCveDb conn meta =
 -- is this module's closed vocabulary rather than the driver's exception type.
 taggedQuery :: Text -> IO a -> IO a
 taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
-
-{- | Bracket a lexically-scoped use of an artifact: open, hand the consumer
-view to the action, and close on any exit. A rejected artifact short-circuits
-('Left') without running the action; its connection is already closed.
--}
-withCveDb :: Ecosystem -> FilePath -> (CveLookup -> IO a) -> IO (Either CveDbRejected a)
-withCveDb eco dbFile use =
-    openCveDb eco dbFile >>= \case
-        Left rejection -> pure (Left rejection)
-        Right db -> Right <$> (use (cveDbLookup db) `finally` cveDbClose db)
 
 {- | Is this version inside the advisory segment's affected interval, under the
 ecosystem's version ordering? The interval is @introduced <= v@ bounded above by
