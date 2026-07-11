@@ -120,6 +120,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Version.Token
     Ecluse.Core.Registry.Npm.Publish
     Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
@@ -173,7 +174,7 @@ library ecluse-core
     Ecluse.Core.Version.Gem
     Ecluse.Core.Version.Pep440
     Ecluse.Core.Version.Semver
-    Ecluse.Core.Version.Token
+
     Paths_ecluse
 
   autogen-modules: Paths_ecluse
@@ -525,6 +526,8 @@ test-suite ecluse-core-unit
     Ecluse.Test.SupportLinkageSpec
     Ecluse.TextSpec
     Ecluse.VersionOrderingSpec
+    Ecluse.Version.TokenSpec
+    Ecluse.Version.TokenSpec
     Ecluse.VersionSpec
     Ecluse.WireSpec
     Ecluse.Worker.IntegritySpec
