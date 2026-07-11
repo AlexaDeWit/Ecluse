@@ -6,8 +6,7 @@ name: Benchmarks
 # crashed harness, or a tripped complexity assertion). It never computes a
 # perf-regression fail — time and allocations are reported in the run summary for a
 # human to read, never compared to a threshold. There is no cross-run baseline: a run's
-# results are downloadable from its own page but are not consumed by any other run. See
-# docs/architecture/performance.md.
+# results are downloadable from its own page but are not consumed by any other run.
 on:
   pull_request:
   push:
@@ -54,25 +53,24 @@ jobs:
       - name: Update package index
         run: nix develop .#bench --command task update
 
-      # Run the benches, capturing the console table (time + allocations) for the run
-      # summary and a CSV uploaded as this run's downloadable results. `task bench`
-      # never gates on performance; this step fails only on a genuine benchmark failure.
+      # Run the benches, teeing the console output (progress lines, the generator
+      # tests, the complexity assertions) for the report's raw-output section, and
+      # writing the CSV the report renders from. pipefail: `tee` must not mask a
+      # tripped complexity assertion or a crashed harness. `task bench` never gates
+      # on performance; this step fails only on a genuine benchmark failure.
       - name: Run benchmarks
         run: |
+          set -eo pipefail
           nix develop .#bench --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
 
+      # Render the CSV as the structured Markdown report. The renderer writes to
+      # stdout and appends to $GITHUB_STEP_SUMMARY itself (as the load and acceptance
+      # harnesses do), so the step needs no shell wrapping and stays injection-free.
+      # Runs even on a red bench: a partial CSV is still worth reading, and a missing
+      # CSV renders as an explicit note, never a second failure.
       - name: Render results to the run summary
         if: always()
-        run: |
-          {
-            echo '## Benchmarks — work-per-request over ecluse-core';
-            echo;
-            echo 'Time AND allocations per pure hot path. Allocations (from GC stats) are the machine-independent signal tracked across commits; time is informational and varies with the runner. This workflow never computes a perf-regression fail — its only red state is a literal benchmark failure (a build error, a crashed harness, or a tripped complexity assertion).';
-            echo;
-            echo '```';
-            sed -E 's/\x1b\[[0-9;]*m//g' bench-output.txt 2>/dev/null || echo '(no output)';
-            echo '```';
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: nix develop .#bench --command task bench-report
 
       # This run's results, downloadable from the run page (the CSV + the console
       # table). A convenience for a human comparing by hand — there is no cross-run

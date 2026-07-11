@@ -12,7 +12,7 @@ name: Load test
 # never computes a perf-regression fail — throughput and latency are reported in the run
 # summary for a human to read and trend, never compared to a threshold. There is no
 # cross-run baseline: a run's results are downloadable from its own page but consumed by
-# no other run. See docs/architecture/performance.md.
+# no other run.
 on:
   workflow_dispatch:
     inputs:

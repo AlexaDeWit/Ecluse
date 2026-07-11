@@ -602,6 +602,7 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
+    Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
     Ecluse.CompositionSpec
@@ -628,6 +629,7 @@ test-suite ecluse-unit
     , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-bench-load
+    , ecluse:ecluse-bench-report
     , optparse-applicative
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
@@ -1031,6 +1033,31 @@ library ecluse-bench-load
   hs-source-dirs:  bench/load/src
   exposed-modules: Ecluse.BenchLoad.Normalise
   build-depends:   text ^>=2.1
+
+-- Work-per-request bench report core: the PURE CSV-to-Markdown rendering behind the
+-- bench run summary (parse the tasty-bench CSV, group by tasty path, render the
+-- structured report). An INTERNAL sublibrary (the ecluse-bench-load pattern) so the
+-- gating unit suite exercises the parse and rendering deterministically. No HTTP and
+-- no egress former, so unlike bench-load it needs no dev-http-egress gating; kept
+-- out of the shipped library closure.
+library ecluse-bench-report
+  import:          shared
+  hs-source-dirs:  bench/report/src
+  exposed-modules: Ecluse.BenchReport
+  build-depends:   text ^>=2.1
+
+-- The bench report renderer: the thin file-reading shell over ecluse-bench-report.
+-- CI runs it after the benchmarks to turn bench-results.csv (plus the teed console
+-- output) into the run summary; it appends to $GITHUB_STEP_SUMMARY itself, like the
+-- load and acceptance harnesses, so the workflow step stays a single unwrapped
+-- command.
+executable bench-report
+  import:         shared
+  main-is:        Main.hs
+  hs-source-dirs: bench/report
+  build-depends:
+    , ecluse:ecluse-bench-report
+    , text  ^>=2.1
 
 -- Live performance-acceptance harness (Context B): the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the

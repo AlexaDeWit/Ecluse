@@ -45,6 +45,9 @@ module Ecluse.Acceptance (
     reportBreached,
 
     -- * Rendering
+    OperatingPoint (..),
+    headroom,
+    watchFraction,
     renderReport,
 ) where
 
@@ -196,20 +199,69 @@ breached :: Assessment -> Bool
 breached (Assessment _ (Breached _)) = True
 breached _ = False
 
-{- | Render a run as a Markdown summary: an overall verdict line, then a per-package
-table that keeps the __upstream__, __full-packument overhead__, and __single-version
-overhead__ legs in separate columns -- so an upstream-normalisation view can be added
-without reshaping the table -- with each measured row naming its budgets and, on a
-breach, which leg went over and by how much. Unavailable packages are listed as such,
-never as breaches.
+{- | The run-shape facts the summary names so a reader can interpret the numbers
+without opening the harness: how many packages the catalogue held, and how many
+timed passes each reported leg's median came from.
 -}
-renderReport :: Report -> Text
-renderReport report =
-    T.unlines (headerLines <> tableLines <> footerLines)
+data OperatingPoint = OperatingPoint
+    { opPassesPerLeg :: Int
+    -- ^ Timed passes per leg; the reported figure is their median.
+    , opCatalogueSize :: Int
+    -- ^ Packages in the curated catalogue this run set out to measure.
+    }
+    deriving stock (Eq, Show)
+
+{- | The budget-to-observed multiple for one leg: how many times the measured
+overhead fits inside its budget ('Nothing' when the observed figure is zero or
+negative, where the multiple is meaningless). Rendered per package so the report
+shows how much room each leg has before a breach, not just the binary verdict.
+-}
+headroom :: Double -> Double -> Maybe Double
+headroom budget observed
+    | observed <= 0 = Nothing
+    | otherwise = Just (budget / observed)
+
+{- | The fraction of its budget a within-budget leg may consume before the report
+marks it __watch__ -- early warning that reality is drifting toward the bar, while
+the exit code stays green (only a breach exits non-zero). Budgets are calibrated at
+roughly 2.2x the observed CI maxima, so a healthy leg sits near 45% of its budget:
+0.7 stays quiet across that range and trips once a leg reaches about 1.55x its
+calibration-time maximum, well before the breach at 2.2x.
+-}
+watchFraction :: Double
+watchFraction = 0.7
+
+-- Whether a within-budget leg has consumed enough of its budget to be on watch. A
+-- breached leg is never merely on watch, and a non-positive budget cannot express a
+-- meaningful fraction.
+watching :: Assessment -> Double -> Bool
+watching a observed = case assessVerdict a of
+    Within -> assessBudgetMs a > 0 && observed / assessBudgetMs a >= watchFraction
+    Breached _ -> False
+
+{- | Render a run as a Markdown summary: an overall verdict line, the operating
+point, then a per-package table that keeps the __upstream__, __full-packument
+overhead__, and __single-version overhead__ legs in separate columns -- so an
+upstream-normalisation view can be added without reshaping the table -- with each
+measured row naming its budgets, its per-leg headroom, and a verdict: @within@, a
+@watch@ mark on a leg at or above 'watchFraction' of its budget, or on a breach
+which leg went over and by how much. Unavailable packages are listed as such, never
+as breaches.
+-}
+renderReport :: OperatingPoint -> Report -> Text
+renderReport op report =
+    T.unlines (headerLines <> operatingLines <> tableLines <> footerLines)
   where
     outcomes = reportOutcomes report
     breaches = length [() | Measured _ full single <- outcomes, breached full || breached single]
     unavailable = length [() | Unavailable _ _ <- outcomes]
+    watched =
+        length
+            [ ()
+            | Measured s full single <- outcomes
+            , (a, observed) <- [(full, sampleFullOverheadMs s), (single, sampleSingleVersionOverheadMs s)]
+            , watching a observed
+            ]
 
     headerLines =
         [ "## Live performance-acceptance (Context B)"
@@ -226,9 +278,20 @@ renderReport report =
         | unavailable > 0 = " (" <> show unavailable <> " package(s) unavailable, not assessed)"
         | otherwise = ""
 
+    operatingLines =
+        [ "**Operating point**"
+        , ""
+        , "| knob | value |"
+        , "| --- | --- |"
+        , cells ["catalogue", show (opCatalogueSize op) <> " packages (bench/corpus/pins.json)"]
+        , cells ["timing", "median of " <> show (opPassesPerLeg op) <> " timed passes per leg"]
+        , cells ["budgets", "acceptance/criteria.json (version-controlled; moving the bar is a reviewed change)"]
+        , ""
+        ]
+
     tableLines =
-        [ "| Package | Versions | Upstream (ms) | Full overhead (ms) | Single-version (ms) | Budget full/1-ver (ms) | Verdict |"
-        , "|---|--:|--:|--:|--:|--:|---|"
+        [ "| Package | Versions | Upstream (ms) | Full overhead (ms) | Single-version (ms) | Budget full/1-ver (ms) | Headroom full/1-ver | Verdict |"
+        , "|---|--:|--:|--:|--:|--:|--:|---|"
         ]
             <> map row outcomes
 
@@ -240,27 +303,45 @@ renderReport report =
             , fmt1 (sampleFullOverheadMs s)
             , fmt1 (sampleSingleVersionOverheadMs s)
             , fmt1 (assessBudgetMs full) <> " / " <> fmt1 (assessBudgetMs single)
-            , renderVerdicts full single
+            , headroomCell full (sampleFullOverheadMs s)
+                <> " / "
+                <> headroomCell single (sampleSingleVersionOverheadMs s)
+            , renderVerdicts s full single
             ]
     row (Unavailable name reason) =
-        cells [name, "--", "--", "--", "--", "--", "unavailable: " <> reason]
+        cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]
 
-    footerLines
+    headroomCell a observed = maybe "n/a" (\h -> fmt1 h <> "x") (headroom (assessBudgetMs a) observed)
+
+    footerLines = unavailableNote <> watchNote
+    unavailableNote
         | unavailable > 0 =
             ["", "_" <> show unavailable <> " package(s) could not be fetched or decoded; a flaky registry is not a breach._"]
         | otherwise = []
+    watchNote
+        | watched > 0 =
+            [ ""
+            , "_watch marks a leg at or above "
+                <> fmt0 (watchFraction * 100)
+                <> "% of its budget: early warning, not a failure -- only a breach exits non-zero._"
+            ]
+        | otherwise = []
 
--- A measured row's verdict cell: "within" when both legs are in budget, else the
--- breached legs named with their margins.
-renderVerdicts :: Assessment -> Assessment -> Text
-renderVerdicts full single =
-    case catMaybes [tag "full" full, tag "1-ver" single] of
+-- A measured row's verdict cell: "within" when both legs are in budget and clear of
+-- the watch fraction, else each breached leg named with its margin and each watched
+-- leg named with the budget share it has consumed.
+renderVerdicts :: Sample -> Assessment -> Assessment -> Text
+renderVerdicts s full single =
+    case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of
         [] -> "within"
-        breaches -> T.intercalate ", " breaches
+        marks -> T.intercalate ", " marks
   where
-    tag label a = case assessVerdict a of
-        Within -> Nothing
+    tag label a observed = case assessVerdict a of
         Breached margin -> Just ("BREACH " <> label <> " +" <> fmt1 margin <> " ms")
+        Within
+            | watching a observed ->
+                Just ("watch -- " <> label <> " at " <> fmt0 (observed / assessBudgetMs a * 100) <> "% of budget")
+            | otherwise -> Nothing
 
 -- A Markdown table row from its cells.
 cells :: [Text] -> Text
@@ -269,3 +350,7 @@ cells xs = "| " <> T.intercalate " | " xs <> " |"
 -- A double rendered to one decimal place (non-scientific), for the summary table.
 fmt1 :: Double -> Text
 fmt1 x = toText (showFFloat (Just 1) x "")
+
+-- A double rendered with no decimal places (non-scientific), for whole percentages.
+fmt0 :: Double -> Text
+fmt0 x = toText (showFFloat (Just 0) x "")

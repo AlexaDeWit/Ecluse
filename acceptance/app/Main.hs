@@ -34,7 +34,7 @@ import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
-import Ecluse.Acceptance (Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
+import Ecluse.Acceptance (OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, artHashes, mkPackageName, mkScope, pkgArtifacts)
 import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
@@ -57,7 +57,7 @@ main = do
     let names = Map.keys (catBenchPins catalogue)
     inputs <- traverse (measurePackage manager now) names
     let report = evaluate criteria inputs
-        rendered = renderReport report
+        rendered = renderReport (OperatingPoint sampleCount (length names)) report
     putText rendered
     -- In CI, mirror the summary into the GitHub step summary so a breach is visible
     -- on the pull request without the workflow shelling around the harness.
