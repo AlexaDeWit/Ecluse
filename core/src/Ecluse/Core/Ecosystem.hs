@@ -61,7 +61,8 @@ parseEcosystem = \case
 
 {- | The path prefix a mount serves under, __derived__ from its ecosystem (npm →
 @\/npm@, PyPI → @\/pypi@) and never operator-configured, so a prefix can neither
-collide nor be mistyped (see @docs\/architecture\/hosting.md@ → "Mounts"). A
+collide nor be mistyped (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
+mounts"). A
 'NonEmpty' list of path segments: every registry is path-mounted, so a root mount
 is unrepresentable.
 
