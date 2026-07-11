@@ -237,13 +237,29 @@ extractFromAdvisory adv = do
 data Segment = Segment (Maybe Text) (Maybe Text) (Maybe Text)
 
 -- The affected segments of one package entry: the segments carved from each
--- range's event list, plus one point segment per exactly-enumerated version.
+-- __version-typed__ range's event list, plus one point segment per
+-- exactly-enumerated version.
 affectedSegments :: OsvAffected -> [Segment]
 affectedSegments aff =
-    maybe [] (concatMap (extractRange . rangeEvents)) (affectedRanges aff)
+    maybe [] (concatMap (extractRange . rangeEvents) . filter versionTyped) (affectedRanges aff)
         <> maybe [] (map exactVersion) (affectedVersions aff)
   where
     exactVersion v = Segment (Just v) Nothing (Just v)
+
+    -- OSV defines three range types (@SEMVER@, @ECOSYSTEM@, @GIT@); only the first
+    -- two carry version-string bounds this model can order with
+    -- 'Ecluse.Core.Version.compareVersions'. A @GIT@ range's events are __commit
+    -- identifiers__, not versions, so carving them into segments would store a
+    -- commit hash as a version bound; the downstream matcher ('insideAffectedRange')
+    -- then fails that unparseable bound __closed to affected__, so a single @GIT@
+    -- range (@introduced: "0"@, @fixed: \<sha\>@) would flag /every/ version of a
+    -- healthy package as CVE-affected and quarantine it wholesale. Such a range
+    -- expresses no npm-version constraint at all, so it must contribute nothing; a
+    -- genuinely version-affecting npm advisory always carries an @ECOSYSTEM@ (or
+    -- @SEMVER@) range. The type match is case-folded so a mixed-case producer's
+    -- version range is still honoured rather than silently dropped.
+    versionTyped :: OsvRange -> Bool
+    versionTyped r = T.toUpper (T.strip (rangeType r)) `elem` ["SEMVER", "ECOSYSTEM"]
 
 {- | Carve a range's ordered events into affected segments. An @introduced@ opens
 a segment; a @fixed@ or @last_affected@ closes it; an @introduced@ that arrives

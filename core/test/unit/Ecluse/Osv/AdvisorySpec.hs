@@ -128,6 +128,30 @@ spec = describe "Osv parsing and streaming" $ do
             extractFromAdvisory adv
                 `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") Nothing (Just "3.8.8") Nothing]
 
+        it "ignores a GIT range whose commit-SHA bounds are not versions" $ do
+            -- A GIT range carries commit identifiers in its introduced/fixed events.
+            -- Carving them into segments would store a SHA as a version bound, which
+            -- the matcher fails closed-to-affected -- quarantining every version of a
+            -- healthy package. Such a range constrains no npm version, so it must
+            -- yield no segments.
+            let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0") Nothing]
+                adv = OsvAdvisory "GHSA-git" (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory adv `shouldBe` []
+
+        it "extracts the version range and drops a co-published GIT range" $ do
+            -- OSV advisories often carry a GIT range alongside the ECOSYSTEM/SEMVER
+            -- one; only the version-typed range contributes a segment.
+            let semverEvents = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "2.0.0") Nothing]
+                gitEvents = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") Nothing]
+                adv =
+                    OsvAdvisory
+                        "GHSA-both"
+                        (Just [OsvAffected (OsvPackage "mixed-pkg" "npm") (Just [OsvRange "GIT" gitEvents, OsvRange "ECOSYSTEM" semverEvents]) Nothing])
+                        Nothing
+                        Nothing
+            extractFromAdvisory adv
+                `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" (Just "0") (Just "2.0.0") Nothing Nothing]
+
     it "extracts multiple packages and ranges from a complex OSV advisory" $ do
         fileBytes <- BS.readFile "test/unit/fixtures/osv/complex.json"
         let res = eitherDecodeStrict fileBytes :: Either String OsvAdvisory
