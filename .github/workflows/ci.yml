@@ -370,11 +370,16 @@ jobs:
       - name: Update package index
         run: nix develop .#stan --command task update
 
-      # `task stan` exits non-zero on findings; pipefail (the runner's default) carries
-      # that through `tee` so the job goes red, while the findings are still captured for
-      # the summary. The gate never depends on this job, so red here never blocks a merge.
+      # `task stan` exits non-zero on findings. An inline `run:` step without an explicit
+      # `shell:` executes under `bash -e` without pipefail, so the pipeline's status would
+      # be tee's 0 and stan's exit would be masked; set pipefail explicitly (the repo idiom
+      # in bench.yml and perf-acceptance.yml) so tee cannot swallow stan's exit and the job
+      # goes red, while the findings are still captured for the summary. The gate never
+      # depends on this job, so red here never blocks a merge.
       - name: stan (fails on findings; non-gating)
-        run: nix develop .#stan --command task stan 2>&1 | tee stan.out
+        run: |
+          set -eo pipefail
+          nix develop .#stan --command task stan 2>&1 | tee stan.out
 
       - name: Render stan findings to the run summary
         if: always()
