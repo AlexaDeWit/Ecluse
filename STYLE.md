@@ -819,3 +819,28 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
 ## 13. Character Sets
 
 Only the ASCII standard character set is permitted in the codebase or documentation except where specific language-specific terms require it, such as our name Écluse, or if for some reason Vi hadde någon (väldigt stort) behöv och skriva på svenska. But things like em-dashes, emoji, and so on? No. Exactly one emoji is allowed: `⚜️`
+
+## 14. Licence headers
+
+Every tracked `.hs` file opens with a machine-readable licence header, as line
+comments above any pragmas and the module Haddock block (so module documentation
+and the `-Werror` build are undisturbed):
+
+```haskell
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+```
+
+The header attaches the licence to the unit that actually travels: a source file
+keeps its licensing when it is vendored, copied, or forked away from the
+repository-root `LICENSE`, and SBOM and compliance tooling parses the tags
+deterministically. The licence text the tag references lives in
+`LICENSES/MIT.txt`.
+
+Do not type the header by hand. `task spdx-fix` stamps every tracked `.hs` file
+that lacks it (idempotent, discovers files via `git ls-files` at run time), and
+`task lint-spdx` gates it as part of `task static-checks`, so a new file without
+the header fails CI. The format is REUSE-native, but the gate is deliberately
+scoped to Haskell sources; there is no repo-wide REUSE compliance regime.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for packument merging ("Ecluse.Core.Package.Merge"): the
 union of a trusted and a gated upstream's versions into one document, with the
 shared-algorithm integrity divergence check.

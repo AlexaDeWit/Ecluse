@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for the rules engine ("Ecluse.Core.Rules"): evaluating a
 rule set against every version of a packument, the sweep that decides which versions
 survive a metadata response.

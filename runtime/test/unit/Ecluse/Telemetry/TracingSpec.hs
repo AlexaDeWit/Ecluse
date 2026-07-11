@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Telemetry.TracingSpec (spec) where
 
 import Data.Text qualified as T

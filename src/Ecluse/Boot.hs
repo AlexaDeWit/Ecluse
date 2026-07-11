@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Écluse: a supply-chain policy proxy for package registries.
 
 Écluse (package @ecluse@) sits between consumers (developers, CI) and a package

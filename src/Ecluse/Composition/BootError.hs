@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The boot-error vocabulary of the composition root: every reason Écluse refuses
 to start, and its operator-facing rendering.
 

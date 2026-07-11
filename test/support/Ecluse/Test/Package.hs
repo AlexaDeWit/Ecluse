@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Test helpers and fixtures for "Ecluse.Core.Package".
 
 This mirrors the module under test: helpers that support exercising

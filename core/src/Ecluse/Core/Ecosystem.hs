@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The ecosystem tag.
 
 'Ecosystem' is the shared vocabulary the rest of the system dispatches on: the

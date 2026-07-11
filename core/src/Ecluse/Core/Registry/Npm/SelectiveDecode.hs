@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | A __selective__ decode of an npm packument: pull __one version's__ pieces out of
 the document bytes without materialising the other versions.
 

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Shared fixtures for the composition-root specs: the minimal valid environment
 layers, their targeted mutations, and the expect-helpers that load them. Split out
 so each composition module's spec ("Ecluse.Composition.CredentialSpec",

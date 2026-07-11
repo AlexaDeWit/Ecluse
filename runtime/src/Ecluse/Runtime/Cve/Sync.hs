@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The advisory database's sync mechanics: detect a new @osv.db@ artifact in
 object storage, download it bounded, verify it, and shadow-swap it into the
 read path, one ecosystem per task, driven by the configured mounts.

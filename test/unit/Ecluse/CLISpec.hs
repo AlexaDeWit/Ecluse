@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.CLISpec (spec) where
 
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, helper, idm, info)

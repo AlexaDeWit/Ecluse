@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The local-development immediate-halt wiring: an interactive session's
 "quit now" key, inert outside a terminal. "Ecluse.Runtime.Server"'s 'runWarp'
 wraps the whole run in 'withInteractiveHalt'.

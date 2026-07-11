@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The semver grammar and ordering (npm).
 
 Backed by the [@versions@](https://hackage.haskell.org/package/versions) library:

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.TelemetryMetricsSpec (spec) where
 
 import Data.ByteString qualified as BS

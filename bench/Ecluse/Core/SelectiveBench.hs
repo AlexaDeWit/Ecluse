@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request bench for the __single-version__ metadata read: the cold tarball
 gate's cost to consult one version of a packument, the whole-document decode against the
 selective decode.

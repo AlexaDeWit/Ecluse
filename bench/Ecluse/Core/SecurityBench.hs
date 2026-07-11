@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for the response-bound guards ("Ecluse.Core.Security"):
 the bounded body read that caps an upstream response, the JSON nesting-depth guard,
 and the version-count guard -- the cheap checks that protect the proxy from a hostile

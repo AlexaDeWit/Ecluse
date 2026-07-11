@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The core-owned transport-fault vocabulary: why a network operation could not
 deliver a response, reported as a __value__.
 

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Resolving and applying the process's runtime posture -- how many capabilities
 Écluse claims and what heap ceiling it runs under -- from first-class configuration
 with a cgroup-derived fallback, logged at boot with each decision's provenance.

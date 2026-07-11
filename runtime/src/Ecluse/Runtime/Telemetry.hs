@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The OpenTelemetry substrate: the tracer and meter providers the rest of the
 proxy will hang spans and metrics on, behind a master switch that defaults to
 __off__.

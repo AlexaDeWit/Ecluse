@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The npm registry publish-document assembly and request shaping.
 
 This module provides the pure data assembly for an npm publish request: forming

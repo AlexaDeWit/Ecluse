@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Loop robustness and supervision for the worker.
 
 The loop cannot be killed by a single bad iteration. A failed @receive@ arrives

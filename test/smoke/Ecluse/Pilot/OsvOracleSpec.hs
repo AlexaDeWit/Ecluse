@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Smoke tier: compile the /live/ osv.dev npm export through the same
 one-shot path operators script ('Ecluse.Pilot.runPilotCompile') and
 sanity-check the artifact's advisory population. This is the drift alarm for

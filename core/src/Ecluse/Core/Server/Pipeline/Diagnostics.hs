@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The operator-facing diagnostics the packument serve path emits: the per-origin
 metadata-fetch failure log, the response-bound breach warning, the cross-upstream
 integrity-divergence warning (threat #11), and the dropped-entry warning a

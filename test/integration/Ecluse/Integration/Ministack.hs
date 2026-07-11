@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Shared @ministack@ bootstrapping for the integration suite.
 
 The mirror-queue and mirror-worker specs both exercise the real AWS SQS

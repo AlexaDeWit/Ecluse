@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Flush-strategy benches for the artifact streaming pump
 ("Ecluse.Core.Server.Stream").
 

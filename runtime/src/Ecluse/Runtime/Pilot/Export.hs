@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | The S3 upload adapter for the compiled OSV artifact.

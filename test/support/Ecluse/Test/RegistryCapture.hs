@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The shared registry-capture support: one curated package catalogue and one
 live-registry fetch path for the test tiers that reach real registries.
 

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The AWS CodeArtifact leaf of the outbound-credential handle: mint a
 short-lived registry bearer token via CodeArtifact's @GetAuthorizationToken@.
 

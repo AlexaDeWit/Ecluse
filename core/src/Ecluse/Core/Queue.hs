@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The mirror-queue handle: the durable hand-off from the request path to the
 mirror worker.
 

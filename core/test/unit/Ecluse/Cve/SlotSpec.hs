@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Cve.SlotSpec (spec) where
 
 import Control.Concurrent.STM (check)

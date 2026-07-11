@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The advisory fast lane, proven end to end in two phases against one
 booted proxy (the ratified acceptance criterion on the sync slice):
 

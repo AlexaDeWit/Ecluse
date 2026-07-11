@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Shared test-support library for Écluse's suites.
 
 This internal library is the common home for helpers, fixtures, and specs that

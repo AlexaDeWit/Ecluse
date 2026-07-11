@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
 {- | The domain-span tracing ports: the abstract interfaces the core serve path and

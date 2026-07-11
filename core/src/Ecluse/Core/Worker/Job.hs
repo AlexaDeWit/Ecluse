@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Ack within the visibility budget during job processing.
 
 A received message is hidden only for the queue's visibility window. The worker

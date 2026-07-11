@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The two pure transforms an npm packument needs before Écluse serves it:
 rewrite the embedded artifact URLs under the mount's prefix, and assemble the
 served document from a cross-upstream 'MergePlan' and the raw source documents.

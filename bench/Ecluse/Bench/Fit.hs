@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The complexity-assertion helpers shared by the version-count-scaled benches.
 
 A scaled bench is not only timed; its /growth/ is fitted with @tasty-bench-fit@ and

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The runtime metric instruments and the typed emit helpers the hot path records
 through -- the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Core.Telemetry.Metrics").
 

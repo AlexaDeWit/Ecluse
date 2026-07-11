@@ -173,5 +173,8 @@ sign-off become a permanent public record.
   Origin](#developer-certificate-of-origin-dco) with a `Signed-off-by` trailer, `git commit -s`.
 - **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an `Assisted-by:`
   trailer; see [AI-assisted contributions](#ai-assisted-contributions).
+- **Every Haskell source file carries an SPDX licence header.** `task spdx-fix` stamps it,
+  `task lint-spdx` gates it in `static-checks`; the convention lives in
+  [STYLE.md](STYLE.md#14-licence-headers).
 - **Diagrams are Mermaid, not ASCII art** in committed Markdown docs: a fenced ` ```mermaid `
   block, never box-drawing characters.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The log↔trace correlation glue: read the active OpenTelemetry span off the
 ambient context and stamp its ids onto the @dd@ log object ("Ecluse.Runtime.Log"), so a JSONL
 line can be joined to the trace it was emitted within.

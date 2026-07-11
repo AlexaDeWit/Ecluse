@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | A test- and dev-only escape hatch that builds a 'RegistryUrl' from a plain-HTTP
 loopback URL, so the integration suites can dial an in-process @http:\/\/127.0.0.1@
 server rather than standing up TLS.

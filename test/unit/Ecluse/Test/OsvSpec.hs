@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Test.OsvSpec (spec) where
 
 import Database.SQLite.Simple (Only (..), close, open, query_)

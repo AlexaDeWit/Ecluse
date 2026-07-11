@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Fixture generation for the end-to-end suite: the static file tree the nginx
 public-upstream stub serves.
 

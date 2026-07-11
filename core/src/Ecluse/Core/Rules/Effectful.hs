@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The resilience harness for effectful rules: the per-attempt timeout, bounded
 retry with backoff, and per-source circuit breaker wrapped around a rule evaluation
 that does IO. "Ecluse.Core.Rules" attaches a 'Resilience' to each effectful rule at

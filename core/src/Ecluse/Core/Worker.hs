@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The mirror worker: the supervised consume loop that turns enqueued jobs into
 mirrored packages.
 

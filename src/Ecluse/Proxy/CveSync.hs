@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle'), the
 config-driven plan that builds it ('planCveSync'), and the projections the
 composition root reads off the plan (the per-ecosystem rule capabilities, the

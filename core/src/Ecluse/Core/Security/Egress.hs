@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The egress posture for registry traffic: __https-only by construction__, with
 TLS certificate validation as the endpoint-authentication boundary.
 

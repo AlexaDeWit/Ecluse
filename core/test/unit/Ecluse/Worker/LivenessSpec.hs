@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 {-# OPTIONS_GHC -Wno-unused-imports -Wno-orphans #-}
 
 module Ecluse.Worker.LivenessSpec (spec) where

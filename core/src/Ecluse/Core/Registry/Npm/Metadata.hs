@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The npm realization of the serve-path read operations: fetch a package's full
 packument and project it into the domain manifest, reporting every failure as a typed
 'MetadataError'.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.AwsEndToEndSpec (spec) where
 
 import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)

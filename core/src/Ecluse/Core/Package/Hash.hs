@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The integrity-digest vocabulary: hash algorithms and their authority order,
 the validated 'Hash' value, digest computation, and the Subresource-Integrity
 wire forms.

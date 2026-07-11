@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Version identity and ordering.
 
 A 'Version' carries the raw text verbatim (version strings are embedded in

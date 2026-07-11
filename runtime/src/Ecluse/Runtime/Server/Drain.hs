@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The graceful-shutdown drain vocabulary: the one-way 'DrainSignal' the front
 door observes on every request, and the bound on how long a drain may run.
 "Ecluse.Runtime.Server"'s 'runWarp' raises the signal from the OS shutdown

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The metric-recording ports: the abstract interfaces the core serve path and
 mirror worker record through, decoupled from any telemetry backend.
 

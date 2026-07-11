@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The front door's cross-cutting middleware pieces and the control-plane health
 endpoints: the defensive request-body cap, the drain-aware going-away header, the
 per-request timeout knob, and the @\/livez@ \/ @\/readyz@ probe application.

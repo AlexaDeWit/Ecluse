@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The refresh / cache / expiry / concurrency policy behind a
 'Ecluse.Core.Credential.CredentialProvider'.
 

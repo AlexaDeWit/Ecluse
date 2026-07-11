@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @openapi-gen@ build-time generator: write Écluse's capability manifest to
 disk.
 

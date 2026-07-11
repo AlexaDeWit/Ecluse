@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Hedgehog generators of structurally valid version strings, per ecosystem.
 
 This mirrors the module under test: generators that support exercising

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The compiled advisory artifact's schema contract.
 
 Écluse Pilot compiles OSV advisory data into a read-only SQLite artifact

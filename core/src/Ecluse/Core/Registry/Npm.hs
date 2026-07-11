@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The npm __data plane__: the effectful "Ecluse.Core.Registry" fields over
 @http-client@.
 

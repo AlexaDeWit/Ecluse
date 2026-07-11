@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Merging several upstream packuments into the one document Écluse serves.
 
 A packument is the /set of available versions/ of a package, and that set is

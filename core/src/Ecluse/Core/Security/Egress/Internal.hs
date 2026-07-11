@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The private construction boundary for 'RegistryUrl'.
 
 This module is __not exposed__ from @ecluse-core@ (it is an @other-module@), so the

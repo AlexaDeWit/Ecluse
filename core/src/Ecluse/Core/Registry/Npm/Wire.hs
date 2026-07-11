@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The npm registry __wire__ JSON types and their lenient decoders.
 
 This module is the npm protocol __boundary__: it models the JSON the registry

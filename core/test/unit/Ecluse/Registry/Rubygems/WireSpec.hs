@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Registry.Rubygems.WireSpec (spec) where
 
 import Data.Aeson (eitherDecode)

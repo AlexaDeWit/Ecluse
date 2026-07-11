@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | One TTL- and STM-backed single-flight store under a resident-byte budget: the
 shape every store of the metadata cache ("Ecluse.Core.Server.Cache") takes, factored
 here so the machinery is written once over any key and value.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The read side of the advisory database's atomic shadow-swap: a slot holding
 the currently-active 'CveDb' generation, read through a bracket so the swap can
 tell when a superseded generation is no longer required for reads.

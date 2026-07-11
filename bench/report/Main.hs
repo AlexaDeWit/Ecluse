@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @bench-report@ entry point: read the work-per-request benchmark CSV (and,
 when captured, the raw console log), render the structured Markdown report
 ("Ecluse.BenchReport"), print it, and mirror it to the GitHub step summary when

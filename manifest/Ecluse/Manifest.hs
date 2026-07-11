@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 {-# LANGUAGE DerivingVia #-}
 
 {- | The capability manifest: a pure assembly of Écluse's OpenAPI 3 document from

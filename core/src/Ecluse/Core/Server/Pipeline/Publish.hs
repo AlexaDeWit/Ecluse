@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The serve path behind the first-party publish route: @PUT \/{pkg}@.
 
 This module handles the publish flow: it validates edge authentication, applies
