@@ -5,7 +5,7 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)

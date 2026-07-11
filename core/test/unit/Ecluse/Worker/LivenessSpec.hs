@@ -40,8 +40,8 @@ import Ecluse.Core.Queue (
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
-    newInMemoryQueue,
  )
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (PublishError),

@@ -119,8 +119,8 @@ import Ecluse.Core.Queue (
     ),
     MirrorQueue (receive),
     enqueue,
-    newInMemoryQueue,
  )
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)

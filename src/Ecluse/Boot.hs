@@ -103,7 +103,8 @@ import Ecluse.Config (
     mountCollisionWarnings,
     renderConfigError,
  )
-import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))

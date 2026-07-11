@@ -28,7 +28,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project

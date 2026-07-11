@@ -117,6 +117,7 @@ library ecluse-core
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.Merge
     Ecluse.Core.Queue
+    Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
@@ -511,6 +512,8 @@ test-suite ecluse-core-unit
     Ecluse.Osv.RetrySpec
     Ecluse.Osv.SchemaSpec
     Ecluse.PackageSpec
+    Ecluse.Queue.MemorySpec
+    Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec

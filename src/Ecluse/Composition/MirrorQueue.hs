@@ -26,7 +26,7 @@ import Ecluse.Config (
     Url,
     unUrl,
  )
-import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
+import Ecluse.Core.Queue.Memory (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)

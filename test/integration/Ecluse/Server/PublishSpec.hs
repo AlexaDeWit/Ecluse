@@ -25,7 +25,7 @@ import UnliftIO (throwIO)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project

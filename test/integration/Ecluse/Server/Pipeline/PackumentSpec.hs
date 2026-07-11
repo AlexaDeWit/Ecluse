@@ -5,7 +5,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
 import Network.Wai.Test (SResponse (..), simpleBody)

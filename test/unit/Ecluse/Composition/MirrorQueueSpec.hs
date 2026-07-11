@@ -13,7 +13,7 @@ import Ecluse.Composition.MirrorQueue (
  )
 import Ecluse.Composition.Support (expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
 import Ecluse.Config (AppConfig, QueueBackend (..))
-import Ecluse.Core.Queue (defaultMemoryQueueConfig)
+import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 
 spec :: Spec

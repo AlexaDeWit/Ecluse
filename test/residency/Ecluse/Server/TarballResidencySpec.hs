@@ -38,7 +38,7 @@ import Network.Wai.Test (defaultRequest, setPath)
 import System.Mem (performMajorGC)
 import Test.Hspec
 
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Server.Pipeline.TestSupport (
     artifactUpstream,
     privateArtifactHit,
