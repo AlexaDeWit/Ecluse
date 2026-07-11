@@ -123,13 +123,15 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
 
 ## Deviating from the Golden Path
 
-Écluse still runs if you diverge, but each deviation trades away a protection, and two are
-**silent** (Écluse can't detect them, so nothing warns you):
+Écluse still runs if you diverge, but each deviation trades away a protection, and one is
+**silent** (Écluse can't detect it, so nothing warns you):
 
 - **Collapsing the registries onto one store** (leaving `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` /
   `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` unset). The perimeter still holds, but first-party and
   public-derived packages share one store, so you lose provenance separation, per-provenance
-  scanning, and clean post-incident scoping. **Écluse Dredger refuses to boot** if
+  scanning, and clean post-incident scoping. The proxy logs a boot warning for each pair of a
+  mount's registry endpoints that resolve to the same registry (the mirror folding onto the
+  private upstream included), and **Écluse Dredger refuses to boot** if
   `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
   first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html#threat-10)
   and #16.)
@@ -151,6 +153,13 @@ Configuration has two layers: **environment variables** for process and secret v
 optional **config document** (YAML) for the two things too expressive for flat env vars: the rule
 policy and the mount map. A single-mount npm deployment on the default policy needs no document.
 
+A mount serves only when you declare it: setting any `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable (or
+any key under `mounts.<ecosystem>` in the document) activates that mount, and an active mount must
+define its private upstream or the boot fails naming the missing key. A mount you never mention
+stays off. Declaring the public upstream and mirror target explicitly alongside the private
+upstream is strongly recommended; endpoints that resolve to the same registry are logged as boot
+warnings (see [Deviating from the Golden Path](#deviating-from-the-golden-path)).
+
 The table below is the complete environment-variable reference. A value resolves as defaults <
 config document < environment variable, so the environment wins. The resolution model and the
 rationale behind each setting are in
@@ -161,7 +170,7 @@ rationale behind each setting are in
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_PORT` | No | `8080` | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
-| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes |  | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
+| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes |  | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). Required to activate the mount: any other `ECLUSE_MOUNTS__NPM__*` key set without it is a boot error. |
 | `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
 | `ECLUSE_PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
 | `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |

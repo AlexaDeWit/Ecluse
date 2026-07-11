@@ -31,7 +31,7 @@ import Data.Time (NominalDiffTime)
 
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
@@ -202,8 +202,20 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
+    | -- | An operator-declared (active) mount does not define its private upstream.
+      MountMissingPrivateUpstream Ecosystem
     deriving stock (Eq, Show)
 
 renderConfigError :: ConfigError -> Text
 renderConfigError (ParseError e) = e
 renderConfigError (PolicyErrors es) = T.unlines (map renderPolicyError es)
+renderConfigError (MountMissingPrivateUpstream eco) =
+    let name = ecosystemName eco
+        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__PRIVATE_UPSTREAM"
+     in "mount \""
+            <> name
+            <> "\" is declared in the configuration, so it must define its private upstream: set mounts."
+            <> name
+            <> ".privateUpstream in the config document (or "
+            <> envKey
+            <> "), or remove the mount's keys to leave it unmounted"

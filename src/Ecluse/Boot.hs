@@ -100,6 +100,7 @@ import Ecluse.Config (
     AppConfig (cfgCores, cfgLogFormat, cfgMaxHeapBytes, cfgTelemetry),
     Config (configApp),
     loadConfig,
+    mountCollisionWarnings,
     renderConfigError,
  )
 import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
@@ -150,6 +151,7 @@ withBootEnv action = do
     -- ceiling, so nothing stateful must precede it beyond config and the logger.
     applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (cfgCores env) (cfgMaxHeapBytes env)
     logBootInfo logEnv ("Loaded configuration: " <> show config)
+    traverse_ (logBootWarning logEnv) (mountCollisionWarnings config)
     prepareTelemetryBoot (cfgTelemetry env) logEnv
     withTelemetry (cfgTelemetry env) logEnv $ \telemetry ->
         action

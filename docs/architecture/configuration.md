@@ -25,6 +25,18 @@ path prefix is derived from that key, never declared, so a wrong or colliding pr
 unrepresentable. The document is a YAML config file, the source of truth: reviewable,
 diffable, the expected form once the rule policy is non-trivial.
 
+A mount serves only when the operator declares it. The shipped defaults carry a dormant
+template per ecosystem (the canonical public upstream and the default credential provider),
+and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
+`ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
+upstream: a declared-but-incomplete mount is a boot error naming the missing key, never a
+mount that silently vanishes from service, and a mount the operator never mentions stays
+off without ceremony. Declaring every registry endpoint explicitly is the recommended
+posture; endpoints of one mount that resolve to the same registry are each logged as a
+boot warning (the mirror target folding onto the private upstream included), since a
+shared store narrows provenance separation and what maintenance tooling can safely do
+(see [USAGE → Deviating from the Golden Path](../../USAGE.md#deviating-from-the-golden-path)).
+
 Secrets never live in the structured config. Tokens (`ECLUSE_AUTH_TOKEN`, per-endpoint
 registry tokens) are always environment variables; cloud-managed registries derive short-lived
 tokens from ambient cloud credentials (see
@@ -282,6 +294,10 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
 - Merge references must resolve. A `rules` entry that neither names a known default nor supplies
   a complete new rule (a typo'd default name, an `"enabled": false` against a non-existent rule,
   a patch missing the `type` it needs to stand alone) is rejected.
+- A declared mount must be complete. Any operator-supplied key under `mounts.<ecosystem>`
+  activates that mount, and an active mount without a `privateUpstream` is rejected at boot,
+  naming the mount and the key (every incomplete mount in one report); the shipped
+  per-ecosystem templates alone never activate anything.
 - Credential references must resolve. A mount whose [credential strategy](access-model.md) draws
   on an uninitialised provider (a `service` mount with no read provider, or a mirror target
   naming a backend whose ambient cloud identity is absent) is rejected at boot. Credential
