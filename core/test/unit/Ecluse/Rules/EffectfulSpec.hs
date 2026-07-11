@@ -13,10 +13,24 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), noBreakerReporter)
 import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package
-import Ecluse.Core.Rules
+import Ecluse.Core.Rules (
+    PreparedRule (..),
+    evalRule,
+    evalRules,
+    inertRuleDeps,
+    runEffectfulRule,
+ )
+import Ecluse.Core.Rules.Effectful (
+    EffectfulConfig (..),
+    Resilience (..),
+    backoffPolicy,
+    defaultEffectfulConfig,
+    newBreaker,
+ )
 
 -- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
 -- 'prepName' -- to exercise the resilience harness and the parallel engine without any

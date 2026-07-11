@@ -132,6 +132,7 @@ library ecluse-core
     Ecluse.Core.Registry.Pypi.Wire
     Ecluse.Core.Registry.Rubygems.Wire
     Ecluse.Core.Rules
+    Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Egress
