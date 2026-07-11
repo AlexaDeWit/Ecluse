@@ -2,8 +2,8 @@
 @GET \/{pkg}@.
 
 This is the data-plane handler module for packuments. It composes the
-slices that decide /what/ to serve -- the registry client
-("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
+slices that decide /what/ to serve -- the origin resolution
+("Ecluse.Core.Server.Pipeline.Origin"), the per-version rules ("Ecluse.Core.Rules"), the structural
 filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
 ("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Core.Server.Cache"), the
 own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
@@ -70,7 +70,6 @@ upstream's.
 module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
     headPackument,
-    withPublicMetadataClient,
 
     -- * The derived validator (exported for its unit spec)
     packumentETag,
@@ -79,29 +78,20 @@ module Ecluse.Core.Server.Pipeline.Packument (
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
 import Data.Aeson (Value (Object))
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
-import Katip (KatipContext, Severity (DebugS, InfoS, WarningS), katipAddContext, logFM, ls, sl)
-import Network.HTTP.Client (Manager)
+import Katip (Severity (DebugS, InfoS), logFM, ls)
 import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
-import UnliftIO (concurrently, withRunInIO)
-import UnliftIO.Exception (catchAny, throwIO, tryAny)
-
-import Ecluse.Core.Credential (Secret)
+import UnliftIO (concurrently)
+import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Package (
-    HashAlg,
-    InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
-    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageInfo (infoVersions),
     PackageName,
-    renderHashAlg,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
@@ -109,31 +99,22 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    Divergence (divLosing, divVersion, divWinning),
     DivergencePolicy,
-    IntegrityFingerprint,
-    MergePlan (mpDivergences, mpSurvivors),
+    MergePlan (mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
     applyDivergencePolicy,
-    integrityHashes,
     mergePackuments,
  )
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest (manifestDigest, manifestInfo, manifestRaw),
-    MetadataClient (fetchFullManifest),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
-import Ecluse.Core.Security (
-    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
-    Limits,
- )
 import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Cache (Source (Source), resolveAssembled)
+import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -144,19 +125,23 @@ import Ecluse.Core.Server.Context (
     ctxRuntime,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
+import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     admitByIntegrity,
     evalTier,
-    logDecodeFailure,
     logDenials,
-    logNameMismatch,
-    logUpstreamUnformable,
-    logUpstreamUnreachable,
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
+ )
+import Ecluse.Core.Server.Pipeline.Origin (
+    Contribution (..),
+    OriginResult (..),
+    fetchPrivateOrigin,
+    fetchPublicOrigin,
+    fingerprintPiece,
+    originManifest,
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
@@ -358,346 +343,6 @@ answerPackumentConditional mode deps name request respond rt sources plan = do
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
 -- stub is the handler's, so the routing layer need not re-derive it.
-
-{- A successfully resolved upstream contribution: the parsed packument used to
-decide, alongside the raw @Value@ that is edited in place to serve, and the
-origin body's 'ContentDigest' for the derived validator. Pairing the views is
-the decision-surface\/served-surface contract -- every stage carries the raw
-@Value@ next to the typed view so losslessness survives the pipeline. -}
-data Contribution = Contribution
-    { srcProvenance :: Provenance
-    , srcInfo :: PackageInfo
-    , srcValue :: Value
-    , srcDigest :: ContentDigest
-    }
-
-{- One source's slice of the derived validator: its provenance, its origin body's
-digest, and the version keys that actually survived its gate -- together with the
-mount base URL and package name, exactly the inputs the assembled document is a
-deterministic function of (the plan itself derives from these). -}
-fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [Text])
-fingerprintPiece s = (srcProvenance s, srcDigest s, Map.keys (infoVersions (srcInfo s)))
-
-{- The outcome of resolving one upstream origin for a packument, beyond the
-plain "resolved or not" the merge consumes: a name mismatch is kept distinct from a
-plain non-resolution so the no-valid-origin terminal status can render a @502@ (a
-responding upstream returned a packument for a different package) apart from a
-transient outage or a genuine absence. -}
-data OriginResult
-    = -- | A packument that decoded and whose self-reported name matched the request.
-      OriginResolved Manifest
-    | {- | The origin answered, but its packument self-reported a name for a /different/
-      package -- dropped as untrusted for this request, and a @502@ signal when no
-      origin is valid.
-      -}
-      OriginNameMismatch
-    | {- | The origin did not yield a usable packument -- unreachable, undecodable, or a
-      genuine absence -- the existing degrade (no contribution).
-      -}
-      OriginUnresolved
-
--- The resolved manifest an origin contributed, if any. A name mismatch and a plain
--- non-resolution alike contribute no document to the merge.
-originManifest :: OriginResult -> Maybe Manifest
-originManifest = \case
-    OriginResolved manifest -> Just manifest
-    OriginNameMismatch -> Nothing
-    OriginUnresolved -> Nothing
-
-{- Classify a per-origin full-manifest fetch into an 'OriginResult'. Every fetch outcome
--- an unreachable upstream included -- arrives typed in the 'MetadataError' channel and
-degrades to no contribution; a 'MetadataNameMismatch' is kept distinct as
-'OriginNameMismatch' so the no-valid-origin terminal status can render a @502@ (a
-responding upstream answered for a different package) apart from a transient outage, an
-undecodable body, or a bound breach. The 'tryAny' arm is the per-origin degrade boundary
-for an __invariant break only__ (the fetch is total by type): a handle that escapes its
-contract still costs one origin's contribution, never the whole merge. -}
-originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
-originResultOf = \case
-    Left _ -> OriginUnresolved
-    Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
-    Right (Left _) -> OriginUnresolved
-    Right (Right manifest) -> OriginResolved manifest
-
-{- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
-own credential (the default @passthrough@ posture). Returns its coherent (parsed
-packument, raw @Value@) pair -- or 'Nothing' when the origin is unavailable or its body
-does not parse. A failed fetch is a degraded contribution, not an error: the merge
-serves the best-effort union of whatever resolved (partial-upstream availability).
-
-Under @passthrough@ the private upstream is the per-client authority for who may read
-what, so its metadata is __not__ shared across clients: it is fetched and parsed on
-__every__ request with that client's own forwarded token, so the upstream re-authorises
-each client itself. Caching it would key on the base URL alone (no credential
-dimension), so within the TTL one client's cache hit would skip the fetch and serve
-another client's private document -- bypassing the upstream's authorisation. The private
-origin is therefore deliberately kept out of the metadata cache; only the anonymous
-public origin is cached. (How a non-@passthrough@ strategy can instead share the private
-origin safely is the serve-time authorisation it adds -- see
-@docs\/architecture\/access-model.md@.) -}
-fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt token name = do
-    logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-    resolved <-
-        tryAny $
-            withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token $ \client ->
-                fetchFullManifest client name
-    pure (originResultOf resolved)
-
-{- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
-keyed by the origin's base URL as its 'Source', returning its coherent (parsed
-packument, raw @Value@) pair -- or 'Nothing' when the origin is unavailable or its body
-does not parse. A failed fetch is a degraded contribution, not an error.
-
-The public origin is anonymous (no client credential), so a single cached entry serves
-every client without crossing any trust boundary -- there is no per-client authority
-to preserve, only one shared anonymous document. A hit returns the cached pair
-(typed view and the exact bytes it was decoded from), so the served document and the
-decision over it stay coherent across the TTL, and concurrent resolutions of a
-popular package __collapse to one upstream call__ -- as does the tarball gate's
-single-version read, which shares this very cache entry ('fetchVersionMetadata'). -}
-fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
-fetchPublicOrigin deps rt name = do
-    logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
-    resolved <-
-        tryAny $
-            withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
-                fetchFullManifest client name
-    pure (originResultOf resolved)
-
-{- Construct a per-request read handle for one origin and run an action over it, with the
-ambient @katip@ context captured into the handle's failure log.
-
-The handle's operations run the fetch in plain 'IO' (the public origin's cache leader runs
-under @mask@); 'withRunInIO' discharges the 'Handler' logs to 'IO' while capturing the
-request's trace-correlated context, so a breach\/decode\/name-mismatch warning, or the
-dropped-entry warning a successful-but-degraded projection emits ('logInvalidEntries'),
-still rides that context. The npm origin's credential posture, manager, base URL, and
-response budget are the per-fetch 'NpmClientConfig'; the 'ManifestCaching' decides whether
-the origin resolves through the shared metadata cache.
-
-Every response bound (security.md invariant 4) is enforced inside the handle's fetch
-against the mount's 'Limits' budget -- a body-size, nesting-depth, or version-count breach
-becomes a 'MetadataBoundExceeded', logged once at a 'WarningS' (naming the package and the
-ceiling crossed) before it degrades the contribution fail-closed, so an operator can tell a
-hostile\/oversized upstream from an ordinary parse failure. -}
-withMetadataClient ::
-    ServeRuntime ->
-    PackumentDeps ->
-    Metric.Upstream ->
-    ManifestCaching ->
-    Limits ->
-    Manager ->
-    Text ->
-    Maybe Secret ->
-    (MetadataClient -> IO a) ->
-    Handler a
-withMetadataClient rt deps upstream caching limits manager baseUrl token k =
-    withRunInIO $ \runInIO ->
-        k $
-            pdNewMetadataClient
-                deps
-                (srTracing rt)
-                (srMetrics rt)
-                upstream
-                caching
-                (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
-                (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
-                (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
-                limits
-                manager
-                baseUrl
-                token
-
-{- The public origin's read handle: anonymous (no token), resolved through the shared
-metadata cache under the base URL's 'Source'. Both the packument fetch ('fetchFullManifest')
-and the tarball gate's single-version read ('fetchVersionMetadata') go through this handle,
-so they share one cache entry. -}
-withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> Text -> (MetadataClient -> IO a) -> Handler a
-withPublicMetadataClient rt deps baseUrl =
-    withMetadataClient rt deps Metric.Public (Cached (srMetadataCache rt) (Source baseUrl)) (pdLimits deps) (srPublicManager rt) baseUrl Nothing
-
-{- Log a per-origin metadata-fetch failure at the point and severity it has always been
-logged: a response-bound breach names the ceiling crossed ('logBreach'); an undecodable
-body is the silent-guard decode log ('logDecodeFailure'); a self-reported /different/ name
-is the name-mismatch log ('logNameMismatch'); an unformable configured base URL is the
-config-fault log ('logUpstreamUnformable'); an unreachable origin is the outage log
-('logUpstreamUnreachable'). Invoked once per real fetch, inside the single-flight
-leader, in the request's context. -}
-logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
-logMetadataFailure name baseUrl = \case
-    MetadataBoundExceeded err -> logBreach name err
-    MetadataUndecodable -> logDecodeFailure name
-    MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
-    MetadataUrlUnformable urlErr -> logUpstreamUnformable name baseUrl urlErr
-    MetadataUnreachable fault -> logUpstreamUnreachable name baseUrl fault
-
-{- Log a response-bound breach at 'WarningS' before the contribution is degraded
-fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
-upstream, or a too-tight cap) from an ordinary parse failure or upstream outage. The
-structured payload names the package, which @bound@ was crossed, and the observed
-value against its @cap@ -- the high-cardinality identifiers that belong on the log
-line, not a metric label. Emitted through the ambient @katip@ context (the request's,
-so the line carries its trace-correlation @dd@), under the @ecluse@ namespace the rest
-of the stream uses. -}
-logBreach :: (KatipContext m) => PackageName -> LimitError -> m ()
-logBreach name err =
-    katipAddContext payload $
-        logFM WarningS (ls message)
-  where
-    -- The package the refused document was for, plus the breach detail, as the
-    -- structured @data@ object on the line.
-    payload =
-        sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
-            <> sl "bound" boundName
-            <> sl "observed" observed
-            <> sl "cap" cap
-
-    -- A human-readable one-line summary; the structured fields carry the detail.
-    message :: Text
-    message = "refused an upstream metadata document: it exceeded the " <> boundName <> " response bound (observed " <> observed <> ", cap " <> cap <> ")"
-
-    -- Which ceiling, the observed value, and the cap -- pulled from the typed error so
-    -- the three are always consistent with what was enforced.
-    boundName :: Text
-    observed :: Text
-    cap :: Text
-    (boundName, observed, cap) = case err of
-        BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
-        TooManyVersions seen c -> ("version-count", show seen, show c)
-        TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
-
-{- Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it. A
-public copy contradicts the trusted one on a shared integrity algorithm for a shared
-version; the trusted copy still won the merge (and is served, or withheld under
-'FailClosed'), so this is the supply-chain signal the operator alarms on, never a silent
-reconciliation. The structured payload names the package and the contradicting versions;
-the @ecluse.registry.merge.divergence@ counter is incremented once per contradicting
-version. Nothing is logged or metered for a clean merge. -}
-warnDivergences :: (KatipContext m) => MetricsPort -> PackageName -> MergePlan -> m ()
-warnDivergences metrics name plan =
-    case toList (mpDivergences plan) of
-        [] -> pass
-        divs -> do
-            liftIO (for_ divs (const (mpMergeDivergence metrics)))
-            katipAddContext (payload divs) $ logFM WarningS (ls (message divs))
-  where
-    payload divs =
-        sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
-            <> sl "versions" (T.intercalate "," (map divVersion divs))
-    message divs =
-        "cross-upstream integrity divergence: the trusted copy of "
-            <> renderPackageName name
-            <> " is served, but a public copy contradicts it on a shared integrity algorithm for "
-            <> show (length divs)
-            <> " version(s): "
-            <> T.intercalate "; " (map renderDivergence divs)
-
--- One divergence rendered for the log line: the version key and the contradicting trusted
--- vs public integrity fingerprints, read back via 'integrityHashes'.
-renderDivergence :: Divergence -> Text
-renderDivergence d =
-    divVersion d
-        <> " (trusted "
-        <> renderFingerprint (divWinning d)
-        <> " vs public "
-        <> renderFingerprint (divLosing d)
-        <> ")"
-
-renderFingerprint :: IntegrityFingerprint -> Text
-renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashes fp)) <> "}"
-
-renderHash :: (Text, Maybe HashAlg, Text) -> Text
-renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
-
-{- Log the malformed packument entries an upstream served that the projection dropped
-rather than failing the whole document on, at 'WarningS', so an operator can see that an
-upstream served a malformed entry, which kind (a version manifest, a dist-tag, or a
-per-version publish time), and __the raw value it sent__. The structured payload names the
-package, the per-kind drop counts, and a bounded sample of the dropped entries each
-rendering its raw 'Aeson.Value' (truncated if large, and capped to 'maxRenderedDrops'
-entries so a flood of drops cannot bloat the line). The dropped versions are still served
-minus those entries (graceful degradation), so this is an observability signal, not a
-refusal. Emitted once per real fetch (inside the cache leader, so a coalesced follower
-never re-logs) through the request's @katip@ context. The caller guards on a non-empty
-list, so this never logs for a clean document. -}
-logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries name baseUrl entries =
-    katipAddContext payload $
-        logFM WarningS (ls message)
-  where
-    payload =
-        sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
-            <> sl "upstream" baseUrl
-            <> sl "droppedVersionManifests" manifests
-            <> sl "droppedDistTags" distTags
-            <> sl "droppedPublishTimes" publishTimes
-            <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
-
-    (manifests, distTags, publishTimes, entriesLen) =
-        foldl'
-            accumulateDropCounts
-            (0 :: Int, 0 :: Int, 0 :: Int, 0 :: Int)
-            entries
-
-    accumulateDropCounts (m, d, p, l) e =
-        case invalidKind e of
-            InvalidVersionManifest -> (m + 1, d, p, l + 1)
-            InvalidDistTag -> (m, d + 1, p, l + 1)
-            InvalidPublishTime -> (m, d, p + 1, l + 1)
-
-    message :: Text
-    message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
-    plural = if entriesLen == 1 then "y" else "ies"
-
--- One dropped entry rendered for the operator: its kind, key, reason, and the raw
--- value the upstream sent (truncated), so the actual offending bytes are visible.
-renderDroppedEntry :: InvalidEntry -> Text
-renderDroppedEntry e =
-    renderInvalidKind (invalidKind e)
-        <> " "
-        <> invalidKey e
-        <> " = "
-        <> truncatedValue (invalidValue e)
-        <> " ("
-        <> invalidReason e
-        <> ")"
-
-renderInvalidKind :: InvalidEntryKind -> Text
-renderInvalidKind = \case
-    InvalidVersionManifest -> "version-manifest"
-    InvalidDistTag -> "dist-tag"
-    InvalidPublishTime -> "publish-time"
-
--- The raw value as compact JSON, truncated to 'maxRenderedValueChars' (only that many
--- characters are ever forced, so a huge value never balloons the log line).
-truncatedValue :: Value -> Text
-truncatedValue v =
-    let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
-     in if T.length rendered > maxRenderedValueChars
-            then T.take maxRenderedValueChars rendered <> "…"
-            else rendered
-
--- How many dropped entries the drop-tracking log renders in full, and how many characters
--- of each raw value, so an unbounded flood of malformed entries (or one huge value) cannot
--- bloat a single log line. The per-kind counts in the payload still report the full totals.
-maxRenderedDrops :: Int
-maxRenderedDrops = 20
-
-maxRenderedValueChars :: Int
-maxRenderedValueChars = 200
-
--- The @module@ tag this module's breach log carries -- the operator-facing log filter
--- key, held stable as the current value rather than the source module path, so an
--- operator's saved filter keeps matching across the move into ecluse-core (the only
--- change to these lines is the trace-correlation @dd@ the ambient context adds). The
--- decode-failure log lives in "Ecluse.Core.Server.Pipeline.Internal", tagged likewise.
-pipelineModule :: Text
-pipelineModule = "Ecluse.Server.Pipeline"
 
 {- Apply the __trusted integrity floor__ to a private (trusted) contribution before it
 enters the merge, returning the surviving 'Contribution' (if any version survived) and the
