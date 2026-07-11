@@ -205,7 +205,6 @@ jobWith url =
         , -- The flag-gated loopback former: these suites point jobs at in-process
           -- http stubs, which the production https-only former would refuse.
           jobArtifactUrl = loopbackRegistryUrl url
-        , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }

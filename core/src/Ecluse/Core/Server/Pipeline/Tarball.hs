@@ -116,7 +116,7 @@ import Ecluse.Core.Package.Admission (
     admitArtifact,
  )
 import Ecluse.Core.Queue (
-    MirrorJob (MirrorJob, jobArtifactFilename, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
+    MirrorJob (MirrorJob, jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
     QueueFault,
     enqueue,
     qfDetail,
@@ -698,8 +698,9 @@ outage never fails or delays the serve. The 'enqueue' it calls is the compositio
 root's buffered hand-off ('Ecluse.Core.Queue.newEnqueueBuffer'), so even a slow
 backend's own producer latency (the SQS round trip) stays off the request path
 rather than holding the served connection's turn. The job names the artifact's
-authoritative URL (the same location the public fetch targeted) and the mount's
-mirror target; it carries no credential (the worker mints its own).
+authoritative URL (the same location the public fetch targeted); it carries no
+credential and no mirror target (the worker mints its own token and publishes
+through the mount-resolved target).
 
 It also captures the __serve-time-admitted__ filename on the job: the selection
 key the worker's ingest re-evaluation gates under current policy. Nothing else of
@@ -733,7 +734,6 @@ enqueueMirror rt deps name version artifact =
             { jobPackage = name
             , jobVersion = version
             , jobArtifactUrl = egressUrl
-            , jobMirrorTarget = pdMirrorTarget deps
             , jobArtifactFilename = artFilename artifact
             , -- The enqueueing span's trace context, captured by the span
               -- bracket, so the worker's per-job span links back across the hop.

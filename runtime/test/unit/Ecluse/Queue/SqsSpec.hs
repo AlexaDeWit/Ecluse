@@ -46,7 +46,6 @@ npmJob =
         { jobPackage = mkPackageName Npm Nothing "lodash"
         , jobVersion = mkVersion Npm "4.17.21"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
-        , jobMirrorTarget = "https://mirror.example/lodash/-/lodash-4.17.21.tgz"
         , jobArtifactFilename = "lodash-4.17.21.tgz"
         , -- A populated trace-context carrier, so the round-trip proves the W3C
           -- traceparent/tracestate survive the wire mapping.
@@ -65,7 +64,6 @@ scopedJob =
         { jobPackage = mkPackageName Npm (Just (mkScope "babel")) "core"
         , jobVersion = mkVersion Npm "7.24.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
-        , jobMirrorTarget = "https://mirror.example/@babel/core/-/core-7.24.0.tgz"
         , jobArtifactFilename = "core-7.24.0.tgz"
         , -- The absent-carrier case (tracing off at enqueue), so both arms round-trip.
           jobTraceContext = Nothing
@@ -78,7 +76,6 @@ pypiJob =
         { jobPackage = mkPackageName PyPI Nothing "Flask"
         , jobVersion = mkVersion PyPI "3.0.2"
         , jobArtifactUrl = unsafeRegistryUrl "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
-        , jobMirrorTarget = "https://mirror.example/flask-3.0.2.tar.gz"
         , jobArtifactFilename = "flask-3.0.2.tar.gz"
         , jobTraceContext = Nothing
         }
@@ -90,7 +87,7 @@ accept, decoding it to a 'Nothing' carrier.
 noTraceContextBody :: Text
 noTraceContextBody =
     "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"left-pad\",\
-    \\"version\":\"1.3.0\",\"artifactUrl\":\"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\",\"mirrorTarget\":\"m\",\
+    \\"version\":\"1.3.0\",\"artifactUrl\":\"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\",\
     \\"filename\":\"left-pad-1.3.0.tgz\"}"
 
 spec :: Spec
@@ -114,7 +111,6 @@ spec = do
                     jobPackage job `shouldBe` jobPackage npmJob
                     jobVersion job `shouldBe` jobVersion npmJob
                     jobArtifactUrl job `shouldBe` jobArtifactUrl npmJob
-                    jobMirrorTarget job `shouldBe` jobMirrorTarget npmJob
                     jobArtifactFilename job `shouldBe` jobArtifactFilename npmJob
                     jobTraceContext job `shouldBe` jobTraceContext npmJob
 
@@ -138,18 +134,18 @@ spec = do
             decodeJob mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
 
         it "rejects an object missing a required field" $
-            -- No "mirrorTarget".
+            -- No "artifactUrl".
             decodeJob
                 mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
+                \\"version\":\"1.0.0\",\"filename\":\"x-1.0.0.tgz\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects an unknown ecosystem, naming it in the error" $
             case decodeJob
                 mkRegistryUrl
                 "{\"ecosystem\":\"cargo\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}" of
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"filename\":\"x-1.0.0.tgz\"}" of
                 Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
 
@@ -159,14 +155,14 @@ spec = do
             decodeJob
                 mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}"
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects a job with a malformed traceContext (missing traceparent)" $
             decodeJob
                 mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
                 \\"filename\":\"x-1.0.0.tgz\",\
                 \\"traceContext\":{\"tracestate\":\"ecluse=1\"}}"
                 `shouldSatisfy` isLeft
@@ -175,7 +171,7 @@ spec = do
             decodeJob
                 mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
                 \\"filename\":\"x-1.0.0.tgz\",\
                 \\"traceContext\":\"just-a-string\"}"
                 `shouldSatisfy` isLeft

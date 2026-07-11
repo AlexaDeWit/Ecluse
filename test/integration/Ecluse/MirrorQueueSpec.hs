@@ -113,7 +113,6 @@ sampleJob =
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
-        , jobMirrorTarget = "https://mirror.example/left-pad/-/left-pad-1.3.0.tgz"
         , jobArtifactFilename = "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }

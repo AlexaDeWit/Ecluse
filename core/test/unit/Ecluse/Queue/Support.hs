@@ -44,7 +44,6 @@ sampleJob =
         { jobPackage = mkPackageName Npm Nothing "thing"
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
-        , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }

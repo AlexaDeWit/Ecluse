@@ -115,7 +115,6 @@ import Ecluse.Core.Queue (
         MirrorJob,
         jobArtifactFilename,
         jobArtifactUrl,
-        jobMirrorTarget,
         jobPackage,
         jobTraceContext,
         jobVersion
@@ -575,7 +574,6 @@ mirrorJob url =
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = loopbackRegistryUrl url
-        , jobMirrorTarget = "https://mirror.bench/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
         , jobArtifactFilename = packageText <> "-1.0.0.tgz"
         , jobTraceContext = Nothing
         }

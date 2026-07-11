@@ -102,7 +102,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
                                ( mkPackageName Npm Nothing "thing"
                                , mkVersion Npm "1.0.0"
                                , localhost publicPort <> "/thing/-/thing-1.0.0.tgz"
-                               , "https://mirror.test"
+                               , "thing-1.0.0.tgz"
                                )
                            ]
 

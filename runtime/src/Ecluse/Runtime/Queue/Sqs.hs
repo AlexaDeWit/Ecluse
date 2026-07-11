@@ -328,7 +328,6 @@ encodeJob job =
             , "name" .= unscopedName name
             , "version" .= renderVersion (jobVersion job)
             , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
-            , "mirrorTarget" .= jobMirrorTarget job
             , "filename" .= jobArtifactFilename job
             , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
             ]
@@ -376,7 +375,6 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     -- Re-form the egress witness at the wire boundary: the type the worker's fetch
     -- requires cannot be fabricated from an unvalidated payload string.
     artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
-    mirrorTarget <- o .: "mirrorTarget"
     filename <- o .: "filename"
     -- The trace-context carrier is optional: a job from an older producer (or one
     -- enqueued with tracing off) carries no "traceContext", which decodes to
@@ -387,7 +385,6 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
             { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
             , jobVersion = mkVersion eco rawVersion
             , jobArtifactUrl = artifactUrl
-            , jobMirrorTarget = mirrorTarget
             , jobArtifactFilename = filename
             , jobTraceContext = traceContext
             }

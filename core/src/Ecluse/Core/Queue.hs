@@ -115,8 +115,6 @@ data MirrorJob = MirrorJob
     the validated https egress witness rather than bare text; the SQS wire decode
     re-forms it, since the queue payload is a trust boundary.
     -}
-    , jobMirrorTarget :: Text
-    -- ^ The mirror-target endpoint the artifact is published to.
     , jobArtifactFilename :: Text
     {- ^ The serve-time-admitted artifact's filename: the selection key the
     worker's ingest re-evaluation gates by, cross-checked against current metadata

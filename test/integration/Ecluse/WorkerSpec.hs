@@ -196,7 +196,6 @@ job upstreamUrl =
         , jobVersion = mkVersion Npm "1.3.0"
         , -- The flag-gated loopback former: the job points at an in-process http stub.
           jobArtifactUrl = loopbackRegistryUrl (upstreamUrl <> artifactPath)
-        , jobMirrorTarget = "the-publish-client-base-url-is-used-instead"
         , jobArtifactFilename = "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }
