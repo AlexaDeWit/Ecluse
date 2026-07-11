@@ -40,8 +40,8 @@ import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (npmServerConfig, unconfiguredRegistry)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
+import Ecluse (mountBindingFor, unconfiguredRegistry)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (
@@ -49,7 +49,7 @@ import Ecluse.Runtime.Log (
     DdSpan (DdSpan),
     ddField,
  )
-import Ecluse.Runtime.Server (tracedApplication)
+import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, tracedApplication)
 import Ecluse.Runtime.Telemetry (
     Telemetry,
     TelemetrySwitch (TelemetryOff, TelemetryOn),
@@ -59,6 +59,7 @@ import Ecluse.Runtime.Telemetry (
 import Ecluse.Runtime.Telemetry.Correlation (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
 import Ecluse.Test.Containers (testContainerLabels)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 {- | The integration tier for tracing: drive a request through an in-process Écluse
 into a real OTLP __Collector__ container (no Datadog SaaS) and assert the spans are
@@ -117,7 +118,7 @@ driveRequest collector switch marker = do
     logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
     withTelemetry switch logEnv $ \telemetry -> do
         env <- buildEnv telemetry
-        app <- tracedApplication npmServerConfig env
+        app <- tracedApplication npmTestConfig env
         Warp.testWithApplication (pure app) $ \port -> do
             manager <- newManager defaultManagerSettings
             request <- parseRequest ("http://127.0.0.1:" <> show port <> "/" <> toString marker)
@@ -143,6 +144,12 @@ pointSdkAt endpoint = do
     setEnv "OTEL_LOGS_EXPORTER" "none"
     setEnv "OTEL_BSP_SCHEDULE_DELAY" "200"
 
+{- The npm front door the traced application mounts: a bare npm mount (no serve or
+publish dependencies) assembled through the public binding resolver, the same shape
+the composition root derives from configuration. -}
+npmTestConfig :: ServerConfig
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))
+
 {- A minimal composition root for the traced front door: the route under test
 (@\/{marker}@) matches no mount and is the neutral @404@, so the registry, credential,
 and cache handles are never exercised and the unconfigured placeholders suffice. The
@@ -151,7 +158,7 @@ buildEnv :: Telemetry -> IO Env
 buildEnv telemetry = do
     manager <- newManager defaultManagerSettings
     privateManager <- newManager defaultManagerSettings
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat

@@ -462,6 +462,7 @@ library ecluse-test-support
     Ecluse.Test.OsvDb
     Ecluse.Test.Package
     Ecluse.Test.Port
+    Ecluse.Test.Queue
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Stub
     Ecluse.Test.Support
@@ -862,6 +863,7 @@ test-suite ecluse-residency
     , ecluse
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
+    , ecluse:ecluse-test-support
     , hspec             ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12

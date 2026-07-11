@@ -42,9 +42,9 @@ handle's contract reflects that:
   since idempotency already makes redelivery harmless.
 
 This module provides the handle, its payload types, and the building blocks a
-backend implementation reaches for; the two STM-backed in-memory implementations
-(the visibility-timeout __test double__ and the bounded, best-effort __production
-backend__ behind @ECLUSE_QUEUE_BACKEND=memory@) live in "Ecluse.Core.Queue.Memory".
+backend implementation reaches for; the STM-backed bounded, best-effort
+__production backend__ behind @ECLUSE_QUEUE_BACKEND=memory@ lives in
+"Ecluse.Core.Queue.Memory".
 
 It also provides 'newEnqueueBuffer', a __bounded producer-side hand-off buffer__
 wrapped in front of any backend so the serve path's 'enqueue' completes in
@@ -57,7 +57,6 @@ module Ecluse.Core.Queue (
 
     -- * Faults
     QueueFault (..),
-    queueFault,
     queueTransportFault,
 
     -- * Payloads
@@ -85,7 +84,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, rea
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault), transportFault)
+import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -195,9 +194,9 @@ __value__ on every handle field: the closed transport cause a consumer branches
 on, and the backend's rendered detail for its log line. The cause vocabulary is
 "Ecluse.Core.Fault"'s ('TransportCause'); a cloud backend's service-level
 refusal (a throttle, an access denial) classifies as 'TransportProtocol' with
-the service detail carried. Build one with 'queueFault' (or adopt an
-already-classified transport fault with 'queueTransportFault') so the detail
-stays bounded.
+the service detail carried. Build one by adopting an already-classified
+transport fault ('Ecluse.Core.Fault.transportFault') with 'queueTransportFault',
+so the detail stays bounded.
 
 Every fault is __safe to absorb__ under the handle's contract: an enqueue fault
 is the documented best-effort loss (re-enqueued on the next demand), a receive
@@ -215,15 +214,11 @@ data QueueFault = QueueFault
     }
     deriving stock (Eq, Show)
 
-{- | Build a 'QueueFault' with the detail truncated to the shared log-line budget
-(delegated to 'Ecluse.Core.Fault.transportFault', so the two vocabularies cannot
-drift on what "bounded" means).
--}
-queueFault :: TransportCause -> Text -> QueueFault
-queueFault cause detail = queueTransportFault (transportFault cause detail)
-
 {- | Adopt an already-classified 'TransportFault' (an adapter edge's
-classification of its client library's exception) as a 'QueueFault'.
+classification of its client library's exception) as a 'QueueFault'. The
+'TransportFault' side ('Ecluse.Core.Fault.transportFault') truncates the detail
+to the shared log-line budget, so the two vocabularies cannot drift on what
+"bounded" means.
 -}
 queueTransportFault :: TransportFault -> QueueFault
 queueTransportFault (TransportFault cause detail) = QueueFault cause detail

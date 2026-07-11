@@ -10,18 +10,18 @@ import Test.Hspec
 import UnliftIO (evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
-import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredRegistry)
+import Ecluse (mountBindingFor, runServer, runWorker, unconfiguredRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Core.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
-import Ecluse.Runtime.Server (scPort)
+import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if
@@ -62,12 +62,19 @@ newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 newTestCache :: IO MetadataCache
 newTestCache = newMetadataCache defaultCacheConfig
 
+{- | The npm front door the split-ready server test drives: a single npm mount with
+no packument-serve or publish dependencies, assembled through the public binding
+resolver exactly as the composition root would ('mountBindingFor' over npm).
+-}
+npmTestConfig :: ServerConfig
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))
+
 {- | Assemble an 'Env' from the doubles above, a no-network manager, a metadata
 cache, and a scribe-free 'LogEnv'.
 -}
 newTestEnv :: IO Env
 newTestEnv = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     manager <- newTestManager
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
@@ -151,7 +158,7 @@ spec = do
 
     describe "withEnv" $ do
         it "runs the body against the assembled Env and returns its result" $ do
-            queue <- newInMemoryQueue
+            queue <- newTestMemoryQueue
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
@@ -159,7 +166,7 @@ spec = do
             withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
-            queue <- newInMemoryQueue
+            queue <- newTestMemoryQueue
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
@@ -179,7 +186,7 @@ spec = do
             -- socket-free in "Ecluse.ServerSpec".) 'scPort = 0' binds an OS-assigned
             -- ephemeral port, so the test never races a fixed port already in use.
             env <- newTestEnv
-            timeout 100000 (runServer (npmServerConfig{scPort = 0}) env) `shouldReturn` Nothing
+            timeout 100000 (runServer (npmTestConfig{scPort = 0}) env) `shouldReturn` Nothing
 
         it "runWorker over an Env serves (blocks polling) rather than returning" $ do
             -- The worker is a continuous consume loop: started under a short timeout

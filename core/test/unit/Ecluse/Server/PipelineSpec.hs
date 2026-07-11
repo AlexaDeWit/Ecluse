@@ -31,7 +31,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
@@ -60,6 +59,7 @@ import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -203,7 +203,7 @@ mkRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
 mkRuntimeWith admission metricsPort = do
     manager <- newManager defaultManagerSettings
     cache <- newMetadataCache defaultCacheConfig
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     pure (ServeRuntime admission manager manager cache queue metricsPort passthroughTracingPort)
 
 leftpad :: PackageName

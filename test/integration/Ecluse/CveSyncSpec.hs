@@ -51,7 +51,6 @@ import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
@@ -72,6 +71,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
@@ -190,7 +190,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     env <- newEnv publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
     let deps =
             PackumentDeps

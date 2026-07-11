@@ -122,7 +122,7 @@ import Ecluse.Core.Queue (
     MirrorQueue (receive),
     enqueue,
  )
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
+import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -400,7 +400,17 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
             logEnv <- benchLogEnv
             heartbeat <- newWorkerHeartbeat
-            queue <- newInMemoryQueue
+            -- The production memory backend at the shipped default depth cap (50000,
+            -- config/default.yaml's queueMemoryMaxDepth). No worker consumes this queue,
+            -- so a public-leg tarball scenario (one enqueue per request, ~100 connections
+            -- x 30s) can outgrow any fixed cap; past the cap the backend sheds
+            -- drop-newest exactly as production would, and the callback reports the
+            -- running total (rate-limited by the backend to the first drop and every
+            -- 1000th) so a shed is loud in the run log, never silent.
+            queue <-
+                newBoundedInMemoryQueue
+                    (defaultMemoryQueueConfig 50_000)
+                    (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap; running dropped-job total: " <> show n))
             -- The same plain manager serves the private and public legs; the serve path
             -- never touches the publish-side registry handle, so it is the refusing
             -- placeholder.
@@ -510,7 +520,15 @@ workerScenario =
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
-                queue <- newInMemoryQueue
+                -- The production memory backend. The drive loop enqueues one job then
+                -- receives it, so at most one job is ever outstanding; a cap of 16 is
+                -- comfortably above that maximum, and a drop (impossible unless the
+                -- cadence breaks) fails the run loudly rather than quietly publishing
+                -- fewer jobs than were enqueued.
+                queue <-
+                    newBoundedInMemoryQueue
+                        (defaultMemoryQueueConfig 16)
+                        (\n -> benchFail ("worker scenario: the in-memory mirror queue dropped a job (running total " <> show n <> "); the enqueue-receive cadence broke"))
                 heartbeat <- newWorkerHeartbeat
                 logEnv <- benchLogEnv
                 let runtime =

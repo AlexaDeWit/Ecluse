@@ -81,7 +81,6 @@ module Ecluse.Proxy (
     runProxy,
     runServer,
     runWorker,
-    npmServerConfig,
     mountBindingFor,
     unconfiguredRegistry,
 ) where
@@ -132,7 +131,6 @@ import Ecluse.Core.Registry.Adapter (
     serveRenderer,
  )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHost)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
@@ -410,17 +408,6 @@ warpExceptionHook logEnv mRequest err =
     payload =
         sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
             <> sl "detail" (displayExceptionT err)
-
-{- | The fallback server settings: a single npm mount with __no__ packument-serve
-or publish dependencies, so the packument route is the recognised-but-unserved @501@
-stub and a publish is @405@ (no publication target). Exposed so the composed front
-door can be driven directly without binding a socket (e.g. embedded in another @wai@
-application, or exercised in tests through 'Ecluse.Runtime.Server.application') to assert the
-routing and the unwired-mount surface; a real launch derives its bindings from
-configuration in 'run'.
--}
-npmServerConfig :: ServerConfig
-npmServerConfig = mkServerConfig [mountOf npmAdapter Nothing Nothing]
 
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
 ecosystem has no registered adapter. The adapter registry

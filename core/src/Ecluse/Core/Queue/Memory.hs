@@ -2,26 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The two STM-backed in-memory 'MirrorQueue' implementations.
+{- | The STM-backed in-memory 'MirrorQueue': the __bounded, best-effort
+production backend__ selected by @ECLUSE_QUEUE_BACKEND=memory@.
 
-Both honour the handle's contract (see "Ecluse.Core.Queue" for the @enqueue@ \/
-don't-@ack@-to-retry \/ no-@nack@ conventions); they serve different purposes:
-
-* 'newInMemoryQueue' -- the __test double__ that models the cloud backends'
-  visibility-timeout semantics (receive → ack \/ redeliver-on-no-ack), used to
-  exercise the worker's retry path without a cloud queue.
-* 'newBoundedInMemoryQueue' -- the __bounded, best-effort production backend__
-  selected by @ECLUSE_QUEUE_BACKEND=memory@. See its own Haddock for why it is
-  correctness-safe (a dropped job is re-enqueued on the next demand) and why it
-  deliberately does __not__ redeliver.
-
-Neither references the other; both are built from the contract module's backend
-building blocks.
+It honours the handle's contract (see "Ecluse.Core.Queue" for the @enqueue@ \/
+don't-@ack@-to-retry \/ no-@nack@ conventions) and is built from the contract
+module's backend building blocks. See 'newBoundedInMemoryQueue' for why it is
+correctness-safe (a dropped job is re-enqueued on the next demand) and why it
+deliberately does __not__ redeliver.
 -}
 module Ecluse.Core.Queue.Memory (
-    -- * In-memory double
-    newInMemoryQueue,
-
     -- * Bounded in-memory production backend
     MemoryQueueConfig (..),
     defaultMemoryQueueConfig,
@@ -31,155 +21,16 @@ module Ecluse.Core.Queue.Memory (
 ) where
 
 import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, readTBQueue, tryReadTBQueue)
-import Data.Map.Strict qualified as Map
-import Data.Sequence qualified as Seq
 import System.Timeout (timeout)
 
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (..),
-    QueueFault,
     QueueMessage (..),
-    ReceiptHandle,
     mkReceiptHandle,
     reportWorthy,
-    unReceiptHandle,
     writeOrDrop,
  )
-
-{- The mutable state of the in-memory queue.
-
-Modelled as visible (waiting) jobs plus in-flight (received-but-unacked) ones,
-exactly mirroring the visibility-timeout model the cloud backends use: a 'receive'
-makes visible jobs in-flight, an 'ack' drops an in-flight job, and an unacked
-in-flight job becomes visible again -- redelivered -- on a subsequent 'receive'.
--}
-data QueueState = QueueState
-    { -- A monotonic counter giving each delivery a unique 'ReceiptHandle'.
-      qsNextReceipt :: Word64
-    , -- Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
-      -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
-      qsVisible :: Seq MirrorJob
-    , -- Delivered-but-unacked jobs, keyed by the numeric receipt counter (not the
-      -- rendered 'ReceiptHandle' text) so iteration stays in delivery -- hence
-      -- FIFO-reclaim -- order rather than the lexicographic order text keys give.
-      qsInFlight :: Map Word64 InFlight
-    }
-
-{- One in-flight job and whether its visibility has been extended.
-
-A held ('inFlightHeld' = 'True') job survives one reclaim pass (the effect of
-'extendVisibility'); otherwise an in-flight job is reclaimed -- made visible again
-for redelivery -- on the next 'receive', modelling expiry of the visibility
-window.
--}
-data InFlight = InFlight
-    { -- The job awaiting acknowledgement.
-      inFlightJob :: MirrorJob
-    , -- Whether 'extendVisibility' has held it past the next reclaim.
-      inFlightHeld :: Bool
-    }
-
-{- | Build a fresh STM-backed in-memory 'MirrorQueue'.
-
-Honours the handle's contract: 'enqueue' appends (FIFO), 'receive' delivers all
-currently-visible jobs and moves them in-flight, 'ack' removes an in-flight job,
-and an in-flight job that is never acked is __redelivered__ on the next 'receive'
-("retry is don't ack"). 'extendVisibility' holds a job in-flight across one such
-redelivery pass. This is a test double -- there is no long-poll blocking; an empty
-'receive' returns @[]@ at once.
--}
-newInMemoryQueue :: IO MirrorQueue
-newInMemoryQueue = do
-    stateVar <- newTVarIO (QueueState 0 Seq.empty mempty)
-    -- Every operation is one STM transaction over process-local state, so this
-    -- backend has no fault to report: each field is always 'Right'.
-    let modifyState :: (QueueState -> QueueState) -> IO (Either QueueFault ())
-        modifyState = fmap Right . atomically . modifyTVar' stateVar
-    pure
-        MirrorQueue
-            { enqueue = modifyState . enqueueJob
-            , receive = fmap Right . atomically $ do
-                qs <- readTVar stateVar
-                let (messages, qs') = deliverAll qs
-                writeTVar stateVar qs'
-                pure messages
-            , ack = modifyState . ackJob
-            , extendVisibility = \handle _seconds -> modifyState (holdJob handle)
-            }
-
--- Append a job to the back of the visible queue (FIFO). O(1) amortised.
-enqueueJob :: MirrorJob -> QueueState -> QueueState
-enqueueJob job qs = qs{qsVisible = qsVisible qs <> Seq.singleton job}
-
--- Drop an acked in-flight job; a handle that is unknown (already acked, never
--- issued, or not one of ours) is a harmless no-op.
-ackJob :: ReceiptHandle -> QueueState -> QueueState
-ackJob handle qs =
-    case receiptKey handle of
-        Just key -> qs{qsInFlight = Map.delete key (qsInFlight qs)}
-        Nothing -> qs
-
--- Hold an in-flight job past the next reclaim pass. Unknown handle: no-op.
-holdJob :: ReceiptHandle -> QueueState -> QueueState
-holdJob handle qs =
-    case receiptKey handle of
-        Just key ->
-            qs{qsInFlight = Map.adjust (\f -> f{inFlightHeld = True}) key (qsInFlight qs)}
-        Nothing -> qs
-
--- Recover the numeric counter a handle was minted from (the inverse of the
--- 'show' in 'assignReceipts'); 'Nothing' for a handle this queue never issued.
-receiptKey :: ReceiptHandle -> Maybe Word64
-receiptKey = readMaybe . toString . unReceiptHandle
-
-{- A single receive over the in-memory queue state. First reclaim any un-held
-in-flight jobs (their visibility window has lapsed) back to the front of the
-visible queue, and clear the held flag on the rest so they are reclaimed next
-time unless held again. Then deliver every visible job: assign each a fresh
-receipt, move it in-flight, and return it as a 'QueueMessage'. -}
-deliverAll :: QueueState -> ([QueueMessage], QueueState)
-deliverAll qs =
-    let (reclaimed, stillHeld) = reclaim (Map.toList (qsInFlight qs))
-        toDeliver = Seq.fromList reclaimed <> qsVisible qs
-        (messages, nextReceipt, delivered) =
-            assignReceipts (qsNextReceipt qs) (toList toDeliver)
-     in ( messages
-        , QueueState
-            { qsNextReceipt = nextReceipt
-            , qsVisible = Seq.empty
-            , qsInFlight = Map.fromList stillHeld <> delivered
-            }
-        )
-
-{- Partition in-flight entries into (jobs reclaimed to visible, entries that
-stay in flight). A held entry stays in flight but has its hold cleared, so a
-later un-held receive reclaims it. -}
-reclaim ::
-    [(Word64, InFlight)] ->
-    ([MirrorJob], [(Word64, InFlight)])
-reclaim = foldr step ([], [])
-  where
-    step (key, f) (jobs, held)
-        | inFlightHeld f = (jobs, (key, f{inFlightHeld = False}) : held)
-        | otherwise = (inFlightJob f : jobs, held)
-
-{- Give each job a fresh receipt, threading the monotonic counter. Returns
-the messages, the next free counter value, and the new in-flight entries. The
-in-flight map is keyed by the numeric counter; the 'ReceiptHandle' the message
-carries is that counter rendered as text. -}
-assignReceipts ::
-    Word64 ->
-    [MirrorJob] ->
-    ([QueueMessage], Word64, Map Word64 InFlight)
-assignReceipts next [] = ([], next, mempty)
-assignReceipts next (job : rest) =
-    let message = QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show next)}
-        (messages, next', inFlight) = assignReceipts (next + 1) rest
-     in ( message : messages
-        , next'
-        , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
-        )
 
 {- | What the bounded in-memory backend needs: its depth cap and its idle-poll
 window. A record (like the SQS backend's @SqsConfig@) so each knob is named rather
@@ -250,7 +101,7 @@ That admits two deliberate departures from the cloud backends' contract:
   injected drop callback with the running drop count, rate-limited by
   'memoryQueueDropReportInterval' so a flood does not spam.
 * __No redelivery; 'ack' \/ 'extendVisibility' are no-ops.__ Unlike the cloud
-  backends (and 'newInMemoryQueue'), there is no visibility-timeout in-flight
+  backends, there is no visibility-timeout in-flight
   tracking: a 'receive' removes a job for good. A job whose processing fails is
   therefore __not__ redelivered -- it is simply re-enqueued on the next demand. This
   bounds memory hardest (nothing is retained after delivery) and is admissible

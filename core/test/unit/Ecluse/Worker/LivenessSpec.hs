@@ -43,7 +43,6 @@ import Ecluse.Core.Queue (
     ReceiptHandle,
     enqueue,
  )
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (PublishError),

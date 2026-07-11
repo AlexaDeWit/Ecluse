@@ -17,6 +17,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
+import Ecluse.Core.Queue (QueueMessage (msgReceipt))
 import Ecluse.Core.Registry (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishError (PublishError),
@@ -304,17 +305,19 @@ spec = do
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
-        it "acks a policy-denied job so it is retired, not redelivered forever" $
-            -- Mirrors the integrity-mismatch ack test for the deny path: a current-policy deny
-            -- is non-retryable, so the job is acked (retired) rather than left to redeliver.
-            withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+        it "acks a policy-denied job, retiring it from the queue" $ do
+            -- Mirrors the integrity-mismatch ack test for the deny path: a current-policy
+            -- deny is non-retryable, so the worker acks the job (the retire decision,
+            -- observed at the handle) rather than leaving it for the backend to redeliver.
+            (queue, ackedReceipts) <- recordingAckQueue
+            withRuntimeQueue queue (`recordingClient` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue (jobWith unreachableUrl)
                 messages <- receive_ queue
                 runWM runtime (processBatch messages)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
-                redelivered <- pollUntilRedelivered queue 5
-                redelivered `shouldBe` False
+                acked <- ackedReceipts
+                acked `shouldBe` map msgReceipt messages
     describe "processJob: the mirror-presence dedup probe" $ do
         -- The default 'recordingClient' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that
@@ -352,15 +355,16 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "acks the skipped duplicate so it is retired from the queue" $
-            withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+        it "acks the skipped duplicate, retiring it from the queue" $ do
+            (queue, ackedReceipts) <- recordingAckQueue
+            withRuntimeQueue queue (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue (jobWith unreachableUrl)
                 messages <- receive_ queue
                 runWM runtime (processBatch messages)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
-                redelivered <- pollUntilRedelivered queue 5
-                redelivered `shouldBe` False
+                acked <- ackedReceipts
+                acked `shouldBe` map msgReceipt messages
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
         -- The serve-time tarball gate and the worker both resolve a version through this one
         -- function, so its classification (the no-divergence boundary) is asserted directly.
@@ -387,47 +391,51 @@ spec = do
             -- laundered into the transient degrade.
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
-    describe "processBatch -- ack semantics over the in-memory queue" $ do
-        it "acks a successfully-mirrored job so it is not redelivered" $
-            withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue _logRef -> do
+    describe "processBatch -- ack decisions at the queue handle" $ do
+        -- The worker's retire-vs-retry decision is its ack call, recorded by
+        -- 'recordingAckQueue' (the production memory backend's own ack is a no-op,
+        -- so the decision has no queue-state observable). What an un-acked message
+        -- does over a redelivering backend -- the real second delivery -- is pinned
+        -- against real SQS in the integration suite's "Ecluse.WorkerSpec".
+        it "acks a successfully-mirrored job, retiring it from the queue" $
+            withUpstream $ \url -> do
+                (queue, ackedReceipts) <- recordingAckQueue
+                withRuntimeQueue queue (`recordingClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
-                    -- A redelivery pass past the (immediate) visibility window yields
-                    -- nothing: the job was acked.
-                    redelivered <- receive_ queue
-                    redelivered `shouldBe` []
+                    acked <- ackedReceipts
+                    acked `shouldBe` map msgReceipt messages
 
-        it "does not ack a transiently-failed job, so it redelivers" $
-            withUpstream $ \url ->
-                withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do
+        it "does not ack a transiently-failed job (left for the backend to redeliver)" $
+            withUpstream $ \url -> do
+                (queue, ackedReceipts) <- recordingAckQueue
+                withRuntimeQueue queue (`recordingClient` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
-                    -- The publish was rejected (retryable), so the job is left un-acked
-                    -- and redelivers. The worker extended the message's visibility before
-                    -- the (failing) publish, so the in-memory double holds it past one
-                    -- reclaim pass; poll a few times so the held message reappears.
-                    redelivered <- pollUntilRedelivered queue 5
-                    redelivered `shouldBe` True
+                    -- The publish was rejected (retryable), so the worker must not
+                    -- ack: over a redelivering backend the un-acked message comes
+                    -- back ("retry is don't ack").
+                    acked <- ackedReceipts
+                    acked `shouldBe` []
 
-        it "acks a DROPPED job so a tampered artifact is retired, not redelivered forever" $
-            -- An integrity mismatch is non-retryable: redelivery can never make the
-            -- bytes match, so the worker must ack the job to retire it from the queue
-            -- (having alarmed at the mismatch) rather than leave it to redeliver
-            -- indefinitely. A second poll past the visibility window yields nothing.
-            withUpstream $ \url ->
-                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+        it "acks a DROPPED job, retiring a tampered artifact rather than retrying it" $
+            -- An integrity mismatch is non-retryable: redelivery could never make the
+            -- bytes match, so the worker acks the job (having alarmed at the mismatch)
+            -- rather than leaving it for the backend to redeliver indefinitely.
+            withUpstream $ \url -> do
+                (queue, ackedReceipts) <- recordingAckQueue
+                withRuntimeQueue queue (`recordingClient` Right ()) (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort $ \runtime logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     -- Nothing was published (the mismatch refused the publish)...
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
-                    -- ...and the job was acked: it does not redeliver.
-                    redelivered <- pollUntilRedelivered queue 5
-                    redelivered `shouldBe` False
+                    -- ...and the job was acked: retired at the handle.
+                    acked <- ackedReceipts
+                    acked `shouldBe` map msgReceipt messages
     describe "the worker metrics port" $ do
         it "records a Published result for a successfully-mirrored job, through the port" $
             -- Drive the recording 'WorkerMetricsPort' and assert the worker classified the

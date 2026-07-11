@@ -9,9 +9,9 @@ import Data.ByteString.Lazy qualified as LBS
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (throwString)
@@ -166,7 +166,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servingUpstream
                 (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -185,7 +185,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
                         [("1.0.0", publishedDaysAgo 30)]
                     )
                 )
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinIntegrity = sha512Floor}) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -250,7 +250,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
                         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 3)]
                     )
                 )
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdDivergencePolicy = FailClosed}) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
