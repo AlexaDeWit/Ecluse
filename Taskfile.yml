@@ -58,7 +58,7 @@ tasks:
   test:
     desc: Run the fast, gating unit suites (core + app)
     cmds:
-      - cabal test ecluse-core-unit ecluse-unit --test-show-details=direct
+      - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
 
   test-integration:
     desc: Run the integration suite (requires a Docker daemon)
@@ -171,6 +171,8 @@ tasks:
         vars: { SUITE: ecluse-core-unit }
       - task: coverage-unit
         vars: { SUITE: ecluse-unit }
+      - task: coverage-unit
+        vars: { SUITE: ecluse-runtime-unit }
       # The integration tier drives ministack containers, so it runs in its own task that pins
       # the reaping scope and reaps around itself -- the integration suite's Docker lifecycle on
       # the `task check` path (which runs coverage), matching what `test-integration` does. It is
@@ -180,14 +182,16 @@ tasks:
       - task: coverage-integration
       - |
         core_unit_tix="$(find dist-coverage -type f -name ecluse-core-unit.tix | head -n1)"
+        runtime_unit_tix="$(find dist-coverage -type f -name ecluse-runtime-unit.tix | head -n1)"
         unit_tix="$(find dist-coverage -type f -name ecluse-unit.tix | head -n1)"
         integration_tix="$(find dist-coverage -type f -name ecluse-integration.tix | head -n1)"
-        if [ -z "$core_unit_tix" ] || [ -z "$unit_tix" ] || [ -z "$integration_tix" ]; then
-          echo "coverage: missing a tier .tix under dist-coverage/ (did all three suites run?)" >&2
+        if [ -z "$core_unit_tix" ] || [ -z "$runtime_unit_tix" ] || [ -z "$unit_tix" ] || [ -z "$integration_tix" ]; then
+          echo "coverage: missing a tier .tix under dist-coverage/ (did all four suites run?)" >&2
           exit 1
         fi
-        
-        hpc combine --union --output=dist-coverage/unit-combined.tix "$core_unit_tix" "$unit_tix"
+
+        hpc combine --union --output=dist-coverage/unit-core-runtime.tix "$core_unit_tix" "$runtime_unit_tix"
+        hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/unit-core-runtime.tix "$unit_tix"
         hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix "$integration_tix"
         
         mix_args=()

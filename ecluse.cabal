@@ -592,9 +592,6 @@ test-suite ecluse-unit
     Ecluse.BootSpec
     Ecluse.CLISpec
     Ecluse.CompositionSpec
-    Ecluse.Credential.CodeArtifactSpec
-    Ecluse.Cve.SyncSpec
-    Ecluse.Queue.SqsSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
@@ -602,7 +599,6 @@ test-suite ecluse-unit
     Ecluse.ConfigSpec
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
-    Ecluse.LogSpec
     Ecluse.Core.CveSpec
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
@@ -610,13 +606,7 @@ test-suite ecluse-unit
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
-    Ecluse.TelemetrySpec
     Ecluse.Test.OsvSpec
-    Ecluse.Telemetry.CorrelationSpec
-    Ecluse.Telemetry.InstrumentsSpec
-    Ecluse.Telemetry.ReportersSpec
-    Ecluse.Telemetry.ResolveSpec
-    Ecluse.Telemetry.TracingSpec
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
@@ -631,7 +621,6 @@ test-suite ecluse-unit
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
     , aeson             ^>=2.2
-    , amazonka          ^>=2.0
     , autodocodec       ^>=0.5
     , bytestring        ^>=0.12
     , cache             ^>=0.1.3
@@ -671,6 +660,62 @@ test-suite ecluse-unit
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
     , temporary         ^>=1.3
+
+-- Runtime-tier unit tests: cover the Ecluse.Runtime.* capability modules that need no
+-- application library (the cloud adapters, the telemetry SDK wiring, and logging). Pure,
+-- fast, deterministic. Gating. MUST NOT list the `ecluse` app library in build-depends:
+-- its absence is the partition enforcement, mirroring ecluse-core-unit, so a shell spec
+-- accidentally placed here fails to compile. Ecluse.Runtime.Server and Ecluse.Runtime.Env
+-- exercise the shell's runServer/runWorker, so their specs stay in ecluse-unit; those two
+-- modules are the unscoped entries in scripts/coverage.sh's ecluse-runtime-unit guard.
+test-suite ecluse-runtime-unit
+  import:             shared
+  -- hspec-discover generates a Main without an export list. -threaded is required by the
+  -- OpenTelemetry batch span processor the telemetry specs drive through the live SDK (it
+  -- aborts under the non-threaded RTS).
+  ghc-options:        -Wno-missing-export-lists -threaded
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     runtime/test/unit
+  other-modules:
+    Ecluse.Credential.CodeArtifactSpec
+    Ecluse.Cve.SyncSpec
+    Ecluse.LogSpec
+    Ecluse.Queue.SqsSpec
+    Ecluse.Telemetry.CorrelationSpec
+    Ecluse.Telemetry.InstrumentsSpec
+    Ecluse.Telemetry.ReportersSpec
+    Ecluse.Telemetry.ResolveSpec
+    Ecluse.Telemetry.TracingSpec
+    Ecluse.TelemetrySpec
+
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-runtime
+    , ecluse:ecluse-test-support
+    , aeson             ^>=2.2
+    , amazonka          ^>=2.0
+    , bytestring        ^>=0.12
+    , conduit           ^>=1.3
+    , directory         ^>=1.3
+    , filepath          ^>=1.4 || ^>=1.5
+    , hspec             ^>=2.11
+    , http-client       ^>=0.7
+    , http-types        ^>=0.12
+    , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-exporter-in-memory  ^>=1.0
+    , hs-opentelemetry-instrumentation-http-client  ^>=1.0
+    , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-w3c     ^>=1.0
+    , hs-opentelemetry-sdk  ^>=1.0
+    , katip             ^>=0.8.8
+    , temporary         ^>=1.3
+    , text              ^>=2.1
+    , time              ^>=1.12
+    , unliftio          ^>=0.2.25
+    , wai               ^>=3.2
+    , warp              ^>=3.4
 
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via

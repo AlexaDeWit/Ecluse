@@ -155,6 +155,23 @@ case "$suite" in
     # report emits.
     unscoped=()
     ;;
+  ecluse-runtime-unit)
+    src_dir="runtime/src"
+    src_prefix="./runtime/src/"
+    # Runtime modules the runtime-unit suite intentionally does not link, each covered by
+    # another gating tier and merged into the Codecov total under its flag. Each entry
+    # states why, so this stays a reviewed decision, not a silent escape hatch.
+    unscoped=(
+      # Ecluse.Runtime.Server and Ecluse.Runtime.Env exercise the shell's runServer /
+      # runWorker, so ServerSpec and EnvSpec live in ecluse-unit (which links the app
+      # library); the runtime-unit partition cannot. They are covered there.
+      ./runtime/src/Ecluse/Runtime/Server.hs
+      ./runtime/src/Ecluse/Runtime/Env.hs
+      # The S3 export adapter is exercised only by the integration tier
+      # (test/integration/Ecluse/Pilot/S3ExportSpec.hs).
+      ./runtime/src/Ecluse/Runtime/Pilot/Export.hs
+    )
+    ;;
   *)
     echo "coverage: wrote $out"
     exit 0

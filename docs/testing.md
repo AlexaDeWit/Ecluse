@@ -19,6 +19,17 @@ Proxy request-lifecycle tests run against an in-process WAI stub standing in for
 private/public upstreams, so the full fetch → parse → rules → mirror path can be asserted
 without a network. Run: `cabal test ecluse-unit`.
 
+The unit tier is three Cabal suites, split by which library a spec may link and enforced by
+each suite's `build-depends`: **`ecluse-core-unit`** covers `Ecluse.Core.*` (it depends on
+`ecluse-core` only); **`ecluse-runtime-unit`** covers the `Ecluse.Runtime.*` capabilities
+that need no application library (the cloud adapters, the telemetry SDK wiring, and logging;
+it depends on `ecluse-runtime`); and **`ecluse-unit`** covers the composition shell and the
+app-tier specs that exercise it (it depends on the `ecluse` app library, so it can also drive
+runtime handles through `runServer`/`runWorker`, which is why the `Ecluse.Runtime.Server` and
+`Ecluse.Runtime.Env` specs live here rather than in `ecluse-runtime-unit`). Each tests its
+tree in isolation, mirrored under `core/test/unit`, `runtime/test/unit`, and `test/unit`. Run
+all three with `cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit`.
+
 ## Integration tests: `ecluse-integration` (gating)
 
 Exercise cloud-backed code (the `MirrorQueue` and `CredentialProvider` handles) against a
@@ -122,11 +133,12 @@ drift from the artifact contract (`Ecluse.Core.Osv.Schema`).
   (`osvCorpusZip`) and hand-builds *hostile* artifacts (a wrong schema epoch, a view
   shadowing the ranges table), the tampered files the real compiler must never be able to
   produce, for the reader's rejection tests.
-- `Ecluse.Test.OsvDb` (`ecluse-test-support-app`) compiles the corpus into a real artifact
-  through Pilot's actual pipeline (`withFixtureOsvDb`). It lives in a separate internal
-  library because it needs the `ecluse` application library, and the `ecluse-core-unit`
-  partition forbids that dependency: core-tier suites test rule evaluation against a pure
-  fake lookup, and app-tier suites exercise the real artifact.
+- `Ecluse.Test.OsvDb` (`ecluse-test-support`) compiles the corpus into a real artifact
+  through the OSV producer's actual pipeline (`withFixtureOsvDb`). The compiler
+  (`Ecluse.Core.Osv.Compile`) lives in `ecluse-core` and takes no live telemetry handle, so
+  this helper is ecosystem-agnostic and the `ecluse-core-unit` partition can link it: the
+  OSV compile specs exercise the real artifact from the core tier, while a rule-evaluation
+  spec can still test against a pure fake lookup.
 - The corpus is versioned: `CorpusV2` adds an advisory for a package `CorpusV1` leaves
   clean, so shadow-swap tests can observe both an ETag change and a rule-outcome flip.
 - `Ecluse.Test.OsvSpec` pins each version's compiled rows exactly; editing the corpus means

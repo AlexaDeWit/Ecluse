@@ -87,6 +87,14 @@ jobs:
           flags: unit
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
+      - name: Upload runtime unit coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
+          files: coverage/ecluse-runtime-unit.json
+          flags: unit
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:

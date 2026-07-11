@@ -428,9 +428,10 @@
         checks = {
           # Pure, gating test tiers. Each builds the package and runs ONE unit
           # suite (testTarget), so these hermetic checks never execute the Docker-
-          # or network-dependent suites. Both are required by the gate (`make
-          # nix-check` runs both; CI's static-checks job runs both via `nix build
-          # .#checks.x86_64-linux.unit-core .#checks.x86_64-linux.unit-app`).
+          # or network-dependent suites. All three are required by the gate (`make
+          # nix-check` runs them; CI's static-checks job runs them via `nix build
+          # .#checks.x86_64-linux.unit-core .#checks.x86_64-linux.unit-app
+          # .#checks.x86_64-linux.unit-runtime`).
           # Both build the whole package (including the loopback integration suite),
           # so they enable dev-http-egress, the flag the integration suites' loopback
           # constructor needs to compile. The release `ecluse` (ecluseRaw / dontCheck)
@@ -443,6 +444,10 @@
           unit-app = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
             doCheck = true;
             testTarget = "ecluse-unit";
+          })) "dev-http-egress";
+          unit-runtime = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
+            doCheck = true;
+            testTarget = "ecluse-runtime-unit";
           })) "dev-http-egress";
 
           format = pkgs.runCommand "fourmolu-check"
