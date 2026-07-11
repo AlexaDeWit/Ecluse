@@ -13,7 +13,7 @@ import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithMalformedEcosystem, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
@@ -92,6 +92,12 @@ spec = do
         it "rejects an artifact compiled for a different ecosystem" $
             withFixtureOsvDb CorpusV1 (openCveDb PyPI >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
 
+        it "rejects an artifact with a malformed ecosystem value as a value" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "malformed-ecosystem.db"
+                mkDbWithMalformedEcosystem path
+                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
+
         it "rejects an artifact with no meta table as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-meta.db"
@@ -122,7 +128,9 @@ spec = do
                 let path = dir </> "malformed-meta.db"
                 mkDbWithMalformedProvenance path
                 openCveDb Npm path >>= \case
-                    Left (CveDbMetaUnreadable problems) -> problems `shouldSatisfy` not . null
+                    Left rej@(CveDbMetaUnreadable problems) -> do
+                        show rej `shouldSatisfy` not . (null :: [Char] -> Bool)
+                        problems `shouldSatisfy` not . null
                     Left other -> fail ("expected CveDbMetaUnreadable, got " <> show other)
                     Right db -> do
                         cveDbClose db

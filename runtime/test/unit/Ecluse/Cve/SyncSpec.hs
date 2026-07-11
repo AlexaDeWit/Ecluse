@@ -149,7 +149,9 @@ spec = do
                 void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
                 let env = envWith (fetchServing (Just "e2") mkDbWithMalformedProvenance)
                 syncStep env (Just (DbEtag "e1")) >>= \case
-                    SyncRejected etag (CveDbMetaUnreadable _) -> etag `shouldBe` DbEtag "e2"
+                    SyncRejected etag rej@(CveDbMetaUnreadable _) -> do
+                        etag `shouldBe` DbEtag "e2"
+                        show rej `shouldSatisfy` not . (null :: [Char] -> Bool)
                     other -> expectationFailure ("expected SyncRejected CveDbMetaUnreadable, got " <> show other)
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
                 probesFor slot "pkg-a" `shouldReturn` Just True
@@ -233,6 +235,34 @@ spec = do
                     -- remembered ETag reads as unchanged until a re-publish.
                     readIORef downloads `shouldReturn` 1
                     probesFor slot "pkg" `shouldReturn` Nothing
+
+        it "the boot burst concedes on a malformed provenance row" $
+            withSyncEnv $ \_ slot envWith -> do
+                downloads <- newIORef (0 :: Int)
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Just (DbEtag "bad-meta"))
+                            , fetchDownload = \dest -> do
+                                modifyIORef' downloads (+ 1)
+                                mkDbWithMalformedProvenance dest
+                                pure (DbEtag "bad-meta")
+                            }
+                    schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
+                withAsync (runQuiet (runCveSync (envWith fetch) schedule pass)) $ \_ -> do
+                    threadDelay 200_000
+                    readIORef downloads `shouldReturn` 1
+                    probesFor slot "pkg" `shouldReturn` Nothing
+
+    describe "SyncOutcome and DbEtag" $ do
+        it "Show SyncOutcome" $ do
+            let (isNotNull :: [Char] -> Bool) = not . null
+            show (SyncSwapped (DbEtag "e") []) `shouldSatisfy` isNotNull
+            show SyncUnchanged `shouldSatisfy` isNotNull
+            show SyncAbsent `shouldSatisfy` isNotNull
+            show (SyncRejected (DbEtag "e") (CveDbMetaUnreadable [])) `shouldSatisfy` isNotNull
+
+        it "Show DbEtag" $ do
+            show (DbEtag "e") `shouldBe` ("DbEtag \"e\"" :: [Char])
 
     describe "cappedAt" $ do
         it "passes a stream that ends exactly at the cap through unchanged" $ do

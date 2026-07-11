@@ -28,6 +28,7 @@ module Ecluse.Test.Osv (
     mkDbWithViewShadowingRanges,
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
+    mkDbWithMalformedEcosystem,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
 ) where
@@ -199,6 +200,27 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute_ conn "INSERT INTO meta (key, value) VALUES ('zz-opaque', X'DEADBEEF')"
+    setEpoch conn osvSchemaEpoch
+
+{- | An artifact with the right epoch whose @meta@ ecosystem row holds a BLOB
+value. Acceptance (specifically 'checkMetaEcosystem') must fold the decode
+throw into a rejection value (CveDbEcosystemMismatch Nothing) rather than an
+uncaught exception.
+-}
+mkDbWithMalformedEcosystem :: FilePath -> IO ()
+mkDbWithMalformedEcosystem path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
+        \)"
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', X'DEADBEEF')"
     setEpoch conn osvSchemaEpoch
 
 {- | A structurally corrupt artifact: a valid, right-epoch database whose

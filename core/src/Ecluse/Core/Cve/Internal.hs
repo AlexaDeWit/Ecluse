@@ -15,8 +15,8 @@ module Ecluse.Core.Cve.Internal (
     provenanceQuery,
 ) where
 
-import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, open, query, query_)
-import UnliftIO.Exception (onException, try, tryAny)
+import Database.SQLite.Simple (Connection, Only (..), close, execute_, open, query, query_)
+import UnliftIO.Exception (onException, tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (MetaKey (MetaEcosystem), osvSchemaEpoch, renderMetaKey)
@@ -136,7 +136,7 @@ checkEpochStamp conn = do
     -- artifact is refused as a value the sync task can remember (so it is not
     -- re-downloaded every poll), never a fault that unwinds and leaks the
     -- connection.
-    stamped <- try (query_ conn "PRAGMA user_version") :: IO (Either SQLError [Only Int])
+    stamped <- tryAny (query_ conn "PRAGMA user_version")
     pure $ case stamped of
         Left err -> Left (CveDbIntegrityFailed ["not a valid SQLite database: " <> show err])
         Right rows -> case map fromOnly rows of
@@ -157,7 +157,7 @@ rather than propagated: a hostile artifact is refused, never a fault to unwind.
 -}
 checkIntegrity :: Connection -> IO (Either CveDbRejected ())
 checkIntegrity conn = do
-    result <- try (query_ conn "PRAGMA quick_check") :: IO (Either SQLError [Only Text])
+    result <- tryAny (query_ conn "PRAGMA quick_check")
     pure $ case result of
         Left err -> Left (CveDbIntegrityFailed [show err])
         Right report -> case map fromOnly report of
@@ -170,11 +170,11 @@ checkRangesTable conn = do
     -- already passed), but fold any SQLite throw into the rejection so acceptance
     -- stays total at the type: a read fault here is a refusal value the sync task
     -- remembers, never an exception that unwinds and re-fetches the artifact every poll.
-    kinds <- try (query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'") :: IO (Either SQLError [Only Text])
+    kinds <- tryAny (query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'")
     pure $ case kinds of
         Left err -> Left (CveDbIntegrityFailed ["ranges relation unreadable: " <> show err])
         Right rows
-            | map fromOnly rows == ["table"] -> Right ()
+            | map fromOnly (rows :: [Only Text]) == ["table"] -> Right ()
             | otherwise -> Left CveDbRangesNotATable
 
 checkMetaEcosystem :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
@@ -184,11 +184,11 @@ checkMetaEcosystem eco conn = do
     -- ecosystem-cannot-be-confirmed refusal a present-but-wrong value yields
     -- ('CveDbEcosystemMismatch' 'Nothing'), so a missing @meta@ table is a remembered
     -- rejection value rather than an exception that re-fetches the artifact every poll.
-    named <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem))) :: IO (Either SQLError [Only Text])
+    named <- tryAny (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem)))
     pure $ case named of
         Left _ -> Left (CveDbEcosystemMismatch Nothing)
         Right rows ->
-            let found = fromOnly <$> listToMaybe rows
+            let found = fromOnly <$> listToMaybe (rows :: [Only Text])
              in if found == Just (ecosystemName eco)
                     then Right ()
                     else Left (CveDbEcosystemMismatch found)
