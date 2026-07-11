@@ -11,7 +11,7 @@ import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Core.Cve (CveDbRejected (CveDbMetaUnreadable, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
+import Ecluse.Core.Cve (CveDbRejected (..), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
