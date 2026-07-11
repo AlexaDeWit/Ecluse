@@ -1,19 +1,19 @@
 module Ecluse.Core.CveSpec (spec) where
 
 import Data.List (isSuffixOf)
-import Database.SQLite.Simple (Only, SQLError, close, execute_, fromOnly, open, query_)
+import Database.SQLite.Simple (Only, Query (Query), SQLError, close, execute_, fromOnly, open, query_)
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (bracket, catchAny)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), openCveDb, withCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
@@ -87,7 +87,16 @@ spec = do
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "view-shadow.db"
                 mkDbWithViewShadowingRanges path
-                openCveDb Npm path >>= rejectionShouldBe CveDbRangesNotATable
+                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+
+        it "rejects an artifact whose tables are not STRICT" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "lax-schema.db"
+                -- The right names and columns under affinity-hinted (non-STRICT)
+                -- declarations: the reader cannot trust its decodes, so schema
+                -- conformance must refuse it as a value.
+                mkDbWithLaxSchema path
+                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact compiled for a different ecosystem" $
             withFixtureOsvDb CorpusV1 (openCveDb PyPI >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
@@ -95,18 +104,29 @@ spec = do
         it "rejects an artifact with no meta table as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-meta.db"
-                -- A structurally-sound artifact with the ranges table and the right epoch
-                -- stamp but no @meta@ table: the ecosystem query raises "no such table",
-                -- which acceptance must fold into a rejection value
-                -- (CveDbEcosystemMismatch Nothing) rather than an uncaught throw that would
-                -- re-download the artifact every poll and leak the just-opened connection.
+                -- A structurally-sound artifact with the canonical ranges table and
+                -- the right epoch stamp but no @meta@ table: schema conformance must
+                -- refuse the missing relation as a rejection value rather than an
+                -- uncaught throw that would re-download the artifact every poll and
+                -- leak the just-opened connection.
                 bracket (open path) close $ \conn -> do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
-                    execute_ conn "CREATE TABLE package_vulnerability_ranges (package_name TEXT, introduced_version TEXT, fixed_version TEXT, last_affected_version TEXT, severity REAL)"
-                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
+                    execute_ conn (Query rangesTableDdl)
+                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "meta")
                 -- The rejected artifact's connection must not leak.
                 held <- openFdTargets
                 held `shouldSatisfy` not . any (path `isSuffixOf`)
+
+        it "rejects an artifact whose meta lacks the ecosystem row" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "no-ecosystem-row.db"
+                -- Conformant tables, but @meta@ never names an ecosystem: the
+                -- ecosystem cannot be confirmed, and the refusal is a value.
+                bracket (open path) close $ \conn -> do
+                    execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
+                    execute_ conn (Query rangesTableDdl)
+                    execute_ conn (Query metaTableDdl)
+                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
 
         it "withCveDb short-circuits a rejection without running the action" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
@@ -117,13 +137,22 @@ spec = do
                 result `shouldBe` Left (CveDbWrongEpoch (osvSchemaEpoch + 1))
                 readIORef ran `shouldReturn` False
 
-        it "closes the connection when a malformed provenance row fails handle construction" $
+        it "rejects an artifact whose stored meta values violate the strict declaration, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "malformed-meta.db"
+                -- A BLOB smuggled under a forged STRICT declaration: the integrity
+                -- walk verifies stored values against the declared column types and
+                -- must refuse the artifact as a rejection value (so the sync task
+                -- remembers its ETag), never a thrown decode error.
                 mkDbWithMalformedProvenance path
-                openCveDb Npm path `shouldThrow` anyException
-                -- The failed construction must not leak its accepted
-                -- connection: no descriptor may still reference the artifact.
+                openCveDb Npm path >>= \case
+                    Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
+                    Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
+                    Right db -> do
+                        cveDbClose db
+                        fail "expected the forged artifact to be rejected, but it was accepted"
+                -- The rejected artifact's connection must not leak: no descriptor
+                -- may still reference the artifact.
                 held <- openFdTargets
                 held `shouldSatisfy` not . any (path `isSuffixOf`)
 

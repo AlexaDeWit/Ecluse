@@ -19,7 +19,7 @@ import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_,
 import UnliftIO.Exception (onException, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Osv.Schema (MetaKey (MetaEcosystem), osvSchemaEpoch, renderMetaKey)
+import Ecluse.Core.Osv.Schema (ColumnSpec (..), MetaKey (MetaEcosystem), TableSpec (..), osvSchemaEpoch, osvTableSpecs, renderMetaKey)
 
 {- | One advisory segment recorded against a package: the advisory's identifier,
 its CVSS base score (0 to 10, 'Nothing' when unscored), and the affected
@@ -57,13 +57,17 @@ data CveDbRejected
       caps at 100 problems).
       -}
       CveDbIntegrityFailed [Text]
-    | {- | The ranges relation is not a plain table -- a view here is
-      attacker-authored SQL wearing the table's name.
+    | {- | A required relation (carried) does not conform to the epoch's schema
+      contract: absent, not a real @STRICT@ table, or missing a required column
+      with its declared type. A view here is attacker-authored SQL wearing the
+      table's name; a lax (non-@STRICT@) table would leave the reader's decodes
+      exposed to type-confused values.
       -}
-      CveDbRangesNotATable
+      CveDbSchemaNonConformant Text
     | {- | The artifact's @meta@ table names a different ecosystem (carried) than
-      the one this handle was asked to serve, or the @meta@ table is absent or
-      unreadable so the ecosystem cannot be confirmed ('Nothing').
+      the one this handle was asked to serve, or carries no ecosystem row at all
+      so the ecosystem cannot be confirmed ('Nothing'). An absent @meta@ table
+      is caught earlier, as 'CveDbSchemaNonConformant'.
       -}
       CveDbEcosystemMismatch (Maybe Text)
     deriving stock (Eq, Show)
@@ -81,10 +85,13 @@ hostile file pages straight into the address space.
 
 Acceptance then checks, cheapest and least trusting first: the 'osvSchemaEpoch'
 stamp (a header field, so a stale, substituted, or non-SQLite artifact is refused
-before the file's interior is walked at all), a @PRAGMA quick_check@
-structural-integrity walk (a malformed or truncated b-tree is rejected before any
-lookup dereferences it), the ranges relation being a real table, and the @meta@
-ecosystem matching the one asked for. A rejected artifact's connection is closed
+before the file's interior is walked at all), a @PRAGMA quick_check@ integrity
+walk (a malformed or truncated b-tree is rejected before any lookup dereferences
+it, and stored values are verified against each @STRICT@ table's declared column
+types), the required tables conforming to the epoch's schema contract
+('osvTableSpecs': real @STRICT@ tables carrying the required columns with their
+declared types, which is what makes every later row decode total), and the
+@meta@ ecosystem matching the one asked for. A rejected artifact's connection is closed
 before returning, and so is a connection whose hardening or acceptance /throws/
 before it can return a rejection value: the whole phase runs under a
 close-on-exception guard, so the just-opened connection is never leaked (the
@@ -119,7 +126,7 @@ acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 acceptArtifact eco conn = runExceptT $ do
     ExceptT (checkEpochStamp conn)
     ExceptT (checkIntegrity conn)
-    ExceptT (checkRangesTable conn)
+    traverse_ (ExceptT . checkTableConformance conn) osvTableSpecs
     ExceptT (checkMetaEcosystem eco conn)
 
 checkEpochStamp :: Connection -> IO (Either CveDbRejected ())
@@ -159,26 +166,45 @@ checkIntegrity conn = do
             ["ok"] -> Right ()
             problems -> Left (CveDbIntegrityFailed problems)
 
-checkRangesTable :: Connection -> IO (Either CveDbRejected ())
-checkRangesTable conn = do
-    -- 'sqlite_master' is present in any structurally-sound database (quick_check has
-    -- already passed), but fold any SQLite throw into the rejection so acceptance
-    -- stays total at the type: a read fault here is a refusal value the sync task
-    -- remembers, never an exception that unwinds and re-fetches the artifact every poll.
-    kinds <- try (query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'") :: IO (Either SQLError [Only Text])
-    pure $ case kinds of
-        Left err -> Left (CveDbIntegrityFailed ["ranges relation unreadable: " <> show err])
-        Right rows
-            | map fromOnly rows == ["table"] -> Right ()
-            | otherwise -> Left CveDbRangesNotATable
+{- | Does the artifact carry this relation as the schema contract demands: a
+real @STRICT@ table with every required column under its declared type (and
+@NOT NULL@ where the reader's decode relies on it)? Columns beyond the spec are
+tolerated, keeping additive schema changes epoch-neutral. This declaration
+check is one half of the totality guarantee; 'checkIntegrity' is the other,
+verifying the stored values actually conform to the @STRICT@ declaration.
+
+Any SQLite throw folds into the rejection so acceptance stays total at the
+type: a read fault here is a refusal value the sync task remembers, never an
+exception that unwinds and re-fetches the artifact every poll. The pragma rows
+decode through 'Maybe' for the same reason -- nothing an artifact carries may
+make this check throw.
+-}
+checkTableConformance :: Connection -> TableSpec -> IO (Either CveDbRejected ())
+checkTableConformance conn spec = do
+    listed <- try (query conn "SELECT type, strict FROM pragma_table_list WHERE name = ?" (Only (tableName spec))) :: IO (Either SQLError [(Maybe Text, Maybe Int)])
+    columns <- try (query conn "SELECT name, type, \"notnull\" FROM pragma_table_xinfo(?)" (Only (tableName spec))) :: IO (Either SQLError [(Maybe Text, Maybe Text, Maybe Int)])
+    pure $ case (listed, columns) of
+        (Right [(Just "table", Just 1)], Right cols)
+            | all (hasConformingColumn cols) (tableColumns spec) -> Right ()
+        _ -> Left (CveDbSchemaNonConformant (tableName spec))
+
+-- Is the required column among the table's actual columns, under its declared
+-- type and (where the decode relies on it) NOT NULL?
+hasConformingColumn :: [(Maybe Text, Maybe Text, Maybe Int)] -> ColumnSpec -> Bool
+hasConformingColumn cols spec = any conforms cols
+  where
+    conforms (name, declaredType, notnull) =
+        name == Just (colName spec)
+            && declaredType == Just (colDeclaredType spec)
+            && (not (colNotNull spec) || notnull == Just 1)
 
 checkMetaEcosystem :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 checkMetaEcosystem eco conn = do
-    -- A structurally-sound artifact can still lack the @meta@ table entirely, in
-    -- which case this query raises "no such table". Fold that throw into the same
-    -- ecosystem-cannot-be-confirmed refusal a present-but-wrong value yields
-    -- ('CveDbEcosystemMismatch' 'Nothing'), so a missing @meta@ table is a remembered
-    -- rejection value rather than an exception that re-fetches the artifact every poll.
+    -- By this point conformance has confirmed @meta@ is a real STRICT table of
+    -- NOT NULL TEXT, and the integrity walk has verified the stored values, so
+    -- the row decode here is total. The try-fold stays as the siblings' shape:
+    -- should SQLite still throw, that is a refusal value the sync task
+    -- remembers, never an exception that re-fetches the artifact every poll.
     named <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem))) :: IO (Either SQLError [Only Text])
     pure $ case named of
         Left _ -> Left (CveDbEcosystemMismatch Nothing)
@@ -213,8 +239,10 @@ advisoriesQuery conn name = do
             }
 
 {- | The artifact's @meta@ provenance rows, key-sorted for a deterministic
-snapshot. An artifact with no @meta@ table would have failed acceptance, so
-this only ever runs on an accepted connection.
+snapshot. This only ever runs on an accepted connection, and acceptance has
+confirmed @meta@ is a @STRICT@ table of @NOT NULL TEXT@ whose stored values the
+integrity walk verified, so the @(Text, Text)@ decode is total here: no
+artifact content can make it throw.
 -}
 provenanceQuery :: Connection -> IO [(Text, Text)]
 provenanceQuery conn = query_ conn "SELECT key, value FROM meta ORDER BY key"

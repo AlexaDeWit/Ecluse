@@ -81,8 +81,8 @@ spec = do
                 -- A stale in-progress download and a canonical artifact from a
                 -- previous run: the sweep takes the former, keeps the latter.
                 createDirectoryIfMissing True dataDir
-                writeFileBS (dataDir </> "npm-osv-schema2.db.tmp") "stale partial download"
-                writeFileBS (dataDir </> "npm-osv-schema2.db") "prior artifact"
+                writeFileBS (dataDir </> "npm-osv-schema3.db.tmp") "stale partial download"
+                writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
                 cfg <-
                     appConfigFrom
                         [ ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", "advisories")
@@ -93,12 +93,12 @@ spec = do
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
-                    syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema2.db"
+                    syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema3.db"
                     -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
                     withSlotLookup (csSlot handle) (pure . isJust) `shouldReturn` False
-                doesFileExist (dataDir </> "npm-osv-schema2.db.tmp") `shouldReturn` False
-                doesFileExist (dataDir </> "npm-osv-schema2.db") `shouldReturn` True
+                doesFileExist (dataDir </> "npm-osv-schema3.db.tmp") `shouldReturn` False
+                doesFileExist (dataDir </> "npm-osv-schema3.db") `shouldReturn` True
 
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do

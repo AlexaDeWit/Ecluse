@@ -11,10 +11,10 @@ import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Core.Cve (CveDbRejected (CveDbWrongEpoch), CveLookup (cveRemediationProbe))
+import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
@@ -37,7 +37,7 @@ withSyncEnv use =
                 SyncEnv
                     { syncFetch = fetch
                     , syncEcosystem = Npm
-                    , syncDbPath = dir </> "npm-osv-schema2.db"
+                    , syncDbPath = dir </> osvDbFileName "npm"
                     , syncSlot = slot
                     }
         use dir slot envWith
@@ -144,13 +144,30 @@ spec = do
                 syncStep env Nothing `shouldThrow` anyException
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
 
-        it "a malformed provenance row propagates, discards the temp, and keeps the last-good generation" $
+        it "an artifact whose meta values violate the strict declaration is refused and its ETag remembered" $
             withSyncEnv $ \_ slot envWith -> do
                 void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
-                let env = envWith (fetchServing (Just "e2") mkDbWithMalformedProvenance)
-                syncStep env (Just (DbEtag "e1")) `shouldThrow` anyException
+                downloads <- newIORef (0 :: Int)
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Just (DbEtag "e2"))
+                            , fetchDownload = \dest -> do
+                                modifyIORef' downloads (+ 1)
+                                mkDbWithMalformedProvenance dest
+                                pure (DbEtag "e2")
+                            }
+                    env = envWith fetch
+                syncStep env (Just (DbEtag "e1")) >>= \case
+                    SyncRejected etag (CveDbIntegrityFailed _) -> etag `shouldBe` DbEtag "e2"
+                    other -> expectationFailure ("expected SyncRejected on the forged artifact, got " <> show other)
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
                 probesFor slot "pkg-a" `shouldReturn` Just True
+                -- The remembered ETag turns the next poll into a no-op: the same
+                -- bad object is never re-downloaded.
+                syncStep env (Just (DbEtag "e2")) >>= \case
+                    SyncUnchanged -> pass
+                    other -> expectationFailure ("expected SyncUnchanged on the remembered ETag, got " <> show other)
+                readIORef downloads `shouldReturn` 1
 
         it "a swapper cancelled while draining never closes the newly published generation" $
             withSyncEnv $ \_ slot envWith -> do

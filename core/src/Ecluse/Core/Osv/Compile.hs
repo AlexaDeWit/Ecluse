@@ -20,7 +20,7 @@ import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
-import Ecluse.Core.Osv.Schema (MetaKey (..), osvDbFileName, osvSchemaEpoch, renderMetaKey)
+import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
 import Ecluse.Core.Osv.Stream (
     IngestStats (..),
     PilotIngestAborted (..),
@@ -57,7 +57,7 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
         -- incrementally, so a mid-stream drop can leave a partial table behind; each
         -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
         -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
-        -- under the composite primary key, so a re-run would duplicate those ranges.)
+        -- under the dedup index's uniqueness, so a re-run would duplicate those ranges.)
         -- The ingest tally is reset alongside the table so it reflects only the final
         -- attempt.
         withOsvRetry defaultOsvRetryPolicy $ do
@@ -97,27 +97,18 @@ renderDrops s =
 
 initSchema :: Connection -> IO ()
 initSchema conn = do
-    execute_
-        conn
-        "CREATE TABLE package_vulnerability_ranges (\
-        \  package_name TEXT NOT NULL,\
-        \  cve_id TEXT NOT NULL,\
-        \  introduced_version TEXT,\
-        \  fixed_version TEXT,\
-        \  last_affected_version TEXT,\
-        \  severity REAL,\
-        \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version, last_affected_version)\
-        \)"
+    execute_ conn (Query rangesTableDdl)
+    -- The dedup guard over a segment's five identity columns. A unique index
+    -- rather than a composite PRIMARY KEY because @STRICT@ makes primary-key
+    -- columns implicitly NOT NULL and the three bound columns are legitimately
+    -- NULL; uniqueness behaviour is identical (INSERT OR IGNORE honours it, and
+    -- NULL bounds are distinct under both forms).
+    execute_ conn "CREATE UNIQUE INDEX uq_ranges_segment ON package_vulnerability_ranges(package_name, cve_id, introduced_version, fixed_version, last_affected_version)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
     -- The reader's remediation probe is an exact (name, fixed) equality; this
     -- index makes it one B-tree traversal. Additive, so epoch-neutral.
     execute_ conn "CREATE INDEX idx_package_fixed ON package_vulnerability_ranges(package_name, fixed_version)"
-    execute_
-        conn
-        "CREATE TABLE meta (\
-        \  key TEXT NOT NULL PRIMARY KEY,\
-        \  value TEXT NOT NULL\
-        \)"
+    execute_ conn (Query metaTableDdl)
     execute_ conn (fromString ("PRAGMA user_version = " <> show osvSchemaEpoch))
 
 -- Written once, after the stream has completed: the row count is only
