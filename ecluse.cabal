@@ -333,6 +333,9 @@ library ecluse-runtime
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
     Ecluse.Runtime.Server
+    Ecluse.Runtime.Server.Drain
+    Ecluse.Runtime.Server.Halt
+    Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Instruments
@@ -718,6 +721,8 @@ test-suite ecluse-runtime-unit
     Ecluse.Cve.SyncSpec
     Ecluse.LogSpec
     Ecluse.Queue.SqsSpec
+    Ecluse.Server.DrainSpec
+    Ecluse.Server.HaltSpec
     Ecluse.Telemetry.CorrelationSpec
     Ecluse.Telemetry.InstrumentsSpec
     Ecluse.Telemetry.ReportersSpec
