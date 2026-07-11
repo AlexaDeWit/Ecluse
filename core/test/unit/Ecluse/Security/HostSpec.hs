@@ -166,6 +166,19 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "does not block a mapped public address (::ffff:1.1.1.1)" $
             isBlockedTarget noOptIn "::ffff:1.1.1.1" `shouldBe` False
 
+    describe "blocks IPv4-compatible IPv6 (::/96)" $ do
+        -- RFC 4291 §2.5.5.1: IPv4-compatible addresses are deprecated but still
+        -- accepted by many stacks, including Écluse's parser; they must be
+        -- decoded to their embedded IPv4 so the block catch them.
+        it "blocks the instance-metadata address (::169.254.169.254)" $
+            isBlockedTarget noOptIn "::169.254.169.254" `shouldBe` True
+        it "blocks compatible loopback (::127.0.0.1)" $
+            isBlockedTarget noOptIn "::127.0.0.1" `shouldBe` True
+        it "blocks the fully-expanded compatible loopback (0:0:0:0:0:0:127.0.0.1)" $
+            isBlockedTarget noOptIn "0:0:0:0:0:0:127.0.0.1" `shouldBe` True
+        it "does not block a compatible public address (::1.1.1.1)" $
+            isBlockedTarget noOptIn "::1.1.1.1" `shouldBe` False
+
     describe "treats malformed IPv6 literals as names (not blocked)" $ do
         -- Each malformed form must fail to parse as an IP, so it is not mistaken
         -- for an internal literal; the allowlist would still gate a real name.
@@ -346,6 +359,10 @@ classificationCorpusSpec =
         , ("::ffff:127.0.0.1", True) -- mapped loopback
         , ("0:0:0:0:0:ffff:127.0.0.1", True) -- mapped loopback, fully expanded
         , ("::ffff:1.1.1.1", False) -- mapped public stays permitted
+        , ("::169.254.169.254", True) -- IMDSv4 compatible
+        , ("::127.0.0.1", True) -- compatible loopback
+        , ("0:0:0:0:0:0:127.0.0.1", True) -- compatible loopback, fully expanded
+        , ("::1.1.1.1", False) -- compatible public stays permitted
         ]
 
     lenientBoundary =

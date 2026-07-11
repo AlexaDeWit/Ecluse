@@ -217,17 +217,20 @@ canonicalHostKey host = case parseIpLiteral host of
     Just addr -> show (ipAddrToIP addr)
     Nothing -> T.toLower host
 
-{- Decode an IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) to its embedded IPv4, so
-it is tested against the IPv4 ranges; any other address is returned unchanged.
-Over the sixteen octets 'fromIPv6b' yields, the mapped form is ten zero octets,
-then @ff ff@, then the four IPv4 octets. Testing a mapped internal literal against
-the IPv6 ranges instead would let @::ffff:169.254.169.254@ through, so the decode
-is load-bearing for the SSRF block.
+{- Decode an IPv4-mapped (@::ffff:a.b.c.d@) or IPv4-compatible (@::a.b.c.d@)
+IPv6 address to its embedded IPv4, so it is tested against the IPv4 ranges;
+any other address is returned unchanged. Over the sixteen octets 'fromIPv6b'
+yields, the mapped form is ten zeros then @ff ff@, and the compatible form
+is twelve zeros. Testing an embedded internal literal against the IPv6 ranges
+instead would let @::169.254.169.254@ through, so the decode is load-bearing
+for the SSRF block.
 -}
 decodeMappedV4 :: IP -> IP
 decodeMappedV4 = \case
     IPv6 v6 -> case fromIPv6b v6 of
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, a, b, c, d] ->
+            IPv4 (toIPv4 [a, b, c, d])
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, a, b, c, d] ->
             IPv4 (toIPv4 [a, b, c, d])
         _ -> IPv6 v6
     ip -> ip
