@@ -6,10 +6,11 @@ module's stability promise.
 It holds the operator-facing warning helpers for the bad-upstream and misconfiguration
 conditions the response-bound guards leave silent -- an upstream whose body does not
 decode into a usable packument ('logDecodeFailure'), one whose packument self-reports a
-name for a /different/ package ('logNameMismatch'), and a mount whose configured base URL
-cannot be formed into a request ('logUpstreamUnformable') -- each surfaced at a
-'WarningS' through the ambient @katip@ context before the contribution degrades. The
-conditions themselves are classified on the serve path as a typed
+name for a /different/ package ('logNameMismatch'), a mount whose configured base URL
+cannot be formed into a request ('logUpstreamUnformable'), and an upstream the transport
+could not reach ('logUpstreamUnreachable') -- each surfaced at a 'WarningS' through the
+ambient @katip@ context before the contribution degrades. The conditions themselves are
+classified on the serve path as a typed
 'Ecluse.Core.Registry.Metadata.MetadataError'; this module only renders their warning
 lines. Alongside them sit the pure integrity-floor admission and the metric-label
 projections the serve path records.
@@ -18,6 +19,7 @@ module Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logNameMismatch,
     logUpstreamUnformable,
+    logUpstreamUnreachable,
 
     -- * Integrity-floor admission (pure)
     admitByIntegrity,
@@ -46,6 +48,7 @@ import Data.Set qualified as Set
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
 import Ecluse.Core.Cve (DbEtag (..))
+import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoVersions),
@@ -136,6 +139,27 @@ logUpstreamUnformable name origin urlErr =
             <> sl "urlError" (show urlErr :: Text)
     message :: Text
     message = "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
+
+{- | Log an unreachable upstream at 'WarningS' before the contribution degrades: the
+transport failed before a usable body returned (a timeout, a refused connection, a TLS
+refusal), so the origin contributes nothing this request. The structured payload
+carries the origin, the bounded 'Ecluse.Core.Fault.TransportCause', and the rendered
+detail, so an operator can tell an outage apart from a decode failure or a
+misconfigured mount; same fail-closed degrade and payload convention as
+'logUpstreamUnformable'.
+-}
+logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
+logUpstreamUnreachable name origin fault =
+    katipAddContext payload $ logFM WarningS (ls message)
+  where
+    payload =
+        sl "module" pipelineInternalModule
+            <> sl "package" (renderPackageName name)
+            <> sl "origin" origin
+            <> sl "transportCause" (show (tfCause fault) :: Text)
+            <> sl "transportDetail" (tfDetail fault)
+    message :: Text
+    message = "an upstream metadata fetch could not reach the origin; its contribution degrades this request"
 
 {- | Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
 whose strongest digest meets the floor and projecting the rest to refusals. A version

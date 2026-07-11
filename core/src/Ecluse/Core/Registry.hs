@@ -40,14 +40,17 @@ module Ecluse.Core.Registry (
 
     -- * Errors
     ParseError (..),
+    FetchFault (..),
     PublishError (..),
     PublishFault (..),
     UrlFormationError (..),
     PublishRelayResponse (..),
 ) where
 
+import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Queue (MirrorArtifact)
+import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
@@ -103,14 +106,26 @@ data UrlFormationError
       UnparseableUrl Text
     deriving stock (Eq, Show)
 
-{- | A 'UrlFormationError' is throwable. The __read__ path (metadata\/artifact
-fetch) treats an unformable URL as a configuration fault and raises it as this
-typed exception -- catchable by type, never laundered into a stringly-typed
-@stringException@. The __write__ path does not throw it: it surfaces it as a
-'PublishFault' value instead (see below), because the mirror worker must decide
-retry vs. drop on it.
+{- | Why a metadata fetch could not produce a response body, reported as a __value__
+so a read-path consumer maps each cause onto its own outcome -- the serve read
+adapter onto the response it renders, the worker's mirror-presence probe onto its
+fall-through -- rather than catching a typed throw two calls away. Total over the
+read fetch: an unformable request URL, a response-bound breach, and a transport
+fault are all in this channel, so no fetch failure rides up outside the declared
+type.
 -}
-instance Exception UrlFormationError
+data FetchFault
+    = -- | The request URL could not be formed from configuration (an empty or unparseable base URL).
+      FetchUrlUnformable UrlFormationError
+    | -- | The upstream body crossed the response-size bound and was refused fail-closed.
+      FetchBoundExceeded LimitError
+    | {- | The request never completed: the transport failed before a usable body
+      returned (a timeout, an unreachable peer, a TLS refusal), carried as the
+      'TransportFault' the adapter edge classified out of its client library's
+      exception.
+      -}
+      FetchTransport TransportFault
+    deriving stock (Eq, Show)
 
 {- | The response from the publication target after relaying a publish document.
 Kept in memory (no streaming) -- the relayed body is small (typically a JSON
@@ -157,8 +172,12 @@ private state the closures capture. The effectful fields return 'IO' (decoupled
 from the core); the @parse*@ fields are pure. See the module header.
 -}
 data RegistryClient = RegistryClient
-    { fetchMetadata :: PackageName -> IO RegistryResponse
-    -- ^ Fetch a package's metadata document (its packument) from the registry.
+    { fetchMetadata :: PackageName -> IO (Either FetchFault RegistryResponse)
+    {- ^ Fetch a package's metadata document (its packument) from the registry. A
+    failure is reported as a 'FetchFault' __value__ -- an unformable URL, a bound
+    breach, or a transport fault -- never thrown, so a consumer's fall-through
+    decision is total at the call site.
+    -}
     , publishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Publish one version's artifact to the registry, given its metadata
     ('MirrorArtifact': filename, integrity hashes, declared size) and the raw

@@ -29,14 +29,12 @@ module Ecluse.Core.Server.Metadata (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Client qualified as HTTP
-import UnliftIO.Exception (throwIO, try, tryAny)
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
  )
 import Ecluse.Core.Registry.Npm (NpmClientConfig)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, fetchNpmVersion)
@@ -113,19 +111,20 @@ newMetadataClient ::
     MetadataClient
 newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
     MetadataClient
-        { fetchFullManifest = foldManifestCarrier . resolveEntry
+        { fetchFullManifest = fmap (fmap entryToManifest) . resolveEntry
         , fetchVersionMetadata = resolveVersionHybrid
         }
   where
-    resolveEntry :: PackageName -> IO CacheEntry
+    resolveEntry :: PackageName -> IO (Either MetadataError CacheEntry)
     resolveEntry name = case caching of
         Uncached -> manifestLeader name
         Cached cache source -> resolveMetadata metrics cache source name (manifestLeader name)
 
     -- The full-manifest single-flight leader action: the real fetch, run only on a cache
     -- miss, metered, with any dropped malformed entries logged on success and a fetch
-    -- failure logged once before the carrier is raised.
-    manifestLeader :: PackageName -> IO CacheEntry
+    -- failure logged once before its 'Left' is handed to the cache (which stores nothing
+    -- and delivers the same value to every coalesced follower).
+    manifestLeader :: PackageName -> IO (Either MetadataError CacheEntry)
     manifestLeader name = do
         logFetch name
         recordedFetch metrics upstream $
@@ -133,14 +132,14 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
                 Right manifest -> do
                     let invalid = infoInvalidEntries (manifestInfo manifest)
                     unless (null invalid) (logInvalid name invalid)
-                    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest))
-                Left err -> logFailure name err >> throwIO (ManifestFetchFailed err)
+                    pure (Right (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest)))
+                Left err -> logFailure name err >> pure (Left err)
 
     -- The single-version hybrid: the small version cache, then the warm full cache
     -- read-only, then a cold selective fetch -- or, uncached, the raw selective fetch.
     resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     resolveVersionHybrid name version = case caching of
-        Uncached -> foldVersionCarrier (versionLeader name version)
+        Uncached -> versionLeader name version
         Cached cache source -> do
             -- (1) The single-version cache: a positive snapshot or a cached determined
             -- absence both short-circuit.
@@ -155,17 +154,18 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
                     case warm of
                         Just entry -> pure (Right (selectVersion version (entryInfo entry)))
                         -- (3) Cold: lead the selective fetch through the version cache.
-                        Nothing -> foldVersionCarrier (resolveVersion metrics cache source name version (versionLeader name version))
+                        Nothing -> resolveVersion metrics cache source name version (versionLeader name version)
 
     -- The single-version single-flight leader action: the real selective fetch, run only on
-    -- a cold miss, metered and (on failure) logged once before the carrier is raised.
-    versionLeader :: PackageName -> Version -> IO (Maybe PackageDetails)
+    -- a cold miss, metered and (on failure) logged once before its 'Left' is handed to the
+    -- cache, exactly as the full-manifest leader.
+    versionLeader :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     versionLeader name version = do
         logFetch name
         recordedFetch metrics upstream $
             rawFetchVersion name version >>= \case
-                Right details -> pure details
-                Left err -> logFailure name err >> throwIO (VersionFetchFailed err)
+                Right details -> pure (Right details)
+                Left err -> logFailure name err >> pure (Left err)
 
 {- | Build a per-request read handle for the npm protocol over one origin's fetch
 configuration: the npm full-manifest and single-version fetches as the raw primitives, with
@@ -189,84 +189,39 @@ newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logF
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
-{- The in-band failure carrier for a full-manifest leader fetch: a 'MetadataError' raised
-so the shared metadata cache caches nothing on failure and re-raises it to coalesced
-followers, then converted back to a 'Left' at the resolve boundary. Internal -- the
-serve path only ever sees the returned 'Either' (or a genuine transport throw). -}
-newtype ManifestFetchFailed = ManifestFetchFailed MetadataError
-    deriving stock (Show)
-
-instance Exception ManifestFetchFailed
-
-{- Fold a full-manifest resolve run's carrier back to a 'Left': a leader's parse\/policy
-failure is raised as the carrier so the cache stores nothing and re-raises to followers,
-and is recovered here. A transport fault is a different type, so it is not caught and
-propagates to the serve path's bracket, exactly as before. -}
-foldManifestCarrier :: IO CacheEntry -> IO (Either MetadataError Manifest)
-foldManifestCarrier resolve = do
-    outcome <- try resolve
-    pure $ case outcome of
-        Right entry ->
-            Right
-                Manifest
-                    { manifestInfo = entryInfo entry
-                    , manifestRaw = entryRaw entry
-                    , manifestDigest = entryDigest entry
-                    }
-        Left (ManifestFetchFailed err) -> Left err
-
-{- The single-version analogue of 'ManifestFetchFailed': the carrier a single-version
-leader raises so the version cache stores nothing on failure and re-raises to coalesced
-followers, recovered to a 'Left' by 'newMetadataClient'. Distinct from
-'ManifestFetchFailed' only so each leg's carrier is unambiguous; both wrap a
-'MetadataError'. -}
-newtype VersionFetchFailed = VersionFetchFailed MetadataError
-    deriving stock (Show)
-
-instance Exception VersionFetchFailed
-
-{- Fold a single-version resolve run's carrier back to a 'Left', mirroring
-'foldManifestCarrier': a leader's parse\/policy failure is raised through the cache (which
-stores nothing and re-raises to followers) and recovered here; a transport fault is a
-different type and propagates to the serve path's bracket. -}
-foldVersionCarrier :: IO (Maybe PackageDetails) -> IO (Either MetadataError (Maybe PackageDetails))
-foldVersionCarrier resolve = do
-    outcome <- try resolve
-    pure $ case outcome of
-        Right details -> Right details
-        Left (VersionFetchFailed err) -> Left err
+-- Widen a cached entry back to the read handle's 'Manifest': the same three fields,
+-- named for the boundary each type serves (the cache stores, the handle answers).
+entryToManifest :: CacheEntry -> Manifest
+entryToManifest entry =
+    Manifest
+        { manifestInfo = entryInfo entry
+        , manifestRaw = entryRaw entry
+        , manifestDigest = entryDigest entry
+        }
 
 {- Record one upstream metadata fetch around the leader action: its latency on a
-successful resolve, or the bounded error cause otherwise, before re-raising so the
-caller's degrade is unchanged. Wrapping the leader -- which runs only on a cache miss --
-means the public path records real upstream calls, not cache hits. Value-agnostic, so it
-wraps either leg's leader (a full-manifest 'CacheEntry' or a single-version snapshot). -}
-recordedFetch :: MetricsPort -> Metric.Upstream -> IO a -> IO a
+successful resolve, or the bounded error cause otherwise. Wrapping the leader -- which
+runs only on a cache miss -- means the public path records real upstream calls, not
+cache hits. Value-agnostic in the payload, so it wraps either leg's leader (a
+full-manifest 'CacheEntry' or a single-version snapshot); the outcome passes through
+untouched, so the caller's degrade is unchanged. -}
+recordedFetch :: MetricsPort -> Metric.Upstream -> IO (Either MetadataError a) -> IO (Either MetadataError a)
 recordedFetch metrics upstream action = do
-    (result, seconds) <- timedSeconds (tryAny action)
+    (result, seconds) <- timedSeconds action
     case result of
-        Right entry -> do
-            mpUpstreamFetch metrics upstream Metric.Status2xx seconds
-            pure entry
-        Left err -> do
-            mpUpstreamFetchError metrics upstream (fetchCause err)
-            throwIO err
+        Right _ -> mpUpstreamFetch metrics upstream Metric.Status2xx seconds
+        Left err -> mpUpstreamFetchError metrics upstream (metadataErrorCause err)
+    pure result
 
 {- Classify a leader-fetch failure into the bounded @ecluse.upstream.fetch.errors@
-cause: a decode or name failure is a decode fault, a transport error a connection
-fault, a bound breach or anything else the catch-all other. Read off the typed
-'MetadataError' the carrier holds rather than any stringly error text, so the cause
-stays bounded by construction. -}
-fetchCause :: SomeException -> Metric.Cause
-fetchCause err
-    | Just (ManifestFetchFailed me) <- fromException err = metadataErrorCause me
-    | Just (VersionFetchFailed me) <- fromException err = metadataErrorCause me
-    | Just (_ :: HTTP.HttpException) <- fromException err = Metric.Connection
-    | otherwise = Metric.OtherCause
-
+cause: a decode or name failure is a decode fault, an unreachable upstream a
+connection fault, a bound breach or a config fault the catch-all other. Read off the
+typed 'MetadataError' rather than any stringly error text, so the cause stays bounded
+by construction. -}
 metadataErrorCause :: MetadataError -> Metric.Cause
 metadataErrorCause = \case
     MetadataUndecodable -> Metric.Decode
     MetadataNameMismatch _ -> Metric.Decode
     MetadataBoundExceeded _ -> Metric.OtherCause
     MetadataUrlUnformable _ -> Metric.OtherCause
+    MetadataUnreachable _ -> Metric.Connection

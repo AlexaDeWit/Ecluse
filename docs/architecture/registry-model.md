@@ -301,9 +301,8 @@ proxy logic and any specific registry protocol:
 
 ```haskell
 data RegistryClient = RegistryClient
-  { fetchMetadata    :: PackageName -> IO RegistryResponse
-  , fetchArtifact    :: PackageName -> Version -> IO RegistryResponse
-  , publishArtifact  :: PackageName -> Version -> ByteString -> IO (Either PublishError ())
+  { fetchMetadata    :: PackageName -> IO (Either FetchFault RegistryResponse)
+  , publishArtifact  :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
   , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
   , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
   , parseVersionList :: RegistryResponse -> Either ParseError [Version]
@@ -312,7 +311,10 @@ data RegistryClient = RegistryClient
 
 The effectful fields return plain `IO`, not `App`: an adapter closes over its own state (HTTP
 manager, credentials) and never imports the proxy's `Env`/`App`, so backends stay decoupled from the
-core. The `parse*` fields are pure. See
+core. Each reports its failures as a typed value (`FetchFault` on the read, `PublishFault` on the
+write; both carry a transport arm classified at the adapter edge), so no fetch or publish fault
+rides up as an exception and a caller's fall-through or retry-vs-drop decision is total at the call
+site. The `parse*` fields are pure. See
 [Technology Stack → the effect model](technology-stack.md#key-decisions). `parsePackageInfo` takes
 the route-requested `PackageName` as a validation input, so the adapter validates the upstream's
 self-reported name against it rather than trusting it (see

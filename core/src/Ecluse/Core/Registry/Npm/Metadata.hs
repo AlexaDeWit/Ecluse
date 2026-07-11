@@ -47,14 +47,16 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    RegistryResponse (responseBody),
+ )
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
     digestOf,
  )
 import Ecluse.Core.Registry.Npm (
-    FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     NpmClientConfig (npmBaseUrl, npmLimits),
     fetchMetadataFormBounded,
  )
@@ -92,10 +94,10 @@ why it could not.
 
 The body is read bounded against the config's response budget (so an oversized upstream
 is refused fail-closed before it is buffered whole); a breach surfaces as
-'MetadataBoundExceeded' and an unformable upstream URL as 'MetadataUrlUnformable', both
-threaded straight from the bounded fetch's 'FetchFault' value. A genuine transport fault
-is left to throw -- the serve path already brackets the unreachable-upstream case -- so
-this 'Either' carries the parse-and-policy outcomes the serve path renders distinctly.
+'MetadataBoundExceeded', an unformable upstream URL as 'MetadataUrlUnformable', and an
+unreachable upstream as 'MetadataUnreachable', each threaded straight from the bounded
+fetch's 'FetchFault' value. Total by type: this 'Either' carries every outcome the
+serve path renders, the transport channel included.
 
 The digest is computed here, over the strict body the bounded read already produced:
 the one place the wire bytes exist, so no later stage re-encodes the document just to
@@ -117,11 +119,13 @@ fetchNpmManifest tracing config name =
 
 -- Map the bounded fetch's 'FetchFault' onto the serve path's 'MetadataError': a
 -- response-bound breach is 'MetadataBoundExceeded', an unformable upstream URL is
--- 'MetadataUrlUnformable' (a config fault held distinct from a decode or an outage).
+-- 'MetadataUrlUnformable' (a config fault held distinct from a decode or an outage),
+-- and a transport fault is 'MetadataUnreachable' (the outage, kept transient).
 fetchFaultError :: FetchFault -> MetadataError
 fetchFaultError = \case
     FetchBoundExceeded err -> MetadataBoundExceeded err
     FetchUrlUnformable urlErr -> MetadataUrlUnformable urlErr
+    FetchTransport transport -> MetadataUnreachable transport
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
@@ -154,8 +158,8 @@ npm carries the @time@ map only in the full document, so the __full bytes are st
 fetched__ (bounded against the config's budget, exactly as 'fetchNpmManifest'); the win is
 that they are parsed __selectively__ ('projectNpmVersion'), materialising the one requested
 version rather than every version. A 'Nothing' is a version genuinely absent from a sound
-document (a forwarded miss); a 'MetadataError' is metadata that could not be obtained at all.
-A transport fault is left to throw, as 'fetchNpmManifest'.
+document (a forwarded miss); a 'MetadataError' is metadata that could not be obtained at
+all, an unreachable upstream included, exactly as 'fetchNpmManifest'.
 -}
 fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing config name version =

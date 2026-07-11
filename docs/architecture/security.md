@@ -79,11 +79,11 @@ not here.
    entry); it only widens the block, with no knob to narrow it.
 4. **Parsed upstream responses are bounded**, maximum body size, version count, and JSON
    nesting depth, and fail closed past any bound: an oversized or pathological document is
-   refused, never partially served. `Ecluse.Core.Registry.Npm.fetchMetadataForm` reads the
-   body through `Ecluse.Core.Security.boundedRead` at the `http-client` boundary (so a body
-   past the cap aborts before it is buffered whole), and
-   `Ecluse.Core.Server.Pipeline.fetchEntry` applies `checkNestingDepth` on the decoded
-   document and `checkVersionCount` after projection. Every breach degrades the
+   refused, never partially served. `Ecluse.Core.Registry.Npm.fetchMetadataFormBounded`
+   reads the body through `Ecluse.Core.Security.boundedRead` at the `http-client` boundary
+   (so a body past the cap is refused fail-closed, as a typed fault value, before it is
+   buffered whole), and `Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest` applies
+   `checkNestingDepth` on the decoded document and `checkVersionCount` after projection. Every breach degrades the
    contribution to nothing, the same fail-closed path a parse failure takes, logged at
    `WARNING` (which ceiling, observed-vs-cap) so it is distinguishable from a parse
    failure; the merge then serves the best-effort union of whatever resolved within budget.

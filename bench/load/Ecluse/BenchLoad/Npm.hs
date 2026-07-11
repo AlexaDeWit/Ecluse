@@ -594,7 +594,7 @@ succeedingPublishClient counter =
         { publishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , fetchMetadata = const (pure (RegistryResponse ""))
+        , fetchMetadata = const (pure (Right (RegistryResponse "")))
         , parseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
         }
 

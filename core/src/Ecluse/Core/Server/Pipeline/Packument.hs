@@ -123,7 +123,7 @@ import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest (manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUrlUnformable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
@@ -152,6 +152,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     logDenials,
     logNameMismatch,
     logUpstreamUnformable,
+    logUpstreamUnreachable,
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
@@ -402,11 +403,14 @@ originManifest = \case
     OriginNameMismatch -> Nothing
     OriginUnresolved -> Nothing
 
-{- Classify a per-origin full-manifest fetch into an 'OriginResult'. A genuine
-transport\/async fault (the 'tryAny' channel) and a 'MetadataError' degrade alike yield
-no document, but a 'MetadataNameMismatch' is kept distinct as 'OriginNameMismatch' so the
-no-valid-origin terminal status can render a @502@ (a responding upstream answered for a
-different package) apart from a transient outage, an undecodable body, or a bound breach. -}
+{- Classify a per-origin full-manifest fetch into an 'OriginResult'. Every fetch outcome
+-- an unreachable upstream included -- arrives typed in the 'MetadataError' channel and
+degrades to no contribution; a 'MetadataNameMismatch' is kept distinct as
+'OriginNameMismatch' so the no-valid-origin terminal status can render a @502@ (a
+responding upstream answered for a different package) apart from a transient outage, an
+undecodable body, or a bound breach. The 'tryAny' arm is the per-origin degrade boundary
+for an __invariant break only__ (the fetch is total by type): a handle that escapes its
+contract still costs one origin's contribution, never the whole merge. -}
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
     Left _ -> OriginUnresolved
@@ -516,14 +520,16 @@ withPublicMetadataClient rt deps baseUrl =
 logged: a response-bound breach names the ceiling crossed ('logBreach'); an undecodable
 body is the silent-guard decode log ('logDecodeFailure'); a self-reported /different/ name
 is the name-mismatch log ('logNameMismatch'); an unformable configured base URL is the
-config-fault log ('logUpstreamUnformable'). Invoked once per real fetch, inside the
-single-flight leader, in the request's context. -}
+config-fault log ('logUpstreamUnformable'); an unreachable origin is the outage log
+('logUpstreamUnreachable'). Invoked once per real fetch, inside the single-flight
+leader, in the request's context. -}
 logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
 logMetadataFailure name baseUrl = \case
     MetadataBoundExceeded err -> logBreach name err
     MetadataUndecodable -> logDecodeFailure name
     MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
     MetadataUrlUnformable urlErr -> logUpstreamUnformable name baseUrl urlErr
+    MetadataUnreachable fault -> logUpstreamUnreachable name baseUrl fault
 
 {- Log a response-bound breach at 'WarningS' before the contribution is degraded
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized

@@ -85,8 +85,9 @@ per-source breaker state is shared, never forked.
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
     {- ^ Resolve and project one version's metadata through the guarded public origin,
-    classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails'). Total:
-    a fetch failure is a 'VersionMetadataUnavailable' value, never an escaping exception.
+    classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails'). Total
+    by type: the fetch reports every failure -- transport included -- in its typed
+    channel, and each classifies as a 'VersionMetadataUnavailable' value.
     -}
     , wpRules :: [PreparedRule]
     {- ^ The prepared rule set evaluated against the resolved version under current policy
