@@ -82,8 +82,9 @@ module Ecluse.Runtime.Server (
 ) where
 
 import Data.List (dropWhileEnd)
+import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
 import Network.HTTP.Types (Method, Status, hConnection, hContentType, methodHead, status200, status404, status500, status501, status503)
-import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, requestMethod, responseLBS)
+import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
@@ -93,15 +94,19 @@ import System.IO (hIsTerminalDevice, isEOF)
 import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Async (withAsync)
+import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     RequestCtx (RequestCtx),
+    ServeRuntime (srMetrics),
     runHandler,
  )
+import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
 import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
 import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Server.Route (Route (..))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
@@ -143,6 +148,15 @@ data ServerConfig = ServerConfig
     absent advisory database only ever abstains into deny-by-default; this
     gates what a load balancer routes, not whether the process answers.
     -}
+    , scOnException :: Maybe Request -> SomeException -> IO ()
+    {- ^ @warp@'s exception hook, fired for a fault that escapes to the server
+    itself: a post-commit teardown the request perimeter rethrew, or a fault in
+    warp's own connection handling. The composition root wires it to the
+    process's structured logger (filtered through
+    'Warp.defaultShouldDisplayException', so routine client disconnects stay
+    quiet); the 'mkServerConfig' default is inert, so a bare config never
+    surprises a test with logging.
+    -}
     }
 
 {- | Build a 'ServerConfig' over the given mount bindings, taking the default
@@ -162,6 +176,7 @@ mkServerConfig mounts =
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
         , scCheckReady = pure True
+        , scOnException = \_ _ -> pass
         }
 
 -- | The conventional npm proxy listen port (4873), the 'mkServerConfig' default.
@@ -377,14 +392,49 @@ serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseRece
 serve env binding classified request respond =
     case classified of
         Packument name
-            | isHead -> run (headPackument name request respond)
-            | otherwise -> run (servePackument name request respond)
+            | isHead -> guardedServe (headPackument name request)
+            | otherwise -> guardedServe (servePackument name request)
         Tarball name version filename
-            | isHead -> run (headTarball name version filename request respond)
-            | otherwise -> run (serveTarball name version filename request respond)
-        Publish name -> run (servePublish name request respond)
+            | isHead -> guardedServe (headTarball name version filename request)
+            | otherwise -> guardedServe (serveTarball name version filename request)
+        Publish name -> guardedServe (servePublish name request)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
+    {- The typed request perimeter: run the effectful handler with a
+    commit-tracking respond, catching only __synchronous__ escapes (asynchronous
+    cancellation is not caught and tears the request down like any thread). The
+    handlers report every routine failure as a value, so what arrives here is an
+    escape from some dependency's typed contract. Pre-commit, it is classified
+    ('classifyEscape'), counted on the bounded @ecluse.serve.perimeter.faults@
+    metric, logged with its audit payload, and answered with the mount-shaped
+    neutral 500 -- no fault detail ever reaches the client. Post-commit there is
+    no second response to give: the escape rethrows, warp tears the connection
+    down, and the 'scOnException' hook logs it. -}
+    guardedServe handlerOn = do
+        committed <- newIORef False
+        let respondCommitted response = do
+                atomicWriteIORef committed True
+                respond response
+        run (handlerOn respondCommitted) `catchAny` \escape -> do
+            wasCommitted <- readIORef committed
+            if wasCommitted
+                then throwIO escape
+                else do
+                    let fault = classifyEscape escape
+                    mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
+                    run . katipAddContext (perimeterPayload fault) $
+                        logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
+                    respond (renderedError (bindingRenderer binding) status500 "internal server error")
+
+    -- The perimeter audit payload: the request path, the bounded classified
+    -- cause, and the rendered detail -- mirror fields of the denial audit line,
+    -- so an operator triages both surfaces with one vocabulary.
+    perimeterPayload fault =
+        sl "module" ("Ecluse.Runtime.Server" :: Text)
+            <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
+            <> sl "perimeterCause" (show (rqCause fault) :: Text)
+            <> sl "perimeterDetail" (rqDetail fault)
+
     -- Discharge a 'Handler' to 'IO' over the per-request context, establishing the
     -- @katip@ logging context the application owns: the composition root's 'LogEnv'
     -- (scribes) and the resolved trace-correlation @dd@ object as the initial context,
@@ -394,8 +444,11 @@ serve env binding classified request respond =
         dd <- ddPayloadNow (envDdContext env)
         runHandler (envLogEnv env) dd ctx action
 
+    runtime :: ServeRuntime
+    runtime = serveRuntimeOf env
+
     ctx :: RequestCtx
-    ctx = RequestCtx (serveRuntimeOf env) binding
+    ctx = RequestCtx runtime binding
 
     isHead :: Bool
     isHead = requestMethod request == methodHead
@@ -606,10 +659,15 @@ runWarp cfg0 getApp = do
             Warp.setPort (scPort cfg)
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
-                -- Defence-in-depth for a fault that escapes the handler pre-commit: a
-                -- neutral JSON 500 (no exception detail) rather than warp's default body.
-                -- Routing an escaped fault through the app's katip/audit channel is the
-                -- typed request perimeter's job, tracked separately.
+                -- The composition root's exception hook: post-commit teardowns the
+                -- request perimeter rethrew, and warp's own connection faults, reach
+                -- the structured logger rather than warp's stderr default.
+                . Warp.setOnException (scOnException cfg)
+                -- Defence-in-depth for a fault with no mount context (middleware,
+                -- warp itself): a neutral JSON 500 (no exception detail) rather than
+                -- warp's default body. A pre-commit handler escape never reaches
+                -- this -- the typed request perimeter ('serve') answers it first,
+                -- mount-shaped.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp

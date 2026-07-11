@@ -46,6 +46,7 @@ noopMetricsPort =
         , mpVersionCacheResidentBytes = const pass
         , mpAssembledCacheResidentBytes = const pass
         , mpMirrorEnqueued = pass
+        , mpRequestPerimeterFault = const pass
         , mpMirrorEnqueueFailure = pass
         }
 

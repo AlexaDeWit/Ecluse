@@ -63,7 +63,7 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (throwIO, try)
+import UnliftIO (try)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Fault.Http (classifyTransport)
@@ -74,10 +74,10 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (..),
     PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
+    PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable),
     PublishRelayResponse (..),
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
-    UrlFormationError,
  )
 
 import Ecluse.Core.Registry.Npm.Project qualified as Project
@@ -289,22 +289,29 @@ relayPublishDocument ::
     NpmClientConfig ->
     PackageName ->
     ByteString ->
-    IO (Either UrlFormationError PublishRelayResponse)
+    IO (Either PublishRelayFault PublishRelayResponse)
 relayPublishDocument config name document =
     case publishRequest (npmBaseUrl config) (npmToken config) name document of
-        Left urlErr -> pure (Left urlErr)
+        Left urlErr -> pure (Left (RelayUrlUnformable urlErr))
         Right request ->
-            withResponse request (npmManager config) $
-                fmap Right . readRelayResponse (npmLimits config)
+            -- The transport wrap covers the whole exchange, the bounded body
+            -- read included: the relay buffers the target's response before
+            -- anything is answered, so a mid-body reset is still a pre-commit
+            -- fault with a value representation.
+            try (withResponse request (npmManager config) (readRelayResponse (npmLimits config)))
+                <&> \case
+                    Left httpErr -> Left (RelayTransport (classifyTransport httpErr))
+                    Right relayed -> relayed
 
 {- Buffer the publication target's response to a relayed publish: the body read
-bounded against the budget, paired with the status the target answered. -}
-readRelayResponse :: Limits -> Response BodyReader -> IO PublishRelayResponse
+bounded against the budget (an overstep is the typed 'RelayBoundExceeded'),
+paired with the status the target answered. -}
+readRelayResponse :: Limits -> Response BodyReader -> IO (Either PublishRelayFault PublishRelayResponse)
 readRelayResponse limits response =
-    readBoundedBody limits (responseBody response) >>= \case
-        Left limitErr -> throwIO (ResponseBoundExceeded limitErr)
+    readBoundedBody limits (responseBody response) <&> \case
+        Left limitErr -> Left (RelayBoundExceeded limitErr)
         Right (RegistryResponse body) ->
-            pure
+            Right
                 PublishRelayResponse
                     { relayStatus = statusCode (responseStatus response)
                     , relayBody = LBS.fromStrict body

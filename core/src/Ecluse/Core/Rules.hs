@@ -95,6 +95,7 @@ import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffect
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Types
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (renderVersion)
 
 {- | The boot-bound capabilities a rule's evaluation may consult, injected once at
@@ -429,6 +430,12 @@ in boot order, and the moment the earliest decisive one is known every still-run
 strictly-later evaluation is cancelled. No IO an earlier decisive result would moot is
 ever launched, because a resilient run is started only once every rule before it is
 known non-decisive.
+
+__Never throws.__ An effectful rule's faults are absorbed by its resilience
+harness ('runEffectfulRule'); a direct rule that throws anyway -- an invariant
+break, since a direct rule declares no effects -- is absorbed here as a
+fail-closed 'Undecidable' naming the rule. Either way one request's evaluation
+resolves to a 'Decision', never a serve-path escape.
 -}
 evalRules :: EvalContext -> [PreparedRule] -> PackageDetails -> IO Decision
 evalRules ctx rules pd = step (bootOrder rules) []
@@ -441,10 +448,23 @@ evalRules ctx rules pd = step (bootOrder rules) []
         | isNothing (prepResilience r) = do
             -- A direct rule is zero-cost: run it in place. Reaching it means every
             -- earlier rule was non-decisive, so no speculated IO has been mooted.
-            res <- Decided <$> prepEval r ctx pd
-            case decisive (prepName r) res of
-                Just d -> pure d
-                Nothing -> step rs (reasonOf res : reasons)
+            evaluated <- tryAny (prepEval r ctx pd)
+            case evaluated of
+                Left escape ->
+                    -- A direct rule declares no effects, so a throw here is an
+                    -- invariant break -- absorbed fail-closed as 'Undecidable'
+                    -- (the retryable 503), symmetric with the effectful
+                    -- harness's fail-deny 'Unavailable', with the rule named in
+                    -- the reason the audit trail carries. Absorbing (rather
+                    -- than propagating) keeps the engine's totality claim
+                    -- constructive: no rule, however written, can turn one
+                    -- request's evaluation into a serve-path escape.
+                    pure (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
+                Right verdict -> do
+                    let res = Decided verdict
+                    case decisive (prepName r) res of
+                        Just d -> pure d
+                        Nothing -> step rs (reasonOf res : reasons)
         | otherwise =
             -- A maximal contiguous block of resilient rules: launch it concurrently
             -- and resolve it in boot order. Stopping the block at the next direct rule
