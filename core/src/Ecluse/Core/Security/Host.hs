@@ -133,16 +133,26 @@ isBlockedTarget additionalRanges host =
 set together with the caller-supplied @additionalRanges@.
 
 The single source of record for the internal-range decision, used by the literal
-block ('isBlockedTarget') on the @dist.tarball@ host gate. An
-IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) is first decoded to its embedded IPv4
-and tested against the IPv4 ranges: a mapped internal literal (e.g.
-@::ffff:169.254.169.254@) is a recognised SSRF smuggling form, so it must be
-caught by the IPv4 block rather than slip through as an unrelated IPv6 address.
+block ('isBlockedTarget') on the @dist.tarball@ host gate. An IPv6 address that
+embeds an IPv4 address is first decoded to that embedded IPv4 and tested against
+the IPv4 ranges: an embedded internal literal (e.g. @::ffff:169.254.169.254@, or
+its NAT64 spelling @64:ff9b::a9fe:a9fe@) is a recognised SSRF smuggling form, so
+it must be caught by the IPv4 block rather than slip through as an unrelated
+IPv6 address.
+
+The decoded embeddings are exactly the fixed-prefix forms: IPv4-mapped
+@::ffff:a.b.c.d@ and IPv4-compatible @::a.b.c.d@ (RFC 4291), the NAT64
+well-known prefix @64:ff9b::\/96@ (RFC 6052), and the NAT64 local-use prefix
+@64:ff9b:1::\/48@ (RFC 8215). An RFC 6052 network-specific translation prefix
+cannot be enumerated here: it is operator-chosen from the operator's own unicast
+space, so nothing in the address marks it as an embedding. An operator whose
+fabric translates under such a prefix extends the block with @additionalRanges@
+(@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) instead.
 -}
 isBlockedIP :: [IPRange] -> IP -> Bool
 isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
   where
-    decoded = decodeMappedV4 ip
+    decoded = decodeEmbeddedV4 ip
     matches = \case
         IPv4Range r -> case decoded of
             IPv4 a -> a `isMatchedTo` r
@@ -193,9 +203,9 @@ parseBlockedRange = readMaybe . toString
 
 {- Convert a recognised literal to an @iproute@ 'IP' for the membership test.
 The four IPv4 octets become an 'IPv4', and the eight 16-bit groups an 'IPv6'. The
-IPv4-mapped decode is left to 'isBlockedIP' ('decodeMappedV4'), so a mapped
-literal is carried here as the IPv6 it textually is and decoded only at the point
-of the range test.
+embedded-IPv4 decode is left to 'isBlockedIP' ('decodeEmbeddedV4'), so an
+embedding literal is carried here as the IPv6 it textually is and decoded only at
+the point of the range test.
 -}
 ipAddrToIP :: IpAddr -> IP
 ipAddrToIP = \case
@@ -221,20 +231,28 @@ canonicalHostKey host = case parseIpLiteral host of
     Just addr -> show (ipAddrToIP addr)
     Nothing -> T.toLower host
 
-{- Decode an IPv4-mapped (@::ffff:a.b.c.d@) or IPv4-compatible (@::a.b.c.d@)
-IPv6 address to its embedded IPv4, so it is tested against the IPv4 ranges;
-any other address is returned unchanged. Over the sixteen octets 'fromIPv6b'
-yields, the mapped form is ten zeros then @ff ff@, and the compatible form
-is twelve zeros. Testing an embedded internal literal against the IPv6 ranges
-instead would let @::169.254.169.254@ through, so the decode is load-bearing
-for the SSRF block.
+{- Decode an IPv6 address carrying one of the fixed-prefix IPv4 embeddings
+'isBlockedIP' documents to its embedded IPv4 (the low 32 bits), so it is tested
+against the IPv4 ranges; any other address is returned unchanged. Over the
+sixteen octets 'fromIPv6b' yields: the IPv4-mapped form is ten zeros then
+@ff ff@, the IPv4-compatible form is twelve zeros, the NAT64 well-known prefix
+is @00 64 ff 9b@ then eight zeros, and the RFC 8215 local-use prefix is
+@00 64 ff 9b 00 01@ with the middle six octets unconstrained (every \/96 within
+the \/48 embeds in the low 32 bits). Testing an embedded internal literal
+against the IPv6 ranges instead would let @::169.254.169.254@ or
+@64:ff9b::a9fe:a9fe@ through (no embedding prefix falls in a blocked IPv6
+range), so the decode is load-bearing for the SSRF block.
 -}
-decodeMappedV4 :: IP -> IP
-decodeMappedV4 = \case
+decodeEmbeddedV4 :: IP -> IP
+decodeEmbeddedV4 = \case
     IPv6 v6 -> case fromIPv6b v6 of
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, a, b, c, d] ->
             IPv4 (toIPv4 [a, b, c, d])
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, a, b, c, d] ->
+            IPv4 (toIPv4 [a, b, c, d])
+        [0x00, 0x64, 0xFF, 0x9B, 0, 0, 0, 0, 0, 0, 0, 0, a, b, c, d] ->
+            IPv4 (toIPv4 [a, b, c, d])
+        [0x00, 0x64, 0xFF, 0x9B, 0x00, 0x01, _, _, _, _, _, _, a, b, c, d] ->
             IPv4 (toIPv4 [a, b, c, d])
         _ -> IPv6 v6
     ip -> ip
