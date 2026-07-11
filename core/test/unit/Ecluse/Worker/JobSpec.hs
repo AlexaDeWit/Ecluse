@@ -5,6 +5,7 @@ import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Test.Hspec
 
 import Ecluse.Core.Package (
+    Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
 import Ecluse.Core.Queue (
@@ -189,6 +190,61 @@ spec = do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
                 outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job whose artifact host the current tarball-host policy refuses (payload re-gated)" $
+            -- The queue payload is a trust boundary: the host gate the serve path
+            -- applied before its public fetch is re-established at ingest, so a URL
+            -- injected or no-longer-honoured since enqueue is refused before any fetch.
+            withRuntimePolicies (withHostGate (const False) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job whose artifact's current digests fall below the integrity floor" $
+            -- Admission-policy drift toward refuse: the upstream now serves only a
+            -- legacy SHA-1 for the file. The serve gate would 403 it below the floor;
+            -- the shared oracle refuses it at ingest identically, so a
+            -- no-longer-admissible artifact is never frozen into the rule-exempt mirror.
+            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = [unsafeHash SHA1 trueSha1]}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job whose version no longer carries any integrity digest" $
+            -- The stripped-digest degrade: current metadata offers nothing to tie the
+            -- bytes to. The serve gate 403s it as MissingIntegrity; the worker drops it.
+            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = []}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job whose admitted artifact file the current metadata no longer carries" $
+            -- The withdrawn-file degrade: the version survives upstream but its file
+            -- set no longer names the admitted artifact. A forwarded miss on the serve
+            -- path; a non-retryable drop here (redelivery cannot restore the file).
+            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artFilename = "renamed-9.9.9.tgz"}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "retries a job when a fail-closed rule cannot be computed (undecidable), without publishing" $
+            -- The advisory-outage degrade: the serve path renders the same cause a
+            -- transient 503; the worker leaves the job for redelivery rather than
+            -- dropping a serviceable job or publishing it unvetted.
+            withRuntimePolicies (npmPolicies presentResolver [cannotVetRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 

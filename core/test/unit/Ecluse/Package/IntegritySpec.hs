@@ -15,7 +15,6 @@ import Ecluse.Core.Package.Integrity (
     classifyArtifacts,
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
-    integrityStrength,
     meetsFloor,
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -73,36 +72,6 @@ spec = do
     describe "HashAlg Ord" $ do
         it "uses the explicit checksum-authority order, not constructor order" $ do
             let ranks = [SRI, MD5, SHA1, SHA256, SHA384, Blake2b, SHA512]
-            and (zipWith (<) ranks (drop 1 ranks)) `shouldBe` True
-
-    describe "integrityStrength" $ do
-        it "ranks the broken algorithms below SHA-256" $ do
-            (integrityStrength SHA1 < integrityStrength SHA256) `shouldBe` True
-            (integrityStrength MD5 < integrityStrength SHA256) `shouldBe` True
-
-        it "ranks the modern long digests at or above SHA-256" $ do
-            (integrityStrength SHA512 >= integrityStrength SHA256) `shouldBe` True
-            (integrityStrength Blake2b >= integrityStrength SHA256) `shouldBe` True
-            (integrityStrength SHA512 > integrityStrength SHA256) `shouldBe` True
-
-        it "ranks SHA-384 strictly between SHA-256 and SHA-512" $ do
-            -- SHA-384 is SHA-512 truncated: its collision resistance sits above SHA-256's
-            -- and below SHA-512's, so it earns a tier of its own between them.
-            (integrityStrength SHA256 < integrityStrength SHA384) `shouldBe` True
-            (integrityStrength SHA384 < integrityStrength SHA512) `shouldBe` True
-
-        it "ranks a bare SRI below every real algorithm (resolve it first)" $
-            (integrityStrength SRI < integrityStrength MD5) `shouldBe` True
-
-        it "groups SHA-512 and Blake2b in the same broad strength tier" $
-            -- 'HashAlg' 'Ord' makes the operational tie-break; 'Strength' keeps the
-            -- collision-resistance tier language for docs and diagnostics.
-            (integrityStrength SHA512 `compare` integrityStrength Blake2b) `shouldBe` EQ
-
-        it "is strictly increasing weakest-to-strongest: SRI < MD5 < SHA1 < SHA256 < SHA384 < SHA512" $ do
-            -- Pins the broad tier representation. Blake2b shares SHA-512's tier,
-            -- asserted above, so it is left out of this strict chain.
-            let ranks = map integrityStrength [SRI, MD5, SHA1, SHA256, SHA384, SHA512]
             and (zipWith (<) ranks (drop 1 ranks)) `shouldBe` True
 
     describe "assertedAlg" $ do

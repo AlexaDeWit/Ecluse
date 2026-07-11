@@ -57,6 +57,7 @@ module Ecluse.Core.Package (
     hashAlg,
     hashValue,
     mkHash,
+    mkSriHashes,
     HashAlg (..),
 
     -- * Algorithm vocabulary
@@ -280,8 +281,11 @@ data HashAlg
     | SHA512
     | MD5
     | Blake2b
-    | {- | A Subresource-Integrity string (npm @dist.integrity@), e.g.
-      @"sha512-…"@, carried whole.
+    | {- | A single Subresource-Integrity component (npm @dist.integrity@), e.g.
+      @"sha512-…"@. Exactly one @\<alg\>-\<base64\>@ component per 'Hash': a wire
+      string that joins several with whitespace is split into one 'Hash' per
+      component by 'mkSriHashes', so every reader resolves the same algorithm and
+      digest body from 'hashValue'.
       -}
       SRI
     deriving stock (Bounded, Enum, Eq, Show)
@@ -311,7 +315,7 @@ data Hash = Hash
     -- ^ The algorithm the digest was computed with.
     , hashValue :: Text
     {- ^ The digest itself, in the algorithm's wire encoding (e.g. hex, or the
-    whole @sha512-…@ string for 'SRI').
+    single @sha512-…@ component for 'SRI').
     -}
     }
     deriving stock (Eq, Show)
@@ -328,10 +332,12 @@ fine; whether it clears the public-integrity floor is the separate decision of
 "Ecluse.Core.Package.Integrity". 'mkHash' rejects a malformed digest, never a merely weak one.
 
 A hex-tagged algorithm (everything but 'SRI') takes lower- or upper-case hex of the
-algorithm's digest length. An 'SRI' takes one or more whitespace-separated
-@\<alg\>-\<base64\>@ components, each naming a Subresource-Integrity algorithm
-(@sha256@, @sha384@, @sha512@) whose base64 body decodes to that algorithm's digest
-length; every component must be well-formed.
+algorithm's digest length. An 'SRI' takes __exactly one__ @\<alg\>-\<base64\>@
+component, naming a Subresource-Integrity algorithm (@sha256@, @sha384@, @sha512@)
+whose base64 body decodes to that algorithm's digest length. A wire string that
+joins several components with whitespace is malformed /here/: split it with
+'mkSriHashes', which yields one 'Hash' per component, so no reader ever has to
+decide which component of a joined string a 'Hash' means.
 
 >>> import Ecluse.Core.Package (HashAlg (SHA1))
 >>> fmap hashAlg (mkHash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0")
@@ -344,6 +350,29 @@ mkHash :: HashAlg -> Text -> Either Text Hash
 mkHash alg value
     | wellFormed alg value = Right (Hash alg value)
     | otherwise = Left ("malformed " <> renderHashAlg alg <> " digest")
+
+{- | Split a Subresource-Integrity __wire string__ -- one or more
+whitespace-separated @\<alg\>-\<base64\>@ components (npm's @dist.integrity@) --
+into one 'SRI' 'Hash' per component, each built through the validating 'mkHash'.
+The whole string is rejected when it carries no component or /any/ component is
+malformed, so a partially-valid value never yields a partial digest set.
+
+This is the one intended path from wire data to 'SRI' hashes. Because each
+resulting 'Hash' holds exactly one component, the admission floor, the worker's
+tamper gate, and the divergence fingerprint all resolve the same algorithm and
+digest body from it -- there is no joined string left for two consumers to read
+two different ways.
+
+>>> fmap length (mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
+Right 2
+
+>>> mkSriHashes "  "
+Left "malformed sri digest"
+-}
+mkSriHashes :: Text -> Either Text (NonEmpty Hash)
+mkSriHashes wire = case nonEmpty (T.words wire) of
+    Nothing -> Left "malformed sri digest"
+    Just comps -> traverse (mkHash SRI) comps
 
 -- Whether a digest string is a well-formed digest of the given algorithm.
 wellFormed :: HashAlg -> Text -> Bool
@@ -411,14 +440,18 @@ False
 isComputable :: HashAlg -> Bool
 isComputable = isJust . computeDigest
 
-{- A Subresource-Integrity string is one or more whitespace-separated
-@\<alg\>-\<base64\>@ components (npm's @dist.integrity@ is usually one); every
-component must be well-formed, and there must be at least one.
+{- An 'SRI' 'Hash' carries exactly one canonical @\<alg\>-\<base64\>@ component: no
+surrounding whitespace (the first-dash accessors 'sriPrefix'\/'sriBody' read the
+stored value verbatim, so a padded value would corrupt both) and never a
+whitespace-joined set (that is the wire shape 'mkSriHashes' splits, one 'Hash' per
+component). The single-component invariant is what lets every consumer -- the
+admission floor, the worker's tamper gate, the divergence fingerprint -- resolve
+the same algorithm and digest body from one 'Hash'.
 -}
 wellFormedSri :: Text -> Bool
 wellFormedSri t = case T.words t of
-    [] -> False
-    comps -> all wellFormedSriComponent comps
+    [comp] -> comp == t && wellFormedSriComponent comp
+    _ -> False
 
 wellFormedSriComponent :: Text -> Bool
 wellFormedSriComponent comp

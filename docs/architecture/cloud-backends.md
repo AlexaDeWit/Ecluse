@@ -24,10 +24,13 @@ jobs, and for each one:
    the probe retires each duplicate for one metadata round trip instead of a full
    download and no-op publish (positive confirmation only: a probe that cannot tell
    falls through to the full pipeline),
-2. **re-evaluates current policy** through the same rules and single-version fetch the
-   serve path uses, so a version denied since its serve-time admit (a new denylist
-   entry, a fresh advisory, a rule change) is dropped rather than frozen into the
-   rule-exempt mirror,
+2. **re-evaluates current policy** through the same shared admission gate the serve
+   path runs (`Ecluse.Core.Package.Admission`: the rules, artifact selection by the
+   job's filename, and the public-integrity floor, over the same single-version
+   fetch), and re-checks the job's fetch URL against the mount's tarball-host gate,
+   so a version refused since its serve-time admit (a new denylist entry, a fresh
+   advisory, a rule change, a raised floor, a withdrawn file, a no-longer-honoured
+   host) is dropped rather than frozen into the rule-exempt mirror,
 3. fetches the artifact from the public upstream,
 4. **verifies its bytes against the version's integrity hash** (npm `dist.integrity`),
    and

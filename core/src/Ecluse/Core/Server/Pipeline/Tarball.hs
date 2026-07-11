@@ -88,12 +88,19 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
-    PackageDetails (pkgArtifacts),
+    PackageDetails,
     PackageName,
  )
-import Ecluse.Core.Package.Integrity (
-    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
-    classifyArtifacts,
+import Ecluse.Core.Package.Admission (
+    ArtifactAdmission (
+        AdmissionAdmit,
+        AdmissionBelowFloor,
+        AdmissionDenied,
+        AdmissionFileAbsent,
+        AdmissionIntegrityMissing,
+        AdmissionUndecidable
+    ),
+    admitArtifact,
  )
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -104,13 +111,10 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
-import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
+import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
     hostAddress,
-    tarballHostAllowed,
-    thgAllowlist,
     thgPrivateHost,
     thgPublicHost,
  )
@@ -123,6 +127,7 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
+    tarballHostHonoured,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -417,7 +422,7 @@ version is decided by the rules, where a needed effectful rule that cannot be co
 fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Maybe DbEtag -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file advisoryEtag = do
-    evalCtx <- liftIO (EvalContext <$> pdNow deps <*> pure advisoryEtag)
+    evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
     eval <-
         withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
             liftIO (fetchVersionDetails client name version)
@@ -443,32 +448,28 @@ gateVerdict = \case
     Admitted _ -> Admit
     Refused decision -> decision
 
-{- Project a single version's rule decision to a gate outcome, selecting the
-artifact by filename on an admit. A denied version is 'Refused' with its decision; an
+{- Gate one requested artifact of one public version through the shared admission
+gate ('Ecluse.Core.Package.Admission.admitArtifact', which the worker's ingest
+re-evaluation also runs), projecting the shared 'ArtifactAdmission' onto the serve
+surface: a denied or undecidable version carries its rule decision through
+'serveDecisionOf' (a @403@, or a fail-closed @503@\/@500@ by transience); an
 admitted version whose requested filename matches no artifact is a forwarded miss
-('versionAbsent', rendered @404@).
-
-The __integrity-floor admission policy__ is enforced here, after the rules admit and
-the artifact is selected: a public version whose selected artifact carries no digest
-meeting the floor ('pdMinIntegrity') is inadmissible -- 'integrityMissing' (no digest at
-all) or 'integrityBelowFloor' (a digest, but too weak), both rendered @403@ -- and
-refused outright, never fetched. This is the public path; the trusted (private) artifact
-serve is a conventional stable read in 'streamPrivateArtifact' that applies no serve-time
-integrity floor, so it never reaches this gate. -}
+('versionAbsent', rendered @404@); an artifact refused by the integrity-floor policy
+('pdMinIntegrity') is 'integrityMissing' (no digest at all) or 'integrityBelowFloor'
+(a digest, but too weak), both rendered @403@ and never fetched. This is the public
+path; the trusted (private) artifact serve is a conventional stable read in
+'streamPrivateArtifact' that applies no serve-time integrity floor, so it never
+reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details = do
-    decision <- serveDecisionOf details <$> evalRules ctx (pdRules deps) details
-    pure $ case decision of
-        Admit -> maybe (Refused versionAbsent) admitWithIntegrity (artifactFor file details)
-        Reject _ -> Refused decision
-  where
-    -- A rule-admitted artifact is served only if it carries a digest meeting the floor;
-    -- a weaker-than-floor or hashless one is refused by the integrity-floor policy.
-    admitWithIntegrity :: Artifact -> PublicArtifactGate
-    admitWithIntegrity artifact = case classifyArtifacts (pdMinIntegrity deps) (artifact :| []) of
-        MeetsFloor -> Admitted artifact
-        BelowFloor -> Refused integrityBelowFloor
-        NoIntegrity -> Refused integrityMissing
+    admission <- admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
+    pure $ case admission of
+        AdmissionAdmit artifact -> Admitted artifact
+        AdmissionDenied decision -> Refused (serveDecisionOf details decision)
+        AdmissionUndecidable decision -> Refused (serveDecisionOf details decision)
+        AdmissionFileAbsent -> Refused versionAbsent
+        AdmissionBelowFloor -> Refused integrityBelowFloor
+        AdmissionIntegrityMissing -> Refused integrityMissing
 
 -- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
 upstreamUnavailable :: ServeDecision
@@ -600,15 +601,21 @@ what the rules cleared (immune to an upstream packument mutated in the
 enqueue → process window) and can assemble the publish document without re-fetching.
 The artifact reached this point through the integrity-presence admission policy, so
 'artHashes' is non-empty; a hashless artifact (which that policy already refuses to
-serve) is not enqueued, since there would be no digest to verify against. -}
+serve) is not enqueued, since there would be no digest to verify against. The
+artifact URL travels as the validated egress witness ('pdEgressUrl'): the projection
+already normalised it to https, so a witness that will not form is unreachable in
+production and fails the best-effort enqueue closed (counted, never served-blocking). -}
 enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
 enqueueMirror rt deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $
-            enqueueJob hashes
+        case pdEgressUrl deps (artUrl artifact) of
+            Left _ -> mpMirrorEnqueueFailure (srMetrics rt)
+            Right egressUrl ->
+                void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $
+                    enqueueJob egressUrl hashes
   where
-    enqueueJob hashes traceContext = do
-        enqueued <- tryAny (enqueue (srQueue rt) (mirrorJob hashes traceContext))
+    enqueueJob egressUrl hashes traceContext = do
+        enqueued <- tryAny (enqueue (srQueue rt) (mirrorJob egressUrl hashes traceContext))
         -- Best-effort: the hand-off outcome is counted but never propagated, so
         -- a refused hand-off records a failure rather than failing or delaying
         -- the serve. (Drops and backend delivery failures behind the buffered
@@ -618,11 +625,11 @@ enqueueMirror rt deps name version artifact =
         -- errored on the producer span (the metric counts it; the span explains it).
         pure enqueued
 
-    mirrorJob hashes traceContext =
+    mirrorJob egressUrl hashes traceContext =
         MirrorJob
             { jobPackage = name
             , jobVersion = version
-            , jobArtifactUrl = artUrl artifact
+            , jobArtifactUrl = egressUrl
             , jobMirrorTarget = pdMirrorTarget deps
             , jobArtifact =
                 MirrorArtifact
@@ -643,45 +650,6 @@ enqueueMirror rt deps name version artifact =
 
     enqueueFailureDetail :: SomeException -> Text
     enqueueFailureDetail e = "mirror enqueue failed: " <> displayExceptionT e
-
-{- Whether an artifact's @dist.tarball@ host may be fetched, given the origin's trust,
-the mount's tarball-host policy, and the host that served the packument it came from.
-Connects the pure 'tarballHostAllowed' at the serve boundary: the tarball host must be on
-the upstream allowlist and -- under the secure-default
-'Ecluse.Core.Security.SameHostAsPackument' -- equal to the packument host; the opt-in
-'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
-This is the policy half of the @dist.tarball@ defence; the egress itself is https-only
-with certificate validation authenticating the host (see "Ecluse.Core.Security.Egress").
-
-The @packumentHost@ and @artifactHost@ are bare hosts, __already extracted__: the
-mount-constant ones (the upstream allowlist and the private\/public hosts) are precomputed
-once at the composition root into the 'Ecluse.Core.Security.TarballHostGate' carried on
-'pdTarballHostGate', so the hot path parses no base URL and rebuilds no allowlist per
-request; only the dynamic public @dist.tarball@ host is parsed at the call site.
-
-The literal internal-range block is __origin-aware__: an
-'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
-range set plus the operator-configured @additionalBlockedRanges@, while an
-'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is exempt,
-since a private registry may legitimately live on an internal address (security.md
-invariant 3). The allowlist and same-host clauses still gate the trusted origin
-identically. -}
-tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
-tarballHostHonoured origin deps =
-    tarballHostAllowed
-        origin
-        (pdTarballHostPolicy deps)
-        (thgAllowlist (pdTarballHostGate deps))
-        (pdAdditionalBlockedRanges deps)
-
-{- Select the artifact a request's filename names from a version's distribution
-files. npm has exactly one artifact per version, so the match is the single file; a
-many-per-version ecosystem (PyPI) would select the wheel\/sdist whose filename the
-client requested. 'Nothing' when no artifact carries the requested filename -- a
-forwarded miss, never a fabricated location. -}
-artifactFor :: Text -> PackageDetails -> Maybe Artifact
-artifactFor file details =
-    find ((== file) . artFilename) (pkgArtifacts details)
 
 {- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
 a cross-host @dist.tarball@ under the secure-default 'Ecluse.Core.Security.SameHostAsPackument',

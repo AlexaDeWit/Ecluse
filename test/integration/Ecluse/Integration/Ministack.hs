@@ -43,6 +43,7 @@ import UnliftIO.Exception (try)
 import System.Environment (setEnv)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 import Ecluse.Test.Containers (testContainerLabels)
 
@@ -130,7 +131,10 @@ up the instant the port opens, so the @CreateQueue@ call is retried.
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
     queueUrl <- freshQueueUrl container queueName
+    -- The wire decode's egress former: the loopback dev former, since these
+    -- suites' artifact URLs point at in-process http servers.
     newSqsQueue
+        (Right . loopbackRegistryUrl)
         (defaultSqsConfig queueUrl "us-east-1")
             { sqsEndpoint = Just (endpointFor container)
             , sqsWaitSeconds = qoWaitSeconds options

@@ -54,6 +54,8 @@ import Ecluse.Core.Rules.Types (
     atDefaultPrecedence,
  )
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -628,6 +630,9 @@ deps privatePort publicPort inbound = do
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
             , pdAssemble = assembleMergedPackument
+            , -- The loopback egress former: these suites enqueue jobs whose artifact
+              -- URLs point at in-process http servers.
+              pdEgressUrl = Right . loopbackRegistryUrl
             }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful prepared
@@ -1030,7 +1035,7 @@ conditionalArtifactUpstream version tarballBody = do
 -- the four coordinates the job carries (package, version, public artifact URL,
 -- mirror target).
 jobShape :: MirrorJob -> (PackageName, Version, Text, Text)
-jobShape job = (jobPackage job, jobVersion job, jobArtifactUrl job, jobMirrorTarget job)
+jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), jobMirrorTarget job)
 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do

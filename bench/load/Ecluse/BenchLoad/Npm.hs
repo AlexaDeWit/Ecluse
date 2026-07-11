@@ -130,6 +130,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -464,6 +465,7 @@ npmDeps privatePort publicPort = do
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
             , pdAssemble = assembleMergedPackument
+            , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
 -- The npm mount binding: the shared npm classifier, renderer, and /npm prefix, carrying
@@ -566,7 +568,7 @@ mirrorJob url hashes size =
     MirrorJob
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
-        , jobArtifactUrl = url
+        , jobArtifactUrl = loopbackRegistryUrl url
         , jobMirrorTarget = "https://mirror.bench/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
         , jobArtifact =
             MirrorArtifact

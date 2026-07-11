@@ -27,7 +27,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
 import Ecluse.Core.Queue
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (unsafeHash, validSha1)
+import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
 
 {- | A sample mirror job. The in-memory queue under test does not inspect a
 job's contents -- it only carries it from 'enqueue' to 'receive' -- so one fixed
@@ -38,7 +38,7 @@ sampleJob =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "thing"
         , jobVersion = mkVersion Npm "1.0.0"
-        , jobArtifactUrl = "https://public.test/thing/-/thing-1.0.0.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         , jobArtifact =
             MirrorArtifact

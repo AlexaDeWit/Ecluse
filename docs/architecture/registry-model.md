@@ -141,8 +141,9 @@ order-independent; only the positional labels track input order.
   [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)) before entering. The
   merged packument is deliberately mixed-provenance: `trusted(private) ∪ filtered(public)`.
 - **Collision → private wins; divergence is a signal.** On a shared version key the private copy
-  wins. But if the public copy contradicts the private one on a shared integrity algorithm (one
-  both carry, whose digests disagree), that is the supply-chain tampering Écluse exists to catch
+  wins. But if the public copy contradicts the private one on a shared artifact's shared
+  integrity algorithm (a file both carry, under an algorithm both assert for it, whose digests
+  disagree), that is the supply-chain tampering Écluse exists to catch
   ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged (a
   `WARNING` naming the package, the contradicting versions, and their digests) and metered
   (`ecluse.registry.merge.divergence`), never silently reconciled. Whether the contested version is
@@ -152,8 +153,9 @@ order-independent; only the positional labels track input order.
   it). The algorithm compared
   is the one each digest asserts (an SRI is resolved to its embedded algorithm, not bucketed under
   an opaque `SRI` tag), so the same algorithm as hex or SRI is cross-checked together. An asymmetric
-  set (one upstream carrying a digest the other omits, no disagreement on any shared algorithm)
-  describes the same bytes and is not a divergence.
+  set is not a divergence: one upstream carrying a digest the other omits, or a file the other
+  does not serve (a multi-artifact ecosystem's mirror holding fewer files than the index),
+  describes the same bytes with no disagreement on any shared key.
 - **Below-floor versions are inadmissible (at admission, not merge).** A version whose strongest
   digest is too weak or absent is a divergence blind spot (two differing-byte copies can
   fingerprint-collide). Écluse refuses it before the merge: the served listing drops it in both

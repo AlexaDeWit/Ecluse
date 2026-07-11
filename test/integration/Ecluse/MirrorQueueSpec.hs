@@ -19,7 +19,7 @@ import Ecluse.Integration.Ministack (
     receiveUntil,
     withMinistack,
  )
-import Ecluse.Test.Package (unsafeHash, validSha1)
+import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
 
 {- | Integration tests exercise the SQS 'MirrorQueue' backend against a real
 endpoint provided by a @ministack@ container (launched via @testcontainers@, shared
@@ -73,7 +73,7 @@ sampleJob =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
-        , jobArtifactUrl = "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
         , jobMirrorTarget = "https://mirror.example/left-pad/-/left-pad-1.3.0.tgz"
         , jobArtifact =
             MirrorArtifact

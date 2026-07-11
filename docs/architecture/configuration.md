@@ -179,8 +179,9 @@ the [Operator Manual](../../USAGE.md#environment-variables) for supported values
 
 ### Cross-upstream divergence policy
 
-When a shared version's private and public copies contradict on a shared integrity algorithm
-(one both carry, whose digests disagree), that is the supply-chain tampering Écluse exists to
+When a shared version's private and public copies contradict on a shared artifact's shared
+integrity algorithm (a file both carry, under an algorithm both assert for it, whose digests
+disagree), that is the supply-chain tampering Écluse exists to
 catch ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11); see
 [Packument merge](registry-model.md#packument-merge-across-upstreams)). The trusted copy always
 wins the bytes, and the divergence is always logged (a `WARNING`) and metered

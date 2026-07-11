@@ -16,7 +16,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
 import Ecluse.Runtime.Server (scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
-import Ecluse.Test.Package (unsafeHash, validSha1)
+import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if
@@ -75,7 +75,7 @@ sampleJob =
     MirrorJob
         { jobPackage = pkg
         , jobVersion = ver
-        , jobArtifactUrl = "https://public.test/thing/-/thing-1.0.0.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         , jobArtifact =
             MirrorArtifact

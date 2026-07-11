@@ -56,6 +56,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -208,6 +209,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
                 , pdAssemble = assembleMergedPackument
+                , pdEgressUrl = Right . loopbackRegistryUrl
                 }
         binding =
             MountBinding

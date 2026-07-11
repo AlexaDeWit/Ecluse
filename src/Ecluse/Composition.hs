@@ -112,7 +112,7 @@ import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defa
 
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, splitHostPort, tarballHostGate)
-import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Metadata qualified as Metadata
@@ -747,6 +747,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                 , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s
                 , pdAssemble = NpmFilter.assembleMergedPackument
+                , pdEgressUrl = mkRegistryUrl
                 }
 
 -- The resolved tarball-host policy of a mount, from the secure-default

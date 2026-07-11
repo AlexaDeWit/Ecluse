@@ -6,6 +6,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkPackageName, mkScope)
 import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), RemoteSpanContext (..), Seconds (..))
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Queue.Sqs (
     SqsConfig (..),
@@ -16,10 +17,12 @@ import Ecluse.Runtime.Queue.Sqs (
  )
 import Ecluse.Test.Package (
     unsafeHash,
+    unsafeRegistryUrl,
     validBlake2b,
     validMd5,
     validSha1,
     validSha256,
+    validSha256Sri,
     validSha384Hex,
     validSha512Hex,
     validSha512Sri,
@@ -33,7 +36,7 @@ npmJob =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "lodash"
         , jobVersion = mkVersion Npm "4.17.21"
-        , jobArtifactUrl = "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
         , jobMirrorTarget = "https://mirror.example/lodash/-/lodash-4.17.21.tgz"
         , jobArtifact =
             MirrorArtifact
@@ -57,7 +60,7 @@ scopedJob =
     MirrorJob
         { jobPackage = mkPackageName Npm (Just (mkScope "babel")) "core"
         , jobVersion = mkVersion Npm "7.24.0"
-        , jobArtifactUrl = "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
         , jobMirrorTarget = "https://mirror.example/@babel/core/-/core-7.24.0.tgz"
         , jobArtifact =
             MirrorArtifact
@@ -75,7 +78,7 @@ pypiJob =
     MirrorJob
         { jobPackage = mkPackageName PyPI Nothing "Flask"
         , jobVersion = mkVersion PyPI "3.0.2"
-        , jobArtifactUrl = "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
         , jobMirrorTarget = "https://mirror.example/flask-3.0.2.tar.gz"
         , jobArtifact =
             MirrorArtifact
@@ -93,7 +96,7 @@ shape the optional-carrier decode must accept (decoding it to a 'Nothing' carrie
 legacyNoTraceContextBody :: Text
 legacyNoTraceContextBody =
     "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"left-pad\",\
-    \\"version\":\"1.3.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+    \\"version\":\"1.3.0\",\"artifactUrl\":\"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\",\"mirrorTarget\":\"m\",\
     \\"artifact\":{\"filename\":\"left-pad-1.3.0.tgz\",\
     \\"hashes\":[{\"alg\":\"sha1\",\"value\":\""
         <> validSha1
@@ -103,18 +106,18 @@ spec :: Spec
 spec = do
     describe "encodeJob / decodeJob round-trip" $ do
         it "round-trips an unscoped npm job" $
-            decodeJob (encodeJob npmJob) `shouldBe` Right npmJob
+            decodeJob mkRegistryUrl (encodeJob npmJob) `shouldBe` Right npmJob
 
         it "round-trips a scoped npm job (scope and bare name both recovered)" $
-            decodeJob (encodeJob scopedJob) `shouldBe` Right scopedJob
+            decodeJob mkRegistryUrl (encodeJob scopedJob) `shouldBe` Right scopedJob
 
         it "round-trips a PyPI job (ecosystem carried through)" $
-            decodeJob (encodeJob pypiJob) `shouldBe` Right pypiJob
+            decodeJob mkRegistryUrl (encodeJob pypiJob) `shouldBe` Right pypiJob
 
         it "carries every field through unchanged" $ do
             -- Field-by-field so a single mangled field is pinpointed, not lost in
             -- a whole-record comparison.
-            case decodeJob (encodeJob npmJob) of
+            case decodeJob mkRegistryUrl (encodeJob npmJob) of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
                     jobPackage job `shouldBe` jobPackage npmJob
@@ -145,14 +148,34 @@ spec = do
                                            ]
                                 }
                         }
-             in decodeJob (encodeJob allAlgsJob) `shouldBe` Right allAlgsJob
+             in decodeJob mkRegistryUrl (encodeJob allAlgsJob) `shouldBe` Right allAlgsJob
+
+        it "splits an old producer's multi-component sri value into one Hash per component (back-compat)" $
+            -- Before the single-component invariant, a producer carried a
+            -- whitespace-joined @dist.integrity@ whole in one @sri@ entry. Such an
+            -- in-flight job must keep decoding across the upgrade -- into split,
+            -- single-component hashes the tamper gate ranks and verifies exactly.
+            let joined = validSha512Sri <> " " <> validSha256Sri
+                body =
+                    "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"left-pad\",\
+                    \\"version\":\"1.3.0\",\"artifactUrl\":\"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\",\
+                    \\"mirrorTarget\":\"https://mirror.example\",\
+                    \\"artifact\":{\"filename\":\"left-pad-1.3.0.tgz\",\
+                    \\"hashes\":[{\"alg\":\"sri\",\"value\":\""
+                        <> joined
+                        <> "\"}],\"size\":null}}"
+             in case decodeJob mkRegistryUrl body of
+                    Left err -> expectationFailure (toString err)
+                    Right job ->
+                        maHashes (jobArtifact job)
+                            `shouldBe` (unsafeHash SRI validSha512Sri :| [unsafeHash SRI validSha256Sri])
 
         it "decodes a legacy job body with no traceContext key to a Nothing carrier (back-compat)" $
             -- A producer from before the carrier field existed emits no "traceContext" key
             -- at all (not even a null). It must decode to a valid job with no carrier -- the
             -- '.:?'-absent path -- rather than fail, so the field is additive and a job
             -- already on the wire keeps processing across the upgrade.
-            case decodeJob legacyNoTraceContextBody of
+            case decodeJob mkRegistryUrl legacyNoTraceContextBody of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
                     jobTraceContext job `shouldBe` Nothing
@@ -161,20 +184,22 @@ spec = do
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
-            decodeJob "not json at all" `shouldSatisfy` isLeft
+            decodeJob mkRegistryUrl "not json at all" `shouldSatisfy` isLeft
 
         it "rejects a JSON value that is not an object" $
-            decodeJob "[1,2,3]" `shouldSatisfy` isLeft
+            decodeJob mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
 
         it "rejects an object missing a required field" $
             -- No "mirrorTarget".
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects an unknown ecosystem, naming it in the error" $
             case decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"cargo\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}" of
                 Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
@@ -184,12 +209,14 @@ spec = do
             -- The serve-time-admitted digest is mandatory: a body without it has
             -- nothing to verify the fetched bytes against.
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects an artifact carrying an empty hash list (the NonEmpty invariant)" $
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\"hashes\":[],\"size\":null}}"
@@ -200,8 +227,9 @@ spec = do
             -- verify the fetched bytes, so the job is rejected at decode rather than
             -- admitted with an unverifiable digest. The error names the offending alg.
             case decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"https://public.test/x/-/x-1.0.0.tgz\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
                 \\"hashes\":[{\"alg\":\"crc32\",\"value\":\"deadbeef\"}],\"size\":null}}" of
                 Left err -> err `shouldSatisfy` ("crc32" `T.isInfixOf`)
@@ -213,6 +241,7 @@ spec = do
             -- digest (20 bytes), so 'mkHash' refuses it and the job fails to decode rather
             -- than reaching the worker with an unusable digest (issue #291, the queue side).
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
@@ -221,6 +250,7 @@ spec = do
 
         it "rejects a job with a malformed traceContext (missing traceparent)" $
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
@@ -230,6 +260,7 @@ spec = do
 
         it "rejects a job with traceContext present but not an object" $
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
@@ -239,6 +270,7 @@ spec = do
 
         it "rejects a job with a malformed artifact (missing filename)" $
             decodeJob
+                mkRegistryUrl
                 "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"hashes\":[{\"alg\":\"sha1\",\"value\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}],\"size\":null}}"

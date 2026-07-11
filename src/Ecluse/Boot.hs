@@ -104,6 +104,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Rts (applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleField, newLogEnv)
@@ -169,7 +170,7 @@ buildMirrorQueue :: LogEnv -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv plan = do
     whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
     case plan of
-        SqsBackend sqsConfig -> newSqsQueue sqsConfig
+        SqsBackend sqsConfig -> newSqsQueue mkRegistryUrl sqsConfig
         MemoryBackend memoryConfig ->
             newBoundedInMemoryQueue memoryConfig (logBootWarning logEnv . memoryQueueDropWarning)
 

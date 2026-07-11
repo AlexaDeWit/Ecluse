@@ -153,12 +153,13 @@ sha1Abc = validSha1Of "abc"
 sha1Dead = validSha1Of "deadbeef"
 sha256Def = validSha256Of "def"
 
--- The fingerprint pair an SRI digest resolves to under the merge's keying: its embedded
--- algorithm (via 'sriAlgorithm') and its base64 body (via 'sriBody'), as 'integrityHashes'
--- reads them back. The mnemonic fixtures are all well-formed SRIs, so the algorithm is
--- always 'Just'.
-sriPair :: Text -> (Maybe HashAlg, Text)
-sriPair s = (sriAlgorithm s, sriBody s)
+-- The fingerprint triple an SRI digest resolves to under the merge's keying: the
+-- fixture artifact's filename, its embedded algorithm (via 'sriAlgorithm'), and its
+-- base64 body (via 'sriBody'), as 'integrityHashes' reads them back. The mnemonic
+-- fixtures are all well-formed SRIs, so the algorithm is always 'Just'; the file is
+-- the single fixture artifact every 'artifactWith' version carries.
+sriPair :: Text -> (Text, Maybe HashAlg, Text)
+sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
 
 -- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
@@ -445,6 +446,47 @@ spec = do
                         integrityHashes (divWinning d) `shouldBe` sort [sriPair sriX, sriPair sriY]
                         integrityHashes (divLosing d) `shouldBe` [sriPair sriX]
                     other -> expectationFailure ("expected exactly one divergence, got " <> show other)
+
+    describe "divergence keys per artifact, not per version (#739)" $ do
+        -- A multi-artifact ecosystem (PyPI: an sdist plus wheels) spreads a version's
+        -- digests across files. Collapsing them into one per-algorithm set made two
+        -- mirrors with a different file *set* read as tampering; the fingerprint keys
+        -- each digest by its file, so only a shared file's shared algorithm can
+        -- contradict.
+        let sri = unsafeHash SRI
+            withArtifacts arts info =
+                info{infoVersions = Map.map (\d -> d{pkgArtifacts = arts}) (infoVersions info)}
+            wheelWith fileName hs =
+                (artifactWith hs){artFilename = fileName, artUrl = "https://example.test/" <> fileName}
+
+        it "a mirror carrying fewer files than the index is availability, not a divergence" $ do
+            -- Both serve thing.tgz with the same digest; the public index additionally
+            -- carries a wheel the mirror lacks. No shared file contradicts, so no
+            -- divergence -- the differing file set describes availability, not
+            -- substituted bytes.
+            let sharedFile = artifactWith [sri sriX]
+                extraWheel = wheelWith "thing-extra.whl" [sri sriY]
+                trusted = (TrustedSource, withArtifacts (one sharedFile) (packumentWith [("1.0.0", [])]))
+                gated = (GatedSource, withArtifacts (sharedFile :| [extraWheel]) (packumentWith [("1.0.0", [])]))
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
+        it "a shared file contradicting under a shared algorithm diverges even amid differing file sets" $ do
+            -- The tampering signal survives the per-artifact keying: the shared
+            -- thing.tgz disagrees on its sha512 body, so the version diverges even
+            -- though the sides also differ in which files they carry.
+            let extraWheel = wheelWith "thing-extra.whl" [sri sriY]
+                trusted = (TrustedSource, withArtifacts (one (artifactWith [sri sriX])) (packumentWith [("1.0.0", [])]))
+                gated = (GatedSource, withArtifacts (artifactWith [sri sriY] :| [extraWheel]) (packumentWith [("1.0.0", [])]))
+            (map divVersion . Set.toList . mpDivergences <$> mergePackuments [trusted, gated])
+                `shouldBe` Just ["1.0.0"]
+
+        it "the same digest under a renamed file is asymmetric, not a divergence" $ do
+            -- A file served under different names on the two sides shares no
+            -- (file, algorithm) key, so nothing can contradict: the fail-open reading
+            -- on absence, consistent with the asymmetric-algorithm stance above.
+            let trusted = (TrustedSource, withArtifacts (one (artifactWith [sri sriX])) (packumentWith [("1.0.0", [])]))
+                gated = (GatedSource, withArtifacts (one (wheelWith "renamed.tgz" [sri sriY])) (packumentWith [("1.0.0", [])]))
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
     describe "divergence keys on the resolved algorithm, not the raw digest tag" $ do
         -- The comparison resolves each digest to the algorithm it asserts and compares
