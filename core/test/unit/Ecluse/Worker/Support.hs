@@ -12,8 +12,21 @@ import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Lazy.Builder (toLazyText)
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
+import Katip (
+    Environment (Environment),
+    Item (_itemMessage, _itemSeverity),
+    LogStr (unLogStr),
+    Namespace (Namespace),
+    Scribe (Scribe, liPush, scribeFinalizer, scribePermitItem),
+    Severity (DebugS, WarningS),
+    closeScribes,
+    defaultScribeSettings,
+    initLogEnv,
+    permitItem,
+    registerScribe,
+ )
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
@@ -212,8 +225,15 @@ jobWith url hashes =
 
 -- ── a recording publish client ─────────────────────────────────────────────────
 
--- | What a publish captured: the bytes (the publish document) it was handed.
-newtype PublishLog = PublishLog {plDocuments :: [ByteString]}
+{- | What a publish captured: the raw verified bytes it was handed, and the artifact
+descriptor whose digests the real client's publish document is assembled from (the
+verification-source cases pin that descriptor to the re-admitted set, never the
+payload's).
+-}
+data PublishLog = PublishLog
+    { plDocuments :: [ByteString]
+    , plArtifacts :: [MirrorArtifact]
+    }
 
 {- | A registry-handle double whose 'publishArtifact' records each call and returns
 the given fixed outcome. The mirror-presence probe (the worker's first step) answers
@@ -226,8 +246,8 @@ recordingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
 recordingClient logRef outcome =
     RegistryClient
         { fetchMetadata = const (pure (Right (RegistryResponse "")))
-        , publishArtifact = \_ _ _ document -> do
-            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
+        , publishArtifact = \_ _ artifact document -> do
+            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l}, ()))
             pure outcome
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
@@ -265,7 +285,7 @@ directly to swap in 'mirrorListingClient' or 'probeUnreachableClient';
 -}
 withRuntimeRegistry :: (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimeRegistry mkClient policies metricsPort body = do
-    logRef <- newIORef (PublishLog [])
+    logRef <- newIORef (PublishLog [] [])
     queue <- newInMemoryQueue
     manager <- newManager defaultManagerSettings
     heartbeat <- newWorkerHeartbeat
@@ -306,7 +326,7 @@ test drive the supervised loop against a queue whose @receive@ misbehaves.
 -}
 withQueueRuntime :: MirrorQueue -> (WorkerRuntime -> IO a) -> IO a
 withQueueRuntime queue body = do
-    logRef <- newIORef (PublishLog [])
+    logRef <- newIORef (PublishLog [] [])
     manager <- newManager defaultManagerSettings
     heartbeat <- newWorkerHeartbeat
     let runtime =
@@ -369,8 +389,12 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 
 {- | The artifact of a projected version snapshot. The injected rules never inspect
 it, but the shared admission oracle does: its filename must match the job fixture's
-'maFilename' (file selection) and it carries a floor-clearing sha512 SRI digest
-(the integrity-floor admission policy the worker now re-applies at ingest).
+'maFilename' (file selection) and it carries the floor-clearing sha512 SRI of
+'tarballBytes'. The re-admitted artifact's digests are what the tamper gate
+verifies the fetched bytes against, so the current-metadata double must carry the
+true digest of the bytes the stub upstream serves (the faithful, immutable-version
+posture); a verification-source case swaps this set through
+'admitPoliciesWithDigests'.
 -}
 sampleArtifact :: Artifact
 sampleArtifact =
@@ -378,7 +402,7 @@ sampleArtifact =
         { artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
         , artKind = Tarball
-        , artHashes = [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
+        , artHashes = [unsafeHash SRI trueSri]
         , artSize = Nothing
         , artInterpreter = Nothing
         , artYanked = False
@@ -430,6 +454,16 @@ existing tests exercise the integrity gate and publish outcomes unchanged.
 admitPolicies :: WorkerPolicies
 admitPolicies = npmPolicies presentResolver [admitRule]
 
+{- | 'admitPolicies' with the resolved artifact's digest set replaced: the
+current-metadata double for the verification-source cases. The tamper gate verifies
+fetched bytes against the re-admitted artifact's digests, so a test chooses here
+whether current metadata matches the stub upstream's bytes (a faithful mirror) or
+deliberately mismatches them (a tamper), independent of what the job payload carries.
+-}
+admitPoliciesWithDigests :: [Hash] -> WorkerPolicies
+admitPoliciesWithDigests hashes =
+    npmPolicies (resolverWithArtifact sampleArtifact{artHashes = hashes}) [admitRule]
+
 {- | A 'MetadataClient' double whose single-version op returns a fixed result (the
 full-manifest op is unused here and refuses loudly).
 -}
@@ -472,6 +506,36 @@ runWM :: WorkerRuntime -> WorkerM a -> IO a
 runWM runtime action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runWorkerM logEnv mempty runtime action
+
+{- | 'runWM' against a capturing scribe: runs the action, drains the scribe, and
+returns the action's result with every (severity, message) pair it logged, oldest
+first. For the cases that assert a log line's presence or absence (the payload
+digest-divergence warning), where a scribe-less environment would observe nothing.
+-}
+runWMCapturing :: WorkerRuntime -> WorkerM a -> IO (a, [(Severity, Text)])
+runWMCapturing runtime action = do
+    capturedRef <- newIORef []
+    let scribe =
+            Scribe
+                { liPush = \item -> atomicModifyIORef' capturedRef (\entries -> ((_itemSeverity item, itemText item) : entries, ()))
+                , scribeFinalizer = pass
+                , scribePermitItem = permitItem DebugS
+                }
+    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    logEnv <- registerScribe "capture" scribe defaultScribeSettings base
+    result <- runWorkerM logEnv mempty runtime action
+    -- katip pushes through a buffered per-scribe queue; close (and so drain) it
+    -- before reading, so every line the action logged is captured.
+    _ <- closeScribes logEnv
+    captured <- reverse <$> readIORef capturedRef
+    pure (result, captured)
+  where
+    itemText item = toStrict (toLazyText (unLogStr (_itemMessage item)))
+
+-- | Whether a captured log line is the payload digest-divergence warning.
+isDivergenceWarning :: (Severity, Text) -> Bool
+isDivergenceWarning (severity, message) =
+    severity == WarningS && "diverges from the re-admitted artifact's" `T.isInfixOf` message
 
 {- | A typed stand-in for an exception escaping a dependency's typed contract (an
 invariant break), so the residue-supervision cases pin the escape channel without

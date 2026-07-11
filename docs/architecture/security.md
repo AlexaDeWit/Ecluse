@@ -368,7 +368,9 @@ scope its IAM too (only the serve role enqueues, only the worker consumes) (regi
 into its https-only `RegistryUrl` witness at the wire decode (an unformable URL fails the
 decode), the fetch host is re-checked against the mount's tarball-host gate at ingest, the
 version is re-decided through the shared admission gate, and the fetched bytes must match
-the job's serve-time-admitted digest before any publish.
+the digest of the artifact that gate re-admits (the set it floor-checked against current
+metadata; a job's own digests are never what the bytes are verified against) before any
+publish.
 
 **Registry separation is defence-in-depth and auditability, not the perimeter** (register
 threat #10). The three-registry topology

@@ -4,8 +4,8 @@
 
 module Ecluse.WorkerSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, hashlazy)
-import Data.ByteArray.Encoding (Base (Base16), convertToBase)
+import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
+import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status201, status409, status503)
@@ -18,7 +18,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse (runWorker)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -29,6 +29,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
     QueueOptions (qoWaitSeconds),
     defaultQueueOptions,
@@ -62,7 +63,7 @@ spec =
                         unwrapQ (enqueue queue (job upstreamUrl trueSha1))
                         -- Run the supervised loop against the real queue until it has
                         -- published, then cancel it.
-                        runLoopUntil env (publishedAtLeast publishLog 1)
+                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The job was acked, so it does not redeliver.
@@ -74,10 +75,13 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        -- The threaded digest is well-formed but does not match the served
-                        -- bytes: a tampered artifact. The worker must refuse to publish.
-                        unwrapQ (enqueue queue (job upstreamUrl wrongSha1))
-                        runLoopFor env 4_000_000
+                        -- The version's current-metadata digest (the set the worker
+                        -- re-admits and verifies against) is well-formed but does not
+                        -- match the served bytes: a tampered artifact. The worker must
+                        -- refuse to publish, even though the payload's own digest
+                        -- matches the bytes.
+                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
+                        runLoopFor (admitAllPolicies (unsafeHash SRI mismatchSri :| [])) env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
 
@@ -90,7 +94,7 @@ spec =
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         env <- envFor queue mirrorUrl
                         unwrapQ (enqueue queue (job upstreamUrl trueSha1))
-                        runLoopUntil env (publishedAtLeast publishLog 1)
+                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
                         leftover <- unwrapQ (receive queue)
                         leftover `shouldBe` []
 
@@ -129,7 +133,7 @@ spec =
                         -- redelivered within budget. Waiting on the worker's /second/ PUT
                         -- removes that race entirely: the second PUT cannot happen unless
                         -- the release ran and the message redelivered.
-                        runLoopUntil env (publishedAtLeast publishLog 2)
+                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 2)
                         published <- readIORef publishLog
                         -- The one un-acked job was delivered and PUT more than once -- a
                         -- real redelivery -- and every PUT targeted its publish path. We
@@ -150,7 +154,7 @@ spec =
                         pollBefore `shouldBe` Nothing
                         -- No job enqueued: an idle loop still completes real polls, so
                         -- the heartbeat must advance from Nothing.
-                        runLoopFor env 3_000_000
+                        runLoopFor faithfulPolicies env 3_000_000
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
 
@@ -161,6 +165,23 @@ tarballBytes = "left-pad-artifact-bytes"
 -- The true lower-cased hex SHA-1 of the served bytes.
 trueSha1 :: Text
 trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy tarballBytes :: Digest SHA1) :: ByteString)
+
+-- The true SRI (@sha512-<base64>@) of the served bytes: the digest the worker's
+-- re-evaluation re-admits from current metadata and verifies the fetched bytes against.
+trueSri :: Text
+trueSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy tarballBytes :: Digest SHA512) :: ByteString)
+
+{- | A well-formed sha512 SRI of OTHER bytes, the tamper fixture: current metadata
+whose digest the served bytes cannot satisfy, distinct from a malformed digest.
+-}
+mismatchSri :: Text
+mismatchSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
+
+{- | The faithful current-metadata policies: the re-admitted artifact carries the
+served bytes' true digest, so verification passes and the pipeline publishes.
+-}
+faithfulPolicies :: WorkerPolicies
+faithfulPolicies = admitAllPolicies (unsafeHash SRI trueSri :| [])
 
 -- The path the job's artifact URL appends to the upstream stub base.
 artifactPath :: Text
@@ -190,13 +211,6 @@ job upstreamUrl sha1 =
         , jobTraceContext = Nothing
         }
 
-{- | A well-formed SHA-1 digest (sha1 of the empty string) that does not match the
-served tarball -- the tamper fixture, distinct from a malformed digest the queue would
-reject at decode.
--}
-wrongSha1 :: Text
-wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-
 envFor :: MirrorQueue -> Text -> IO Env
 envFor queue mirrorUrl = do
     manager <- newManager defaultManagerSettings
@@ -217,14 +231,15 @@ envFor queue mirrorUrl = do
 newTestLogEnv :: IO LogEnv
 newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
-{- Run the supervised mirror worker ('runWorker') against the real queue until a
-condition holds, then tear it down. The loop never returns on its own, so it is raced
-against a condition-poller ('race_'): when the poller observes the condition, 'race_'
-cancels the loop -- the same cooperative cancellation process shutdown uses. A hard
-timeout bounds the whole thing so a failing test cannot hang. -}
-runLoopUntil :: Env -> IO Bool -> IO ()
-runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker admitAllPolicies env) (waitFor done)
+{- Run the supervised mirror worker ('runWorker') under the given re-evaluation
+policies against the real queue until a condition holds, then tear it down. The loop
+never returns on its own, so it is raced against a condition-poller ('race_'): when
+the poller observes the condition, 'race_' cancels the loop -- the same cooperative
+cancellation process shutdown uses. A hard timeout bounds the whole thing so a
+failing test cannot hang. -}
+runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
+runLoopUntil policies env done =
+    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
 
 {- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
 condition (the redelivery case waiting on a /second/ publish -- two full
@@ -236,11 +251,12 @@ and only ever fires on a genuine hang. -}
 loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
 
-{- Run the supervised mirror worker ('runWorker') for a fixed wall-clock window, then
-cancel it -- for the cases that assert a /negative/ (nothing published, an idle
-heartbeat) where there is no positive condition to wait on. -}
-runLoopFor :: Env -> Int -> IO ()
-runLoopFor env micros = void (timeout micros (runWorker admitAllPolicies env))
+{- Run the supervised mirror worker ('runWorker') under the given re-evaluation
+policies for a fixed wall-clock window, then cancel it -- for the cases that assert a
+/negative/ (nothing published, an idle heartbeat) where there is no positive
+condition to wait on. -}
+runLoopFor :: WorkerPolicies -> Env -> Int -> IO ()
+runLoopFor policies env micros = void (timeout micros (runWorker policies env))
 
 -- Poll a condition until it holds, bounded so a failing test does not hang. The
 -- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not

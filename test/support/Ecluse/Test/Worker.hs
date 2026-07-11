@@ -19,7 +19,7 @@ import Data.Time (getCurrentTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
-import Ecluse.Core.Package (Artifact (artFilename, artHashes), HashAlg (SRI), PackageDetails (pkgArtifacts), PackageName, unscopedName)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
@@ -27,7 +27,7 @@ import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpMinIntegrity, wpNow, wpResolveVersion, wpRules))
-import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash, validSha512Sri)
+import Ecluse.Test.Package (sampleArtifact, sampleDetails)
 
 {- | An admit-everything worker re-evaluation policy for the npm ecosystem: every version
 resolves present through an injected resolver (no real metadata fetch) and an always-allow
@@ -38,12 +38,17 @@ The worker's ingest gate is the __same shared admission oracle the serve path ru
 ('Ecluse.Core.Package.Admission.admitArtifact'), so the resolved snapshot must also
 pass artifact selection and the integrity floor: the resolver synthesises the
 conventional @{name}-{version}.tgz@ artifact (matching a conventionally-named job's
-'Ecluse.Core.Queue.maFilename') carrying a floor-clearing sha512 SRI digest, the host
-gate honours every host (a test upstream is loopback), and the floor is the
-production default.
+'Ecluse.Core.Queue.maFilename') carrying the caller's digest set, the host gate
+honours every host (a test upstream is loopback), and the floor is the production
+default (so the set must include a floor-clearing digest).
+
+The digest set is the caller's because the worker's tamper gate verifies the fetched
+bytes against the __re-admitted__ artifact's digests, the ones this resolver carries:
+a test passes the true digests of the bytes its stub upstream serves for the faithful
+posture, or a deliberately mismatching set to drive the tamper refusal.
 -}
-admitAllPolicies :: WorkerPolicies
-admitAllPolicies =
+admitAllPolicies :: NonEmpty Hash -> WorkerPolicies
+admitAllPolicies currentDigests =
     Map.singleton
         Npm
         WorkerPolicy
@@ -64,8 +69,9 @@ admitAllPolicies =
             }
 
     -- The sample snapshot with its artifact renamed to the conventional
-    -- @{name}-{version}.tgz@ and given a floor-clearing digest, so the shared
-    -- admission oracle's file selection and integrity floor both pass.
+    -- @{name}-{version}.tgz@ and given the caller's digest set, so the shared
+    -- admission oracle's file selection passes and the tamper gate verifies the
+    -- fetched bytes against exactly this set.
     mirrorableDetails :: PackageName -> Version -> PackageDetails
     mirrorableDetails name version =
         (sampleDetails name version)
@@ -73,6 +79,6 @@ admitAllPolicies =
                 one
                     sampleArtifact
                         { artFilename = unscopedName name <> "-" <> renderVersion version <> ".tgz"
-                        , artHashes = [unsafeHash SRI validSha512Sri]
+                        , artHashes = toList currentDigests
                         }
             }

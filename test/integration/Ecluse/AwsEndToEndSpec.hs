@@ -29,6 +29,7 @@ import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue)
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
@@ -53,6 +54,7 @@ import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
@@ -67,9 +69,9 @@ Two flows are exercised against that one wiring:
   by the @min-age@ quarantine and never appears in the served document);
 * a __tarball__ request on a private-upstream miss is gated, streamed from the public
   upstream, and __enqueues a real SQS mirror job__; the worker then long-polls that
-  queue, fetches the artifact, __verifies it against the serve-time integrity digest__,
-  and publishes it to the mirror target -- the demand-driven fetch → verify → publish
-  back-fill, across a genuine SQS round-trip.
+  queue, fetches the artifact, __verifies it against the re-admitted current-metadata
+  digest__, and publishes it to the mirror target -- the demand-driven
+  fetch → verify → publish back-fill, across a genuine SQS round-trip.
 
 Hermetic and gating, but requires a Docker daemon (for @ministack@) and no real AWS.
 -}
@@ -94,7 +96,7 @@ spec =
                     status resp `shouldBe` 200
                     simpleBody resp `shouldBe` tarballBytes
                     -- The worker long-polls the same SQS queue, fetches the artifact,
-                    -- verifies it against the serve-time digest, and publishes it.
+                    -- verifies it against the re-admitted digest, and publishes it.
                     runLoopUntil (tpEnv proxy) (publishedAtLeast (tpMirrorLog proxy) 1)
                     published <- readIORef (tpMirrorLog proxy)
                     length published `shouldSatisfy` (>= 1)
@@ -349,7 +351,12 @@ against a condition-poller ('race_'); a hard timeout bounds the whole thing so a
 test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker admitAllPolicies env) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
+  where
+    -- The worker verifies the fetched bytes against the digests its re-evaluation
+    -- re-admits from current metadata (the injected resolver), so the resolver must
+    -- carry the true digest of the bytes the public stub serves.
+    policies = admitAllPolicies (unsafeHash SRI sha512Integrity :| [])
 
 -- A generous hard ceiling, far above a healthy fetch → verify → publish cycle even
 -- under @-fhpc@ instrumentation, so it only ever fires on a genuine hang.

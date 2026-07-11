@@ -32,8 +32,9 @@ jobs, and for each one:
    advisory, a rule change, a raised floor, a withdrawn file, a no-longer-honoured
    host) is dropped rather than frozen into the rule-exempt mirror,
 3. fetches the artifact from the public upstream,
-4. **verifies its bytes against the version's integrity hash** (npm `dist.integrity`),
-   and
+4. **verifies its bytes against the re-admitted artifact's integrity digest** (npm
+   `dist.integrity`, from the same current metadata step 2 gated; the queue payload
+   contributes no digest), and
 5. publishes it to the mirror target via `publishArtifact` and acknowledges the job.
 
 A hash mismatch fails the job (no publish; it routes to retry/DLQ) and alarms, so a

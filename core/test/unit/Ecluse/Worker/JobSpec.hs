@@ -14,6 +14,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
+import Ecluse.Core.Queue (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry (
     PublishError (PublishError),
     PublishFault (PublishRejected, PublishUrlUnformable),
@@ -52,7 +53,7 @@ spec = do
                     stringAt ["_attachments", "thing-1.0.0.tgz", "data"] value
                         `shouldBe` Just (decodeUtf8 (convertToBase Base64 tarballBytes :: ByteString))
     describe "processJob -- the integrity gate" $ do
-        it "publishes and reports success when the bytes match the admitted digest" $
+        it "publishes and reports success when the bytes match the re-admitted digest" $
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
@@ -61,46 +62,94 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "publishes a sha384-only job end to end (fetch, compute sha384, verify, publish)" $
+        it "publishes a sha384-only version end to end (fetch, compute sha384, verify, publish)" $
             -- The end-to-end proof that a sha384-admitted artifact is not admit-but-
-            -- uncomputable: the worker fetches, recomputes sha384, matches, and publishes.
+            -- uncomputable: current metadata carries only the sha384, so the worker
+            -- fetches, recomputes sha384, matches, and publishes.
             withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue logRef -> do
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSha384Sri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI trueSha384Sri :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "publishes a sha256-only job end to end (the #409 fix on the default floor)" $
+        it "publishes a sha256-only version end to end (the #409 fix on the default floor)" $
             -- A sha256-only artifact is admitted by the default public floor; before #409 the
             -- worker could not compute sha256 and Dropped it. Now it fetches, recomputes
             -- sha256, matches, and publishes, never the admitted-but-dropped defect.
             withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue logRef -> do
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SHA256 trueSha256]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA256 trueSha256 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "publishes a blake2b-only job end to end (the #409 fix, the top tier)" $
+        it "publishes a blake2b-only version end to end (the #409 fix, the top tier)" $
             -- A blake2b-only artifact is admitted by the floor and was likewise Dropped before
             -- #409; the worker now recomputes blake2b-512, matches, and publishes.
             withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue logRef -> do
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash Blake2b trueBlake2b]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash Blake2b trueBlake2b :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "refuses to publish (no publish) when the bytes do not match the digest" $
+        it "refuses to publish (no publish) when the bytes do not match the re-admitted digest" $
+            withUpstream $ \url ->
+                -- A tampered/substituted artifact: the version's digest (current
+                -- metadata and the payload agree, the faithful posture) names other
+                -- bytes than the upstream served, so the worker must NOT publish.
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI falseSri :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldSatisfy` isDropped
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+
+        it "verifies the bytes against the re-admitted digest, never the queue payload's" $
+            -- The payload's digest does not match the fetched bytes, but the artifact
+            -- current metadata re-admits does: the publish proceeds, proof the payload
+            -- contributes no digest to the gate (it is untrusted for digests, exactly
+            -- as its fetch-URL host is re-derived rather than trusted).
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
-                    -- A tampered/substituted artifact: the threaded digest does not match
-                    -- the fetched bytes, so the worker must NOT publish.
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "hands the publish step the re-admitted descriptor, so payload digest text never reaches the document" $
+            -- The payload carries a divergent, well-formed digest set and a declared
+            -- size of its own; the publish must be handed the descriptor derived from
+            -- the re-admitted artifact (its digests, its filename, its declared size),
+            -- so payload text can never land in the trusted-tier publish document.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI falseSri :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    descriptors <- plArtifacts <$> readIORef logRef
+                    descriptors
+                        `shouldBe` [ MirrorArtifact
+                                        { maFilename = "thing-1.0.0.tgz"
+                                        , maHashes = unsafeHash SRI trueSri :| []
+                                        , maSize = Nothing
+                                        }
+                                   ]
+
+        it "drops a job whose payload-only weak digest matches the bytes the re-admitted digest refuses" $
+            -- The #781 regression: a payload carrying only a computable weak digest
+            -- that matches the fetched bytes must not be mirrored when the
+            -- floor-checked current-metadata digest says the bytes are wrong.
+            -- Verification uses the re-admitted set, so a forgeable payload match
+            -- cannot weaken the gate.
+            withUpstream $ \url ->
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
                     published <- plDocuments <$> readIORef logRef
@@ -144,6 +193,26 @@ spec = do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
+    describe "processJob: the payload digest-divergence warning" $ do
+        it "does not warn when the payload carries the same digest set reordered or duplicated" $
+            -- Wire order and duplication of the same digests carry no meaning, so a
+            -- payload that is set-equal to the re-admitted digests is no divergence.
+            withUpstream $ \url ->
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSri, unsafeHash SHA1 trueSha1]) noopWorkerMetricsPort (Right ()) $ \runtime queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| [unsafeHash SRI trueSri, unsafeHash SHA1 trueSha1]))
+                    (outcome, logged) <- runWMCapturing runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    filter isDivergenceWarning logged `shouldBe` []
+
+        it "warns when the payload digest set genuinely differs from the re-admitted one" $
+            -- Warn-only observability: the job still publishes (the bytes verify
+            -- against the re-admitted set), but the anomaly is surfaced.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    (outcome, logged) <- runWMCapturing runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    logged `shouldSatisfy` any isDivergenceWarning
     describe "processJob: ingest-time policy re-evaluation" $ do
         it "drops a job whose version current policy denies, without publishing" $
             -- The drift-to-deny close: a version admitted at serve time but denied by current
@@ -364,8 +433,8 @@ spec = do
             -- (having alarmed at the mismatch) rather than leave it to redeliver
             -- indefinitely. A second poll past the visibility window yields nothing.
             withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue logRef -> do
-                    enqueue_ queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    enqueue_ queue (jobWith url (unsafeHash SRI falseSri :| []))
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     -- Nothing was published (the mismatch refused the publish)...
@@ -389,8 +458,8 @@ spec = do
         it "records a Failed result for a tampered job, through the port" $
             withUpstream $ \url -> do
                 (metricsPort, readResults) <- recordingWorkerMetricsPort
-                withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
-                    enqueue_ queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) metricsPort (Right ()) $ \runtime queue _logRef -> do
+                    enqueue_ queue (jobWith url (unsafeHash SRI falseSri :| []))
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])
