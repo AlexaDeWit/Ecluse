@@ -632,15 +632,15 @@ logInvalidEntries name baseUrl entries =
 
     (manifests, distTags, publishTimes, entriesLen) =
         foldl'
-            ( \(m, d, p, l) e ->
-                let l' = l + 1
-                 in case invalidKind e of
-                        InvalidVersionManifest -> (m + 1, d, p, l')
-                        InvalidDistTag -> (m, d + 1, p, l')
-                        InvalidPublishTime -> (m, d, p + 1, l')
-            )
+            accumulateDropCounts
             (0 :: Int, 0 :: Int, 0 :: Int, 0 :: Int)
             entries
+
+    accumulateDropCounts (m, d, p, l) e =
+        case invalidKind e of
+            InvalidVersionManifest -> (m + 1, d, p, l + 1)
+            InvalidDistTag -> (m, d + 1, p, l + 1)
+            InvalidPublishTime -> (m, d, p + 1, l + 1)
 
     message :: Text
     message =
