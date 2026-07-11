@@ -138,6 +138,7 @@ library ecluse-core
     Ecluse.Core.Security.Host
     Ecluse.Core.Security.Limits
     Ecluse.Core.Server.Cache
+    Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
@@ -522,6 +523,7 @@ test-suite ecluse-core-unit
     Ecluse.Security.HostSpec
     Ecluse.Security.LimitsSpec
     Ecluse.Server.CacheSpec
+    Ecluse.Server.Cache.StoreSpec
     Ecluse.Server.ConditionalSpec
     Ecluse.Server.FaultSpec
     Ecluse.Server.MetadataSpec
