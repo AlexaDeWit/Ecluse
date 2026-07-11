@@ -35,6 +35,7 @@ import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -44,7 +45,6 @@ import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLim
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Integration.Ministack (
     endpointFor,
     freshQueueUrl,

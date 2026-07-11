@@ -62,13 +62,13 @@ import Ecluse.Core.Credential (CredentialProvider, Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Registry.Npm qualified as Npm
 import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
+import Ecluse.Core.Registry.Npm.Metadata qualified as NpmMetadata
 import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
-import Ecluse.Core.Server.Metadata qualified as Metadata
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
 {- | Validate the environment layer and optional document into the served mount
@@ -211,7 +211,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- carried onto every mount's deps so the serve path withholds a
                   -- contested version under fail-closed.
                   pdDivergencePolicy = cfgDivergencePolicy app
-                , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> Metadata.newNpmMetadataClient t p u c f1 f2 f3 (Npm.NpmClientConfig b m s l)
+                , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> NpmMetadata.newNpmMetadataClient t p u c f1 f2 f3 (Npm.NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s
                 , pdAssemble = NpmFilter.assembleMergedPackument

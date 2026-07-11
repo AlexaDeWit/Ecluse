@@ -29,7 +29,6 @@ module Ecluse.Core.Server.Metadata (
 
     -- * Constructing a per-request read handle
     newMetadataClient,
-    newNpmMetadataClient,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -40,8 +39,6 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (..),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
  )
-import Ecluse.Core.Registry.Npm (NpmClientConfig)
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, fetchNpmVersion)
 
 import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryDigest, entryInfo, entryRaw),
@@ -54,7 +51,6 @@ import Ecluse.Core.Server.Cache (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | How a read handle resolves the full manifest for one origin.
@@ -170,24 +166,6 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
             rawFetchVersion name version >>= \case
                 Right details -> pure (Right details)
                 Left err -> logFailure name err >> pure (Left err)
-
-{- | Build a per-request read handle for the npm protocol over one origin's fetch
-configuration: the npm full-manifest and single-version fetches as the raw primitives, with
-the serve-path caching, metrics, and the failure and dropped-entry logs wired by
-'newMetadataClient'.
--}
-newNpmMetadataClient ::
-    TracingPort ->
-    MetricsPort ->
-    Metric.Upstream ->
-    ManifestCaching ->
-    (PackageName -> MetadataError -> IO ()) ->
-    (PackageName -> [InvalidEntry] -> IO ()) ->
-    (PackageName -> IO ()) ->
-    NpmClientConfig ->
-    MetadataClient
-newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
-    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
 
 -- Select one version's details out of a parsed packument, by its rendered form.
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails

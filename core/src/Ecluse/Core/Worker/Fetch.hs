@@ -9,7 +9,7 @@ module Ecluse.Core.Worker.Fetch (
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)

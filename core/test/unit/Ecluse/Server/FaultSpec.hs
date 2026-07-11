@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Fault (
     RenderEscape (RenderEscape),

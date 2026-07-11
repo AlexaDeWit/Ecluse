@@ -120,6 +120,7 @@ library ecluse-core
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
+    Ecluse.Core.Registry.Fault
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Filter
