@@ -298,7 +298,8 @@ leaving it to warp's defaults:
 
 Asynchronous exceptions are never caught: cancellation tears a request down like any thread. Warp's
 own `setOnExceptionResponse` remains only as the neutral-body backstop for faults with no mount
-context (middleware, warp itself).
+context (middleware, warp itself). The perimeter is one of the two outer edges of the system-wide
+[fault model](fault-model.md), which owns the disposition vocabulary this section uses.
 
 ## Middleware and helper libraries
 

@@ -106,6 +106,8 @@ not re-emit them. Names follow OTel semantic conventions for HTTP (`http.server.
   handler escapes the typed request perimeter answered with the neutral 500 -- steady state is
   zero, so any movement is an invariant break worth a look; the paired `ERROR` audit line carries
   the request path and the bounded rendered detail (`perimeterCause`/`perimeterDetail` fields).
+  The perimeter and the fault channels feeding these signals are mapped in the
+  [fault model](fault-model.md).
 - **Gate**, `ecluse.rule.denials` (counter; rule, reason-class); `ecluse.rule.eval.duration`
   (histogram; tier); `ecluse.rule.effectful.failures` (counter; rule, cause);
   `ecluse.rule.breaker.state` (gauge; source).
