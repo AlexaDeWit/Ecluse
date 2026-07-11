@@ -40,6 +40,9 @@ module Ecluse.Core.Cve (
     -- * Rejection
     CveDbRejected (..),
 
+    -- * Query faults
+    CveQueryFault (..),
+
     -- * Artifact identity
     DbEtag (..),
 
@@ -48,13 +51,13 @@ module Ecluse.Core.Cve (
     severityAtLeast,
 ) where
 
-import UnliftIO.Exception (finally, onException)
+import UnliftIO.Exception (catch, catchAny, finally, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
-import Database.SQLite.Simple (Connection, close)
+import Database.SQLite.Simple (Connection, SQLError, close)
 
 {- | An artifact version marker: S3's ETag, opaque text compared for equality
 only. Two objects with equal ETags carry equal bytes, so an unchanged ETag is
@@ -76,13 +79,41 @@ render their domain values to that form at the boundary.
 data CveLookup = CveLookup
     { cveRemediationProbe :: Text -> Text -> IO Bool
     {- ^ Does any advisory for this package name this exact version string as
-    a fixed bound? One indexed B-tree traversal.
+    a fixed bound? One indexed B-tree traversal. A query fault throws the
+    confined 'CveQueryFault' (see its Haddock for the confinement contract).
     -}
     , cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
     {- ^ Every advisory range recorded against a package name; rule predicates
-    interpret them.
+    interpret them. A query fault throws the confined 'CveQueryFault'.
     -}
     }
+
+{- | A query the accepted advisory database could not answer: the SQLite edge
+threw mid-query (an I\/O error on the database file, a connection released out
+from under a straggling reader). Carries which handle field was asked and the
+rendered 'SQLError' for the log line; the artifact's __content__ can never
+produce this ('openCveDb' acceptance made the row decodes total), so it marks an
+infrastructural fault, not a data fault.
+
+A __confined typed exception__, the same shape as
+'Ecluse.Core.Credential.Refresh.CredentialError' at the breaker leaf: it is
+thrown at the SQLite edge inside the handle and absorbed by the one boundary
+every advisory query runs under -- the rules engine's resilience harness
+('Ecluse.Core.Rules.runEffectfulRule'), which resolves it to an @Unavailable@
+evaluation and advances the rule's circuit breaker. It never crosses that
+boundary, so no caller above the rules engine sees it. The alternative (an
+@Either@ on every 'CveLookup' field) would reshape every rule's evaluation type
+for a fault only the harness ever handles.
+-}
+data CveQueryFault = CveQueryFault
+    { cqfQuery :: Text
+    -- ^ Which handle field was asked (@remediation-probe@ or @advisories-for@).
+    , cqfDetail :: Text
+    -- ^ The rendered 'SQLError', for the harness's log line. Never parsed.
+    }
+    deriving stock (Eq, Show)
+
+instance Exception CveQueryFault
 
 {- | One opened artifact: the consumer view plus the owner's close. Whoever
 holds this owns the connection's lifetime; hand consumers 'cveDbLookup' only.
@@ -92,7 +123,10 @@ data CveDb = CveDb
     -- ^ The view consumers query through.
     , cveDbClose :: IO ()
     {- ^ Release the artifact's connection. Owner-only; the artifact must no
-    longer be read through this handle's view afterwards.
+    longer be read through this handle's view afterwards. __Never throws__: a
+    close fault is absorbed inside the handle, since the connection is being
+    discarded either way and every close site (a swap-out drain, an exception
+    unwind) wants the same disposition.
     -}
     , cveDbMeta :: [(Text, Text)]
     {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build
@@ -126,12 +160,20 @@ mkCveDb conn meta =
     CveDb
         { cveDbLookup =
             CveLookup
-                { cveRemediationProbe = probeQuery conn
-                , cveAdvisoriesFor = advisoriesQuery conn
+                { cveRemediationProbe = \name version -> taggedQuery "remediation-probe" (probeQuery conn name version)
+                , cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
                 }
-        , cveDbClose = close conn
+        , -- Total by construction: the connection is being discarded, so a close
+          -- fault has no better disposition anywhere than "absorb it here".
+          cveDbClose = close conn `catchAny` const pass
         , cveDbMeta = meta
         }
+
+-- The SQLite edge: re-raise a mid-query 'SQLError' as the handle's confined
+-- 'CveQueryFault', tagged with which field was asked, so what escapes the handle
+-- is this module's closed vocabulary rather than the driver's exception type.
+taggedQuery :: Text -> IO a -> IO a
+taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
 {- | Bracket a lexically-scoped use of an artifact: open, hand the consumer
 view to the action, and close on any exit. A rejected artifact short-circuits

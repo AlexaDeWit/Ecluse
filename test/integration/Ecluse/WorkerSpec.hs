@@ -29,6 +29,7 @@ import Ecluse.Integration.Ministack (
     QueueOptions (qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
+    unwrapQ,
     withMinistack,
  )
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
@@ -54,14 +55,14 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        enqueue queue (job upstreamUrl trueSha1)
+                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
                         -- Run the supervised loop against the real queue until it has
                         -- published, then cancel it.
                         runLoopUntil env (publishedAtLeast publishLog 1)
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The job was acked, so it does not redeliver.
-                        leftover <- receive queue
+                        leftover <- unwrapQ (receive queue)
                         leftover `shouldBe` []
 
             it "publishes nothing when the artifact fails its integrity digest" $ \container ->
@@ -71,7 +72,7 @@ spec =
                         env <- envFor queue mirrorUrl
                         -- The threaded digest is well-formed but does not match the served
                         -- bytes: a tampered artifact. The worker must refuse to publish.
-                        enqueue queue (job upstreamUrl wrongSha1)
+                        unwrapQ (enqueue queue (job upstreamUrl wrongSha1))
                         runLoopFor env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
@@ -84,9 +85,9 @@ spec =
                     withMirrorTarget status409 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        enqueue queue (job upstreamUrl trueSha1)
+                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
                         runLoopUntil env (publishedAtLeast publishLog 1)
-                        leftover <- receive queue
+                        leftover <- unwrapQ (receive queue)
                         leftover `shouldBe` []
 
             it "leaves a transiently-rejected job un-acked, so it redelivers" $ \container ->
@@ -96,7 +97,7 @@ spec =
                     withMirrorTarget status503 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        enqueue queue (job upstreamUrl trueSha1)
+                        unwrapQ (enqueue queue (job upstreamUrl trueSha1))
                         -- Observe the redelivery through the worker's /own/ second
                         -- publish attempt: a transient 503 is never acked, so the message
                         -- becomes visible again and the running loop re-consumes it and

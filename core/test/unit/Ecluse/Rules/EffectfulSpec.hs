@@ -3,7 +3,7 @@ module Ecluse.Rules.EffectfulSpec (spec) where
 import Control.Retry (simulatePolicy)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO, throwString)
 
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -12,6 +12,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules
@@ -386,6 +387,25 @@ spec = do
             -- its reason names the open breaker (and the rule), at the rule's alignment.
             fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
             fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule source circuit breaker is open"
+            readIORef attempts `shouldReturn` 2
+
+        it "absorbs the advisory handle's confined CveQueryFault: Unavailable, breaker advanced" $ do
+            -- The advisory lookup's query fault is a confined typed exception whose
+            -- one absorption boundary is THIS harness ('Ecluse.Core.Cve.CveQueryFault').
+            -- It must resolve like any infrastructural fault -- the rule's aligned
+            -- Unavailable -- and count towards the breaker, so a broken advisory
+            -- database degrades to fast-fail rather than throwing through evalRules.
+            attempts <- newIORef (0 :: Int)
+            rule <- mkRule "DenyCve" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
+                modifyIORef' attempts (+ 1)
+                throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorIO")
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldSatisfy` isUnavailable
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            -- Two committed faults reached the threshold: the breaker is open, so the
+            -- next evaluation fast-fails without running the rule's IO again.
+            fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
+            fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "DenyCve: the rule source circuit breaker is open"
             readIORef attempts `shouldReturn` 2
 
         it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do

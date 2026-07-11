@@ -24,7 +24,7 @@ module Ecluse.Core.Cve.Slot (
 ) where
 
 import Control.Concurrent.STM (check)
-import UnliftIO.Exception (bracket, catchAny)
+import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Cve (CveDb (..), CveLookup, DbEtag)
 
@@ -95,4 +95,6 @@ swapIn (CveSlot cell) etag newDb = do
         pure old
     for_ displaced $ \g -> do
         atomically (readTVar (genReaders g) >>= check . (== 0))
-        cveDbClose (genDb g) `catchAny` const pass
+        -- 'cveDbClose' never throws (the handle absorbs close faults), so the
+        -- swallow the module header describes needs no guard here.
+        cveDbClose (genDb g)

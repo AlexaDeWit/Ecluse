@@ -104,6 +104,7 @@ library ecluse-core
     Ecluse.Core.Cve.Slot
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
+    Ecluse.Core.Fault.Http
     Ecluse.Core.InFlight
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
@@ -313,6 +314,7 @@ library ecluse-runtime
   import:          shared
   hs-source-dirs:  runtime/src
   exposed-modules:
+    Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Credential.CodeArtifact
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Env

@@ -1,7 +1,5 @@
 module Ecluse.QueueSpec (spec) where
 
-import Control.Exception (ErrorCall (ErrorCall))
-import Data.Text qualified as T
 import Hedgehog (
     Callback (Ensure, Require, Update),
     Command (Command),
@@ -24,10 +22,24 @@ import UnliftIO (throwIO, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
 import Ecluse.Core.Queue
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
+
+{- | A 'Left' escaping a backend that has no fault to report (the in-memory
+double, the bounded backend, the buffered hand-off) is a broken test premise:
+re-raise it loudly and typed.
+-}
+newtype UnexpectedQueueFault = UnexpectedQueueFault QueueFault
+    deriving stock (Show)
+
+instance Exception UnexpectedQueueFault
+
+-- Unwrap a typed queue outcome from a backend under test that should not fault.
+unwrap :: IO (Either QueueFault a) -> IO a
+unwrap act = act >>= either (throwIO . UnexpectedQueueFault) pure
 
 {- | A sample mirror job. The in-memory queue under test does not inspect a
 job's contents -- it only carries it from 'enqueue' to 'receive' -- so one fixed
@@ -67,13 +79,13 @@ spec = do
     describe "newInMemoryQueue" $ do
         it "receives [] from an empty queue" $ do
             q <- newInMemoryQueue
-            msgs <- receive q
+            msgs <- unwrap (receive q)
             map msgJob msgs `shouldBe` []
 
         it "delivers an enqueued job on the next receive" $ do
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            msgs <- receive q
+            unwrap (enqueue q sampleJob)
+            msgs <- unwrap (receive q)
             map msgJob msgs `shouldBe` [sampleJob]
 
         it "carries every job field through unchanged from enqueue to receive" $ do
@@ -82,8 +94,8 @@ spec = do
             -- (via the 'MirrorJob' selectors) rather than on the whole record, so a
             -- regression that mangled a single field is pinpointed.
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            [msg] <- receive q
+            unwrap (enqueue q sampleJob)
+            [msg] <- unwrap (receive q)
             let job = msgJob msg
             jobPackage job `shouldBe` jobPackage sampleJob
             jobVersion job `shouldBe` jobVersion sampleJob
@@ -92,8 +104,8 @@ spec = do
 
         it "delivers jobs in FIFO order" $ do
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            enqueue q otherJob
+            unwrap (enqueue q sampleJob)
+            unwrap (enqueue q otherJob)
             received <- drain q
             received `shouldBe` [sampleJob, otherJob]
 
@@ -102,47 +114,47 @@ spec = do
             -- in-flight job, so the ack is a harmless no-op: the real in-flight job
             -- is untouched and still redelivers.
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            _ <- receive q
-            ack q (mkReceiptHandle "not-a-handle")
-            redelivered <- receive q
+            unwrap (enqueue q sampleJob)
+            _ <- unwrap (receive q)
+            unwrap (ack q (mkReceiptHandle "not-a-handle"))
+            redelivered <- unwrap (receive q)
             map msgJob redelivered `shouldBe` [sampleJob]
 
         it "ignores an extendVisibility for a handle it never issued" $ do
             -- Likewise extendVisibility on an unknown handle holds nothing, so the
             -- genuinely in-flight job still lapses and redelivers.
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            _ <- receive q
-            extendVisibility q (mkReceiptHandle "not-a-handle") (Seconds 30)
-            redelivered <- receive q
+            unwrap (enqueue q sampleJob)
+            _ <- unwrap (receive q)
+            unwrap (extendVisibility q (mkReceiptHandle "not-a-handle") (Seconds 30))
+            redelivered <- unwrap (receive q)
             map msgJob redelivered `shouldBe` [sampleJob]
 
         it "does not redeliver a job that was acked" $ do
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            [msg] <- receive q
-            ack q (msgReceipt msg)
+            unwrap (enqueue q sampleJob)
+            [msg] <- unwrap (receive q)
+            unwrap (ack q (msgReceipt msg))
             -- After the ack, the job is gone: a later receive is empty.
-            afterAck <- receive q
+            afterAck <- unwrap (receive q)
             map msgJob afterAck `shouldBe` []
 
         it "redelivers a job that was received but never acked" $ do
             q <- newInMemoryQueue
-            enqueue q sampleJob
+            unwrap (enqueue q sampleJob)
             -- Receive (taking the job out of sight) but deliberately do not ack:
             -- retry-is-don't-ack, so the job must become visible again.
-            _ <- receive q
-            redelivered <- receive q
+            _ <- unwrap (receive q)
+            redelivered <- unwrap (receive q)
             map msgJob redelivered `shouldBe` [sampleJob]
 
         it "stops redelivering once a redelivered job is acked" $ do
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            _ <- receive q
-            [msg] <- receive q
-            ack q (msgReceipt msg)
-            afterAck <- receive q
+            unwrap (enqueue q sampleJob)
+            _ <- unwrap (receive q)
+            [msg] <- unwrap (receive q)
+            unwrap (ack q (msgReceipt msg))
+            afterAck <- unwrap (receive q)
             map msgJob afterAck `shouldBe` []
 
         it "gives each delivery of the same job a distinct message (fresh receipt)" $ do
@@ -151,9 +163,9 @@ spec = do
             -- so acking one delivery cannot be confused with another. This pins the
             -- receipt-per-delivery invariant via 'QueueMessage' equality.
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            [firstDelivery] <- receive q
-            [secondDelivery] <- receive q
+            unwrap (enqueue q sampleJob)
+            [firstDelivery] <- unwrap (receive q)
+            [secondDelivery] <- unwrap (receive q)
             msgJob firstDelivery `shouldBe` msgJob secondDelivery
             firstDelivery `shouldNotBe` secondDelivery
             msgReceipt firstDelivery `shouldNotBe` msgReceipt secondDelivery
@@ -163,15 +175,15 @@ spec = do
             -- the in-memory double it simply leaves the in-flight job in flight,
             -- so the very next receive does not redeliver it.
             q <- newInMemoryQueue
-            enqueue q sampleJob
-            [msg] <- receive q
+            unwrap (enqueue q sampleJob)
+            [msg] <- unwrap (receive q)
             let hold = Seconds 30
             -- The window is a typed duration, not a bare Int: the held value is the
             -- one we pass through, and Seconds are ordered (a longer hold is larger).
             hold `shouldBe` Seconds 30
             hold `shouldSatisfy` (> Seconds 0)
-            extendVisibility q (msgReceipt msg) hold
-            afterHold <- receive q
+            unwrap (extendVisibility q (msgReceipt msg) hold)
+            afterHold <- unwrap (receive q)
             map msgJob afterHold `shouldBe` []
 
         it "agrees with a pure model under random operation sequences" $
@@ -185,25 +197,25 @@ spec = do
             -- The helper uses a 50ms window; the 2s timeout is a generous regression
             -- guard that fails loudly if receive ever reverts to blocking forever.
             (q, _drops) <- boundedQueue 4
-            result <- timeout 2_000_000 (receive q)
+            result <- timeout 2_000_000 (unwrap (receive q))
             result `shouldBe` Just []
 
         it "carries a job from enqueue through receive to ack (round-trip)" $ do
             -- A cap well above the one job, so nothing is dropped: the job arrives
             -- unchanged and ack (a no-op on this backend) completes without error.
             (q, _drops) <- boundedQueue 10
-            enqueue q sampleJob
-            [msg] <- receive q
+            unwrap (enqueue q sampleJob)
+            [msg] <- unwrap (receive q)
             msgJob msg `shouldBe` sampleJob
-            ack q (msgReceipt msg)
+            unwrap (ack q (msgReceipt msg))
 
         it "drops the newest enqueue at the cap and keeps the earlier jobs" $ do
             -- The load-bearing bound: at the cap a fresh enqueue is rejected
             -- (drop-newest), so the queue holds exactly the first 'cap' jobs and the
             -- overflowing newest one never arrives.
             (q, drops) <- boundedQueue 2
-            traverse_ (enqueue q) [sampleJob, otherJob, thirdJob]
-            received <- map msgJob <$> receive q
+            traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob]
+            received <- map msgJob <$> unwrap (receive q)
             received `shouldBe` [sampleJob, otherJob]
             -- The drop is observed (the first overflow is always reported).
             readIORef drops `shouldReturn` [1]
@@ -212,8 +224,8 @@ spec = do
             -- Many enqueues into a tiny cap retain at most 'cap' jobs (memory is hard
             -- bounded); the rest are dropped, and at least the first drop is reported.
             (q, drops) <- boundedQueue 2
-            traverse_ (enqueue q) (replicate 5 sampleJob)
-            received <- receive q
+            traverse_ (unwrap . enqueue q) (replicate 5 sampleJob)
+            received <- unwrap (receive q)
             length received `shouldBe` 2
             readIORef drops `shouldReturn` [1]
 
@@ -222,8 +234,8 @@ spec = do
             -- 'memoryQueueDropReportInterval'-th drop are reported (carrying the
             -- running total), so log volume is bounded under load.
             (q, drops) <- boundedQueue 1
-            enqueue q sampleJob -- fills the single slot; nothing receives it
-            traverse_ (enqueue q) (replicate memoryQueueDropReportInterval sampleJob)
+            unwrap (enqueue q sampleJob) -- fills the single slot; nothing receives it
+            traverse_ (unwrap . enqueue q) (replicate memoryQueueDropReportInterval sampleJob)
             readIORef drops `shouldReturn` [1, memoryQueueDropReportInterval]
 
     describe "newEnqueueBuffer" $ do
@@ -231,7 +243,7 @@ spec = do
             delivered <- newIORef []
             (q, drainLoop) <- newEnqueueBuffer 8 (const pass) (\_ _ -> pass) (recordingBackend delivered)
             withAsync drainLoop $ \_ -> do
-                traverse_ (enqueue q) [sampleJob, otherJob, thirdJob]
+                traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob]
                 awaitUntil ((== (3 :: Int)) . length <$> readIORef delivered)
             readIORef delivered `shouldReturn` [sampleJob, otherJob, thirdJob]
 
@@ -242,18 +254,18 @@ spec = do
             delivered <- newIORef []
             drops <- newIORef []
             (q, _drainLoop) <- newEnqueueBuffer 2 (\n -> modifyIORef' drops (<> [n])) (\_ _ -> pass) (recordingBackend delivered)
-            traverse_ (enqueue q) [sampleJob, otherJob, thirdJob, thirdJob]
+            traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob, thirdJob]
             readIORef drops `shouldReturn` [1, 2]
             readIORef delivered `shouldReturn` [] -- nothing drained, nothing delivered
-        it "keeps draining past a backend failure, reporting its total and detail" $ do
+        it "keeps draining past a backend delivery fault, reporting its total and detail" $ do
             delivered <- newIORef []
             failures <- newIORef []
             failFirst <- newIORef True
             let flaky job = do
                     failNow <- atomicModifyIORef' failFirst (False,)
                     if failNow
-                        then throwIO (ErrorCall "backend unavailable")
-                        else modifyIORef' delivered (<> [job])
+                        then pure (Left (queueFault TransportUnreachable "backend unavailable"))
+                        else Right () <$ modifyIORef' delivered (<> [job])
             (q, drainLoop) <-
                 newEnqueueBuffer
                     8
@@ -261,12 +273,10 @@ spec = do
                     (\n detail -> modifyIORef' failures (<> [(n, detail)]))
                     (recordingBackend delivered){enqueue = flaky}
             withAsync drainLoop $ \_ -> do
-                traverse_ (enqueue q) [sampleJob, otherJob]
+                traverse_ (unwrap . enqueue q) [sampleJob, otherJob]
                 awaitUntil ((== (1 :: Int)) . length <$> readIORef delivered)
-            -- GHC 9.10 appends a HasCallStack backtrace to a rendered exception;
-            -- the stable part of the detail is its first line.
-            recorded <- readIORef failures
-            map (second (T.takeWhile (/= '\n'))) recorded `shouldBe` [(1, "backend unavailable")]
+            -- The typed fault's detail arrives verbatim on the failure callback.
+            readIORef failures `shouldReturn` [(1, "backend unavailable")]
             readIORef delivered `shouldReturn` [otherJob] -- the loop survived the failure
   where
     -- A bounded in-memory queue at the given cap, paired with an 'IORef' that records
@@ -287,10 +297,10 @@ spec = do
     recordingBackend :: IORef [MirrorJob] -> MirrorQueue
     recordingBackend delivered =
         MirrorQueue
-            { enqueue = \job -> modifyIORef' delivered (<> [job])
-            , receive = pure []
-            , ack = const pass
-            , extendVisibility = \_ _ -> pass
+            { enqueue = \job -> Right () <$ modifyIORef' delivered (<> [job])
+            , receive = pure (Right [])
+            , ack = const (pure (Right ()))
+            , extendVisibility = \_ _ -> pure (Right ())
             }
 
     -- Poll (1ms cadence) until the condition holds, bounded at 2s so a broken
@@ -309,11 +319,11 @@ spec = do
     drain q = go []
       where
         go acc = do
-            msgs <- receive q
+            msgs <- unwrap (receive q)
             case msgs of
                 [] -> pure (reverse acc)
                 _ -> do
-                    traverse_ (ack q . msgReceipt) msgs
+                    traverse_ (unwrap . ack q . msgReceipt) msgs
                     go (reverse (map msgJob msgs) <> acc)
 
 {- | A pure model of 'newInMemoryQueue's observable state, parameterised over the
@@ -426,7 +436,7 @@ enqueueCommand :: MirrorQueue -> Command H.Gen (PropertyT IO) QModel
 enqueueCommand q =
     Command
         (const (Just (EnqueueInput <$> genJob)))
-        (\(EnqueueInput job) -> liftIO (enqueue q job))
+        (\(EnqueueInput job) -> liftIO (unwrap (enqueue q job)))
         [ Update $ \m (EnqueueInput job) _out ->
             m{mVisible = mVisible m <> [job]}
         ]
@@ -440,7 +450,7 @@ receiveCommand :: MirrorQueue -> Command H.Gen (PropertyT IO) QModel
 receiveCommand q =
     Command
         (const (Just (pure ReceiveInput)))
-        (\ReceiveInput -> liftIO (receive q))
+        (\ReceiveInput -> liftIO (unwrap (receive q)))
         [ Update $ \m ReceiveInput out ->
             let (delivered, stillHeld) = predictReceive m
                 newInFlight =
@@ -473,7 +483,7 @@ ackCommand :: MirrorQueue -> Command H.Gen (PropertyT IO) QModel
 ackCommand q =
     Command
         gen
-        (\(AckInput var i) -> liftIO (whenJust (handleAt var i) (ack q)))
+        (\(AckInput var i) -> liftIO (whenJust (handleAt var i) (unwrap . ack q)))
         [ Require $ \m (AckInput var i) -> inFlightMember m var i
         , Update $ \m (AckInput var i) _out ->
             m{mInFlight = filter (not . sameHandle var i) (mInFlight m)}
@@ -494,7 +504,7 @@ extendCommand :: MirrorQueue -> Command H.Gen (PropertyT IO) QModel
 extendCommand q =
     Command
         gen
-        (\(ExtendInput var i secs) -> liftIO (whenJust (handleAt var i) (\h -> extendVisibility q h secs)))
+        (\(ExtendInput var i secs) -> liftIO (whenJust (handleAt var i) (\h -> unwrap (extendVisibility q h secs))))
         [ Require $ \m (ExtendInput var i _secs) -> inFlightMember m var i
         , Update $ \m (ExtendInput var i _secs) _out ->
             m{mInFlight = map (hold var i) (mInFlight m)}

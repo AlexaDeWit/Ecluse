@@ -3,21 +3,31 @@ module Ecluse.MirrorQueueSpec (spec) where
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorArtifact (..),
     MirrorJob (..),
     MirrorQueue (..),
+    QueueFault (qfCause),
     QueueMessage (..),
     Seconds (..),
  )
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout),
     defaultQueueOptions,
     freshQueue,
     receiveUntil,
+    unwrapQ,
     withMinistack,
+ )
+import Ecluse.Runtime.Queue.Sqs (
+    SqsConfig (sqsEndpoint, sqsWaitSeconds),
+    SqsEndpoint (SqsEndpoint, endpointHost, endpointPort, endpointSecure),
+    defaultSqsConfig,
+    newSqsQueue,
  )
 import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
 
@@ -33,20 +43,20 @@ spec =
         describe "mirror queue (ministack)" $ do
             it "round-trips a job: enqueue, receive, ack, then no redelivery" $ \container -> do
                 queue <- freshQueue container "mirror-roundtrip" defaultQueueOptions
-                enqueue queue sampleJob
+                unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 msgJob message `shouldBe` sampleJob
-                ack queue (msgReceipt message)
+                unwrapQ (ack queue (msgReceipt message))
                 -- After the ack the job is gone: a poll past the (short) visibility
                 -- window yields nothing.
-                afterAck <- receive queue
+                afterAck <- unwrapQ (receive queue)
                 map msgJob afterAck `shouldBe` []
 
             it "redelivers a job that was received but never acked" $ \container -> do
                 -- A very short visibility timeout so the un-acked job becomes
                 -- visible again within the test's patience.
                 queue <- freshQueue container "mirror-redeliver" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                enqueue queue sampleJob
+                unwrapQ (enqueue queue sampleJob)
                 _firstDelivery <- receiveUntil queue
                 -- Deliberately do not ack: retry-is-don't-ack means the job must
                 -- reappear once its visibility window lapses.
@@ -59,13 +69,36 @@ spec =
                 -- gap the original timeout would have redelivered in, proving the
                 -- ChangeMessageVisibility call held it.
                 queue <- freshQueue container "mirror-extend" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                enqueue queue sampleJob
+                unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
-                extendVisibility queue (msgReceipt message) (Seconds 30)
+                unwrapQ (extendVisibility queue (msgReceipt message) (Seconds 30))
                 -- Past the original 1s window (poll twice over ~2s); still hidden.
-                stillHidden1 <- receive queue
-                stillHidden2 <- receive queue
+                stillHidden1 <- unwrapQ (receive queue)
+                stillHidden2 <- unwrapQ (receive queue)
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
+
+            it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
+                -- Point the backend at a loopback port with nothing listening: the
+                -- poll must come back as the typed 'Left' with the unreachable
+                -- cause -- classified at the adapter edge -- never as an exception
+                -- through the caller.
+                queue <- deadEndpointQueue
+                outcome <- receive queue
+                case outcome of
+                    Left fault -> qfCause fault `shouldBe` TransportUnreachable
+                    Right messages -> expectationFailure ("expected a typed transport fault, got " <> show messages)
+
+-- An SQS backend pointed at a loopback port with nothing listening (port 1 is in
+-- the privileged range and never bound), for the typed-fault classification case.
+deadEndpointQueue :: IO MirrorQueue
+deadEndpointQueue =
+    newSqsQueue
+        (Right . loopbackRegistryUrl)
+        (defaultSqsConfig "http://127.0.0.1:1/000000000000/dead" "us-east-1")
+            { sqsEndpoint =
+                Just SqsEndpoint{endpointSecure = False, endpointHost = "127.0.0.1", endpointPort = 1}
+            , sqsWaitSeconds = 1
+            }
 
 -- | A sample mirror job carried end-to-end through SQS.
 sampleJob :: MirrorJob

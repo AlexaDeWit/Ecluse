@@ -57,6 +57,11 @@ module Ecluse.Core.Queue (
     -- * Queue handle
     MirrorQueue (..),
 
+    -- * Faults
+    QueueFault (..),
+    queueFault,
+    queueTransportFault,
+
     -- * Payloads
     MirrorJob (..),
     MirrorArtifact (..),
@@ -93,9 +98,9 @@ import System.Timeout (timeout)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
+import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault), transportFault)
 import Ecluse.Core.Package (Hash, PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (Version)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the
@@ -225,26 +230,73 @@ data QueueMessage = QueueMessage
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
 
+{- | Why a queue operation could not be delivered to the backend, reported as a
+__value__ on every handle field: the closed transport cause a consumer branches
+on, and the backend's rendered detail for its log line. The cause vocabulary is
+"Ecluse.Core.Fault"'s ('TransportCause'); a cloud backend's service-level
+refusal (a throttle, an access denial) classifies as 'TransportProtocol' with
+the service detail carried. Build one with 'queueFault' (or adopt an
+already-classified transport fault with 'queueTransportFault') so the detail
+stays bounded.
+
+Every fault is __safe to absorb__ under the handle's contract: an enqueue fault
+is the documented best-effort loss (re-enqueued on the next demand), a receive
+fault is a failed poll (retried after backoff), and an ack or visibility fault
+just means the message redelivers (idempotent). The typed channel exists so each
+caller makes that absorption decision explicitly, with the cause in hand.
+-}
+data QueueFault = QueueFault
+    { qfCause :: TransportCause
+    -- ^ The closed classification a consumer or an operator reads.
+    , qfDetail :: Text
+    {- ^ The backend's rendered detail, bounded to a log-line-sized budget.
+    Diagnostic text only: it is never parsed, and no decision may branch on it.
+    -}
+    }
+    deriving stock (Eq, Show)
+
+{- | Build a 'QueueFault' with the detail truncated to the shared log-line budget
+(delegated to 'Ecluse.Core.Fault.transportFault', so the two vocabularies cannot
+drift on what "bounded" means).
+-}
+queueFault :: TransportCause -> Text -> QueueFault
+queueFault cause detail = queueTransportFault (transportFault cause detail)
+
+{- | Adopt an already-classified 'TransportFault' (an adapter edge's
+classification of its client library's exception) as a 'QueueFault'.
+-}
+queueTransportFault :: TransportFault -> QueueFault
+queueTransportFault (TransportFault cause detail) = QueueFault cause detail
+
 {- | The mirror-queue handle -- a record of functions over a backend whose private
 state the closures capture. See the module header for the @enqueue@ /
-don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO'.
+don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO', and each
+reports its backend failures as a 'QueueFault' __value__, so no queue outage
+ever rides the exception channel through a caller.
 -}
 data MirrorQueue = MirrorQueue
-    { enqueue :: MirrorJob -> IO ()
-    {- ^ Producer. __Best-effort__: runs on the request hot path, so a failure is
-    logged\/metered and never fails the client response (see the header).
+    { enqueue :: MirrorJob -> IO (Either QueueFault ())
+    {- ^ Producer. __Best-effort__: runs on the request hot path, so a 'Left' is
+    counted\/logged by the caller and never fails the client response (see the
+    header); the lost job is re-enqueued on the next demand for its artifact.
     -}
-    , receive :: IO [QueueMessage]
-    {- ^ Consumer. One long-poll for a batch of messages; returns @[]@ on timeout
-    (an empty poll), so the worker loop simply polls again.
+    , receive :: IO (Either QueueFault [QueueMessage])
+    {- ^ Consumer. One long-poll for a batch of messages; @Right []@ on timeout
+    (an empty, healthy poll), so the worker loop simply polls again. A 'Left' is
+    a failed poll: the worker logs it and backs off, and -- unlike an empty
+    poll -- it does __not__ advance the liveness heartbeat, so a persistently
+    failing backend still surfaces through @\/livez@.
     -}
-    , ack :: ReceiptHandle -> IO ()
+    , ack :: ReceiptHandle -> IO (Either QueueFault ())
     {- ^ Acknowledge a processed message so it is not redelivered. __Not__ acking
-    is how a failed job is retried (the header's "retry is don't ack").
+    is how a failed job is retried (the header's "retry is don't ack"), so a
+    'Left' here is absorbed after logging: the processed message redelivers, and
+    idempotent publishing makes the repeat harmless.
     -}
-    , extendVisibility :: ReceiptHandle -> Seconds -> IO ()
+    , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either QueueFault ())
     {- ^ Extend a received message's visibility window to hold a long publish. An
-    optimization, not correctness-critical (redelivery is harmless).
+    optimization, not correctness-critical (redelivery is harmless), so a 'Left'
+    is absorbed silently by the caller.
     -}
     }
 
@@ -293,12 +345,14 @@ redelivery pass. This is a test double -- there is no long-poll blocking; an emp
 newInMemoryQueue :: IO MirrorQueue
 newInMemoryQueue = do
     stateVar <- newTVarIO (QueueState 0 Seq.empty mempty)
-    let modifyState :: (QueueState -> QueueState) -> IO ()
-        modifyState = atomically . modifyTVar' stateVar
+    -- Every operation is one STM transaction over process-local state, so this
+    -- backend has no fault to report: each field is always 'Right'.
+    let modifyState :: (QueueState -> QueueState) -> IO (Either QueueFault ())
+        modifyState = fmap Right . atomically . modifyTVar' stateVar
     pure
         MirrorQueue
             { enqueue = modifyState . enqueueJob
-            , receive = atomically $ do
+            , receive = fmap Right . atomically $ do
                 qs <- readTVar stateVar
                 let (messages, qs') = deliverAll qs
                 writeTVar stateVar qs'
@@ -485,14 +539,17 @@ newBoundedInMemoryQueue cfg onDrop = do
             { enqueue = \job -> do
                 dropped <- atomically (writeOrDrop queue dropCount job)
                 whenJust dropped (\n -> when (shouldReportDrop n) (onDrop n))
+                -- A cap overflow is the documented drop-newest shed (reported through
+                -- the callback), not a backend fault: the enqueue itself worked.
+                pure (Right ())
             , -- A bounded long-poll: wait up to the poll window for a batch, else return
               -- [] so the worker's heartbeat keeps advancing on an idle queue. The
               -- timeout aborts the blocked STM transaction, so no job is consumed.
-              receive = fromMaybe [] <$> timeout (memQueuePollWaitMicros cfg) (atomically (receiveBatch queue nextReceipt))
+              receive = Right . fromMaybe [] <$> timeout (memQueuePollWaitMicros cfg) (atomically (receiveBatch queue nextReceipt))
             , -- A delivered job is already gone from the queue, so there is nothing to
               -- retire and a failed job redelivers via the next demand, not here.
-              ack = const pass
-            , extendVisibility = \_ _ -> pass
+              ack = const (pure (Right ()))
+            , extendVisibility = \_ _ -> pure (Right ())
             }
 
 -- Report the first drop, then every interval-th, so the first shed is always
@@ -582,7 +639,9 @@ artifact -- the same argument 'newBoundedInMemoryQueue' makes):
   composition root races it against the services; shutdown cancels it and any
   still-buffered jobs are dropped -- the same safe loss.
 
-The wrapped 'enqueue' never throws.
+The wrapped 'enqueue' never fails: it is always @Right ()@ (a drop is the
+documented safe loss, reported through @onDrop@, not a fault), so the never-fails
+producer contract is visible in the type.
 -}
 newEnqueueBuffer ::
     {- | Buffer depth: how many undelivered jobs the hand-off retains before
@@ -613,6 +672,10 @@ newEnqueueBuffer depth onDrop onDeliveryFailure backend = do
             -- hot path, so a throwing observer must never turn a safe drop into an
             -- exception on the client response: guard it (async-safe 'tryAny').
             whenJust dropped (void . tryAny . onDrop)
+            -- The hand-off is an in-process STM write with a drop policy: it has
+            -- no fault to report (the header's never-fails producer contract,
+            -- visible in the type as an always-'Right').
+            pure (Right ())
     pure (backend{enqueue = handOff}, drainLoop buffer failureCount onDeliveryFailure backend)
 
 {- The drain loop: deliver buffered jobs to the backend's own 'enqueue', forever. Each
@@ -630,13 +693,16 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
   where
     go consecutiveFailures = do
         job <- atomically (readTBQueue buffer)
-        tryAny (enqueue backend job) >>= \case
+        -- The backend reports its delivery failures as 'QueueFault' values, so the
+        -- branch is a total match; an exception escaping here is an invariant
+        -- break, left to the loop's supervisor.
+        enqueue backend job >>= \case
             Right () -> go 0
-            Left failure -> do
+            Left fault -> do
                 n <- atomically (bumpCount failureCount)
                 -- 'onDeliveryFailure' is a best-effort observer; guard it so a throwing
                 -- observer can never escape the loop and tear down the composition root.
-                void (tryAny (onDeliveryFailure n (displayExceptionT failure)))
+                void (tryAny (onDeliveryFailure n (qfDetail fault)))
                 threadDelay (drainBackoffMicros consecutiveFailures)
                 go (consecutiveFailures + 1)
 

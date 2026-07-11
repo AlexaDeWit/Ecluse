@@ -15,7 +15,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -40,6 +40,7 @@ import Ecluse.Core.Queue (
     ReceiptHandle,
     enqueue,
     newInMemoryQueue,
+    queueFault,
  )
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
@@ -427,7 +428,7 @@ full-manifest op is unused here and refuses loudly).
 versionClient :: Either MetadataError (Maybe PackageDetails) -> MetadataClient
 versionClient result =
     MetadataClient
-        { fetchFullManifest = const (throwString "versionClient: fetchFullManifest is unused")
+        { fetchFullManifest = const (throwIO (SimulatedContractEscape "versionClient: fetchFullManifest is unused"))
         , fetchVersionMetadata = \_ _ -> pure result
         }
 
@@ -438,8 +439,8 @@ pinning that the classification boundary propagates rather than absorbs it.
 throwingVersionClient :: MetadataClient
 throwingVersionClient =
     MetadataClient
-        { fetchFullManifest = const (throwString "throwingVersionClient: fetchFullManifest is unused")
-        , fetchVersionMetadata = \_ _ -> throwString "simulated contract escape"
+        { fetchFullManifest = const (throwIO (SimulatedContractEscape "throwingVersionClient: fetchFullManifest is unused"))
+        , fetchVersionMetadata = \_ _ -> throwIO (SimulatedContractEscape "simulated contract escape")
         }
 
 {- | Discharge a 'WorkerM' to 'IO' over the worker runtime against a scribe-less @katip@
@@ -452,9 +453,34 @@ runWM runtime action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runWorkerM logEnv mempty runtime action
 
-{- | A queue whose @receive@ always throws, counting each call. Stands in for a
-persistently-failing dependency so the supervised loop's catch-log-backoff arm can
-be exercised: the loop must survive a throwing iteration and poll again, not die.
+{- | A typed stand-in for an exception escaping a dependency's typed contract (an
+invariant break), so the residue-supervision cases pin the escape channel without
+a stringly exception.
+-}
+newtype SimulatedContractEscape = SimulatedContractEscape Text
+    deriving stock (Eq, Show)
+
+instance Exception SimulatedContractEscape
+
+{- | A queue whose @receive@ always reports the handle's typed fault, counting
+each call. Stands in for a persistently-failing backend so the loop's typed
+log-and-back-off arm can be exercised: the loop must survive a faulted poll and
+poll again, not die.
+-}
+faultingReceiveQueue :: IORef Int -> IO MirrorQueue
+faultingReceiveQueue calls = do
+    base <- newInMemoryQueue
+    pure
+        base
+            { receive = do
+                atomicModifyIORef' calls (\n -> (n + 1, ()))
+                pure (Left (queueFault TransportUnreachable "receive: simulated queue outage"))
+            }
+
+{- | A queue whose @receive@ always __throws__, counting each call: the handle's
+typed contract broken rather than honoured. Stands in for residue (an invariant
+break escaping the value channel), so the loop's residual catch-log-backoff arm
+stays pinned by a test.
 -}
 throwingReceiveQueue :: IORef Int -> IO MirrorQueue
 throwingReceiveQueue calls = do
@@ -463,7 +489,7 @@ throwingReceiveQueue calls = do
         base
             { receive = do
                 atomicModifyIORef' calls (\n -> (n + 1, ()))
-                throwString "receive: simulated queue outage"
+                throwIO (SimulatedContractEscape "receive: simulated queue outage")
             }
 
 {- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the
@@ -489,14 +515,29 @@ unformable-URL arm, distinct from a reachable-but-failing fetch.
 unformableUrl :: Text
 unformableUrl = "not a url"
 
+-- Enqueue a job on the in-memory double, unwrapping its never-faulting typed
+-- channel: a 'Left' is a broken test premise, failed loudly.
+enqueue_ :: MirrorQueue -> MirrorJob -> IO ()
+enqueue_ queue job =
+    enqueue queue job >>= \case
+        Left fault -> fail ("enqueue faulted on the in-memory double: " <> show fault)
+        Right () -> pass
+
+-- Receive the currently-visible batch, unwrapping the never-faulting typed channel.
+receive_ :: MirrorQueue -> IO [QueueMessage]
+receive_ queue =
+    receive queue >>= \case
+        Left fault -> fail ("receive faulted on the in-memory double: " <> show fault)
+        Right messages -> pure messages
+
 -- Enqueue a job, receive it, and return its receipt handle so the per-job processing
 -- can be driven with a real handle.
 enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO (ReceiptHandle, MirrorJob)
 enqueueAndReceive queue job = do
-    enqueue queue job
-    receive queue >>= \case
+    enqueue_ queue job
+    receive_ queue >>= \case
         [message] -> pure (msgReceipt message, job)
-        other -> fail ("expected exactly one message, got " <> show (length other))
+        other -> fail ("expected exactly one message, got " <> show other)
 
 -- ── spec ────────────────────────────────────────────────────────────────────────
 
@@ -507,8 +548,9 @@ pollUntilRedelivered :: MirrorQueue -> Int -> IO Bool
 pollUntilRedelivered _ 0 = pure False
 pollUntilRedelivered queue n =
     receive queue >>= \case
-        [] -> pollUntilRedelivered queue (n - 1)
-        _ -> pure True
+        Right [] -> pollUntilRedelivered queue (n - 1)
+        Right _ -> pure True
+        Left fault -> fail ("receive faulted on the in-memory double: " <> show fault)
 
 -- ── small predicates ─────────────────────────────────────────────────────────────
 

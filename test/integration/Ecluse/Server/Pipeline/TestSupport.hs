@@ -32,6 +32,7 @@ import Network.Wai.Test (
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
@@ -40,6 +41,7 @@ import Ecluse.Core.Queue (
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
     newInMemoryQueue,
+    queueFault,
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
@@ -824,7 +826,10 @@ headTarball version bearer =
 
 -- | Drain every mirror job currently enqueued on the proxy's queue, in FIFO order.
 drainJobs :: Env -> IO [MirrorJob]
-drainJobs env = map msgJob <$> receive (envQueue env)
+drainJobs env =
+    receive (envQueue env) >>= \case
+        Right messages -> pure (map msgJob messages)
+        Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
 
 -- The decoded JSON body of a proxy response, or 'Null' if it did not decode (a
 -- non-JSON body then surfaces as a plain assertion mismatch, not a crash).
@@ -1040,4 +1045,6 @@ jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do
     queue <- newInMemoryQueue
-    pure queue{enqueue = \_ -> throwString "enqueue failed (test double)"}
+    -- The typed producer channel: a backend fault is the 'Left' value the serve
+    -- path's best-effort enqueue counts and swallows.
+    pure queue{enqueue = \_ -> pure (Left (queueFault TransportUnreachable "enqueue failed (test double)"))}

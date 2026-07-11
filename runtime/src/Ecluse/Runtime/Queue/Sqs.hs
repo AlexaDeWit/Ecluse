@@ -13,7 +13,11 @@ receipt handle is carried opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'),
 so none of it leaks past the handle. __Retry is "don't ack"__: a job whose
 processing fails is simply not 'ack'ed, and SQS redelivers it once the visibility
 timeout lapses; persistent failures fall to the queue's native dead-letter
-(max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue").
+(max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). Every
+operation reports its AWS failure as the handle's typed
+'Ecluse.Core.Queue.QueueFault' value, classified into the core transport
+vocabulary at this edge ("Ecluse.Runtime.Aws.Fault"), so a queue outage never
+rides the exception channel through a caller.
 
 The @amazonka@ 'AWS.Env' is built once at 'newSqsQueue' and captured by the
 handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
@@ -85,14 +89,17 @@ import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (..),
+    QueueFault,
     QueueMessage (..),
     RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate),
     Seconds (..),
     mkReceiptHandle,
+    queueTransportFault,
     unReceiptHandle,
  )
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 
 {- | Where an SQS-compatible endpoint lives, for pointing the backend at a
 non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint. A
@@ -162,19 +169,24 @@ chain -- and captured by the returned handle's closures.
 newSqsQueue :: (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
 newSqsQueue egressUrl cfg = do
     env <- mkEnv cfg
-    let run :: (AWS.AWSRequest a) => a -> IO (AWS.AWSResponse a)
-        run = runResourceT . AWS.send env
+    -- Every operation reports its AWS failure as the handle's 'QueueFault' value:
+    -- 'AWS.sendEither' keeps the error sum out of the exception channel, and the
+    -- shared classifier folds it into the core transport vocabulary at this edge.
+    let run :: (AWS.AWSRequest a) => a -> IO (Either QueueFault (AWS.AWSResponse a))
+        run = fmap (first (queueTransportFault . classifyAwsTransport)) . runResourceT . AWS.sendEither env
         queueUrl = sqsQueueUrl cfg
     pure
         MirrorQueue
-            { enqueue = void . run . SQS.newSendMessage queueUrl . encodeJob
+            { enqueue = fmap void . run . SQS.newSendMessage queueUrl . encodeJob
             , receive = do
-                response <- run (receiveRequest cfg)
-                let messages = fromMaybe [] (response ^. SQS.receiveMessageResponse_messages)
-                pure (mapMaybe (toQueueMessage egressUrl) messages)
-            , ack = void . run . SQS.newDeleteMessage queueUrl . unReceiptHandle
+                outcome <- run (receiveRequest cfg)
+                pure $
+                    outcome <&> \response ->
+                        let messages = fromMaybe [] (response ^. SQS.receiveMessageResponse_messages)
+                         in mapMaybe (toQueueMessage egressUrl) messages
+            , ack = fmap void . run . SQS.newDeleteMessage queueUrl . unReceiptHandle
             , extendVisibility = \receipt (Seconds secs) ->
-                void . run $
+                fmap void . run $
                     SQS.newChangeMessageVisibility queueUrl (unReceiptHandle receipt) secs
             }
 
