@@ -2634,7 +2634,7 @@
               "threats": [
                 {
                   "number": 16,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Poisoned OSV payload exploits parser",
                   "type": "Denial of service",
