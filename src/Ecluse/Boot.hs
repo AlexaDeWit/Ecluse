@@ -177,7 +177,7 @@ buildMirrorQueue :: LogEnv -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv plan = do
     whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
     case plan of
-        SqsBackend sqsConfig -> newSqsQueue mkRegistryUrl sqsConfig
+        SqsBackend sqsConfig -> newSqsQueue logEnv mkRegistryUrl sqsConfig
         MemoryBackend memoryConfig ->
             newBoundedInMemoryQueue memoryConfig (logBootWarning logEnv . memoryQueueDropWarning)
 

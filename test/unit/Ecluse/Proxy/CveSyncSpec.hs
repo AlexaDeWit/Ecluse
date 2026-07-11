@@ -5,12 +5,30 @@
 module Ecluse.Proxy.CveSyncSpec (spec) where
 
 import Data.Map.Strict qualified as Map
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import Data.Text qualified as T
+import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
+import Katip (
+    ColorStrategy (ColorLog),
+    Environment (Environment),
+    LogEnv,
+    Namespace (Namespace),
+    Severity (DebugS),
+    Verbosity (V2),
+    closeScribes,
+    defaultScribeSettings,
+    initLogEnv,
+    permitItem,
+    registerScribe,
+ )
+import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (throwString)
+import UnliftIO (bracket)
+import UnliftIO.Exception (throwIO, throwString)
+import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
@@ -18,7 +36,7 @@ import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
-import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync)
+import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Test.Cve (fakeCveLookup)
 
@@ -27,7 +45,8 @@ spec = do
     describe "planCveSync -- the per-ecosystem advisory-sync plan" $ do
         it "plans nothing without a configured advisory bucket" $ do
             cfg <- appConfigFrom [] Nothing
-            plan <- planCveSync cfg
+            logEnv <- quietLogEnv
+            plan <- planCveSync logEnv cfg
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
@@ -45,7 +64,8 @@ spec = do
                         , ("ECLUSE_OSV_DATA_DIR", dataDir)
                         ]
                         (Just mountedNpmDoc)
-                plan <- planCveSync cfg
+                logEnv <- quietLogEnv
+                plan <- planCveSync logEnv cfg
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
@@ -55,6 +75,35 @@ spec = do
                     withSlotLookup (csSlot handle) (pure . isJust) `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema3.db.tmp") `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema3.db") `shouldReturn` True
+
+    describe "sweepStep -- the sweep's best-effort filesystem boundary" $ do
+        it "propagates a non-IO exception rather than swallowing it" $ do
+            logEnv <- quietLogEnv
+            sweepStep logEnv "/srv/osv" (throwIO SweepBoom) `shouldThrow` (\SweepBoom -> True)
+
+        it "swallows an IOError, logs it at Warning against the path, and returns so boot proceeds" $
+            withSystemTempDirectory "ecluse-sweep-io" $ \dir -> do
+                logEnv <- jsonLogEnv
+                let missing = dir </> "npm-osv-schema3.db.tmp"
+                logged <- captureStdout $ do
+                    -- Removing a file that is not there raises an 'IOError': the step must
+                    -- log it and return, not propagate it.
+                    sweepStep logEnv missing (removeFile missing)
+                    void (closeScribes logEnv)
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Proxy.CveSync\""
+                logged `shouldSatisfy` T.isInfixOf "npm-osv-schema3.db.tmp"
+                logged `shouldSatisfy` T.isInfixOf "could not sweep"
+
+    describe "sweepStaleTemps -- the whole-directory sweep" $
+        it "swallows a listing fault on a missing dir and returns, logging it at Warning" $
+            withSystemTempDirectory "ecluse-sweep-missing" $ \dir -> do
+                logEnv <- jsonLogEnv
+                logged <- captureStdout $ do
+                    sweepStaleTemps logEnv (dir </> "missing")
+                    void (closeScribes logEnv)
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Proxy.CveSync\""
 
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
@@ -138,3 +187,45 @@ mountedNpmDoc =
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"respectUpstreamTarballHost\":false,\
     \\"mirrorTarget\":\"https://mirror.example.test\",\"credentialProvider\":\"codeartifact\"}}}"
+
+-- | A non-'IO' exception, to prove the sweep no longer swallows every fault.
+data SweepBoom = SweepBoom
+    deriving stock (Show)
+
+instance Exception SweepBoom
+
+{- | A scribe-free 'LogEnv': the planning tests thread a logger but assert on the
+plan, not on any log line, so a no-output environment satisfies the dependency.
+-}
+quietLogEnv :: IO LogEnv
+quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+
+{- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
+severity admitted, so a swept-temp warning's serialised bytes are assertable through
+'captureStdout'.
+-}
+jsonLogEnv :: IO LogEnv
+jsonLogEnv = do
+    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
+    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    registerScribe "stdout" scribe defaultScribeSettings base
+
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning what
+was written, and restore 'stdout' on every exit path, so a test can capture what a
+scribe emits without leaking it into the run.
+-}
+captureStdout :: IO () -> IO Text
+captureStdout act =
+    withSystemTempFile "ecluse-cve-sync-log.txt" $ \path tmpHandle ->
+        bracket (hDuplicate stdout) restore $ \_saved -> do
+            hFlush stdout
+            hDuplicateTo tmpHandle stdout
+            act
+            hFlush stdout
+            hClose tmpHandle
+            decodeUtf8 <$> readFileBS path
+  where
+    restore saved = do
+        hFlush stdout
+        hDuplicateTo saved stdout
+        hClose saved

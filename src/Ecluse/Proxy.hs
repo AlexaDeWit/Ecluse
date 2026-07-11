@@ -196,7 +196,7 @@ runProxy bootEnv = do
     -- independent so one ecosystem's missing artifact never holds back
     -- another's. Without a bucket the map is empty: rules abstain and
     -- readiness is ungated.
-    cveSyncPlan <- planCveSync env
+    cveSyncPlan <- planCveSync logEnv env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule)
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
