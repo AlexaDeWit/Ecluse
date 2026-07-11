@@ -176,7 +176,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
     relative prefix path (@\/npm@), retained for compatibility -- but note @npm@
     cannot consume a relative @dist.tarball@ (it reads a leading slash as a @file:@
     path), so a real install path must set @ECLUSE_PUBLIC_URL@ (see @mountBaseUrl@
-    and @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
+    and @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). -}
     packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
     packumentDepsFor adapter mount mcfg = do
         -- Prepare the resolved policy into the engine's runtime rules, closing the
