@@ -3,6 +3,9 @@ module Ecluse.Cve.SyncSpec (spec) where
 import Conduit (runConduit, yieldMany, (.|))
 import Data.Conduit.Combinators qualified as C
 import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
+import Network.HTTP.Types (Status, hContentType, status200, status404)
+import Network.Wai (Application, responseLBS)
+import Network.Wai.Handler.Warp (testWithApplication)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -10,6 +13,11 @@ import Test.Hspec (Spec, anyException, describe, expectationFailure, it, shouldB
 import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
+
+import Amazonka qualified as AWS
+import Amazonka.Auth (fromKeys)
+import Amazonka.S3 qualified as S3
+import Data.ByteString.Lazy qualified as LBS
 
 import Ecluse.Core.Cve (CveDbRejected (..), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
@@ -25,6 +33,7 @@ import Ecluse.Runtime.Cve.Sync (
     cappedAt,
     discardTemp,
     runCveSync,
+    s3CveFetch,
     syncStep,
  )
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb)
@@ -74,6 +83,30 @@ runQuiet :: KatipContextT IO a -> IO a
 runQuiet action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
+
+stubS3Env :: Int -> IO AWS.Env
+stubS3Env port = do
+    let auth = fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey")
+    env <- AWS.newEnv (pure . auth)
+    pure $ AWS.configureService (customS3Endpoint (False, "127.0.0.1", port)) env
+
+customS3Endpoint :: (Bool, Text, Int) -> AWS.Service
+customS3Endpoint (secure, host, port) =
+    (AWS.setEndpoint secure (encodeUtf8 host) port S3.defaultService)
+        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
+        }
+
+stubS3 :: Maybe Text -> Status -> LByteString -> Application
+stubS3 mEtag status body _req respond =
+    respond
+        ( responseLBS
+            status
+            ( (hContentType, "application/octet-stream")
+                : maybeToList ((\e -> ("ETag", encodeUtf8 e)) <$> mEtag)
+                    <> [("Content-Length", show (LBS.length body))]
+            )
+            body
+        )
 
 spec :: Spec
 spec = do
@@ -280,6 +313,20 @@ spec = do
     describe "discardTemp robustness" $ do
         it "is a no-op when the file does not exist" $
             discardTemp "/no/such/file/deliberate"
+
+    describe "s3HeadEtag / s3Download" $ do
+        it "s3HeadEtag returns Nothing on 404" $
+            testWithApplication (pure (stubS3 (Just "e1") status404 "not found")) $ \port -> do
+                env <- stubS3Env port
+                let fetch = s3CveFetch env "bucket" "key" 1024
+                fetchHeadEtag fetch `shouldReturn` Nothing
+
+        it "s3Download fast-fails on Content-Length over cap" $
+            testWithApplication (pure (stubS3 (Just "e1") status200 "too large")) $ \port -> do
+                env <- stubS3Env port
+                let fetch = s3CveFetch env "bucket" "key" 5
+                withSystemTempDirectory "ecluse-s3-sync" $ \dir -> do
+                    fetchDownload fetch (dir </> "out") `shouldThrow` (== OsvDbTooLarge 5)
 
     describe "Show and Eq instances" $ do
         let (isNotNull :: [Char] -> Bool) = not . null

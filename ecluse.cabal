@@ -541,6 +541,7 @@ test-suite ecluse-core-unit
     , ecluse:ecluse-test-support
     , aeson             ^>=2.2
     , amazonka          ^>=2.0
+    , amazonka-s3       ^>=2.0
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
@@ -696,6 +697,7 @@ test-suite ecluse-runtime-unit
     , ecluse:ecluse-test-support
     , aeson             ^>=2.2
     , amazonka          ^>=2.0
+    , amazonka-s3       ^>=2.0
     , bytestring        ^>=0.12
     , conduit           ^>=1.3
     , directory         ^>=1.3
