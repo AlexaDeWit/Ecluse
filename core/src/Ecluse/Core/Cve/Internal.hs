@@ -77,6 +77,8 @@ data CveDbRejected
       CveDbMetaUnreadable [Text]
     deriving stock (Eq, Show)
 
+instance Exception CveDbRejected
+
 {- | Open an artifact read-only-in-effect and accept or reject it.
 
 Hardening order matters, and every pragma is applied before the first query.
@@ -118,7 +120,7 @@ openHardenedConnection eco dbFile = do
             -- instead throw (e.g. a non-SQLite file whose first file-touching
             -- pragma raises), so the just-opened connection is never leaked on
             -- that path.
-            let hardenAndAccept = do
+            let hardenAndAccept = tryAny $ do
                     execute_ conn "PRAGMA trusted_schema = OFF"
                     execute_ conn "PRAGMA query_only = ON"
                     execute_ conn "PRAGMA cell_size_check = ON"
@@ -126,10 +128,15 @@ openHardenedConnection eco dbFile = do
                     acceptArtifact eco conn
             accepted <- hardenAndAccept `onException` close conn
             case accepted of
-                Left rejection -> do
+                Left err -> do
                     close conn
-                    pure (Left rejection)
-                Right () -> pure (Right conn)
+                    pure $ Left $ case fromException err of
+                        Just (rej :: CveDbRejected) -> rej
+                        Nothing -> CveDbIntegrityFailed ["hardening or acceptance failed: " <> show err]
+                Right (Left rej) -> do
+                    close conn
+                    pure (Left rej)
+                Right (Right ()) -> pure (Right conn)
 
 acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 acceptArtifact eco conn = runExceptT $ do

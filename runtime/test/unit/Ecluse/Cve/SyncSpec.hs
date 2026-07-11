@@ -290,12 +290,18 @@ spec = do
             e1 `shouldBe` e1
             e1 `shouldSatisfy` (/= e2)
 
-        it "Show SyncOutcome exercises all constructors" $ do
-            let (etag, meta, rej) = (DbEtag "e", [("k", "v")], CveDbMetaUnreadable ["err"])
-            show (SyncSwapped etag meta) `shouldSatisfy` isNotNull
-            show SyncUnchanged `shouldSatisfy` isNotNull
-            show SyncAbsent `shouldSatisfy` isNotNull
-            show (SyncRejected etag rej) `shouldSatisfy` isNotNull
+        it "Show and Eq SyncOutcome" $ do
+            let etag = DbEtag "e"
+                meta = [("k", "v")]
+                rej = CveDbMetaUnreadable ["err"]
+                s1 = SyncSwapped etag meta
+                s2 = SyncUnchanged
+                s3 = SyncAbsent
+                s4 = SyncRejected etag rej
+            forM_ [s1, s2, s3, s4] $ \s -> do
+                show s `shouldSatisfy` isNotNull
+                s `shouldBe` s
+            s1 `shouldSatisfy` (/= s2)
 
         it "Show and Eq OsvDbFetchFault" $ do
             let f1 = OsvDbTooLarge 1024

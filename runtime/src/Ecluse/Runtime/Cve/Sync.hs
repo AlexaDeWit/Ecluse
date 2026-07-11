@@ -117,7 +117,7 @@ data SyncOutcome
       last-good generation keeps serving and the ETag is remembered.
       -}
       SyncRejected DbEtag CveDbRejected
-    deriving stock (Show)
+    deriving stock (Eq, Show)
 
 {- | One detect-download-verify-swap cycle against the last seen ETag. Total
 over verification (a refused artifact is an outcome, not an exception);

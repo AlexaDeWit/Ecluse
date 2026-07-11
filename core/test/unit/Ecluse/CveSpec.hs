@@ -34,8 +34,8 @@ spec :: Spec
 spec = do
     describe "openHardenedConnection" $ do
         it "rejects a directory path as a value" $
-            withSystemTempDirectory "ecluse-cve-robust" $ \dir ->
-                openHardenedConnection Npm dir >>= \case
+            withSystemTempDirectory "ecluse-cve-robust" $
+                openHardenedConnection Npm >=> \case
                     Left (CveDbIntegrityFailed _) -> pass
                     res -> fail ("expected Left CveDbIntegrityFailed, got " <> show (void res))
 
@@ -82,6 +82,38 @@ spec = do
             provenanceQuery conn >>= \case
                 Right [("a", "1"), ("b", "2")] -> pass
                 other -> fail ("expected Right meta, got " <> show other)
+            close conn
+
+        it "provenanceQuery returns Left CveDbMetaUnreadable on schema mismatch" $ do
+            conn <- open ":memory:"
+            execute_ conn "CREATE TABLE meta (wrong_col TEXT)"
+            provenanceQuery conn >>= \case
+                Left (CveDbMetaUnreadable _) -> pass
+                other -> fail ("expected Left CveDbMetaUnreadable, got " <> show other)
+            close conn
+
+        it "checkEpochStamp returns Left CveDbWrongEpoch on mismatch" $ do
+            conn <- open ":memory:"
+            execute_ conn "PRAGMA user_version = 0"
+            checkEpochStamp conn >>= \case
+                Left (CveDbWrongEpoch 0) -> pass
+                other -> fail ("expected Left CveDbWrongEpoch 0, got " <> show other)
+            close conn
+
+        it "checkRangesTable returns Left CveDbRangesNotATable when missing" $ do
+            conn <- open ":memory:"
+            checkRangesTable conn >>= \case
+                Left CveDbRangesNotATable -> pass
+                other -> fail ("expected Left CveDbRangesNotATable, got " <> show other)
+            close conn
+
+        it "checkMetaEcosystem returns Left CveDbEcosystemMismatch on mismatch" $ do
+            conn <- open ":memory:"
+            execute_ conn "CREATE TABLE meta (key TEXT, value TEXT)"
+            execute_ conn "INSERT INTO meta VALUES ('ecosystem', 'wrong')"
+            checkMetaEcosystem Npm conn >>= \case
+                Left (CveDbEcosystemMismatch (Just "wrong")) -> pass
+                other -> fail ("expected Left CveDbEcosystemMismatch (Just \"wrong\"), got " <> show other)
             close conn
 
     describe "Show and Eq instances" $ do
