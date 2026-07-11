@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Telemetry configuration resolution and export-failure routing -- the boot-time
 substrate that sits between the operator's environment and the OpenTelemetry SDK.
 

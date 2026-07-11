@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | One supervision combinator for every background loop: rerun a step forever,
 absorbing transient faults with a bounded exponential backoff and failing
 permanent ones up to the process supervisor.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.BenchLoad.NormaliseSpec (spec) where
 
 import Data.Text qualified as T

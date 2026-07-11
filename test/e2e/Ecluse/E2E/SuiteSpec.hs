@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The end-to-end scenarios, driven through the real @npm@ CLI against the real image.
 
 __One data plane, shared per-describe proxies.__ The whole suite shares a single data

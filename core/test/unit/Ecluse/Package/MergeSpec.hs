@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 -- This spec deliberately writes out the Monoid identity laws (@mempty <> a@ and
 -- @a <> mempty@) to /assert/ them; hlint would otherwise "simplify" the very
 -- expressions under test. Silenced file-wide because proving the laws is the

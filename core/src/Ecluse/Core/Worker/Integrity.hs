@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The integrity gate is the security crux of the worker.
 
 A mirrored artifact is later served from the private upstream __without re-running

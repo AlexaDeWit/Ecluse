@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The request perimeter's fault vocabulary: what the serve boundary says about
 an exception that escaped a handler before the response was committed.
 

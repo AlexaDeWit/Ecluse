@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Security.EgressOriginSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))

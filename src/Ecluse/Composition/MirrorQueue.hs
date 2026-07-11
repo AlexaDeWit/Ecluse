@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The composition root's mirror-queue backend selection: the pure decision of
 which queue this binary builds, the boot warnings the choice warrants, and the
 endpoint-URL parsing the cloud backend's override needs.

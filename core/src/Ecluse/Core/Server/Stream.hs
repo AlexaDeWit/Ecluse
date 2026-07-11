@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Bounded-memory artifact streaming -- the constant-memory serve path.
 
 The proxy serves an artifact by __streaming it through__ from upstream, never

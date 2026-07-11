@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The proxy's data-plane entry point for package and artifact routes.
 
 This module re-exports the top-level handlers for packument merges (@GET \/{pkg}@),

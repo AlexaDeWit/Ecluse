@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Shared fixtures for the queue specs: the sample 'MirrorJob's the backend and
 buffer tests carry, and the loud unwrapper for backends that should not fault.
 -}

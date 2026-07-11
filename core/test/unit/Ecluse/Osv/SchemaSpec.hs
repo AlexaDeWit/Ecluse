@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Osv.SchemaSpec (spec) where
 
 import Test.Hspec (Spec, describe, it, shouldBe)

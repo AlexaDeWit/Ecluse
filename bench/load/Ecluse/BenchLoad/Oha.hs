@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @oha@ load-generator driver: spawn @oha@ as a subprocess against a URL and
 parse its JSON report into the throughput and latency-distribution figures the load
 harness records.

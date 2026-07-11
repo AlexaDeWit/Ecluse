@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The RubyGems registry __wire__ JSON, decoded into a typed model.
 
 A __placeholder boundary__ mirroring "Ecluse.Core.Registry.Pypi.Wire". Écluse serves

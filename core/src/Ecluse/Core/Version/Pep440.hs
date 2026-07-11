@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The PEP 440 grammar and ordering (PyPI).
 
 Parses a PEP 440 version into a 'Pep440Key' -- the canonical ordering tuple

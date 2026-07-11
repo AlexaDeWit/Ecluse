@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 -- TupleSections: pairing a matched mount with its classified remainder in
 -- 'dispatchMount' ((mount,) . classifier); see STYLE.md §2.
 {-# LANGUAGE TupleSections #-}

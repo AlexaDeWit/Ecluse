@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @ecluse.*@ metric catalogue and its __bounded-label discipline__.
 
 An inline proxy sees thousands of distinct packages, so the failure mode for metrics

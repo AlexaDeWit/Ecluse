@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Resolving a packument's upstream origins: the per-origin fetch with its
 credential posture, the read-handle construction over the mount's dependencies, and
 the typed outcome the merge consumes.

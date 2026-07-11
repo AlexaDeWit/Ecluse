@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The small circuit-breaker state machine that guards an unreliable operation.
 
 A breaker fronts a call that can fail or hang -- minting an outbound credential, or

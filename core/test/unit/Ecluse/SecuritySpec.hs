@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.SecuritySpec (spec) where
 
 import Ecluse.Core.Security (LimitError (..), TarballHostPolicy (..), defaultLimits)

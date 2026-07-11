@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @bench-load@ entry point: the load benchmarks tier of the benchmark strategy -- throughput and
 latency under concurrent load against the real composed proxy.
 

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Labelling and reaping scope for the Docker containers the integration and
 end-to-end suites spin up.
 

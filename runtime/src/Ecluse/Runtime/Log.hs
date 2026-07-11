@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The structured-logging pipeline.
 
 Écluse sits in the install path of someone else's build, so when it refuses a

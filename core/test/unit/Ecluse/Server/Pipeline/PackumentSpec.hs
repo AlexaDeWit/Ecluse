@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The derived packument validator ('packumentETag'): the input fingerprint that
 stands in for a hash of the served bytes.
 

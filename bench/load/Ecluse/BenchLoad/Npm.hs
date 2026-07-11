@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The npm 'UpstreamFixture' -- the first and (today) only concrete instance of the
 ecosystem interface the load benchmarks harness drives ("Ecluse.BenchLoad.Harness").
 

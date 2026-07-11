@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for the npm serve path: deciding a packument's
 survivors, merging the gated set ("Ecluse.Core.Package.Merge"), assembling the
 served document with the fused tarball rewrite

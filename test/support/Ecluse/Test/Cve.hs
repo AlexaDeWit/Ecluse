@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | An in-memory 'CveLookup' for pure-tier tests.
 
 Rule-evaluation specs in the core suite use this fake instead of SQLite; the

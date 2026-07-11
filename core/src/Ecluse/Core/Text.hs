@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Small pure text helpers shared across the codebase, so the blank-value and
 URL-path-join idioms have a single definition rather than several near-identical
 re-spellings -- plus the hot-path ISO-8601 instant renderer the serve path uses

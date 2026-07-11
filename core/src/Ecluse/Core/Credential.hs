@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The outbound-credential handle: minting the bearer token Écluse uses to
 __write__ approved packages to the mirror target.
 

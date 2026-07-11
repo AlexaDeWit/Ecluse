@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The short-TTL, size-bounded metadata cache shared by the serve paths.
 
 Resolving a package re-fetches its upstream packument, parses it, and evaluates

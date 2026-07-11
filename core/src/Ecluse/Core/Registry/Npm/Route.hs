@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 -- TupleSections: local convenience for pairing a parsed name with its trailing
 -- segments in 'takeScoped' ((,rest) / (,more)); see STYLE.md §2.
 {-# LANGUAGE TupleSections #-}

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | S54 -- the bounded-memory streaming gate: peak live bytes on the tarball relay
 are __invariant in artifact size__, proving constant-memory passthrough rather than
 size-proportional buffering.

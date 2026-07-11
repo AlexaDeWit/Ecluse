@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Integrity-algorithm strength and the admission integrity floors.
 
 Écluse trusts a digest only as far as its algorithm is collision-resistant. Both

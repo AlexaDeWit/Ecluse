@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The composition root's credential resolution: the process-global credential
 providers and the mirror-target provider selection.
 

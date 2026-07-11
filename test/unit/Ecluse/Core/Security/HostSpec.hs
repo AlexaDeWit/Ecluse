@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
 module Ecluse.Core.Security.HostSpec (spec) where

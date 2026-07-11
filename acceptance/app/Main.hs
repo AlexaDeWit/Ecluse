@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The live performance-acceptance harness (Context B).
 
 For each package in the shared curated catalogue it fetches the __live__ packument

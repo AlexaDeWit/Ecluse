@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for the npm metadata read path: decoding a packument
 off the wire ("Ecluse.Core.Registry.Npm.Wire") and projecting it into the agnostic
 'PackageInfo' ("Ecluse.Core.Registry.Npm.Project").

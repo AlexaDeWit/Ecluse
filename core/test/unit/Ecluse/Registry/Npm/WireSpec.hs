@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
 -- The totality properties below are polymorphic in the decoded type @a@, which
 -- appears only under a type application at each call site (e.g.
 -- @valueDecodeIsTotal \@Person@); that is exactly what AllowAmbiguousTypes is for.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The advisory lookup capability: answer CVE questions about a package
 version from a local, already-synced @osv.db@ artifact, never the network.
 

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Data types for the policy rules engine.
 
 The evaluation model lives in "Ecluse.Core.Rules"; this module holds only the

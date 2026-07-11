@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Projection of npm wire JSON into the ecosystem-agnostic domain model.
 
 This module is the second half of the npm protocol boundary. Where

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Cve.SyncSpec (spec) where
 
 import Conduit (runConduit, yieldMany, (.|))

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Proxy.CveSyncSpec (spec) where
 
 import Data.Map.Strict qualified as Map

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Performance-acceptance evaluation: the pure core of the live
 performance-acceptance harness.
 

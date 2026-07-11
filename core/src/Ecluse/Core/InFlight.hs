@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Async-safe release for a claimed __in-flight slot__.
 
 Several places in the proxy collapse duplicate concurrent work onto a single

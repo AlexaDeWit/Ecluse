@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The shared OSV advisory fixture corpus and the artifacts derived from it.
 
 The committed JSON advisories under @test\/fixtures\/osv\/@ are the single

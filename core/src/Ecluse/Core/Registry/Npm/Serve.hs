@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | npm's client-facing error surface: the denial-body renderer wired into an npm
 mount.
 

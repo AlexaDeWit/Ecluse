@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The advisory lookup's internals: the hardened SQLite open and the raw
 queries "Ecluse.Core.Cve" curates into the public handle.
 

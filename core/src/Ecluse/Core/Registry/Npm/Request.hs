@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Request shaping and URL building for the npm data plane.
 
 Three details of the wire protocol are load-bearing and handled here:

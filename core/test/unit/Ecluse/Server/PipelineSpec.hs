@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Unit cover for the core serve handlers ("Ecluse.Core.Server.Pipeline") driven
 __directly__ over a 'ServeRuntime' of test doubles -- no application 'Env', no
 OpenTelemetry SDK.

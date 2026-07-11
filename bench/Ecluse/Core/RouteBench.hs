@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request bench for request routing: the npm classifier
 ("Ecluse.Core.Registry.Npm.Route") that turns a request's method and path segments
 into a typed 'Route' on every request, before any metadata work happens.

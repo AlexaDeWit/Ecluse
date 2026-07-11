@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Outbound-request guards for the proxy's data plane: defending where the proxy fetches.
 
 Écluse builds outbound HTTP requests from two untrusted sources -- __client-supplied

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @amazonka@ edge of the transport-fault vocabulary: fold the AWS error
 sum into "Ecluse.Core.Fault" at an adapter boundary.
 

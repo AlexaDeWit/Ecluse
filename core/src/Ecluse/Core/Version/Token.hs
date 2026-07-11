@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Low-level lexical atoms shared by the per-ecosystem version grammars.
 
 A 'VToken' is a single numeric or textual run, with the ordering rule common to

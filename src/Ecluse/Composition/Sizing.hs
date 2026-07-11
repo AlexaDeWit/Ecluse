@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The config-derived runtime sizings of the composition root: the serve-admission
 capacity, the two connection-pool sizes and the file-descriptor datapoint they are
 computed from, the mirror-enqueue buffer tunables, and the metadata-cache tunables.

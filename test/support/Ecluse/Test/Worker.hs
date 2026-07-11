@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Worker-test fixtures: a ready-made ingest re-evaluation policy.
 
 The mirror worker re-runs current policy against a job's version before mirroring it (see

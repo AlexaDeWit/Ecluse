@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The composition-root wiring: turn a validated 'Config' and the
 process-global credential providers into the served 'MountBinding's, failing fast
 and __aggregated__ on any boot problem.

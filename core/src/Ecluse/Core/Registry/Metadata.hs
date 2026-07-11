@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The serve-path metadata handle: the read boundary between the request pipeline
 and a registry mount, expressed as two __implementation-agnostic intent operations__.
 

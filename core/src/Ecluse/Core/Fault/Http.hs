@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @http-client@ edge of the transport-fault vocabulary: fold the library's
 exception type into "Ecluse.Core.Fault" at an adapter boundary.
 

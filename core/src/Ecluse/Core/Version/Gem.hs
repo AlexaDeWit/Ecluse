@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The @Gem::Version@ grammar and ordering (RubyGems).
 
 Parses a gem version into a 'GemKey': a flat list of 'VToken's obtained by

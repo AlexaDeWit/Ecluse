@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Brief-wait admission control for metadata-bearing serve work.
 
 The handle caps concurrent operations and retains a __bounded room of waiters__: an

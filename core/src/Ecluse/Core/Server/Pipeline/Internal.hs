@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Internal guts of the serve pipeline ("Ecluse.Core.Server.Pipeline"), exposed for
 tests without widening that module's two-handler public API -- the @.Internal@ convention,
 as "Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public

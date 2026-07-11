@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Wiring a per-request "Ecluse.Core.Registry.Metadata.MetadataClient" for the serve
 path: the cross-cutting caching, metrics, and failure-logging policy wrapped around a
 registry's raw fetch primitive.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Response-bound guards for the proxy's data plane.
 
 Écluse parses whatever an upstream returns. This module provides the pure guard layer

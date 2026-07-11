@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 module Ecluse.Credential.CodeArtifactSpec (spec) where
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)

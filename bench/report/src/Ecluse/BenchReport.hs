@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The pure rendering core behind the @bench-report@ executable: it turns the
 work-per-request benchmark CSV (@tasty-bench --csv@) into the structured Markdown
 report the CI run summary shows, kept apart from the file-reading shell so the parse,

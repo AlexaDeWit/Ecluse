@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The AWS SQS backend behind the 'MirrorQueue' handle.
 
 Maps the handle's receive → process → ack shape onto SQS:

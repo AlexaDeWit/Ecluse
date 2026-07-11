@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The serve-outcome model, the per-outcome status mapping, and the agnostic
 shape of an error body.
 

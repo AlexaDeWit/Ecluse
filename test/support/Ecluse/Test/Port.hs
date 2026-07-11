@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Test doubles for the core serve-path and worker recording ports
 ("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span").
 

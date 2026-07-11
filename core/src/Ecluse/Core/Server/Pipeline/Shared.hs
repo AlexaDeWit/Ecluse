@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Shared utilities for the data-plane handler modules.
 
 This module provides the common combinators and shared types used across the packument,

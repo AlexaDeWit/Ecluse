@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The policy rules engine.
 
 A rule set is evaluated against a single 'PackageDetails' snapshot to produce a

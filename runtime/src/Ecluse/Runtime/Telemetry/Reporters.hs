@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The bridge from the telemetry-agnostic reporters the pre-telemetry providers carry
 to the live @ecluse.*@ instruments -- and the deferral that lets a provider built before
 the meter exists record once it does.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The implementation behind 'Ecluse.Core.Credential.Refresh'. This module exposes
 the provider's innards -- including the 'refreshingProviderWith' test hook -- that
 the curated public module deliberately keeps hidden. Importing it opts out of the

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The ecosystem-agnostic filtering /decision/ for a single public-upstream
 packument: which versions survive a rule set, which version @dist-tags.latest@
 resolves to, and the per-version decisions a no-survivors outcome must report.

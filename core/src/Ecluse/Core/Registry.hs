@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The registry-protocol handle: the sole interface between the proxy core and
 any specific registry's wire protocol.
 

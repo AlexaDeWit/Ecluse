@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The pure attribution and saturation maths behind the load benchmarks harness's two
 analysis views, kept apart from the live measurement shell so they are exercised
 deterministically.

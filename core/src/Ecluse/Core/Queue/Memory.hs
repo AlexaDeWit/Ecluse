@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The two STM-backed in-memory 'MirrorQueue' implementations.
 
 Both honour the handle's contract (see "Ecluse.Core.Queue" for the @enqueue@ \/

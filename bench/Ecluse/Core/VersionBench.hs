@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | Work-per-request benches for the version grammar ("Ecluse.Core.Version"): parsing
 a raw version string into its canonical ordering key, ordering versions by the
 semantic comparator, and resolving @dist-tags.latest@ over a candidate set.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The input corpus for the work-per-request benchmarks.
 
 Two sources feed the benches, with distinct jobs:

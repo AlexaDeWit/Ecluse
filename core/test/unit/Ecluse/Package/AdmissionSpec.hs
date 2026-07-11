@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The shared admission oracle, and the differential guarantee it exists to hold:
 the serve gate and the mirror worker decide one artifact the same way, and what the
 admission floor admits the worker's tamper gate can always verify.

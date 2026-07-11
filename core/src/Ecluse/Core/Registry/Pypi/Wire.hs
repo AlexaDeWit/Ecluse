@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The PyPI registry __wire__ JSON, decoded into a typed model.
 
 This is a __placeholder boundary__, the PyPI counterpart to
