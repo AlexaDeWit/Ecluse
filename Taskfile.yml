@@ -133,6 +133,11 @@ tasks:
     cmds:
       - '{{.NIX_BENCH}} cabal bench ecluse-bench --benchmark-options="{{.BENCH_OPTS}}"'
 
+  bench-report:
+    desc: Render the work-per-request bench CSV as a Markdown report
+    cmds:
+      - '{{.NIX_BENCH}} cabal run -v0 bench-report -- {{.BENCH_CSV | default "bench-results.csv"}} {{.BENCH_LOG | default "bench-output.txt"}}'
+
   bench-profile:
     desc: Profiling build -> run -> cost-centre flame graph
     cmds:

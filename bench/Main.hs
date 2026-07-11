@@ -4,8 +4,7 @@ the synthetic-corpus generator's correctness tests, all in one @tasty@ tree.
 
 @tasty-bench@ reports time and -- under @+RTS -T@, baked into the component's RTS
 options -- allocated bytes for each bench. Allocations are the machine-independent
-signal the baseline tracks; time is informational. See
-@docs\/architecture\/performance.md@.
+signal the baseline tracks; time is informational.
 
 The generator tests and the complexity assertions are ordinary @tasty@ test cases
 mixed into the same tree, so a malformed corpus or an accidentally-quadratic hot

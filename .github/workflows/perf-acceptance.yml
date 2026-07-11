@@ -12,8 +12,7 @@ name: Performance Acceptance
 # so the red informs without ever blocking merge. Live + non-deterministic, so a flaky
 # registry is reported as unavailable, never a breach (the harness exits non-zero only
 # on an over-budget measurement). The run summary separates the upstream and Écluse
-# overhead legs, leaving room for a later upstream-normalisation column. See
-# docs/architecture/performance.md.
+# overhead legs, leaving room for a later upstream-normalisation column.
 on:
   pull_request:
   push:
@@ -60,9 +59,24 @@ jobs:
       - name: Update package index
         run: nix develop .#ci --command task update
 
-      # Run the harness. It writes its summary to $GITHUB_STEP_SUMMARY itself, so this
-      # step needs no shell wrapping (keeping the workflow injection-free), and its exit
-      # code is preserved: non-zero ONLY on a real budget breach, which reds this
-      # (non-required) check.
+      # Run the harness. It appends its summary to $GITHUB_STEP_SUMMARY itself and
+      # prints the same report to stdout; `tee` captures that copy as this run's
+      # downloadable report. pipefail preserves the harness exit code through the
+      # pipe: non-zero ONLY on a real budget breach, which reds this (non-required)
+      # check. No expression interpolation reaches the run body, so the step stays
+      # injection-free.
       - name: Run performance acceptance
-        run: nix develop .#ci --command task perf-acceptance
+        run: |
+          set -eo pipefail
+          nix develop .#ci --command task perf-acceptance 2>&1 | tee perf-acceptance-report.md
+
+      # This run's rendered report, downloadable from the run page even when the run
+      # reds on a breach. A convenience for a human comparing runs by hand; there is
+      # no cross-run baseline store.
+      - name: Upload this run's report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-acceptance-report-${{ github.sha }}
+          path: perf-acceptance-report.md
+          if-no-files-found: warn

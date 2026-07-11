@@ -13,6 +13,7 @@ import Ecluse.Acceptance (
         critPerPackageBudgetMs,
         critPerPackageSingleVersionBudgetMs
     ),
+    OperatingPoint (OperatingPoint),
     PackageOutcome (Measured, Unavailable),
     Report (reportOutcomes),
     Sample (Sample),
@@ -20,10 +21,12 @@ import Ecluse.Acceptance (
     budgetFor,
     decodeCriteria,
     evaluate,
+    headroom,
     loadCriteria,
     renderReport,
     reportBreached,
     singleVersionBudgetFor,
+    watchFraction,
  )
 
 spec :: Spec
@@ -79,8 +82,20 @@ spec = do
         it "is False for an unavailable package (flaky registry is not a regression)" $
             reportBreached (evaluate crit [Left ("x", "unreachable")]) `shouldBe` False
 
+    describe "headroom" $ do
+        it "is the budget-to-observed multiple" $
+            headroom 100 20 `shouldBe` Just 5
+        it "is undefined for a non-positive observed figure" $ do
+            headroom 100 0 `shouldBe` Nothing
+            headroom 100 (-1) `shouldBe` Nothing
+
+    describe "watchFraction" $
+        it "sits strictly between the healthy range and the bar" $
+            watchFraction `shouldSatisfy` (\f -> f > 0 && f < 1)
+
     describe "renderReport" $ do
-        let rendered = renderReport (evaluate crit [Right overFull, Right overSingle, Left ("webpack", "unreachable")])
+        let op = OperatingPoint 5 8
+            rendered = renderReport op (evaluate crit [Right overFull, Right overSingle, Left ("webpack", "unreachable")])
         it "names the overall breach result" $
             ("Result: BREACH" `T.isInfixOf` rendered) `shouldBe` True
         it "names the breached full leg and its margin" $
@@ -93,6 +108,29 @@ spec = do
             ("Single-version (ms)" `T.isInfixOf` rendered) `shouldBe` True
         it "lists an unavailable package as unavailable, not breached" $
             ("unavailable: unreachable" `T.isInfixOf` rendered) `shouldBe` True
+        it "names the operating point: catalogue size, timed passes, and budgets source" $ do
+            ("8 packages (bench/corpus/pins.json)" `T.isInfixOf` rendered) `shouldBe` True
+            ("median of 5 timed passes per leg" `T.isInfixOf` rendered) `shouldBe` True
+            ("acceptance/criteria.json" `T.isInfixOf` rendered) `shouldBe` True
+        it "renders each measured leg's headroom multiple" $ do
+            let clean = renderReport op (evaluate crit [Right within])
+            ("Headroom full/1-ver" `T.isInfixOf` clean) `shouldBe` True
+            ("5.0x / 6.0x" `T.isInfixOf` clean) `shouldBe` True
+        it "renders an undefined headroom as n/a" $
+            ("n/a / n/a" `T.isInfixOf` renderReport op (evaluate crit [Right zeroObserved]))
+                `shouldBe` True
+        it "marks a within-budget leg at or above the watch fraction, with the note" $ do
+            let watchRendered = renderReport op (evaluate crit [Right nearFull])
+            ("watch -- full at 85% of budget" `T.isInfixOf` watchRendered) `shouldBe` True
+            ("watch marks a leg at or above 70% of its budget" `T.isInfixOf` watchRendered)
+                `shouldBe` True
+        it "keeps a row clear of the watch fraction a plain within, with no note" $ do
+            let clean = renderReport op (evaluate crit [Right within])
+            ("| within |" `T.isInfixOf` clean) `shouldBe` True
+            ("watch" `T.isInfixOf` clean) `shouldBe` False
+        it "never downgrades a breached leg to a watch mark" $
+            ("watch -- full" `T.isInfixOf` renderReport op (evaluate crit [Right overFull]))
+                `shouldBe` False
 
     -- Guards the committed criteria file: a malformed or empty-budget edit fails here,
     -- in the gating tier, before the live harness ever runs.
@@ -125,3 +163,12 @@ overSingle = Sample "express" 480 40 60 80
 
 heavy :: Sample
 heavy = Sample "@types/node" 2339 400 480 40
+
+-- Within budget on both legs, but the full leg has consumed 85% of its 100 ms budget:
+-- past the watch fraction, still short of a breach.
+nearFull :: Sample
+nearFull = Sample "vue" 300 25 85 10
+
+-- Zero observed on both legs, where a budget-to-observed multiple is meaningless.
+zeroObserved :: Sample
+zeroObserved = Sample "empty" 1 10 0 0
