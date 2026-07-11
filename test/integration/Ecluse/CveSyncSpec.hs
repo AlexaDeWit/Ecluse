@@ -40,7 +40,7 @@ import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Network.HTTP.Types.Status (statusCode)
 import Network.Wai.Test qualified as WaiTest
 
-import Ecluse.Composition (parseEndpointUrl)
+import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (AppConfig (cfgAwsEndpointUrl), Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)

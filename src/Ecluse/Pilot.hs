@@ -19,7 +19,7 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Composition (parseEndpointUrl)
+import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
     AppConfig (cfgAwsEndpointUrl, cfgCveSyncInterval, cfgOsvDataDir, cfgOsvExportBaseUrl, cfgPort, cfgVulnerabilityDatabaseBucket),
     Config (configApp),

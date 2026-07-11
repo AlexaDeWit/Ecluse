@@ -91,7 +91,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (isDoesNotExistError)
 import UnliftIO (throwIO, tryJust)
 
-import Ecluse.Composition (
+import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     memoryQueueDropWarning,
     mirrorQueuePlanWarning,

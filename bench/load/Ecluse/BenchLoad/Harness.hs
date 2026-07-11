@@ -83,7 +83,7 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
-import Ecluse.Composition (resolveServeAdmission)
+import Ecluse.Composition.Sizing (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | The tunables every scenario shares: the load the generator applies (concurrency,

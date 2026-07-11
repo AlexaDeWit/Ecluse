@@ -246,6 +246,10 @@ library
     Ecluse.Pilot
     Ecluse.Dredger
     Ecluse.Composition
+    Ecluse.Composition.BootError
+    Ecluse.Composition.Credential
+    Ecluse.Composition.MirrorQueue
+    Ecluse.Composition.Sizing
     Ecluse.Config
     Ecluse.CLI
     Ecluse.Config.Aeson
@@ -614,6 +618,11 @@ test-suite ecluse-unit
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
+    Ecluse.Composition.BootErrorSpec
+    Ecluse.Composition.CredentialSpec
+    Ecluse.Composition.MirrorQueueSpec
+    Ecluse.Composition.SizingSpec
+    Ecluse.Composition.Support
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec

@@ -104,14 +104,15 @@ import UnliftIO.Exception (catchAny)
 import Ecluse.Boot
 import Ecluse.Composition (
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
-    connectionPoolSettings,
-    initCredentialProviders,
-    planMirrorQueue,
     planMounts,
     planPublishTargets,
-    renderBootError,
  )
-import Ecluse.Composition qualified as Composition
+import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.Credential (initCredentialProviders)
+import Ecluse.Composition.MirrorQueue (planMirrorQueue)
+import Ecluse.Composition.MirrorQueue qualified as Composition
+import Ecluse.Composition.Sizing (connectionPoolSettings)
+import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Config (
     AppConfig (cfgAwsEndpointUrl, cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
  )
