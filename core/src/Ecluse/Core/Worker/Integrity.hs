@@ -7,9 +7,10 @@
 A mirrored artifact is later served from the private upstream __without re-running
 the rules__, so a corrupt or tampered artifact must never enter it. Verification is
 therefore the gate: a hash __mismatch fails the job with no publish__ and is logged
-loudly. Because the digest is the __serve-time-admitted__ one carried on the job,
-the worker mirrors exactly the bytes the rules cleared -- an upstream packument
-mutated in the enqueue → process window cannot substitute a different artifact.
+loudly. The digests verified are the __re-admitted__ artifact's, the exact set the
+worker's ingest re-evaluation floor-checked against current metadata, so the digest
+the bytes are gated on is always one current policy admitted; the queue payload
+contributes no digest to the gate.
 -}
 module Ecluse.Core.Worker.Integrity (
     IntegrityResult (..),

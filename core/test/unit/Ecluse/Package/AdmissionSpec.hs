@@ -163,7 +163,12 @@ spec = do
             let details = detailsWith (sriHashesOf (sri512Of sampleBytes))
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
-                AdmissionAdmit artifact -> artFilename artifact `shouldBe` "thing-1.0.0.tgz"
+                AdmissionAdmit artifact digests -> do
+                    artFilename artifact `shouldBe` "thing-1.0.0.tgz"
+                    -- The carried digest set is the admitted artifact's own, so both
+                    -- consumers (mirror enqueue, worker tamper gate) act on exactly
+                    -- what the floor checked.
+                    toList digests `shouldBe` artHashes artifact
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "carries a rule denial through as AdmissionDenied (both surfaces render the same decision)" $ do
@@ -220,8 +225,7 @@ spec = do
             classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
-                AdmissionAdmit artifact -> do
-                    let admitted = NE.fromList (artHashes artifact)
+                AdmissionAdmit _ admitted -> do
                     verifyIntegrity admitted sampleBytes `shouldBe` IntegrityVerified
                     case verifyIntegrity admitted tamperedBytes of
                         IntegrityMismatch _ -> pass

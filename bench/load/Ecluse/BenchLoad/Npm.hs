@@ -525,7 +525,10 @@ workerScenario =
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
                             , wrInjectTraceContext = id
-                            , wrPolicies = admitAllPolicies
+                            , -- The verification digests are the re-admitted artifact's
+                              -- (the injected resolver's), so they must be the true
+                              -- digests of the stub's bytes for every job to publish.
+                              wrPolicies = admitAllPolicies (jobHashes bytes)
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
                     job = mirrorJob artUrl (jobHashes bytes) size

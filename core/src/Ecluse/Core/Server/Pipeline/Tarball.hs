@@ -99,7 +99,8 @@ import Data.ByteString qualified as BS
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (
-    Artifact (artFilename, artHashes, artSize, artUrl),
+    Artifact (artFilename, artSize, artUrl),
+    Hash,
     PackageDetails,
     PackageName,
     renderPackageName,
@@ -397,10 +398,10 @@ servePublicArtifact mode rt renderer deps validators name version file respond =
     -- the version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag deps)
     withServeAdmission metrics (srAdmission rt) (gatePublicVersion rt deps name version file advisoryEtag) >>= \case
-        Just (Admitted artifact) -> do
+        Just (Admitted artifact digests) -> do
             liftIO (mpServeDecision metrics Metric.Admit)
             withRunInIO $ \runInIO ->
-                streamPublicArtifact mode rt renderer deps validators name version artifact (runInIO . observeRelayAnomaly metrics name version) respond
+                streamPublicArtifact mode rt renderer deps validators name version artifact digests (runInIO . observeRelayAnomaly metrics name version) respond
         Just (Refused decision) -> do
             liftIO (mpServeDecision metrics (serveDecisionClass decision))
             logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
@@ -413,10 +414,13 @@ servePublicArtifact mode rt renderer deps validators name version file respond =
 {- The outcome of gating a single requested artifact on the public path: either the
 chosen 'Artifact' to fetch, or the serve decision the error model renders. The
 admit carries the artifact so the stream step honours its 'artUrl' rather than
-re-deciding or reconstructing the location. -}
+re-deciding or reconstructing the location, and the admission gate's own
+floor-checked digest set so the mirror enqueue captures exactly what was admitted. -}
 data PublicArtifactGate
-    = -- | The version was admitted; carries the artifact selected by filename.
-      Admitted Artifact
+    = {- | The version was admitted; carries the artifact selected by filename and
+      the floor-checked digest set 'AdmissionAdmit' yielded.
+      -}
+      Admitted Artifact (NonEmpty Hash)
     | -- | The version was refused (policy denial, upstream outage, or absence).
       Refused ServeDecision
 
@@ -463,7 +467,7 @@ gatePublicVersion rt deps name version file advisoryEtag = do
 -- model renders.
 gateVerdict :: PublicArtifactGate -> ServeDecision
 gateVerdict = \case
-    Admitted _ -> Admit
+    Admitted _ _ -> Admit
     Refused decision -> decision
 
 {- Gate one requested artifact of one public version through the shared admission
@@ -482,7 +486,7 @@ gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO Publ
 gateVersion ctx deps file details = do
     admission <- admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
     pure $ case admission of
-        AdmissionAdmit artifact -> Admitted artifact
+        AdmissionAdmit artifact digests -> Admitted artifact digests
         AdmissionDenied decision -> Refused (serveDecisionOf details decision)
         AdmissionUndecidable decision -> Refused (serveDecisionOf details decision)
         AdmissionFileAbsent -> Refused versionAbsent
@@ -535,11 +539,13 @@ streamPublicArtifact ::
     PackageName ->
     Version ->
     Artifact ->
+    -- | The admission gate's floor-checked digest set, captured on the mirror job.
+    NonEmpty Hash ->
     -- | Observe the relay verdict (the anomaly log line and metric).
     (RelayVerdict -> IO ()) ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode rt renderer deps validators name version artifact observeVerdict respond
+streamPublicArtifact mode rt renderer deps validators name version artifact digests observeVerdict respond
     | not hostHonoured = respond crossHostRefused
     | otherwise = case publicRequest of
         Left _ -> respond internalArtifactError
@@ -562,7 +568,7 @@ streamPublicArtifact mode rt renderer deps validators name version artifact obse
                     -- clean artifact relay back-fills: a relayed miss would
                     -- enqueue a doomed job, an oddly-shaped 2xx a misleading one.
                     case verdict of
-                        RelayedArtifact -> enqueueOnFull mode (enqueueMirror rt deps name version artifact)
+                        RelayedArtifact -> enqueueOnFull mode (enqueueMirror rt deps name version artifact digests)
                         RelayedOddShape _ -> pass
                         RelayedNonSuccess _ -> pass
                     pure received
@@ -700,26 +706,26 @@ authoritative URL (the same location the public fetch targeted) and the mount's
 mirror target; it carries no credential (the worker mints its own).
 
 It also captures the __serve-time-admitted__ integrity digests, filename, and
-declared size on the job, so the worker verifies the fetched bytes against exactly
-what the rules cleared (immune to an upstream packument mutated in the
-enqueue → process window) and can assemble the publish document without re-fetching.
-The artifact reached this point through the integrity-presence admission policy, so
-'artHashes' is non-empty; a hashless artifact (which that policy already refuses to
-serve) is not enqueued, since there would be no digest to verify against. The
-artifact URL travels as the validated egress witness ('pdEgressUrl'): the projection
+declared size on the job: the filename names the artifact the worker's ingest
+re-evaluation gates under current policy, and the digests and size let it assemble
+the publish document without re-fetching (the tamper gate itself verifies the
+fetched bytes against the re-admitted artifact's digests, never the payload's).
+The digests arrive as the admission gate's own floor-checked set
+('Ecluse.Core.Package.Admission.AdmissionAdmit' carries it, non-empty as a fact of
+admission), so nothing is re-derived here and a digest-less job is unrepresentable.
+The artifact URL travels as the validated egress witness ('pdEgressUrl'): the projection
 already normalised it to https, so a witness that will not form is unreachable in
 production and fails the best-effort enqueue closed (counted, never served-blocking). -}
-enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
-enqueueMirror rt deps name version artifact =
-    whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        case pdEgressUrl deps (artUrl artifact) of
-            Left _ -> mpMirrorEnqueueFailure (srMetrics rt)
-            Right egressUrl ->
-                void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $
-                    enqueueJob egressUrl hashes
+enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> NonEmpty Hash -> IO ()
+enqueueMirror rt deps name version artifact hashes =
+    case pdEgressUrl deps (artUrl artifact) of
+        Left _ -> mpMirrorEnqueueFailure (srMetrics rt)
+        Right egressUrl ->
+            void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $
+                enqueueJob egressUrl
   where
-    enqueueJob egressUrl hashes traceContext = do
-        enqueued <- enqueue (srQueue rt) (mirrorJob egressUrl hashes traceContext)
+    enqueueJob egressUrl traceContext = do
+        enqueued <- enqueue (srQueue rt) (mirrorJob egressUrl traceContext)
         -- Best-effort: the typed hand-off outcome is counted but never propagated,
         -- so a refused hand-off records a failure rather than failing or delaying
         -- the serve. (Drops and backend delivery failures behind the buffered
@@ -729,7 +735,7 @@ enqueueMirror rt deps name version artifact =
         -- errored on the producer span (the metric counts it; the span explains it).
         pure enqueued
 
-    mirrorJob egressUrl hashes traceContext =
+    mirrorJob egressUrl traceContext =
         MirrorJob
             { jobPackage = name
             , jobVersion = version

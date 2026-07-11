@@ -96,15 +96,15 @@ import Ecluse.Core.Version (Version)
 mirror target. The version was gated by the rules at serve time (when the job was
 enqueued); the worker __re-evaluates current policy__ through the same shared
 admission oracle before mirroring (see "Ecluse.Core.Worker.Job"), then fetches the
-bytes, verifies them against the __serve-time-admitted__ integrity digest the job
-carries, and publishes.
+bytes, verifies them against the digests of the artifact that re-evaluation
+re-admitted, and publishes.
 
-The integrity digest and the artifact descriptor are captured __at enqueue time__
-('jobArtifact'), not re-fetched: the worker mirrors exactly the bytes the rules
-admitted, so an upstream packument mutated in the enqueue → process window cannot
-substitute a different artifact for the one that was gated. The descriptor also
-carries the filename and declared size the worker needs to assemble the publish
-document.
+The artifact descriptor is captured __at enqueue time__ ('jobArtifact'): its
+filename names the artifact the worker's ingest re-evaluation selects and gates
+under current policy, and its digests and declared size feed the publish document.
+The queue payload is a trust boundary, so those captured digests are never what the
+fetched bytes are verified against; the tamper gate uses the re-admitted artifact's
+own set.
 -}
 data MirrorJob = MirrorJob
     { jobPackage :: PackageName
@@ -119,9 +119,9 @@ data MirrorJob = MirrorJob
     , jobMirrorTarget :: Text
     -- ^ The mirror-target endpoint the artifact is published to.
     , jobArtifact :: MirrorArtifact
-    {- ^ The serve-time-admitted artifact descriptor: the integrity digest the
-    fetched bytes are verified against, plus the filename and declared size the
-    publish document is assembled from.
+    {- ^ The serve-time-admitted artifact descriptor: the filename the worker's
+    ingest re-evaluation selects the artifact by, plus the digests and declared
+    size the publish document is assembled from.
     -}
     , jobTraceContext :: Maybe RemoteSpanContext
     {- ^ The trace context of the serve-time span that enqueued the job, captured
@@ -134,13 +134,12 @@ data MirrorJob = MirrorJob
     deriving stock (Eq, Show)
 
 {- | The serve-time-admitted artifact descriptor carried on a 'MirrorJob': exactly
-the fields the worker needs to verify the fetched bytes and assemble the publish
-document, captured when the version was gated.
+the fields the worker needs to re-gate the job under current policy and assemble
+the publish document, captured when the version was gated.
 
 'maHashes' is a 'NonEmpty' because the serve path admits a public version only when
 it carries at least one integrity digest (the integrity-presence admission policy),
-so a job with __no__ digest to verify against is unrepresentable -- the worker always
-has a fingerprint to check the bytes against before they reach the private upstream.
+so a digest-less job is unrepresentable by construction.
 -}
 data MirrorArtifact = MirrorArtifact
     { maFilename :: Text
@@ -148,9 +147,11 @@ data MirrorArtifact = MirrorArtifact
     document.
     -}
     , maHashes :: NonEmpty Hash
-    {- ^ The serve-time-admitted integrity digests (at least one). The worker
-    verifies the fetched bytes against these before publishing; a mismatch fails
-    the job with no publish.
+    {- ^ The serve-time-admitted integrity digests (at least one). They feed the
+    publish document (npm @dist.integrity@ \/ @shasum@); the tamper gate verifies
+    the fetched bytes against the re-admitted artifact's own digests, and the
+    worker warns when this captured set diverges from those (versions are
+    immutable, so a divergence is anomalous).
     -}
     , maSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte

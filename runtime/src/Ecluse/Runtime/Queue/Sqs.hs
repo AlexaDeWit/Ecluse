@@ -325,7 +325,7 @@ dropReasonLabel = \case
 bare name so it round-trips through 'mkPackageName', and the version keeps its raw
 string. The serve-time-admitted artifact descriptor ('jobArtifact') -- the filename,
 the integrity digests, and the declared size -- round-trips as a nested object so the
-worker has the digest to verify the fetched bytes against and the inputs to assemble
+worker has the filename its ingest re-evaluation gates by and the inputs to assemble
 the publish document.
 -}
 encodeJob :: MirrorJob -> Text
@@ -426,8 +426,8 @@ parseTraceContext = withObject "RemoteSpanContext" $ \t ->
     RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
 
 -- Parse the nested artifact descriptor, failing on an empty hash list (the
--- 'NonEmpty' invariant the serve path upholds -- a job must carry a digest to verify
--- against).
+-- 'NonEmpty' invariant the serve path upholds: a digest-less job is
+-- unrepresentable).
 parseArtifact :: Aeson.Value -> Parser MirrorArtifact
 parseArtifact = withObject "MirrorArtifact" $ \o -> do
     filename <- o .: "filename"
@@ -442,7 +442,7 @@ parseArtifact = withObject "MirrorArtifact" $ \o -> do
 -- An entry usually yields one 'Hash'; an @sri@ entry whose value joins several
 -- components (a job enqueued by an older producer, which carried the wire string
 -- whole) is split into one single-component 'Hash' each ('mkSriHashes'), so an
--- in-flight job survives the upgrade and the worker still verifies against exact
+-- in-flight job survives the upgrade and the descriptor still carries exact
 -- components rather than a joined string.
 parseHashes :: Aeson.Value -> Parser (NonEmpty Hash)
 parseHashes = withObject "Hash" $ \h -> do
@@ -450,10 +450,10 @@ parseHashes = withObject "Hash" $ \h -> do
     alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
     value <- h .: "value"
     -- The queue is a trust boundary: validate the digest on decode through the same
-    -- constructors the serve path uses ('mkHash' / 'mkSriHashes'), so the worker can
-    -- never ingest a malformed digest to verify the fetched bytes against. A malformed
-    -- value fails the decode (the job is left un-acked and redelivers, ultimately to
-    -- the dead-letter queue).
+    -- constructors the serve path uses ('mkHash' / 'mkSriHashes'), so a malformed
+    -- digest never crosses it into the worker's descriptor. A malformed value fails
+    -- the decode (the job is left un-acked and redelivers, ultimately to the
+    -- dead-letter queue).
     case alg of
         SRI -> either (fail . toString) pure (mkSriHashes value)
         _ -> either (fail . toString) (pure . one) (mkHash alg value)
@@ -464,7 +464,7 @@ parseHashes = withObject "Hash" $ \h -> do
 -- over the SQS message vocabulary, including the @sri@ wrapper an npm @dist.integrity@
 -- digest rides under. An exact match on a name a digest is serialized under, so a
 -- well-formed message round-trips and an unrecognised name yields 'Nothing' (the job
--- is then rejected with a digest the worker could never have verified against).
+-- is then rejected rather than carrying an algorithm the model does not name).
 parseHashAlg :: Text -> Maybe HashAlg
 parseHashAlg = \case
     "sha1" -> Just SHA1

@@ -369,8 +369,12 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 
 {- | The artifact of a projected version snapshot. The injected rules never inspect
 it, but the shared admission oracle does: its filename must match the job fixture's
-'maFilename' (file selection) and it carries a floor-clearing sha512 SRI digest
-(the integrity-floor admission policy the worker now re-applies at ingest).
+'maFilename' (file selection) and it carries the floor-clearing sha512 SRI of
+'tarballBytes'. The re-admitted artifact's digests are what the tamper gate
+verifies the fetched bytes against, so the current-metadata double must carry the
+true digest of the bytes the stub upstream serves (the faithful, immutable-version
+posture); a verification-source case swaps this set through
+'admitPoliciesWithDigests'.
 -}
 sampleArtifact :: Artifact
 sampleArtifact =
@@ -378,7 +382,7 @@ sampleArtifact =
         { artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
         , artKind = Tarball
-        , artHashes = [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
+        , artHashes = [unsafeHash SRI trueSri]
         , artSize = Nothing
         , artInterpreter = Nothing
         , artYanked = False
@@ -429,6 +433,16 @@ existing tests exercise the integrity gate and publish outcomes unchanged.
 -}
 admitPolicies :: WorkerPolicies
 admitPolicies = npmPolicies presentResolver [admitRule]
+
+{- | 'admitPolicies' with the resolved artifact's digest set replaced: the
+current-metadata double for the verification-source cases. The tamper gate verifies
+fetched bytes against the re-admitted artifact's digests, so a test chooses here
+whether current metadata matches the stub upstream's bytes (a faithful mirror) or
+deliberately mismatches them (a tamper), independent of what the job payload carries.
+-}
+admitPoliciesWithDigests :: [Hash] -> WorkerPolicies
+admitPoliciesWithDigests hashes =
+    npmPolicies (resolverWithArtifact sampleArtifact{artHashes = hashes}) [admitRule]
 
 {- | A 'MetadataClient' double whose single-version op returns a fixed result (the
 full-manifest op is unused here and refuses loudly).

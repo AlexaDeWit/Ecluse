@@ -26,7 +26,7 @@ module Ecluse.Core.Package.Admission (
     artifactFor,
 ) where
 
-import Ecluse.Core.Package (Artifact, PackageDetails, artFilename, pkgArtifacts)
+import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Integrity (
     MinIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
@@ -51,8 +51,13 @@ denied job (ack, never publish) and leaves an undecidable one to redeliver.
 data ArtifactAdmission
     = {- | The rules admitted the version, the requested filename selected an
       artifact, and its digests clear the integrity floor: serve it / mirror it.
+      Carries the artifact and its integrity digests exactly as the floor checked
+      them, non-empty as a fact of admission, so both consumers act on this one
+      floor-checked set (the serve pipeline captures it on the mirror job it
+      enqueues; the worker's tamper gate verifies the fetched bytes against it)
+      rather than each re-deriving and re-guarding it from the artifact.
       -}
-      AdmissionAdmit Artifact
+      AdmissionAdmit Artifact (NonEmpty Hash)
     | {- | A rule (or deny-by-default) blocked the version. Carries the 'Blocked' \/
       'BlockedByDefault' 'Decision' so each consumer renders the deciding rule and
       reason on its own surface.
@@ -112,7 +117,13 @@ admitArtifact ctx rules minIntegrity file details = do
         Admitted{} -> case artifactFor file details of
             Nothing -> AdmissionFileAbsent
             Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of
-                MeetsFloor -> AdmissionAdmit artifact
+                MeetsFloor ->
+                    -- 'MeetsFloor' guarantees a digest is present, but 'artHashes'
+                    -- is a plain list, so the (unreachable) empty case fails closed
+                    -- here, in the one place the digest set is extracted, to the
+                    -- same refusal a digest-less artifact receives; neither
+                    -- consumer re-derives or re-guards the set.
+                    maybe AdmissionIntegrityMissing (AdmissionAdmit artifact) (nonEmpty (artHashes artifact))
                 BelowFloor -> AdmissionBelowFloor
                 NoIntegrity -> AdmissionIntegrityMissing
         Blocked{} -> AdmissionDenied decision
