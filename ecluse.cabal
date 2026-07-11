@@ -245,6 +245,7 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Proxy.CveSync
     Ecluse.Pilot
     Ecluse.Dredger
     Ecluse.Composition
@@ -643,6 +644,7 @@ test-suite ecluse-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
+    Ecluse.Proxy.CveSyncSpec
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
