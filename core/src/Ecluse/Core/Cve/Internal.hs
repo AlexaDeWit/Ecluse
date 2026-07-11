@@ -105,24 +105,31 @@ the same guarantee for every statement this connection will run.
 -}
 openHardenedConnection :: Ecosystem -> FilePath -> IO (Either CveDbRejected Connection)
 openHardenedConnection eco dbFile = do
-    conn <- open dbFile
-    -- Apply the hardening pragmas and accept-or-reject the artifact. Acceptance
-    -- folds a hostile artifact into a 'CveDbRejected' value; the 'onException'
-    -- guard closes the connection should a statement instead throw (e.g. a
-    -- non-SQLite file whose first file-touching pragma raises), so the
-    -- just-opened connection is never leaked on that path.
-    let hardenAndAccept = do
-            execute_ conn "PRAGMA trusted_schema = OFF"
-            execute_ conn "PRAGMA query_only = ON"
-            execute_ conn "PRAGMA cell_size_check = ON"
-            execute_ conn "PRAGMA mmap_size = 0"
-            acceptArtifact eco conn
-    accepted <- hardenAndAccept `onException` close conn
-    case accepted of
-        Left rejection -> do
-            close conn
-            pure (Left rejection)
-        Right () -> pure (Right conn)
+    -- 'open' itself can throw (e.g. a directory path or permissions fault).
+    -- Catch it so the sync task treats the artifact as a rejection value rather
+    -- than an exception that re-downloads forever.
+    opened <- tryAny (open dbFile)
+    case opened of
+        Left err -> pure (Left (CveDbIntegrityFailed ["cannot open artifact: " <> show err]))
+        Right conn -> do
+            -- Apply the hardening pragmas and accept-or-reject the artifact.
+            -- Acceptance folds a hostile artifact into a 'CveDbRejected' value;
+            -- the 'onException' guard closes the connection should a statement
+            -- instead throw (e.g. a non-SQLite file whose first file-touching
+            -- pragma raises), so the just-opened connection is never leaked on
+            -- that path.
+            let hardenAndAccept = do
+                    execute_ conn "PRAGMA trusted_schema = OFF"
+                    execute_ conn "PRAGMA query_only = ON"
+                    execute_ conn "PRAGMA cell_size_check = ON"
+                    execute_ conn "PRAGMA mmap_size = 0"
+                    acceptArtifact eco conn
+            accepted <- hardenAndAccept `onException` close conn
+            case accepted of
+                Left rejection -> do
+                    close conn
+                    pure (Left rejection)
+                Right () -> pure (Right conn)
 
 acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 acceptArtifact eco conn = runExceptT $ do

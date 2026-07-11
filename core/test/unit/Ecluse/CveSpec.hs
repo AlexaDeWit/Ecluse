@@ -1,10 +1,11 @@
 module Ecluse.CveSpec (spec) where
 
-import Database.SQLite.Simple (close, open)
+import Database.SQLite.Simple (close, execute_, open)
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDbRejected (..), insideAffectedRange, severityAtLeast)
-import Ecluse.Core.Cve.Internal (checkEpochStamp, checkIntegrity, checkMetaEcosystem, checkRangesTable, provenanceQuery)
+import Ecluse.Core.Cve.Internal (checkEpochStamp, checkIntegrity, checkMetaEcosystem, checkRangesTable, openHardenedConnection, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 -- A builder for a fixed-bounded (half-open) interval, exposing only its bounds.
@@ -31,6 +32,13 @@ inside = insideAffectedRange Npm
 
 spec :: Spec
 spec = do
+    describe "openHardenedConnection" $ do
+        it "rejects a directory path as a value" $
+            withSystemTempDirectory "ecluse-cve-robust" $ \dir ->
+                openHardenedConnection Npm dir >>= \case
+                    Left (CveDbIntegrityFailed _) -> pass
+                    res -> fail ("expected Left CveDbIntegrityFailed, got " <> show (void res))
+
     describe "acceptance components (robustness under closed connection)" $ do
         it "checkEpochStamp returns Left CveDbIntegrityFailed" $ do
             conn <- open ":memory:"
@@ -67,18 +75,37 @@ spec = do
                 Left (CveDbMetaUnreadable _) -> pass
                 other -> fail ("expected Left CveDbMetaUnreadable, got " <> show other)
 
-    describe "Show instances" $ do
-        let (isNotNull :: [Char] -> Bool) = not . null
-        it "AdvisoryRange exercises the constructor" $ do
-            show (AdvisoryRange "CVE-1" (Just 5.0) (Just "0") (Just "1") Nothing) `shouldSatisfy` isNotNull
+        it "provenanceQuery decodes multiple rows and sorts by key" $ do
+            conn <- open ":memory:"
+            execute_ conn "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"
+            execute_ conn "INSERT INTO meta VALUES ('b', '2'), ('a', '1')"
+            provenanceQuery conn >>= \case
+                Right [("a", "1"), ("b", "2")] -> pass
+                other -> fail ("expected Right meta, got " <> show other)
+            close conn
 
-        it "CveDbRejected exercises all constructors" $ do
-            show (CveDbWrongEpoch 1) `shouldSatisfy` isNotNull
-            show (CveDbIntegrityFailed ["p1"]) `shouldSatisfy` isNotNull
-            show CveDbRangesNotATable `shouldSatisfy` isNotNull
-            show (CveDbEcosystemMismatch (Just "bad")) `shouldSatisfy` isNotNull
-            show (CveDbEcosystemMismatch Nothing) `shouldSatisfy` isNotNull
-            show (CveDbMetaUnreadable ["err"]) `shouldSatisfy` isNotNull
+    describe "Show and Eq instances" $ do
+        let (isNotNull :: [Char] -> Bool) = not . null
+        it "AdvisoryRange exercises constructor, show and eq" $ do
+            let ar1 = AdvisoryRange "CVE-1" (Just 5.0) (Just "0") (Just "1") Nothing
+                ar2 = ar1{arFixed = Just "2"}
+            show ar1 `shouldSatisfy` isNotNull
+            ar1 `shouldBe` ar1
+            ar1 `shouldSatisfy` (/= ar2)
+
+        it "CveDbRejected exercises all constructors, show and eq" $ do
+            let rejs =
+                    [ CveDbWrongEpoch 1
+                    , CveDbIntegrityFailed ["p1"]
+                    , CveDbRangesNotATable
+                    , CveDbEcosystemMismatch (Just "bad")
+                    , CveDbEcosystemMismatch Nothing
+                    , CveDbMetaUnreadable ["err"]
+                    ]
+            forM_ rejs $ \rej -> do
+                show rej `shouldSatisfy` isNotNull
+                rej `shouldBe` rej
+            (CveDbWrongEpoch 1 == CveDbWrongEpoch 2) `shouldBe` False
 
     describe "severityAtLeast" $ do
         it "returns True when severity is Nothing (fail-closed)" $

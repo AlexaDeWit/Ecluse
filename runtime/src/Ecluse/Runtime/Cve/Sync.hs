@@ -35,6 +35,7 @@ module Ecluse.Runtime.Cve.Sync (
     SyncEnv (..),
     SyncOutcome (..),
     syncStep,
+    discardTemp,
 
     -- * The scheduled task
     SyncSchedule (..),

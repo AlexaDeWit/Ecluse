@@ -18,11 +18,12 @@ import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
-    OsvDbFetchFault (OsvDbNoEtag, OsvDbTooLarge),
+    OsvDbFetchFault (..),
     SyncEnv (..),
     SyncOutcome (..),
     SyncSchedule (..),
     cappedAt,
+    discardTemp,
     runCveSync,
     syncStep,
  )
@@ -276,20 +277,35 @@ spec = do
                     n <- readIORef heads
                     n `shouldSatisfy` (> 2)
 
-    describe "Sync outcomes and faults Show instances" $ do
+    describe "discardTemp robustness" $ do
+        it "is a no-op when the file does not exist" $
+            discardTemp "/no/such/file/deliberate"
+
+    describe "Show and Eq instances" $ do
         let (isNotNull :: [Char] -> Bool) = not . null
+        it "Show and Eq DbEtag" $ do
+            let e1 = DbEtag "e"
+                e2 = DbEtag "f"
+            show e1 `shouldBe` ("DbEtag \"e\"" :: [Char])
+            e1 `shouldBe` e1
+            e1 `shouldSatisfy` (/= e2)
+
         it "Show SyncOutcome exercises all constructors" $ do
-            show (SyncSwapped (DbEtag "e") [("k", "v")]) `shouldSatisfy` isNotNull
+            let (etag, meta, rej) = (DbEtag "e", [("k", "v")], CveDbMetaUnreadable ["err"])
+            show (SyncSwapped etag meta) `shouldSatisfy` isNotNull
             show SyncUnchanged `shouldSatisfy` isNotNull
             show SyncAbsent `shouldSatisfy` isNotNull
-            show (SyncRejected (DbEtag "e") (CveDbMetaUnreadable ["err"])) `shouldSatisfy` isNotNull
+            show (SyncRejected etag rej) `shouldSatisfy` isNotNull
 
-        it "Show DbEtag" $ do
-            show (DbEtag "e") `shouldBe` ("DbEtag \"e\"" :: [Char])
-
-        it "Show OsvDbFetchFault" $ do
-            show (OsvDbTooLarge 1024) `shouldSatisfy` isNotNull
-            show OsvDbNoEtag `shouldSatisfy` isNotNull
+        it "Show and Eq OsvDbFetchFault" $ do
+            let f1 = OsvDbTooLarge 1024
+                f2 = OsvDbTooLarge 2048
+                f3 = OsvDbNoEtag
+            show f1 `shouldSatisfy` isNotNull
+            show f3 `shouldSatisfy` isNotNull
+            f1 `shouldBe` f1
+            f1 `shouldSatisfy` (/= f2)
+            f1 `shouldSatisfy` (/= f3)
 
     describe "cappedAt" $ do
         it "passes a stream that ends exactly at the cap through unchanged" $ do
