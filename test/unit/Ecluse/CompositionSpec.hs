@@ -39,6 +39,7 @@ import Ecluse.Config (
     PolicyError (UnknownRuleType),
     QueueBackend (..),
     loadConfig,
+    renderConfigError,
  )
 import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
@@ -159,6 +160,7 @@ planFrom envVars mDocBytes = do
             errs = cfgErrs
             toBoot (PolicyErrors es) = map PolicyBootError es
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
+            toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
         Right cfg -> do
             initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
                 Left pErrs -> pure (Left pErrs)
@@ -715,7 +717,12 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Right _ -> expectationFailure "expected a policy boot error"
 
     it "fails on a configured mount whose ecosystem has no adapter" $ do
-        let pypiEnv = ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t") : staticEnvVars
+        -- Touching any pypi key activates the mount, so the env fixture must carry
+        -- the private upstream the activation contract requires.
+        let pypiEnv =
+                ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM", "https://priv.example.test")
+                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")
+                    : staticEnvVars
         _ <- expectEnv pypiEnv
         _ <- expectDoc (mountDoc "pypi" "static")
         planFrom pypiEnv (Just (mountDoc "pypi" "static")) >>= \case

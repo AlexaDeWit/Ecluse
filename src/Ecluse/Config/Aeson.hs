@@ -169,10 +169,13 @@ acceptedDocumentKeys =
     , "maxOsvDbBytes"
     ]
 
+{- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem
+templates included. Which of them are /active/ (operator-declared, served, and
+required to be complete) is decided against the operator overlay in
+"Ecluse.Config"; this parser stays a faithful projection of the merged document.
+-}
 parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
-parseMounts km = do
-    mounts <- Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
-    pure (Map.filter (isJust . mntPrivateUpstream) mounts)
+parseMounts km = Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
 
 parseMountEntry :: (Key.Key, Value) -> Parser (Ecosystem, MountConfig)
 parseMountEntry (k, v) = do

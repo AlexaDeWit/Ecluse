@@ -40,6 +40,29 @@ spec = describe "decodeDocument" $ do
     it "rejects an unknown key inside a mount, naming it" $
         loadConfig [] (Just (mountDocWithExtraKey "baseURL")) `shouldSatisfy` decodeErrorMentions "baseURL"
 
+    it "keeps the shipped template mounts dormant when the overlay never mentions them" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> configMounts doc `shouldBe` mempty
+
+    it "activates a mount from the environment layer alone (the one-variable launch)" $
+        case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+
+    it "fails loudly when a document-declared mount omits its private upstream" $
+        loadConfig [] (Just "{\"mounts\":{\"npm\":{}}}")
+            `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
+
+    it "fails loudly when an environment key activates a mount without an upstream" $
+        loadConfig [("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")] Nothing
+            `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
+
+    it "reports every incomplete active mount in one load, not only the first" $ do
+        let outcome = loadConfig [] (Just "{\"mounts\":{\"npm\":{},\"pypi\":{}}}")
+        outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
+        outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
+
     it "loads the bounded serve and connection-pool defaults" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
