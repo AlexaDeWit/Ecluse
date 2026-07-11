@@ -8,9 +8,8 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
-import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
+import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Queue (
-    MirrorArtifact (..),
     MirrorJob (..),
     MirrorQueue (..),
     QueueFault (qfCause),
@@ -34,7 +33,7 @@ import Ecluse.Runtime.Queue.Sqs (
     defaultSqsConfig,
     newSqsQueue,
  )
-import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 {- | Integration tests exercise the SQS 'MirrorQueue' backend against a real
 endpoint provided by a @ministack@ container (launched via @testcontainers@, shared
@@ -114,12 +113,6 @@ sampleJob =
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
-        , jobMirrorTarget = "https://mirror.example/left-pad/-/left-pad-1.3.0.tgz"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = "left-pad-1.3.0.tgz"
-                , maHashes = unsafeHash SHA1 validSha1 :| []
-                , maSize = Just 256
-                }
+        , jobArtifactFilename = "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }

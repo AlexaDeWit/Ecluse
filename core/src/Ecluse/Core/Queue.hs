@@ -62,7 +62,6 @@ module Ecluse.Core.Queue (
 
     -- * Payloads
     MirrorJob (..),
-    MirrorArtifact (..),
     RemoteSpanContext (..),
     QueueMessage (..),
 
@@ -87,7 +86,7 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault), transportFault)
-import Ecluse.Core.Package (Hash, PackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
 import Ecluse.Core.Version (Version)
@@ -99,12 +98,12 @@ admission oracle before mirroring (see "Ecluse.Core.Worker.Job"), then fetches t
 bytes, verifies them against the digests of the artifact that re-evaluation
 re-admitted, and publishes.
 
-The artifact descriptor is captured __at enqueue time__ ('jobArtifact'): its
-filename names the artifact the worker's ingest re-evaluation selects and gates
-under current policy. The queue payload is a trust boundary: the tamper gate and
-the publish document both use the descriptor the worker derives from the
-re-admitted artifact, so the payload's captured digests serve only the divergence
-check against that set.
+The queue payload is a trust boundary, so it carries __selection keys, never
+authority__: the filename ('jobArtifactFilename') names the artifact the worker's
+ingest re-evaluation selects and gates under current policy, and the payload
+carries no digest or size at all -- the descriptor the tamper gate and the publish
+document consume ('Ecluse.Core.Registry.MirrorArtifact') is derived entirely from
+the artifact that re-evaluation re-admits.
 -}
 data MirrorJob = MirrorJob
     { jobPackage :: PackageName
@@ -116,12 +115,10 @@ data MirrorJob = MirrorJob
     the validated https egress witness rather than bare text; the SQS wire decode
     re-forms it, since the queue payload is a trust boundary.
     -}
-    , jobMirrorTarget :: Text
-    -- ^ The mirror-target endpoint the artifact is published to.
-    , jobArtifact :: MirrorArtifact
-    {- ^ The serve-time-admitted artifact descriptor: the filename the worker's
-    ingest re-evaluation selects the artifact by, plus the captured digests its
-    divergence check compares against the re-admitted set.
+    , jobArtifactFilename :: Text
+    {- ^ The serve-time-admitted artifact's filename: the selection key the
+    worker's ingest re-evaluation gates by, cross-checked against current metadata
+    by the shared admission gate rather than trusted.
     -}
     , jobTraceContext :: Maybe RemoteSpanContext
     {- ^ The trace context of the serve-time span that enqueued the job, captured
@@ -129,35 +126,6 @@ data MirrorJob = MirrorJob
     that produced the work across the asynchronous hop. 'Nothing' when tracing was
     off at enqueue time (or for a job from a producer that carried none). The queue
     treats it as opaque transport; only the tracing port reads it.
-    -}
-    }
-    deriving stock (Eq, Show)
-
-{- | An artifact descriptor: the filename, integrity digests, and declared size a
-mirror publish is assembled from. A 'MirrorJob' carries the __serve-time-admitted__
-capture, whose filename keys the worker's ingest re-evaluation; the worker derives
-a fresh descriptor from the artifact that re-evaluation re-admits, and that derived
-one feeds the tamper gate and the publish document.
-
-'maHashes' is a 'NonEmpty' because the serve path admits a public version only when
-it carries at least one integrity digest (the integrity-presence admission policy),
-so a digest-less job is unrepresentable by construction.
--}
-data MirrorArtifact = MirrorArtifact
-    { maFilename :: Text
-    {- ^ The artifact's on-the-wire filename, the @_attachments@ key in the publish
-    document.
-    -}
-    , maHashes :: NonEmpty Hash
-    {- ^ The integrity digests (at least one). On the queue payload they serve only
-    the divergence warning against the re-admitted set (versions are immutable, so
-    a divergence is anomalous); on the worker-derived descriptor they are the
-    floor-checked set the tamper gate verifies and the publish document's npm
-    @dist.integrity@ \/ @shasum@ fields are picked from.
-    -}
-    , maSize :: Maybe Int
-    {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte
-    count: for npm it is the unpacked-tree size (@dist.unpackedSize@).
     -}
     }
     deriving stock (Eq, Show)

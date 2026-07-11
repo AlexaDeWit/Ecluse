@@ -56,7 +56,6 @@ module Ecluse.Runtime.Queue.Sqs (
     -- * Job wire mapping
     encodeJob,
     decodeJob,
-    parseHashAlg,
 ) where
 
 import Amazonka qualified as AWS
@@ -83,22 +82,14 @@ import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (
-    Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
-    hashAlg,
-    hashValue,
-    mkHash,
     mkPackageName,
     mkScope,
-    mkSriHashes,
     pkgEcosystem,
     pkgNamespace,
     unScope,
     unscopedName,
  )
-import Ecluse.Core.Package.Integrity (renderHashAlg)
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (..),
     QueueFault,
@@ -323,10 +314,10 @@ dropReasonLabel = \case
 {- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
 'decodeJob': the package identity is split into its ecosystem, optional scope, and
 bare name so it round-trips through 'mkPackageName', and the version keeps its raw
-string. The serve-time-admitted artifact descriptor ('jobArtifact') -- the filename,
-the integrity digests, and the declared size -- round-trips as a nested object so the
-worker has the filename its ingest re-evaluation gates by and the captured digest
-set its divergence check compares against the re-admitted one.
+string. The serve-time-admitted artifact's filename rides as a plain field: it is
+the selection key the worker's ingest re-evaluation gates by, and the only thing
+of the artifact the wire carries -- the digests and size the worker verifies and
+publishes with are derived from current metadata, never the payload.
 -}
 encodeJob :: MirrorJob -> Text
 encodeJob job =
@@ -337,8 +328,7 @@ encodeJob job =
             , "name" .= unscopedName name
             , "version" .= renderVersion (jobVersion job)
             , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
-            , "mirrorTarget" .= jobMirrorTarget job
-            , "artifact" .= encodeArtifact (jobArtifact job)
+            , "filename" .= jobArtifactFilename job
             , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
             ]
   where
@@ -355,23 +345,9 @@ encodeTraceContext rsc =
         , "tracestate" .= rscTracestate rsc
         ]
 
--- Encode the serve-time-admitted artifact descriptor: filename, the integrity
--- digests (each an algorithm-tagged value), and the declared size when known.
-encodeArtifact :: MirrorArtifact -> Aeson.Value
-encodeArtifact artifact =
-    object
-        [ "filename" .= maFilename artifact
-        , "hashes" .= map encodeHash (toList (maHashes artifact))
-        , "size" .= maSize artifact
-        ]
-  where
-    encodeHash :: Hash -> Aeson.Value
-    encodeHash h = object ["alg" .= renderHashAlg (hashAlg h), "value" .= hashValue h]
-
 {- | Decode an SQS message body back into a 'MirrorJob', or a human-readable error
 if the body is not the JSON object 'encodeJob' produces (a missing field, an
-unknown ecosystem, an empty hash list, an artifact URL the egress former refuses,
-malformed JSON).
+unknown ecosystem, an artifact URL the egress former refuses, malformed JSON).
 
 The queue payload is a __trust boundary__, so the artifact URL is re-formed into
 its 'RegistryUrl' egress witness on decode through the given former -- the
@@ -387,7 +363,7 @@ decodeJob egressUrl body =
         >>= first toText . parseEither (parseMirrorJob egressUrl)
 
 -- Parse the top-level job object 'encodeJob' writes, delegating the nested
--- carriers to 'parseArtifact' and 'parseTraceContext'.
+-- trace-context carrier to 'parseTraceContext'.
 parseMirrorJob :: (Text -> Either Text RegistryUrl) -> Aeson.Value -> Parser MirrorJob
 parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     ecoName <- o .: "ecosystem"
@@ -399,8 +375,7 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     -- Re-form the egress witness at the wire boundary: the type the worker's fetch
     -- requires cannot be fabricated from an unvalidated payload string.
     artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
-    mirrorTarget <- o .: "mirrorTarget"
-    artifact <- o .: "artifact" >>= parseArtifact
+    filename <- o .: "filename"
     -- The trace-context carrier is optional: a job from an older producer (or one
     -- enqueued with tracing off) carries no "traceContext", which decodes to
     -- 'Nothing' and simply yields no span link in the worker.
@@ -410,8 +385,7 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
             { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
             , jobVersion = mkVersion eco rawVersion
             , jobArtifactUrl = artifactUrl
-            , jobMirrorTarget = mirrorTarget
-            , jobArtifact = artifact
+            , jobArtifactFilename = filename
             , jobTraceContext = traceContext
             }
   where
@@ -424,54 +398,3 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
 parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
 parseTraceContext = withObject "RemoteSpanContext" $ \t ->
     RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
-
--- Parse the nested artifact descriptor, failing on an empty hash list (the
--- 'NonEmpty' invariant the serve path upholds: a digest-less job is
--- unrepresentable).
-parseArtifact :: Aeson.Value -> Parser MirrorArtifact
-parseArtifact = withObject "MirrorArtifact" $ \o -> do
-    filename <- o .: "filename"
-    rawHashes <- (o .: "hashes" :: Parser [Aeson.Value]) >>= traverse parseHashes
-    size <- o .:? "size"
-    case nonEmpty (concatMap toList rawHashes) of
-        Nothing -> fail "MirrorArtifact carries no integrity digest"
-        Just hashes ->
-            pure MirrorArtifact{maFilename = filename, maHashes = hashes, maSize = size}
-
--- Parse one algorithm-tagged digest entry from the artifact descriptor's hash list.
--- An entry usually yields one 'Hash'; an @sri@ entry whose value joins several
--- components (a job enqueued by an older producer, which carried the wire string
--- whole) is split into one single-component 'Hash' each ('mkSriHashes'), so an
--- in-flight job survives the upgrade and the descriptor still carries exact
--- components rather than a joined string.
-parseHashes :: Aeson.Value -> Parser (NonEmpty Hash)
-parseHashes = withObject "Hash" $ \h -> do
-    algName <- h .: "alg"
-    alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
-    value <- h .: "value"
-    -- The queue is a trust boundary: validate the digest on decode through the same
-    -- constructors the serve path uses ('mkHash' / 'mkSriHashes'), so a malformed
-    -- digest never crosses it into the worker's descriptor. A malformed value fails
-    -- the decode (the job is left un-acked and redelivers, ultimately to the
-    -- dead-letter queue).
-    case alg of
-        SRI -> either (fail . toString) pure (mkSriHashes value)
-        _ -> either (fail . toString) (pure . one) (mkHash alg value)
-  where
-    unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
-
--- Decode a wire algorithm name back to its 'HashAlg' -- the inverse of 'renderHashAlg'
--- over the SQS message vocabulary, including the @sri@ wrapper an npm @dist.integrity@
--- digest rides under. An exact match on a name a digest is serialized under, so a
--- well-formed message round-trips and an unrecognised name yields 'Nothing' (the job
--- is then rejected rather than carrying an algorithm the model does not name).
-parseHashAlg :: Text -> Maybe HashAlg
-parseHashAlg = \case
-    "sha1" -> Just SHA1
-    "sha256" -> Just SHA256
-    "sha384" -> Just SHA384
-    "sha512" -> Just SHA512
-    "md5" -> Just MD5
-    "blake2b" -> Just Blake2b
-    "sri" -> Just SRI
-    _ -> Nothing

@@ -72,9 +72,9 @@ import UnliftIO (try)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName)
-import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes))
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    MirrorArtifact (maFilename, maHashes),
     ParseError (ParseError),
     PublishError (..),
     PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),

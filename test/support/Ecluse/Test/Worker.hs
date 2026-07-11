@@ -38,9 +38,9 @@ The worker's ingest gate is the __same shared admission oracle the serve path ru
 ('Ecluse.Core.Package.Admission.admitArtifact'), so the resolved snapshot must also
 pass artifact selection and the integrity floor: the resolver synthesises the
 conventional @{name}-{version}.tgz@ artifact (matching a conventionally-named job's
-'Ecluse.Core.Queue.maFilename') carrying the caller's digest set, the host gate
-honours every host (a test upstream is loopback), and the floor is the production
-default (so the set must include a floor-clearing digest).
+'Ecluse.Core.Queue.jobArtifactFilename') carrying the caller's digest set, the host
+gate honours every host (a test upstream is loopback), and the floor is the
+production default (so the set must include a floor-clearing digest).
 
 The digest set is the caller's because the worker's tamper gate verifies the fetched
 bytes against the __re-admitted__ artifact's digests, the ones this resolver carries:

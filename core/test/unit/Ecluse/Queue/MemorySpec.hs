@@ -67,7 +67,7 @@ spec = do
             jobPackage job `shouldBe` jobPackage sampleJob
             jobVersion job `shouldBe` jobVersion sampleJob
             jobArtifactUrl job `shouldBe` jobArtifactUrl sampleJob
-            jobMirrorTarget job `shouldBe` jobMirrorTarget sampleJob
+            jobArtifactFilename job `shouldBe` jobArtifactFilename sampleJob
 
         it "delivers jobs in FIFO order" $ do
             q <- newInMemoryQueue

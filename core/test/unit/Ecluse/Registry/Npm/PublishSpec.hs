@@ -12,8 +12,8 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Data.List.NonEmpty qualified as NE
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
-import Ecluse.Core.Queue (MirrorArtifact (..))
 import Ecluse.Core.Registry (
+    MirrorArtifact (..),
     PublishError (publishErrorMessage),
     PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
     RegistryClient (publishArtifact),

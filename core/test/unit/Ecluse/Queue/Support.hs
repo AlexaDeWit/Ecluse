@@ -16,10 +16,10 @@ module Ecluse.Queue.Support (
 import UnliftIO (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
-import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), QueueFault)
+import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Queue (MirrorJob (..), QueueFault)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (unsafeHash, unsafeRegistryUrl, validSha1)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 {- | A 'Left' escaping a backend that has no fault to report (the in-memory
 double, the bounded backend, the buffered hand-off) is a broken test premise:
@@ -44,13 +44,7 @@ sampleJob =
         { jobPackage = mkPackageName Npm Nothing "thing"
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
-        , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
-        , jobArtifact =
-            MirrorArtifact
-                { maFilename = "thing-1.0.0.tgz"
-                , maHashes = unsafeHash SHA1 validSha1 :| []
-                , maSize = Just 7
-                }
+        , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
 

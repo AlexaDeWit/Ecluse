@@ -40,7 +40,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
-    MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
+    MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
     queueFault,
@@ -1057,10 +1057,9 @@ conditionalArtifactUpstream version tarballBody = do
         | otherwise = responseLBS status200 [] tarballBody
 
 -- A flat projection of a mirror job, for an order-stable equality assertion over
--- the four coordinates the job carries (package, version, public artifact URL,
--- mirror target).
+-- the coordinates the queued worker consumes.
 jobShape :: MirrorJob -> (PackageName, Version, Text, Text)
-jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), jobMirrorTarget job)
+jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), jobArtifactFilename job)
 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do

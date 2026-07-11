@@ -7,8 +7,9 @@
 Mirroring is **demand-driven**: when a client pulls an artifact whose version
 passes the rules (the tarball path on a private-upstream miss), the proxy:
 
-1. Enqueues a mirror job (the mirror target URL, package name, version, and
-   artifact location) to the configured **mirror queue**.
+1. Enqueues a mirror job (package name, version, artifact location, and filename)
+   to the configured **mirror queue**. The worker publishes through the mirror target
+   resolved from the mount configuration, not a target named on the message.
 2. Returns the artifact to the client **immediately**, no blocking on mirror
    completion.
 
@@ -34,7 +35,7 @@ jobs, and for each one:
 3. fetches the artifact from the public upstream,
 4. **verifies its bytes against the re-admitted artifact's integrity digest** (npm
    `dist.integrity`, from the same current metadata step 2 gated; the queue payload
-   contributes no digest), and
+   carries no digest at all), and
 5. publishes it to the mirror target via `publishArtifact` and acknowledges the job.
 
 A hash mismatch fails the job (no publish; it routes to retry/DLQ) and alarms, so a

@@ -369,8 +369,8 @@ into its https-only `RegistryUrl` witness at the wire decode (an unformable URL 
 decode), the fetch host is re-checked against the mount's tarball-host gate at ingest, the
 version is re-decided through the shared admission gate, and the fetched bytes must match
 the digest of the artifact that gate re-admits (the set it floor-checked against current
-metadata; a job's own digests are never what the bytes are verified against) before any
-publish.
+metadata; a job carries no digest of its own, only the filename keying the re-decision)
+before any publish.
 
 **Registry separation is defence-in-depth and auditability, not the perimeter** (register
 threat #10). The three-registry topology

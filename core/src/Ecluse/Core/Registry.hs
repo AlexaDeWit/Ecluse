@@ -42,6 +42,9 @@ module Ecluse.Core.Registry (
     -- * Fetch payload
     RegistryResponse (..),
 
+    -- * Publish descriptor
+    MirrorArtifact (..),
+
     -- * Errors
     ParseError (..),
     FetchFault (..),
@@ -54,8 +57,7 @@ module Ecluse.Core.Registry (
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Queue (MirrorArtifact)
+import Ecluse.Core.Package (Hash, PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
@@ -67,6 +69,34 @@ protocol\/data plane (fetch) is separate from parsing: a @parse*@ field turns a
 newtype RegistryResponse = RegistryResponse
     { responseBody :: ByteString
     -- ^ The raw response body (a metadata JSON document, or artifact bytes).
+    }
+    deriving stock (Eq, Show)
+
+{- | The artifact descriptor a mirror publish is assembled from: the filename,
+integrity digests, and declared size of the artifact the worker's ingest
+re-evaluation __re-admitted__ under current policy. The worker derives it entirely
+from current metadata -- the queue payload carries no digest or size -- so the
+'publishArtifact' document can only ever name what the shared admission gate
+floor-checked (see "Ecluse.Core.Worker.Job").
+
+'maHashes' is a 'NonEmpty' because admission refuses a digest-less version (the
+integrity-presence policy), so a descriptor with nothing to verify or publish is
+unrepresentable by construction.
+-}
+data MirrorArtifact = MirrorArtifact
+    { maFilename :: Text
+    {- ^ The artifact's on-the-wire filename, the @_attachments@ key in the publish
+    document.
+    -}
+    , maHashes :: NonEmpty Hash
+    {- ^ The integrity digests (at least one): the floor-checked set the tamper
+    gate verified the fetched bytes against, and the set the publish document's
+    npm @dist.integrity@ \/ @shasum@ fields are picked from.
+    -}
+    , maSize :: Maybe Int
+    {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte
+    count: for npm it is the unpacked-tree size (@dist.unpackedSize@).
+    -}
     }
     deriving stock (Eq, Show)
 
