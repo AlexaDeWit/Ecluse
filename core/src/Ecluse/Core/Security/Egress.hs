@@ -19,7 +19,8 @@ resolved-IP pin.
 
 Two complementary controls live alongside this and are __not__ part of this module: the
 outbound host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), which is the
-load-bearing egress-policy control (the proxy dials only configured upstream hosts), and
+load-bearing egress-policy control (the proxy dials only configured upstream
+@host:port@ pairs), and
 the pure literal internal-range block ('Ecluse.Core.Security.isBlockedTarget'), kept as
 cheap defence-in-depth on the @dist.tarball@ host gate. No data-plane request follows an
 upstream redirect ('Ecluse.Core.Registry.Npm.withToken' pins @redirectCount = 0@), so there
@@ -60,10 +61,12 @@ the proxy will dial it:
 * anything that is not an @http(s)@ URL is refused.
 
 The 'Left' reason feeds the per-entry drop record; the 'Right' is the https
-'RegistryUrl' the artifact is fetched from. Hosts are compared by the same bare-host
-extraction the allowlist uses ('Ecluse.Core.Security.hostAddress'). This composes with,
-and never replaces, the host allowlist and the same-host tarball policy applied at serve
-time.
+'RegistryUrl' the artifact is fetched from. Hosts are compared on the bare host
+('Ecluse.Core.Security.hostAddress'): the upgrade decision is a scheme normalisation,
+not an authorisation, so the port plays no part here. This composes with, and never
+replaces, the @host:port@ allowlist and the same-authority tarball policy that still
+gate the resolved target at serve time (an upgraded-but-nonstandard-port target is
+refused there).
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url

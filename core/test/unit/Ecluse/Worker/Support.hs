@@ -63,7 +63,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -365,9 +365,9 @@ resolverWithArtifact art rName rVersion =
     pure (VersionPresent ((sampleDetails rName rVersion){pkgArtifacts = art :| []}))
 
 {- | Override the tarball-host gate of every policy in the map: the payload
-re-gating tests refuse (or admit) every host wholesale.
+re-gating tests refuse (or admit) every authority wholesale.
 -}
-withHostGate :: (Text -> Bool) -> WorkerPolicies -> WorkerPolicies
+withHostGate :: (Maybe HostPort -> Bool) -> WorkerPolicies -> WorkerPolicies
 withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 
 {- | Override the artifact request formation of every policy in the map: the

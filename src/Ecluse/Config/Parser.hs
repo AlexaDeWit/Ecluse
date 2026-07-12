@@ -20,6 +20,7 @@ import Data.Aeson.Types (Parser, withText)
 import Data.Text qualified as T
 
 import Ecluse.Config.Types (Url, mkUrl)
+import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 
 rejectSecretKeys :: KeyMap.KeyMap Value -> Parser ()
@@ -35,9 +36,22 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
+-- A registry URL entry must be https (mkRegistryUrl) and must carry a dialable
+-- authority: a host, and, when a port is written, a decimal port in 1..65535
+-- (hostPortAddress, the same extraction the egress gate authorises by). The gate
+-- treats an unextractable authority as refused, so an entry that fails here could
+-- only ever produce a mount that refuses every fetch; failing the boot names the
+-- offending value instead.
 parseRegistryUrl :: Value -> Parser RegistryUrl
 parseRegistryUrl = \case
-    String t -> either (fail . T.unpack) pure (mkRegistryUrl t)
+    String t
+        | isNothing (hostPortAddress t) ->
+            fail
+                ( "registry URL must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                    <> T.unpack t
+                    <> ")"
+                )
+        | otherwise -> either (fail . T.unpack) pure (mkRegistryUrl t)
     other -> fail ("parseRegistryUrl expected a string, but encountered a " <> valueKind other)
 
 parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a

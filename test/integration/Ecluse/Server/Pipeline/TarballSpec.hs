@@ -281,7 +281,16 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost, pdMirrorTarget = "http://cross.localhost:9"}
+        -- The double advertises its dist.tarball on cross.localhost at its own
+        -- runtime port, so the tarball authority is cross.localhost:<publicPort>.
+        -- The allowlist gates host:port pairs, so the entry must name that real
+        -- port: derive it from the public base URL (which already carries it)
+        -- rather than a hardcoded placeholder.
+        let relax d =
+                d
+                    { pdTarballHostPolicy = AnyAllowlistedHost
+                    , pdMirrorTarget = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
+                    }
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200

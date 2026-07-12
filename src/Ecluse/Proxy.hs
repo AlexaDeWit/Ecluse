@@ -131,7 +131,7 @@ import Ecluse.Core.Registry.Adapter (
     serveRenderer,
  )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHost)
+import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdBuildArtifactRequestByUrl, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
@@ -523,9 +523,9 @@ workerPolicyFor env deps =
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =
             -- The same host-gate composition the serve path applies before its public
-            -- artifact fetch, closed against the public upstream host (the reference
-            -- host the public leg gates dist.tarball hosts by).
-            tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps))
+            -- artifact fetch, closed against the public upstream authority (the
+            -- reference host:port the public leg gates dist.tarball targets by).
+            tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps))
         , -- The mount's own request formation (the adapter's artifact capability,
           -- projected onto these deps at the composition root), so a job's bytes
           -- are fetched exactly as the serve path would fetch them.

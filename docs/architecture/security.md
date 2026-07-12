@@ -46,14 +46,21 @@ not here.
    (`Ecluse.Core.Registry.Npm.Request`) applies this encoder around the structural sigils
    it writes; component safety itself is enforced at the router
    (`Ecluse.Core.Server.Route.isSafeComponent`) before a name is accepted.
-2. **Outbound fetches are restricted to the configured upstream hosts** (an allowlist).
-   Artifact bytes are fetched only from the upstream-declared `dist.tarball`, after the
-   allowlist check, never from a client-supplied URL. The allowlist is enforced when the
+2. **Outbound fetches are restricted to the configured upstream hosts and ports** (an
+   allowlist of `host:port` pairs). Artifact bytes are fetched only from the
+   upstream-declared `dist.tarball`, after the allowlist check, never from a
+   client-supplied URL. The allowlist entries are the configured upstream URLs'
+   authorities: a URL that writes no port authorises port 443 alone (egress is
+   https-only, so 443 is the port a portless URL dials), and an upstream on a
+   nonstandard port authorises exactly the written pair. The comparison always
+   carries the port, so a `dist.tarball` naming an allowlisted host on any other
+   port is refused rather than inheriting the host's authorisation; a URL with an
+   invalid port fails closed at config load. The allowlist is enforced when the
    URL is built, and Écluse never follows an upstream redirect (`redirectCount = 0` for
    every data-plane request, `Ecluse.Core.Registry.Npm.withToken`), so an allowlisted
-   upstream cannot `302` a fetch off-allowlist: the only host dialled is the one the
-   allowlist admitted. See [Registry Model](registry-model.md#registry-abstraction) and
-   [URL rewriting](web-layer.md#web-layer).
+   upstream cannot `302` a fetch off-allowlist: the only authority dialled is the one
+   the allowlist admitted. See [Registry Model](registry-model.md#registry-abstraction)
+   and [URL rewriting](web-layer.md#web-layer).
 3. **Registry egress is https-only by construction, and certificate validation is the
    endpoint-authentication boundary.** Every outbound registry URL, the public and private
    base URLs, every `dist.tarball` target, and any redirect target, is built through a
@@ -389,16 +396,19 @@ egress guards follow that principle, made concrete for the tarball path:
 
 - **`dist.tarball` host, disallow-by-default (public leg).** The public serve leg fetches
   each tarball from its authoritative `dist.tarball`, but gates where: by default only the
-  same allowlisted upstream that served the packument, refusing a `dist.tarball` on a
-  different host even if otherwise allowlisted (`Ecluse.Core.Security.tarballHostAllowed`
-  with `SameHostAsPackument`, applied in `Ecluse.Core.Server.Pipeline`). A cross-host
-  `dist.tarball` is refused with a `403` before any fetch. (The private leg never consults
-  `dist.tarball`; its same-host conventional read satisfies the gate by construction.) An
-  operator whose registry serves tarballs from a separate CDN opts in with
+  same allowlisted upstream authority that served the packument, host and port compared
+  as a pair, refusing a `dist.tarball` on a different host, or on the same host at a
+  different port, even if otherwise allowlisted
+  (`Ecluse.Core.Security.tarballHostAllowed` with `SameHostAsPackument`, applied in
+  `Ecluse.Core.Server.Pipeline`). A packument origin with no written port is port 443,
+  as every portless authority is. A cross-authority `dist.tarball` is refused with a
+  `403` before any fetch. (The private leg never consults `dist.tarball`; its same-host
+  conventional read satisfies the gate by construction.) An operator whose registry
+  serves tarballs from a separate CDN opts in with
   `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST`, accepting the wider fetch surface.
-  The override never escapes the allowlist or https-only: an allowlisted cross-host tarball
-  is still dialled https-only with certificate validation, and a literal internal-address
-  host is still refused (invariant 3). See
+  The override never escapes the `host:port` allowlist or https-only: an allowlisted
+  cross-host tarball is still dialled https-only with certificate validation, and a
+  literal internal-address host is still refused (invariant 3). See
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
 The internal-range block (invariant 3) runs the opposite direction: no knob narrows it (a

@@ -190,7 +190,7 @@ rationale behind each setting are in
 | `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No |  | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
 | `ECLUSE_GOOGLE_PROJECT` | Depends | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
 | `ECLUSE_AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
-| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
+| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_ADDITIONAL_BLOCKED_RANGES` | No |  | Comma-separated list of CIDR ranges (e.g. `10.99.0.0/16,fd12::/8`) an operator adds to the fixed internal-address block, applied identically across every mount. Extends the block only, never narrows it; a malformed entry **fails closed at boot**. See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
 | `ECLUSE_LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
@@ -285,9 +285,13 @@ are then credentialled):
 provides the first in the application, with an **origin-aware trust model**:
 
 - **Untrusted origins**: the public-upstream fetch and every `dist.tarball` fetch are gated by a
-  host **allowlist** (Écluse dials only your configured upstream hosts), fetched **HTTPS-only**
-  with TLS certificate validation, and bounded by **response-size limits**. A non-HTTPS upstream
-  fails closed at boot, and a `dist.tarball` is normalised to HTTPS or refused (below).
+  host **allowlist** (Écluse dials only your configured upstream hosts, **on their configured
+  ports**: an upstream URL with no explicit port authorises port 443 alone, and an upstream on a
+  nonstandard port must write it, e.g. `https://repo.internal:8443`, which authorises exactly
+  that host:port pair), fetched **HTTPS-only** with TLS certificate validation, and bounded by
+  **response-size limits**. A non-HTTPS upstream fails closed at boot, as does an upstream URL
+  whose port is not a decimal number in 1..65535, and a `dist.tarball` is normalised to HTTPS or
+  refused (below).
   Certificate validation closes the resolve-to-internal and DNS-rebinding SSRF class: an address
   a name is steered to can't present a CA-trusted certificate for the host. A **pure literal
   internal-range block** (loopback, link-local incl. the `169.254.169.254` metadata endpoint,
@@ -326,11 +330,13 @@ Provide the second layer at the platform, protecting your data targets (registri
   (under the `service` strategy) the private-read credential, nothing more.
 
 **The `dist.tarball` host policy.** `dist.tarball` is upstream-chosen, so by default Écluse
-fetches a tarball only from the same allowlisted upstream that served the packument; a different
-host is refused even if allowlisted. If your registry serves artifacts from a separate CDN/files
-host (the PyPI-files-host shape), set `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST=true` to
-allow any allowlisted host. It never escapes the allowlist or internal-range block, but widens the
-fetch surface, so opt in deliberately.
+fetches a tarball only from the same allowlisted upstream that served the packument, host **and
+port** compared as a pair; a different host, or the same host on a different port, is refused
+even if allowlisted (no explicit port means 443 on both sides). If your registry serves
+artifacts from a separate CDN/files host (the PyPI-files-host shape), set
+`ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST=true` to allow any allowlisted host:port
+pair. It never escapes the allowlist or internal-range block, but widens the fetch surface, so
+opt in deliberately.
 
 The rationale is in [Security: outbound-request and input-validation
 invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
