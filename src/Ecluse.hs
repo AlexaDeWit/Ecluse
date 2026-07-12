@@ -97,9 +97,6 @@ module Ecluse (
     -- * Composition glue (exposed for direct testing)
     orExit,
     BootAborted (..),
-
-    -- * Default handles
-    unconfiguredRegistry,
 ) where
 
 import Control.Exception (AsyncException (ThreadKilled, UserInterrupt), SomeAsyncException)

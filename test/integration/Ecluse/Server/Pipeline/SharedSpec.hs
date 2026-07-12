@@ -258,7 +258,7 @@ captureBreachLog privateBody = do
             logEnv <- newLogEnv JsonLog (Environment "test")
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
-            env <- newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+            env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
             baseDeps <- deps privatePort publicPort Nothing
             let cfg =
                     mkServerConfig

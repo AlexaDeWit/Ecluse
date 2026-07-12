@@ -35,8 +35,9 @@ import Ecluse.Core.Package.Admission (
     admitArtifact,
  )
 import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
-import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
+import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
+import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
 import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -104,8 +105,8 @@ message is acked or left to redeliver.
 -}
 data JobOutcome
     = {- | The publish succeeded, so the job is acked. This covers an idempotent
-      redelivery too: a version already present at the mirror target is a @409@ the
-      registry handle treats as success ('Ecluse.Core.Registry.publishArtifact'), so it
+      redelivery too: a version already present at the mirror target answers a
+      status the ecosystem's codec classifies as success (npm's @409@), so it
       surfaces here as 'Succeeded' rather than a distinct case -- as does the same
       presence confirmed by the pre-fetch probe, before any bytes moved.
       -}
@@ -133,8 +134,8 @@ The presence probe exists for the enqueue-to-availability window: mirroring is
 demand-driven, so every public-leg admit of a still-unmirrored version enqueues its own
 job, and a fleet-wide install of a novel version enqueues many. Without the probe each
 duplicate pays a full artifact download and an integrity recompute before the publish
-discovers the version is already present (the idempotent @409@); with it, a duplicate
-costs one metadata round trip. The probe is an __optimisation, never a gate__: it skips
+discovers the version is already present (the idempotent already-present answer); with
+it, a duplicate costs one metadata round trip. The probe is an __optimisation, never a gate__: it skips
 only work whose publish would have been that no-op, so the policy re-evaluation below
 still guards every artifact that actually publishes.
 
@@ -181,108 +182,112 @@ processJob receipt job = katipAddNamespace "job" $ do
         Retried reason -> JobSpanOutcome "retried" (Just reason)
 
 -- The terminal decision of re-evaluating current policy for a job, before any artifact
--- fetch: admit (mirror it, carrying the admitting ecosystem's bundle -- whose request
--- formation the fetch rides -- and the re-admitted artifact's descriptor: the
+-- fetch: admit (mirror it, carrying the re-admitted artifact's descriptor: the
 -- floor-checked digest set the tamper gate verifies against, and the filename and
 -- declared size the publish document is assembled from), drop (a current deny or a
 -- withdrawn version, acked and never published), or retry (metadata unobtainable, or a
--- rule uncomputable, left for redelivery).
+-- rule uncomputable, left for redelivery). The admitting ecosystem's bundle is not
+-- carried here: the dispatcher resolved it before the probe and threads it forward.
 data ReevalOutcome
-    = ReevalAdmit WorkerPolicy MirrorArtifact
+    = ReevalAdmit MirrorArtifact
     | ReevalDrop Text
     | ReevalRetry Text
 
--- Probe the mirror target first (a confirmed-present version is a no-op job, acked
--- without another byte moved), then re-evaluate current policy, then mirror on a current
--- admit. Both cheap steps run before the (potentially large) artifact fetch, so a
--- duplicate is retired for one metadata round trip and a now-denied job is dropped
--- without downloading its bytes.
+-- Resolve the job ecosystem's bundle first (a job whose ecosystem carries none is
+-- fail-closed before any network step), then probe the mirror target (a
+-- confirmed-present version is a no-op job, acked without another byte moved),
+-- then re-evaluate current policy, then mirror on a current admit. The cheap steps
+-- run before the (potentially large) artifact fetch, so a duplicate is retired for
+-- one metadata round trip and a now-denied job is dropped without downloading its
+-- bytes. Every step past the lookup rides the resolved bundle, so no job can
+-- consult a foreign ecosystem's probe, rules, request formation, or publish.
 reevaluateThenMirror :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
-reevaluateThenMirror receipt job =
-    alreadyMirrored job >>= \case
-        True -> do
-            logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
-            pure Succeeded
-        False ->
-            reevaluatePolicy job >>= \case
-                ReevalAdmit policy admitted -> mirrorArtifact policy receipt job admitted
-                ReevalDrop reason -> pure (Dropped reason)
-                ReevalRetry reason -> pure (Retried reason)
+reevaluateThenMirror receipt job = do
+    policies <- asks wrPolicies
+    case Map.lookup (pkgEcosystem (jobPackage job)) policies of
+        Nothing ->
+            -- Structurally unreachable when every mounted ecosystem declares its
+            -- mirror target (activation implies a bundle; only activated
+            -- ecosystems' jobs are enqueued); kept as the fail-closed
+            -- defence-in-depth drop for the impossible case.
+            pure (Dropped ("no rule policy is configured for the " <> ecosystemName (pkgEcosystem (jobPackage job)) <> " ecosystem; refusing to mirror " <> renderJob job))
+        Just policy ->
+            alreadyMirrored policy job >>= \case
+                True -> do
+                    logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
+                    pure Succeeded
+                False ->
+                    reevaluatePolicy policy job >>= \case
+                        ReevalAdmit admitted -> mirrorArtifact policy receipt job admitted
+                        ReevalDrop reason -> pure (Dropped reason)
+                        ReevalRetry reason -> pure (Retried reason)
 
 {- Ask the mirror target whether the job's version is already present, through the
-publish-side registry handle's read fields. __Positive confirmation only__: 'True' needs
+bundle's married publish capability. __Positive confirmation only__: 'True' needs
 the mirror's own metadata to parse and to list the version; a fetch fault or an
 unparseable body (a mirror @404@ for a package not yet mirrored, an auth refusal, an
 outage) answers 'False', so the job falls through to the full gated pipeline. A false
-'False' costs one redundant download and an idempotent @409@ -- exactly the pre-probe
-behaviour -- so the probe can only ever save work, never lose a publish or admit one
-unvetted. The fetch reports its failures as 'Ecluse.Core.Registry.FetchFault' values,
-so the fall-through is a total match, nothing caught. -}
-alreadyMirrored :: MirrorJob -> WorkerM Bool
-alreadyMirrored job = do
-    client <- asks wrRegistry
-    probed <- liftIO (fetchMetadata client (jobPackage job))
+'False' costs one redundant download and an idempotent re-publish -- exactly the
+pre-probe behaviour -- so the probe can only ever save work, never lose a publish or
+admit one unvetted. The fetch reports its failures as
+'Ecluse.Core.Registry.FetchFault' values, so the fall-through is a total match,
+nothing caught. -}
+alreadyMirrored :: WorkerPolicy -> MirrorJob -> WorkerM Bool
+alreadyMirrored policy job = do
+    probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
     pure $ case probed of
         Left _ -> False
-        Right response -> case parseVersionList client response of
+        Right response -> case mpParseVersionList (wpPublish policy) response of
             Left _ -> False
             Right versions -> jobVersion job `elem` versions
 
 {- Re-run current policy for the job's single version through the shared admission
 gate ('Ecluse.Core.Package.Admission.admitArtifact' -- rules, the job's filename,
 the integrity floor), after re-checking the job's fetch URL against the mount's
-tarball-host gate (the queue payload is a trust boundary). A job for an ecosystem
-with no configured bundle is fail-closed (dropped) rather than mirrored unvetted.
+tarball-host gate (the queue payload is a trust boundary).
 
 The outcomes mirror the serve path's degrade: a withdrawn/absent version (or a
 filename its current metadata no longer carries) is a non-retryable drop,
 unobtainable metadata a transient retry; a rule block, deny-by-default, refused host,
 or integrity-policy refusal drops, and an uncomputable rule retries rather than
 dropping a serviceable job or publishing it unvetted. -}
-reevaluatePolicy :: MirrorJob -> WorkerM ReevalOutcome
-reevaluatePolicy job = do
-    policies <- asks wrPolicies
-    case Map.lookup ecosystem policies of
-        Nothing ->
-            pure (ReevalDrop ("no rule policy is configured for the " <> ecosystemName ecosystem <> " ecosystem; refusing to mirror " <> renderJob job))
-        Just policy
-            | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) ->
-                pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> registryUrlText (jobArtifactUrl job) <> "); refusing to fetch or mirror it"))
-            | otherwise -> do
-                evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
-                case evaluation of
-                    VersionMetadataUnavailable ->
-                        pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
-                    VersionMissing ->
-                        pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
-                    VersionPresent details -> do
-                        -- The back-fill path emits no per-decision audit line, so the
-                        -- audit-only advisory ETag is not resolved for its context.
-                        ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-                        admission <-
-                            liftIO
-                                ( admitArtifact
-                                    ctx
-                                    (wpRules policy)
-                                    (wpMinIntegrity policy)
-                                    (jobArtifactFilename job)
-                                    details
-                                )
-                        pure (outcomeOfAdmission policy job admission)
-  where
-    ecosystem = pkgEcosystem (jobPackage job)
+reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM ReevalOutcome
+reevaluatePolicy policy job
+    | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
+        pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> registryUrlText (jobArtifactUrl job) <> "); refusing to fetch or mirror it"))
+    | otherwise = do
+        evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
+        case evaluation of
+            VersionMetadataUnavailable ->
+                pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
+            VersionMissing ->
+                pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
+            VersionPresent details -> do
+                -- The back-fill path emits no per-decision audit line, so the
+                -- audit-only advisory ETag is not resolved for its context.
+                ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
+                admission <-
+                    liftIO
+                        ( admitArtifact
+                            ctx
+                            (wpRules policy)
+                            (wpMinIntegrity policy)
+                            (jobArtifactFilename job)
+                            details
+                        )
+                pure (outcomeOfAdmission job admission)
 
 -- The worker's projection of the shared 'ArtifactAdmission' (the serve gate renders
--- the same verdicts as HTTP statuses): an admit mirrors, carrying the admitting
--- ecosystem's bundle and the admission gate's own floor-checked digest set forward
+-- the same verdicts as HTTP statuses): an admit mirrors, carrying the admission
+-- gate's own floor-checked digest set forward
 -- as the tamper gate's verification set; every deliberate refusal drops (never
 -- frozen into the rule-exempt mirror store); an undecidable verdict retries, so a
 -- transient advisory-source outage neither drops a serviceable job nor publishes it
 -- unvetted. Total over 'ArtifactAdmission', so a new admission outcome cannot be
 -- silently ignored here while the serve path handles it.
-outcomeOfAdmission :: WorkerPolicy -> MirrorJob -> ArtifactAdmission -> ReevalOutcome
-outcomeOfAdmission policy job = \case
-    AdmissionAdmit artifact digests -> ReevalAdmit policy (readmittedDescriptor artifact digests)
+outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
+outcomeOfAdmission job = \case
+    AdmissionAdmit artifact digests -> ReevalAdmit (readmittedDescriptor artifact digests)
     AdmissionDenied (Blocked ruleName reason) ->
         ReevalDrop ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
@@ -332,22 +337,21 @@ mirrorArtifact policy receipt job admitted = do
                 IntegrityMismatch detail -> do
                     logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
                     pure (Dropped ("integrity mismatch: " <> detail))
-                IntegrityVerified -> publishVerified receipt job admitted bytes
+                IntegrityVerified -> publishVerified policy receipt job admitted bytes
 
 -- Publish already-verified bytes to the mirror target: hold the message past the
 -- visibility window (a large-artifact publish may run long), publish through the
--- composition-root publish client, which assembles the ecosystem-specific document
+-- bundle's married capability, whose codec assembles the ecosystem-specific document
 -- from the re-admitted artifact's descriptor (the queue payload carries no digest
 -- or size, so payload text cannot reach the trusted-tier packument), and classify
 -- the registry outcome into a 'JobOutcome'.
-publishVerified :: ReceiptHandle -> MirrorJob -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishVerified receipt job admitted bytes = do
+publishVerified :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
+publishVerified policy receipt job admitted bytes = do
     holdForLongPublish receipt
-    client <- asks wrRegistry
     metrics <- asks wrMetrics
     -- The publish is the long, network-bound step; time it for the publish-latency
     -- histogram whichever way the registry responds.
-    (result, seconds) <- timedSeconds (liftIO (publishArtifact client (jobPackage job) (jobVersion job) admitted bytes))
+    (result, seconds) <- timedSeconds (liftIO (mpPublishArtifact (wpPublish policy) (jobPackage job) (jobVersion job) admitted bytes))
     liftIO (wmpMirrorPublishDuration metrics seconds)
     case result of
         Right () -> do

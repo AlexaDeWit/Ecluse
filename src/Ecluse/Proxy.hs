@@ -54,10 +54,10 @@ The library's vocabulary, roughly from the pure core outward:
   ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
 * __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Core.Rules.Types".
-* __Protocol boundary__: "Ecluse.Core.Registry" (the registry-protocol handle),
-  "Ecluse.Core.Registry.Adapter" (the ecosystem adapter registry this composition
-  root projects each mount's, publish target's, and worker's ecosystem wiring
-  from), "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
+* __Protocol boundary__: "Ecluse.Core.Registry" (the shared registry-protocol
+  vocabulary), "Ecluse.Core.Registry.Adapter" (the ecosystem adapter registry this
+  composition root projects each mount's, publish target's, and worker's ecosystem
+  wiring from), "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
   "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
@@ -82,7 +82,6 @@ module Ecluse.Proxy (
     runServer,
     runWorker,
     mountBindingFor,
-    unconfiguredRegistry,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -90,16 +89,15 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import GHC.Conc (getNumCapabilities)
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
-import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
-import UnliftIO (concurrently_, race_, throwIO)
+import UnliftIO (concurrently_, race_)
 import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot
 import Ecluse.Composition (
-    PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     planMounts,
     planPublishTargets,
  )
@@ -108,50 +106,39 @@ import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MirrorQueue (planMirrorQueue)
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
+import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
     AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
  )
-import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
-import Ecluse.Core.Registry (
-    ParseError (..),
-    RegistryClient (..),
-    RegistryUnconfigured (RegistryUnconfigured),
- )
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,
     adapterFor,
-    adapterPublish,
     adapterServe,
-    publishNewClient,
     serveClassifier,
     serveRenderer,
  )
-import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdBuildArtifactRequestByUrl, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
+import Ecluse.Core.Server.Cache (newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     superviseLoop,
  )
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
+import Ecluse.Core.Worker (WorkerPolicies, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
-import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
+import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredMirrorEnqueueFailure,
@@ -159,7 +146,7 @@ import Ecluse.Runtime.Telemetry.Reporters (
     installMetrics,
     newDeferredMetrics,
  )
-import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings, tracingPortOf)
+import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -276,12 +263,7 @@ runProxy bootEnv = do
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     manager <- newManager (connectionPoolSettings publicConnections publicSettings)
     privateManager <- newManager (connectionPoolSettings privateConnections privateSettings)
-    -- The mirror worker's publish-side registry client, resolved per ecosystem from
-    -- the configured mirror target and its write credential. It writes to the
-    -- operator-configured, trusted mirror target, so it uses the trusted private
-    -- manager (the private origin's credential-forwarding path).
-    publishClient <- resolvePublishClient privateManager publishTargets
-    withEnvWithAdmission serveAdmission publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments now exist (built in 'withEnvWithAdmission' from the telemetry handle);
         -- install them so the credential provider's deferred reporters go live for
         -- the rest of the run. They are the no-op-meter instruments when telemetry
@@ -295,8 +277,13 @@ runProxy bootEnv = do
         -- shutdown. Each sync task runs its boot burst immediately, so a healthy
         -- deployment is rules-engine complete within seconds of boot.
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
+        -- The worker's per-ecosystem bundles: one reusable construction
+        -- ('Ecluse.Composition.Worker.workerPoliciesFor') over the served mounts,
+        -- the resolved publish targets, and the adapter registry, so a future
+        -- worker-only binary reuses the same function rather than re-deriving
+        -- this wiring.
         race_
-            (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
+            (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
             (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
 
 {- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
@@ -447,13 +434,15 @@ mountOf adapter packumentDeps publishDeps =
         }
 
 {- | Run the supervised mirror worker over the composition-root 'Env' and the
-per-ecosystem re-evaluation bundles: the
-consume → re-evaluate → fetch → verify → publish →
-ack loop against the queue, the publish-side registry client, and the credential handle, in
+per-ecosystem bundles: the
+consume → probe → re-evaluate → fetch → verify → publish →
+ack loop against the queue, in
 the worker monad ('Ecluse.Core.Worker.WorkerM') over the worker runtime
 ('Ecluse.Runtime.Env.workerRuntimeOf'). The bundles carry the same prepared rules,
-artifact request formation, and public origin the serve path gates with, so the worker
-re-runs current policy against a job before mirroring it.
+artifact request formation, and public origin the serve path gates with, plus each
+mount's married mirror-write capability, so the worker re-runs current policy
+against a job before mirroring it and publishes through the job ecosystem's own
+protocol and target.
 
 This is the composition-root __hoist point__: it resolves the request-independent @dd@
 correlation object (the service identity; no span is active at the worker entry) and
@@ -468,9 +457,9 @@ runWorker policies env = do
     void (runWorkerM (envLogEnv env) dd (workerRuntimeOf policies env) (katipAddNamespace "worker" (workerLoop workerSupervision)))
 
 {- The worker's supervision policy: residue is transient (logged, retried with a
-bounded exponential backoff from one second), except the wiring faults no retry
-can fix -- an unconfigured registry handle or an unconfigured credential leaf
-reached at runtime -- which fail up through the services race and take the
+bounded exponential backoff from one second), except the wiring fault no retry
+can fix -- an unconfigured credential leaf reached at runtime -- which fails up
+through the services race and takes the
 process down, so the orchestrator restarts it against corrected configuration
 instead of the loop retrying a permanently-broken wiring forever. -}
 workerSupervision :: SupervisionPolicy
@@ -482,120 +471,5 @@ workerSupervision =
         }
   where
     classify fault
-        | Just RegistryUnconfigured <- fromException fault = Permanent
         | Just (Unconfigured _) <- fromException fault = Permanent
         | otherwise = Transient
-
-{- | Resolve the worker's per-ecosystem re-evaluation bundles from the served mounts: for
-each mount that serves a packument (carries 'PackumentDeps'), a bundle keyed by the
-ecosystem its path prefix names. A mount left at the recognised-but-unserved stub
-contributes none, and a job for an ecosystem absent here is fail-closed at the worker. The
-bundles reuse each mount's __own__ prepared rules, so the serve gate and the ingest
-re-evaluation share one prepared rule set (and any per-source breaker state) rather than
-preparing a second.
--}
-workerPoliciesFor :: Env -> [MountBinding] -> WorkerPolicies
-workerPoliciesFor env bindings =
-    Map.fromList
-        [ (eco, workerPolicyFor env deps)
-        | binding <- bindings
-        , let prefixHead :| _ = bindingPrefix binding
-        , Just eco <- [parseEcosystem prefixHead]
-        , Just deps <- [bindingPackumentDeps binding]
-        ]
-
-{- Build one mount's worker re-evaluation bundle from its packument-serve dependencies:
-the single-version resolver over the guarded public origin through the shared metadata
-cache (the same fetch-and-project the serve path runs), the mount's prepared rules, its
-configured integrity floor, its tarball-host gate, its ecosystem's artifact request
-formation, and its injected clock -- every decision input taken from the mount's __own__
-'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The metadata client is built through the same
-injected constructor the serve path uses ('pdNewMetadataClient', over the same shared
-manager 'srPublicManager' is wired to), anonymous (no client credential reaches the
-public origin), inheriting the resolved-IP SSRF recheck. Its own failure and
-dropped-entry logs are elided (the worker logs its own re-evaluation outcome per job),
-while the upstream-fetch metrics still record through the shared instruments. -}
-workerPolicyFor :: Env -> PackumentDeps -> WorkerPolicy
-workerPolicyFor env deps =
-    WorkerPolicy
-        { wpResolveVersion = fetchVersionDetails client
-        , wpRules = pdRules deps
-        , wpMinIntegrity = pdMinIntegrity deps
-        , wpArtifactHostHonoured =
-            -- The same host-gate composition the serve path applies before its public
-            -- artifact fetch, closed against the public upstream authority (the
-            -- reference host:port the public leg gates dist.tarball targets by).
-            tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps))
-        , -- The mount's own request formation (the adapter's artifact capability,
-          -- projected onto these deps at the composition root), so a job's bytes
-          -- are fetched exactly as the serve path would fetch them.
-          wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
-        , wpNow = pdNow deps
-        }
-  where
-    client =
-        pdNewMetadataClient
-            deps
-            (tracingPortOf (envTelemetry env))
-            (metricsPortOf (envMetrics env))
-            Public
-            (Cached (envMetadataCache env) (Source (pdPublicBaseUrl deps)))
-            (\_ _ -> pure ())
-            (\_ _ -> pure ())
-            (\_ -> pure ())
-            (pdLimits deps)
-            (envManager env)
-            (pdPublicBaseUrl deps)
-            Nothing
-
-{- Build the worker's publish-side registry client from the resolved per-ecosystem
-publish targets, over the given (trusted) manager.
-
-The client is constructed through the target ecosystem's registered adapter,
-pointed at the mirror-target endpoint, with the credential minted fresh per publish
-through the provider's 'currentToken'. When no target resolves to an adapter there
-is nothing to publish, so the slot holds the refusing 'unconfiguredRegistry'
-placeholder, whose effectful fields fail loudly if ever called. -}
-resolvePublishClient :: Manager -> [PublishTarget] -> IO RegistryClient
-resolvePublishClient manager targets =
-    case asum (map targetAdapter targets) of
-        Nothing -> pure unconfiguredRegistry
-        Just (target, adapter) -> do
-            let mintToken = Just . authSecret <$> currentToken (ptCredentials target)
-            publishNewClient (adapterPublish adapter) manager (ptMirrorUrl target) mintToken
-
--- Pair a publish target with its ecosystem's registered adapter, or 'Nothing' for
--- a target whose ecosystem has none registered.
-targetAdapter :: PublishTarget -> Maybe (PublishTarget, RegistryAdapter)
-targetAdapter target = (,) target <$> adapterFor (ptEcosystem target)
-
-{- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
-with no backend wired in: a composition-root misconfiguration. A distinct typed
-exception (not a stringly @userError@), so the refusal is observable in a test,
-catchable by type, and never mistaken for a configured backend's own failure.
--}
-
-{- | A registry handle with no backend behind it: every effectful field __refuses
-loudly__ (a typed 'RegistryUnconfigured') and every pure @parse*@ field returns
-'Left', so an unconfigured fetch\/publish or parse fails explicitly rather than
-silently returning a fabricated success. It holds the handle slot in the
-composition root where a configured backend is selected elsewhere. The fetch field's
-type carries a 'Ecluse.Core.Registry.FetchFault' channel, but this handle does not
-use it: an unwired backend is a composition fault with no per-request decision, so
-it stays a justified typed throw rather than a value a caller might fall through.
--}
-unconfiguredRegistry :: RegistryClient
-unconfiguredRegistry =
-    RegistryClient
-        { fetchMetadata = const refuse
-        , publishArtifact = \_ _ _ _ -> refuse
-        , parsePackageInfo = \_ _ -> Left notConfigured
-        , parseVersionDetails = \_ _ -> Left notConfigured
-        , parseVersionList = const (Left notConfigured)
-        }
-  where
-    refuse :: IO a
-    refuse = throwIO RegistryUnconfigured
-
-    notConfigured :: ParseError
-    notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}

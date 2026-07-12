@@ -49,10 +49,10 @@ import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     PublishRelayFault,
     PublishRelayResponse,
-    RegistryClient,
     UrlFormationError,
  )
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (MountRenderer)
@@ -80,7 +80,7 @@ data RegistryAdapter = RegistryAdapter
     -- ^ The artifact request formation, by filename and by authoritative URL.
     , adapterPublish :: AdapterPublish
     {- ^ The publish capability: the first-party relay, the name canonicaliser, and
-    the worker's publish-client constructor.
+    the mirror write's protocol codec.
     -}
     }
 
@@ -153,20 +153,22 @@ data AdapterArtifact = AdapterArtifact
     }
 
 {- | The ecosystem's publish capability: relaying a client's own publish document,
-canonicalising a raw package name, and constructing the registry client approved
-artifacts are published through. The relay and canonicaliser have exactly the
-shapes the consuming dependency record carries
+canonicalising a raw package name, and the mirror-write protocol codec. The relay
+and canonicaliser have exactly the shapes the consuming dependency record carries
 ('Ecluse.Core.Server.Context.pubRelayPublish' and
-'Ecluse.Core.Server.Context.pubCanonicaliseName').
+'Ecluse.Core.Server.Context.pubCanonicaliseName'); the codec is the protocol half
+of the mirror write, which the composition root marries to the shared publish
+transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
 data AdapterPublish = AdapterPublish
     { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either PublishRelayFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the publication target, returning its response.
     , publishCanonicaliseName :: Text -> Maybe PackageName
     -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.
-    , publishNewClient :: Manager -> Text -> IO (Maybe Secret) -> IO RegistryClient
-    {- ^ Build the worker's publish-side registry client over the given trusted
-    manager and mirror-target endpoint, minting a fresh bearer per call through
-    the given action.
+    , publishCodec :: PublishCodec
+    {- ^ The mirror write's protocol codec: publish document assembly and request
+    formation, the probe's request and version-list projection, and the status
+    semantics -- protocol only. The manager, credential mint, and fault
+    classification are the shared transport's, supplied at the marriage.
     -}
     }

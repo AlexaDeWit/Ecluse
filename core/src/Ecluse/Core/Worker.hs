@@ -6,7 +6,9 @@
 mirrored packages.
 
 The worker is the consumer end of the demand-driven mirror queue (see
-"Ecluse.Core.Queue"). The consume loop long-polls the queue, and for each received job:
+"Ecluse.Core.Queue"). The consume loop long-polls the queue, resolves each received
+job's __ecosystem bundle__ ('WorkerPolicy', keyed by the job's own ecosystem; a job
+whose ecosystem carries none is fail-closed), and through that bundle:
 
 1. __probes__ the mirror target for the job's version, acking a confirmed-present
    duplicate outright (demand-driven enqueue means a fleet-wide install of a novel
@@ -18,9 +20,9 @@ The worker is the consumer end of the demand-driven mirror queue (see
 4. __verifies__ those bytes against the integrity digests of the artifact the
    re-evaluation re-admitted (the floor-checked, current-metadata set; the queue
    payload carries no digest at all),
-5. assembles the npm publish document from the re-admitted artifact's descriptor
-   and publishes it to the mirror target (the publish-side registry handle on the
-   'WorkerRuntime', resolved at the composition root with the bearer from the
+5. assembles the ecosystem's publish document from the re-admitted artifact's
+   descriptor and publishes it to the mirror target (the bundle's married publish
+   capability, resolved at the composition root with the bearer from the
    "Ecluse.Core.Credential" provider), and
 6. acknowledges the job.
 

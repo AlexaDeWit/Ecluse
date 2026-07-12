@@ -11,9 +11,10 @@ module already exports -- the path grammar ("Ecluse.Core.Registry.Npm.Route"), t
 denial renderer ("Ecluse.Core.Registry.Npm.Serve"), the metadata client and served
 packument assembly ("Ecluse.Core.Registry.Npm.Metadata",
 "Ecluse.Core.Registry.Npm.Filter"), the artifact request builders
-("Ecluse.Core.Registry.Npm.Request"), and the publish relay and client
-("Ecluse.Core.Registry.Npm", with the name canonicaliser from
-"Ecluse.Core.Registry.Npm.Project").
+("Ecluse.Core.Registry.Npm.Request"), the publish relay
+("Ecluse.Core.Registry.Npm"), and the mirror-write codec
+("Ecluse.Core.Registry.Npm.Publish"), with the name canonicaliser from
+"Ecluse.Core.Registry.Npm.Project".
 -}
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
@@ -29,21 +30,20 @@ import Ecluse.Core.Registry.Adapter.Types (
  )
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig),
-    newNpmPublishClient,
     relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Security (defaultLimits)
 
 {- | npm's capability record. The artifact builders ignore the response-bound and
-manager parameters (npm request formation needs neither), and the publish client
-carries no static token (its bearer is minted per call) and the secure-default
-response bounds ('Ecluse.Core.Security.defaultLimits').
+manager parameters (npm request formation needs neither), and the publish slice
+contributes protocol only: the mirror-write codec's transport (manager, credential
+mint, response bound) is supplied at the composition root's marriage.
 -}
 npmAdapter :: RegistryAdapter
 npmAdapter =
@@ -70,7 +70,6 @@ npmAdapter =
                 { publishRelay = \limits manager targetUrl token ->
                     relayPublishDocument (NpmClientConfig targetUrl manager token limits)
                 , publishCanonicaliseName = rightToMaybe . projectName
-                , publishNewClient = \manager mirrorUrl mintToken ->
-                    newNpmPublishClient (NpmClientConfig mirrorUrl manager Nothing defaultLimits) mintToken
+                , publishCodec = npmPublishCodec
                 }
         }

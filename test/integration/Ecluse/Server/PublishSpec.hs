@@ -25,11 +25,9 @@ import Network.Wai.Test (
     srequest,
  )
 import Test.Hspec
-import UnliftIO (throwIO)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
@@ -82,28 +80,6 @@ authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
 targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
 targetSaw target = reverse <$> readIORef (tgSeen target)
 
-{- | The typed trap the handle double throws when the publish path wrongly routes
-through a handle field this suite proves it never uses.
--}
-newtype PublishPathViolation = PublishPathViolation Text
-    deriving stock (Eq, Show)
-
-instance Exception PublishPathViolation
-
-{- | A registry-handle double whose effectful fields refuse loudly: the publish path
-talks to the publication target via the npm client over the shared 'Manager', not the
-handle, so a handle that throws proves the publish never routes through it.
--}
-fakeRegistry :: RegistryClient
-fakeRegistry =
-    RegistryClient
-        { fetchMetadata = const (throwIO (PublishPathViolation "publish must not fetchMetadata"))
-        , publishArtifact = \_ _ _ _ -> throwIO (PublishPathViolation "publish must not use the handle publishArtifact")
-        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
-        , parseVersionDetails = \_ _ -> Left (ParseError "unused")
-        , parseVersionList = const (Left (ParseError "unused"))
-        }
-
 newTestEnv :: IO Env
 newTestEnv = do
     queue <- newTestMemoryQueue
@@ -112,7 +88,7 @@ newTestEnv = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The first-party publish dependencies for the tests: a @\@acme@ publish-scope
 allow-list, the publication target at the given loopback port, and the given static

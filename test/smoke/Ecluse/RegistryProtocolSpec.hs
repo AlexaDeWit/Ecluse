@@ -27,16 +27,16 @@ import Ecluse.Core.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Core.Registry (RegistryClient (fetchMetadata, parsePackageInfo), RegistryResponse (responseBody))
+import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmLimits, npmManager),
     defaultNpmConfig,
     fetchMetadataFormBounded,
-    newNpmClient,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Full),
+    MetadataForm (Abbreviated, Full),
     noValidators,
  )
 import Ecluse.Core.Registry.Npm.Wire (
@@ -55,8 +55,8 @@ automatic blocker.
 Two cases run against the public @registry.npmjs.org@. The first fetches a real
 __abbreviated__ packument and decodes it through "Ecluse.Core.Registry.Npm.Wire"
 (shelling out to @curl@), pinning the lenient decoder to reality. The second
-drives the full data plane -- "Ecluse.Core.Registry.Npm"'s 'newNpmClient' and
-'fetchMetadata' over real @http-client@ -- and projects the response to the domain
+drives the full data plane -- 'fetchMetadataFormBounded' over real @http-client@
+-- and projects the response to the domain
 'PackageInfo', so a protocol or projection drift surfaces end-to-end. Both
 __pend__ rather than fail when the network (or @curl@) is unavailable, so a bare
 or offline checkout does not see a red test.
@@ -88,17 +88,16 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                         Map.member "latest" (apkmtDistTags pk) `shouldBe` True
                         Map.null (apkmtVersions pk) `shouldBe` False
 
-    it "fetchMetadata of a real package projects to PackageInfo (full data plane)" $ do
+    it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
         manager <- newManager tlsManagerSettings
-        client <- newNpmClient (defaultNpmConfig manager)
         let isOdd = mkPackageName Npm Nothing "is-odd"
-        outcome <- fetchMetadata client isOdd
+        outcome <- fetchMetadataFormBounded (defaultNpmConfig manager) Abbreviated noValidators isOdd
         case outcome of
             Left _ ->
                 -- The typed channel reports the unreachable-registry case as a value.
                 pendingWith "npm registry unreachable (offline); smoke test skipped"
             Right response ->
-                case parsePackageInfo client isOdd response of
+                case Project.parsePackageInfo isOdd response of
                     Left err ->
                         expectationFailure ("live packument failed to project: " <> show err)
                     Right info -> do

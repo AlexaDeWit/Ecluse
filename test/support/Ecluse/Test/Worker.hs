@@ -26,13 +26,16 @@ import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpResolveVersion, wpRules))
+import Ecluse.Core.Registry.Publish (MirrorPublish)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 
-{- | An admit-everything worker re-evaluation policy for the npm ecosystem: every version
+{- | An admit-everything worker policy for the npm ecosystem: every version
 resolves present through an injected resolver (no real metadata fetch) and an always-allow
 rule clears it, so the worker's ingest gate admits and an end-to-end test exercises the
-fetch → verify → publish path unchanged.
+fetch → verify → publish path unchanged. The caller supplies the bundle's publish
+capability (the marriage aimed at its own mirror stub, or a recording double), since
+the mirror write rides the bundle.
 
 The worker's ingest gate is the __same shared admission oracle the serve path runs__
 ('Ecluse.Core.Package.Admission.admitArtifact'), so the resolved snapshot must also
@@ -47,8 +50,8 @@ bytes against the __re-admitted__ artifact's digests, the ones this resolver car
 a test passes the true digests of the bytes its stub upstream serves for the faithful
 posture, or a deliberately mismatching set to drive the tamper refusal.
 -}
-admitAllPolicies :: NonEmpty Hash -> WorkerPolicies
-admitAllPolicies currentDigests =
+admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
+admitAllPolicies publish currentDigests =
     Map.singleton
         Npm
         WorkerPolicy
@@ -59,6 +62,7 @@ admitAllPolicies currentDigests =
             , -- npm's real by-URL request formation, as the composition root
               -- projects it, so the fetch path forms requests as production does.
               wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
+            , wpPublish = publish
             , wpNow = getCurrentTime
             }
   where

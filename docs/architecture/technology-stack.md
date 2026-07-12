@@ -55,7 +55,7 @@ control/data-plane split, streaming, and middleware, in [Web Layer](web-layer.md
 so per-mount deps (registry set, rules, renderer, derived prefix) are read from context
 rather than re-threaded. Shared mutable state (credential refresh, circuit-breaker,
 in-flight sets) lives as `TVar`/`IORef` in `Env`, not a `StateT` layer, which would lose
-state across `forkIO`/`async`. The handle records `RegistryClient`, `MirrorQueue`,
+state across `forkIO`/`async`. The handle records `MirrorPublish`, `MirrorQueue`,
 `CredentialProvider` return `IO`, not `App`: each adapter closes over its own backend state
 and never imports the core's `Env`/`App`, so backends stay decoupled (no import cycle).
 App-level code calls a handle through a single `liftIO`. `Env` is the composition-root

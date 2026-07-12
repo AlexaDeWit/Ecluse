@@ -60,9 +60,9 @@ the disposition first is what keeps the shape honest (see STYLE.md rule 11.6):
 | A request | **Deny** (a value rendered through the serve error model: `403`/`404`/`503`/`500` with a reason) · **Propagate** (post-commit: teardown, logged, never answered twice) |
 | The process | **Graceful** (exit 0) · **BootAbort** (exit 2; the boot phase already reported every problem) · **FailUp** (exit 1 with the rendered fault on stderr) · **Cancelled** (exit 3) |
 
-The loops' only Permanent classifications today are the wiring faults no retry can fix:
-`RegistryUnconfigured` and `CredentialError`'s `Unconfigured`, named by the composition
-root's worker policy.
+The loops' only Permanent classification today is the wiring fault no retry can fix:
+`CredentialError`'s `Unconfigured` (an unconfigured credential leaf reached at runtime),
+named by the composition root's worker policy.
 
 ## Two shapes for a failure, and when each applies
 

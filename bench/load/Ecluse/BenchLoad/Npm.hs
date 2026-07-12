@@ -122,13 +122,14 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..), RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
@@ -146,7 +147,6 @@ import Ecluse.Core.Worker (
         wrMetrics,
         wrPolicies,
         wrQueue,
-        wrRegistry,
         wrTracing
     ),
     newWorkerHeartbeat,
@@ -415,7 +415,7 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             -- The same plain manager serves the private and public legs; the serve path
             -- never touches the publish-side registry handle, so it is the refusing
             -- placeholder.
-            env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
+            env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
             deps <- npmDeps privatePort publicPort
             let cfg = mkServerConfig [npmMount deps]
             testWithApplication (pure (application cfg env)) $ \proxyPort ->
@@ -535,7 +535,6 @@ workerScenario =
                 let runtime =
                         WorkerRuntime
                             { wrQueue = queue
-                            , wrRegistry = succeedingPublishClient counter
                             , wrManager = manager
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort
@@ -543,8 +542,9 @@ workerScenario =
                             , wrInjectTraceContext = id
                             , -- The verification digests are the re-admitted artifact's
                               -- (the injected resolver's), so they must be the true
-                              -- digests of the stub's bytes for every job to publish.
-                              wrPolicies = admitAllPolicies (jobHashes bytes)
+                              -- digests of the stub's bytes for every job to publish;
+                              -- the bundle publishes through the recording double.
+                              wrPolicies = admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes)
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
                     job = mirrorJob artUrl
@@ -597,8 +597,8 @@ mirrorJob url =
         , jobTraceContext = Nothing
         }
 
--- A publish client that records each publish and reports success, for the worker hot
--- loop; the remaining read/parse fields refuse loudly, since the worker uses none of them.
+-- A publish-capability double that records each publish and reports success, for the
+-- worker hot loop.
 --
 -- The mirror-presence probe MUST answer "absent" here: the scenario re-mirrors the same
 -- version every iteration, so a probe that confirmed presence would short-circuit every
@@ -606,14 +606,14 @@ mirrorJob url =
 -- unparseable probe body is the absent posture (a production mirror answers a package
 -- it does not hold with an error body no version list parses from), so each job drives
 -- the full fetch -> verify -> publish pipeline.
-succeedingPublishClient :: IORef Int -> RegistryClient
+succeedingPublishClient :: IORef Int -> MirrorPublish
 succeedingPublishClient counter =
-    refusingRegistry
-        { publishArtifact = \_ _ _ _ -> do
+    MirrorPublish
+        { mpPublishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , fetchMetadata = const (pure (Right (RegistryResponse "")))
-        , parseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
+        , mpProbeMetadata = const (pure (Right (RegistryResponse "")))
+        , mpParseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
         }
 
 -- The canned artifact bytes for the worker scenario: a payload-sized buffer (the verify
@@ -874,22 +874,6 @@ publishedLongAgo = toText (iso8601Show (addUTCTime (negate (400 * nominalDay)) b
 -- with its machine-readable per-scenario report on stdout.
 benchLogEnv :: IO LogEnv
 benchLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "bench-load")
-
--- A registry handle whose every field refuses loudly: the serve path never reads the
--- publish-side handle, and the worker scenario overrides only the fields its loop uses
--- (the publish, and the presence probe's metadata read).
-refusingRegistry :: RegistryClient
-refusingRegistry =
-    RegistryClient
-        { fetchMetadata = const (refuse "fetchMetadata")
-        , publishArtifact = \_ _ _ _ -> refuse "publishArtifact"
-        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
-        , parseVersionDetails = \_ _ -> Left (ParseError "unused")
-        , parseVersionList = const (Left (ParseError "unused"))
-        }
-  where
-    refuse :: Text -> IO a
-    refuse field = benchFail ("bench-load: the serve path must not use the registry handle field " <> field)
 
 -- A static credential provider with a placeholder token: the serve path strips the
 -- public-leg credential and forwards the client's to the private leg, so this is unused.

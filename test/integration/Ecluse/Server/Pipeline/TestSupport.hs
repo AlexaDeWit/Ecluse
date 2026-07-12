@@ -32,7 +32,6 @@ import Network.Wai.Test (
     runSession,
     setPath,
  )
-import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -44,7 +43,6 @@ import Ecluse.Core.Queue (
     QueueMessage (msgJob),
     queueTransportFault,
  )
-import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
@@ -590,22 +588,6 @@ selfHostedEmptyDigest baseUrl version =
         , "_unmodeled" .= ("kept" :: Text)
         ]
 
-{- | A registry-handle double whose fields are never invoked (the pipeline talks to
-upstreams directly via the npm client over the shared 'Manager', not the handle).
--}
-fakeRegistry :: RegistryClient
-fakeRegistry =
-    RegistryClient
-        { fetchMetadata = const (refuse "fetchMetadata")
-        , publishArtifact = \_ _ _ _ -> refuse "publishArtifact"
-        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
-        , parseVersionDetails = \_ _ -> Left (ParseError "unused")
-        , parseVersionList = const (Left (ParseError "unused"))
-        }
-  where
-    refuse :: Text -> IO a
-    refuse field = throwString (toString ("fakeRegistry: the pipeline must not use the handle field " <> field))
-
 {- | A fresh 'Env' over handle doubles and a real (no-TLS) manager for the in-process
 upstream doubles, carrying the given mirror queue (the in-memory double, or one
 rigged to fail for the best-effort-enqueue assertion).
@@ -616,7 +598,7 @@ newTestEnvWithQueue queue manager = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').

@@ -258,6 +258,7 @@ library
     Ecluse.Composition.Credential
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.Sizing
+    Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
     Ecluse.Config.Aeson
@@ -642,6 +643,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec
