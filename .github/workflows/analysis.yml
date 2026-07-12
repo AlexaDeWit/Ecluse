@@ -37,37 +37,17 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # dist-weeder is keyed on the SOURCE TREE (the dependency plan plus every
-      # first-party .hs file and the cabal file), with NO restore-keys fallback,
-      # deliberately: cabal cannot delete the build artifacts of removed source
-      # files, so a builddir restored from a different tree keeps orphaned .hie
-      # files for modules that no longer exist, and weeder scans the orphans.
-      # The poisoning is measured, on the stan job: 132 observations reported on
-      # a commit whose true floor is 35, scanning 140 modules where the tree has
-      # 122. weeder shares the exposure and is about to become gating, where a
-      # poisoned builddir means false reds or false greens on the gate.
-      # Exact-key-or-nothing costs a cold local build (several minutes) on any
-      # PR that touches a .hs or .cabal file; the dependency store still comes
-      # warm from the cabal-store cache, and a docs-only or workflow-only push
-      # still hits exactly.
-      #
-      # The source hash is an ALLOWLIST of the first-party source directories,
-      # never a bare '**/*.hs': hashFiles does not honour .gitignore, and the
-      # workspace holds generated .hs files (Paths_*/PackageInfo_* under the
-      # restored dist-newstyle before the build, plus this job's own builddir
-      # after it), so a bare glob hashes different file sets at restore and at
-      # save and the saved key would never round-trip. Maintenance rule: a NEW
-      # top-level Haskell source directory must be added to this list.
-      # Forgetting costs only a spurious cold build, never stale reuse, which is
-      # why the allowlist was chosen over a '!dist-*/**' denylist (a denylist
-      # fails unsafe when a new dist-* appears, and leans on negation-ordering
-      # semantics).
-      - name: Restore weeder build (dist-weeder)
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-weeder
-          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze', 'ecluse.cabal', 'acceptance/**/*.hs', 'app/**/*.hs', 'bench/**/*.hs', 'core/**/*.hs', 'gen/**/*.hs', 'manifest/**/*.hs', 'runtime/**/*.hs', 'src/**/*.hs', 'test/**/*.hs') }}
-
+      # dist-weeder is deliberately NOT cached: the builddir is rebuilt from
+      # scratch each run. weeder scans every .hie under dist-weeder, and cabal
+      # cannot delete the artifacts of removed source files, so any restored
+      # builddir risks feeding weeder orphaned .hie for modules that no longer
+      # exist. That is a false red now, and a false green once weeder gates
+      # (the same staleness measured on stan: 132 observations against a true
+      # floor of 35, 140 modules scanned where the tree had 122). The
+      # dependency closure still comes warm from the cabal-store cache, so a
+      # cold builddir is only the first-party packages, a few minutes. Do not
+      # reintroduce a dist-weeder cache without a per-run orphan-.hie prune:
+      # keying on the source tree alone does not clean a restored builddir.
       - name: Update package index
         run: nix develop .#weeder --command task update
 
@@ -88,14 +68,6 @@ jobs:
             grep -E ':[0-9]+:[0-9]+:' weeder.out || echo '(no findings)';
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Single writer, main only; the key matches the restore key verbatim.
-      - name: Save weeder build (dist-weeder, main)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-weeder
-          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze', 'ecluse.cabal', 'acceptance/**/*.hs', 'app/**/*.hs', 'bench/**/*.hs', 'core/**/*.hs', 'gen/**/*.hs', 'manifest/**/*.hs', 'runtime/**/*.hs', 'src/**/*.hs', 'test/**/*.hs') }}
 
   stan:
     name: Haskell static analysis (stan — fails, never gates)
@@ -118,23 +90,14 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # dist-stan is keyed and guarded exactly like dist-weeder above:
-      # source-tree key, no restore-keys fallback, allowlisted source
-      # directories. See that step's comment for the full rationale. In short:
-      # cabal cannot delete the build artifacts of removed source files, so any
-      # fallback restore hands stan orphaned .hie files to scan (measured here:
-      # 132 observations against a true floor of 35, 140 modules scanned where
-      # the tree has 122), and hashFiles does not honour .gitignore, so a bare
-      # '**/*.hs' would hash generated .hs files and never round-trip between
-      # restore and save. Maintenance rule: a NEW top-level Haskell source
-      # directory must be added to this list; forgetting costs only a spurious
-      # cold build, never stale reuse.
-      - name: Restore stan build (dist-stan)
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-stan
-          key: dist-stan-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze', 'ecluse.cabal', 'acceptance/**/*.hs', 'app/**/*.hs', 'bench/**/*.hs', 'core/**/*.hs', 'gen/**/*.hs', 'manifest/**/*.hs', 'runtime/**/*.hs', 'src/**/*.hs', 'test/**/*.hs') }}
-
+      # dist-stan is deliberately NOT cached, exactly like dist-weeder above:
+      # stan scans every .hie under the builddir, cabal cannot delete the
+      # artifacts of removed source files, and a restored builddir would hand
+      # stan orphaned .hie for modules that no longer exist (the staleness that
+      # once reported 132 observations against a true floor of 35). The
+      # dependency closure comes warm from the cabal-store cache, so a fresh
+      # builddir is only the first-party packages. See the weeder job's comment
+      # for the full rationale.
       - name: Update package index
         run: nix develop .#stan --command task update
 
@@ -155,11 +118,3 @@ jobs:
             sed -E 's/\x1b\[[0-9;]*m//g' stan.out 2>/dev/null || echo '(no output)';
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Single writer, main only; the key matches the restore key verbatim.
-      - name: Save stan build (dist-stan, main)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-stan
-          key: dist-stan-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze', 'ecluse.cabal', 'acceptance/**/*.hs', 'app/**/*.hs', 'bench/**/*.hs', 'core/**/*.hs', 'gen/**/*.hs', 'manifest/**/*.hs', 'runtime/**/*.hs', 'src/**/*.hs', 'test/**/*.hs') }}
