@@ -21,10 +21,7 @@ import Ecluse.Core.Telemetry.Metrics (
     MirrorResult (..),
     ReasonClass (..),
     StatusClass (Status2xx, Status3xx, Status4xx, Status5xx, StatusOther),
-    allLabelKeys,
-    allMetricNames,
     breakerStateCode,
-    highCardinalityKeys,
     labelKey,
     labelKeyName,
     metricAttributes,
@@ -32,6 +29,7 @@ import Ecluse.Core.Telemetry.Metrics (
     renderLabel,
     statusClassOf,
  )
+import Ecluse.Test.Metrics (allLabelKeys, allMetricNames, highCardinalityKeys)
 
 {- | Tests for the @ecluse.*@ catalogue and the __bounded-label discipline__. The
 crux is the cardinality guard: high-cardinality identifiers (package\/version\/scope\/

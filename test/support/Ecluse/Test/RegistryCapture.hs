@@ -59,8 +59,8 @@ import Network.HTTP.Client (
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
-import Ecluse.Core.Registry.Pypi.Wire qualified as Pypi
-import Ecluse.Core.Registry.Rubygems.Wire qualified as Rubygems
+import Ecluse.Test.Registry.Pypi.Wire qualified as Pypi
+import Ecluse.Test.Registry.Rubygems.Wire qualified as Rubygems
 
 {- | The curated package catalogue: the per-ecosystem smoke names and the
 benchmark-corpus capture pins, decoded from the shared JSON source.
@@ -155,8 +155,8 @@ fetchVersions manager eco pkg =
 {- | Extract a registry response's published version strings through each
 ecosystem's __canonical__ wire decoder -- the npm packument
 ('Ecluse.Core.Registry.Npm.Wire.Packument'), the PyPI project JSON
-('Ecluse.Core.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
-('Ecluse.Core.Registry.Rubygems.Wire.VersionListing') -- rather than re-parsing the
+('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
+('Ecluse.Test.Registry.Rubygems.Wire.VersionListing') -- rather than re-parsing the
 JSON here. 'Nothing' if the body does not decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]

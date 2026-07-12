@@ -30,9 +30,9 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmLimits, npmManager),
-    defaultNpmConfig,
     fetchMetadataFormBounded,
  )
+import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (

@@ -2,22 +2,26 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The RubyGems registry __wire__ JSON, decoded into a typed model.
+{- | The RubyGems registry __wire__ JSON, decoded into a typed model for the
+version-capture oracles.
 
-A __placeholder boundary__ mirroring "Ecluse.Core.Registry.Pypi.Wire". Écluse serves
-only npm, so this models just the one shape another part of the system reads from
-RubyGems: the published version strings of the @\/api\/v1\/versions\/{gem}.json@
-response, which is a JSON array with one entry per version. Only each entry's
-@number@ (the version string) is modelled; the rest of the entry (platform, SHA,
-timestamps) is ignored, leaving room for a full RubyGems adapter to grow the model
-later.
+This is __oracle apparatus__ mirroring "Ecluse.Test.Registry.Pypi.Wire". It decodes a live
+RubyGems response as far as the one shape the capture path reads: the published version
+strings of the @\/api\/v1\/versions\/{gem}.json@ response, a JSON array with one entry per
+version. "Ecluse.Test.RegistryCapture" dispatches a RubyGems capture through
+'listingVersions' to feed the version-ordering differential and to detect protocol drift
+against the live registry. Only each entry's @number@ (the version string) is modelled;
+the rest of the entry (platform, SHA, timestamps) is ignored.
+
+The RubyGems adapter (roadmap #767-775) is born from its own adapter design with its own
+production wire module; this decoder serves the test oracles.
 
 Unlike the npm and PyPI listings, the document is a top-level array, so 'parseJSON'
-decodes it as a list of 'VersionEntry'. An entry without a @number@ is a decode
-failure rather than a silently-dropped element, since a version entry that names no
-version is meaningless.
+decodes it as a list of 'VersionEntry'. An entry without a @number@ is a decode failure
+rather than a silently-dropped element, since a version entry that names no version is
+meaningless.
 -}
-module Ecluse.Core.Registry.Rubygems.Wire (
+module Ecluse.Test.Registry.Rubygems.Wire (
     VersionEntry (..),
     VersionListing (..),
     listingVersions,
