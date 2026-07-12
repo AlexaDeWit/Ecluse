@@ -54,6 +54,7 @@ import System.Environment (setEnv)
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 
 -- | The SQS gateway port @ministack@ serves on.
@@ -78,29 +79,41 @@ withMinistack body = do
     setEnv "AWS_ACCESS_KEY_ID" "test"
     setEnv "AWS_SECRET_ACCESS_KEY" "test"
     labels <- testContainerLabels "integration"
-    withContainers (ministack labels) body
+    -- Resolve the pinned base image at startup, failing the suite loudly (the harness's
+    -- IO idiom, 'fail') if the literal is not digest-pinned; the @FROM@ line is then built
+    -- only from a validated 'PinnedImageRef', so a mutable tag can never reach it.
+    image <- either (fail . toString) pure (mkPinnedImageRef ministackImage)
+    withContainers (ministack labels image) body
 
 -- The reaping labels ('testContainerLabels') are threaded in rather than baked into
 -- the image so the container carries this worktree's scope; 'withContainers' already
 -- tears the container down on a normal exit, but the label lets `task test-clean` reap
 -- it after a hard kill. See "Ecluse.Test.Containers".
-ministack :: [(Text, Text)] -> TC.TestContainer Container
-ministack labels =
+ministack :: [(Text, Text)] -> PinnedImageRef -> TC.TestContainer Container
+ministack labels image =
     TC.run $
-        TC.containerRequest (fromDockerfile ministackDockerfile)
+        TC.containerRequest (fromDockerfile (ministackDockerfile image))
             & TC.setExpose [ministackPort]
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable ministackPort))
             & TC.setRm True
             & withLabels labels
 
--- ministack (pinned by digest; tag 1.3-full) with an ASCII description label
--- (see 'withMinistack' for why) and the coarse test marker so a stale build image
--- is prunable by `task test-clean-all`.
-ministackDockerfile :: Text
-ministackDockerfile =
-    "FROM ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594\n\
-    \LABEL description=\"Local AWS Service Emulator\"\n\
-    \LABEL com.ecluse.test=integration\n"
+-- ministack, tag 1.3-full, pinned by digest. Resolved to a 'PinnedImageRef' at startup
+-- (see 'withMinistack'); the @FROM@ line is built from the validated reference, so a
+-- mutable tag can never reach it.
+ministackImage :: Text
+ministackImage = "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+
+-- The derived build 'FROM' the pinned base, with an ASCII description label (see
+-- 'withMinistack' for why) and the coarse test marker so a stale build image is prunable
+-- by `task test-clean-all`.
+ministackDockerfile :: PinnedImageRef -> Text
+ministackDockerfile image =
+    "FROM "
+        <> renderPinnedImageRef image
+        <> "\n\
+           \LABEL description=\"Local AWS Service Emulator\"\n\
+           \LABEL com.ecluse.test=integration\n"
 
 {- | The SQS endpoint override pointing @amazonka@ at the running @ministack@
 container with throwaway credentials. ministack ignores credentials, so any

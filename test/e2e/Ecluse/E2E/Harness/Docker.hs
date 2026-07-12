@@ -58,6 +58,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Container.Image (ImageRef (LocallyBuilt, PinnedExternal), mkPinnedImageRef, renderImageRef)
 import Ecluse.Test.Containers (dockerLabelArgs)
 
 {- | 'Nothing' when the suite can run; @Just reason@ when it must be skipped -- no
@@ -120,15 +121,21 @@ withGlobalDataPlane action = do
             -- reverse order on every exit path: success, failure, or exception.
             labelArgs <- dockerLabelArgs "e2e"
             withFixtureDir $ \workDir -> do
+                -- Resolve each pulled image's pinned reference up front, aborting the suite
+                -- loudly (see 'pinnedExternal') if a literal is not digest-pinned. The
+                -- 'ImageRef' these run specs then carry keeps a tag out of every 'dockerRun'.
+                -- verdaccio/verdaccio:5, nginx:alpine, and ministack (tag 1.3-full), each
+                -- pinned by its multi-arch index digest: a mutable tag can be re-pointed at a
+                -- poisoned image, an immutable @sha256@ digest cannot.
+                verdImage <- pinnedExternal "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c"
+                stubImage <- pinnedExternal "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
+                miniImage <- pinnedExternal "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
                 let net = "ecluse-e2e-global-net-" <> sfx
                     verd = "ecluse-e2e-global-verd-" <> sfx
                     stub = "ecluse-e2e-global-stub-" <> sfx
                     mini = "ecluse-e2e-global-mini-" <> sfx
-                    -- verdaccio/verdaccio:5, pinned by its multi-arch index digest: a
-                    -- supply-chain tool never pulls a mutable tag (a tag can be re-pointed at
-                    -- a poisoned image; an immutable @sha256@ digest cannot).
                     verdRun =
-                        (dockerRun verd net "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c")
+                        (dockerRun verd net verdImage)
                             { drAliases = ["verdaccio"]
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
@@ -136,9 +143,8 @@ withGlobalDataPlane action = do
                     -- One nginx terminates TLS for both registry stubs, so it answers to two
                     -- in-network aliases (`upstream` and `mirror`) -- the multi-alias the raw
                     -- docker CLI supports and testcontainers 0.5.3.0 does not.
-                    -- nginx:alpine, pinned by digest for the same supply-chain reason.
                     stubRun =
-                        (dockerRun stub net "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa")
+                        (dockerRun stub net stubImage)
                             { drAliases = ["upstream", "mirror"]
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
@@ -147,7 +153,7 @@ withGlobalDataPlane action = do
                                 ]
                             }
                     miniRun =
-                        (dockerRun mini net "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594")
+                        (dockerRun mini net miniImage)
                             { drAliases = ["ministack"]
                             , drPorts = ["127.0.0.1:0:4566"]
                             }
@@ -224,8 +230,11 @@ withE2EWith cfg action gdp = do
                 -- ministack through the production AWS_ENDPOINT_URL_SQS override. The test CA
                 -- bundle it trusts (SSL_CERT_FILE in 'proxyEnv') is bind-mounted from the shared
                 -- certs dir -- the documented "extend the image with your cert chain" workflow.
+                -- The product image is built by this run (`make test-e2e` / the CI e2e
+                -- job), never pulled, so it is 'LocallyBuilt' and carries no digest: the
+                -- pin invariant applies only to images pulled from a registry.
                 let proxRun =
-                        (dockerRun prox net image)
+                        (dockerRun prox net (LocallyBuilt (toText image)))
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
                             , drMounts = [(certsDir, "/certs:ro")]
                             , drEnv = proxyEnv proxyPort queueUrl <> ecExtraEnv cfg
@@ -304,12 +313,25 @@ data DockerRun = DockerRun
     , drEnv :: [(Text, Text)]
     -- ^ @-e@ environment.
     , drImage :: String
+    -- ^ The image reference, already rendered to the string @docker@ receives.
     , drCmd :: [String]
     -- ^ Arguments after the image (override the default CMD); usually empty.
     }
 
--- | The base 'DockerRun' for a named container on a network: no ports, mounts, env, or cmd.
-dockerRun :: String -> String -> String -> DockerRun
+{- | Resolve a raw external-image reference to a pinned 'ImageRef', failing the suite
+loudly (the harness's IO idiom, 'fail') if the literal is not digest-pinned. The
+'ImageRef' type keeps a tag out of 'dockerRun'; this is where a bad literal is caught, at
+harness startup rather than at the pull.
+-}
+pinnedExternal :: Text -> IO ImageRef
+pinnedExternal raw = PinnedExternal <$> either (fail . toString) pure (mkPinnedImageRef raw)
+
+{- | The base 'DockerRun' for a named container on a network: no ports, mounts, env, or
+cmd. The image is an 'ImageRef', so a pulled image is digest-pinned by construction and
+only the run's own 'LocallyBuilt' product image may be unpinned; it is rendered to the
+plain string here, at the single boundary to @docker@.
+-}
+dockerRun :: String -> String -> ImageRef -> DockerRun
 dockerRun name net image =
     DockerRun
         { drName = name
@@ -318,7 +340,7 @@ dockerRun name net image =
         , drPorts = []
         , drMounts = []
         , drEnv = []
-        , drImage = image
+        , drImage = toString (renderImageRef image)
         , drCmd = []
         }
 
@@ -361,17 +383,18 @@ provider, so the distroless image needs no shell, file, or bind mount.
 withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
 withOptionalCollector cfg labelArgs net coll body
     | not (ecCollector cfg) = body Nothing
-    | otherwise = withDockerContainer labelArgs collectorRun $ \_ -> do
-        ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
-        unless ready (fail "OTLP collector did not become ready within the timeout")
-        body (Just coll)
-  where
-    collectorRun =
-        (dockerRun coll net collectorImage)
-            { drAliases = [toString collectorAlias]
-            , drEnv = [("OTELCOL_CONFIG", collectorConfig)]
-            , drCmd = ["--config", "env:OTELCOL_CONFIG"]
-            }
+    | otherwise = do
+        image <- pinnedExternal collectorImage
+        let collectorRun =
+                (dockerRun coll net image)
+                    { drAliases = [toString collectorAlias]
+                    , drEnv = [("OTELCOL_CONFIG", collectorConfig)]
+                    , drCmd = ["--config", "env:OTELCOL_CONFIG"]
+                    }
+        withDockerContainer labelArgs collectorRun $ \_ -> do
+            ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
+            unless ready (fail "OTLP collector did not become ready within the timeout")
+            body (Just coll)
 
 -- Force-remove a container by name; never throws (a missing container is fine), so a
 -- bracket release cannot mask the action's own result or exception.
@@ -445,9 +468,11 @@ datadogCollectorEnv =
 -- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by
 -- its multi-arch manifest-list digest like the ministack pin above: the scenarios assert
 -- on this image's exact `debug`-exporter output and its readiness line, so its surface
--- must be immutable, not a movable tag. The core distribution carries the OTLP receiver
--- and the `debug` exporter the assertions read.
-collectorImage :: String
+-- must be immutable, not a movable tag. Resolved to a 'PinnedImageRef' (via
+-- 'pinnedExternal') at collector startup, so an unpinned literal aborts the suite there.
+-- The core distribution carries the OTLP receiver and the `debug` exporter the assertions
+-- read.
+collectorImage :: Text
 collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
 {- The whole collector configuration as a single-line (flow-style) YAML document, passed

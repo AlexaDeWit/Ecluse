@@ -58,6 +58,7 @@ import Ecluse.Runtime.Telemetry (
  )
 import Ecluse.Runtime.Telemetry.Correlation (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
+import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -229,10 +230,11 @@ data Collector = Collector
 collectorPort :: TC.Port
 collectorPort = 4318
 
--- A pinned OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest
--- rather than the mutable tag: a supply-chain tool never pulls a tag, which could be
--- re-pointed at a poisoned image. This digest matches the e2e harness's collector pin. The
--- core distribution carries the OTLP receiver and the @debug@ exporter the assertion reads.
+-- The OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest. It is
+-- resolved to a 'PinnedImageRef' at startup (see 'withCollector'), so a mutable tag (which
+-- could be re-pointed at a poisoned image) aborts the suite rather than reaching the @FROM@
+-- line. This digest matches the e2e harness's collector pin. The core distribution carries
+-- the OTLP receiver and the @debug@ exporter the assertion reads.
 collectorImage :: Text
 collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
@@ -240,10 +242,10 @@ collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a79
 collector. testcontainers 0.5.3 appends @setCmd@ to @docker start@ (which rejects it),
 so the command is set in the image rather than at run time; the config itself still
 arrives through the (correctly applied) @--env@ on @docker create@. -}
-collectorDockerfile :: Text
-collectorDockerfile =
+collectorDockerfile :: PinnedImageRef -> Text
+collectorDockerfile image =
     "FROM "
-        <> collectorImage
+        <> renderPinnedImageRef image
         <> "\nCMD [\"--config\", \"env:OTELCOL_CONFIG\"]\n"
         <> "LABEL com.ecluse.test=integration\n"
 
@@ -265,7 +267,10 @@ withCollector :: (Collector -> IO ()) -> IO ()
 withCollector action = do
     logsRef <- newIORef []
     labels <- testContainerLabels "integration"
-    withContainers (collectorContainer labels logsRef) $ \container -> do
+    -- Resolve the pinned image at startup, failing the suite loudly (the harness's IO
+    -- idiom, 'fail') if the literal is not digest-pinned.
+    image <- either (fail . toString) pure (mkPinnedImageRef collectorImage)
+    withContainers (collectorContainer labels logsRef image) $ \container -> do
         let (host, mappedPort) = containerAddress container collectorPort
         action
             Collector
@@ -273,10 +278,10 @@ withCollector action = do
                 , collectorLogs = logsRef
                 }
 
-collectorContainer :: [(Text, Text)] -> IORef [ByteString] -> TC.TestContainer Container
-collectorContainer labels logsRef =
+collectorContainer :: [(Text, Text)] -> IORef [ByteString] -> PinnedImageRef -> TC.TestContainer Container
+collectorContainer labels logsRef image =
     TC.run $
-        TC.containerRequest (fromDockerfile collectorDockerfile)
+        TC.containerRequest (fromDockerfile (collectorDockerfile image))
             & TC.setEnv [("OTELCOL_CONFIG", collectorConfig)]
             & TC.setExpose [collectorPort]
             & TC.withFollowLogs (accumulateLogs logsRef)
