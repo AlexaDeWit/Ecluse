@@ -1,0 +1,131 @@
+name: Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *" # nightly health check
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  weeder:
+    name: Dead-code report (weeder — fails, never gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # FAILS on findings (a visible red signal) but is NOT a `gate` dependency, so it
+    # never blocks a merge. weeder reports library code not reachable from the application
+    # entry point. Runs on EVERY PR so a newly-introduced unreachable definition is
+    # surfaced on the PR that adds it. Warm deps (restored from main) keep it cheap.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Restore weeder build (dist-weeder)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-weeder
+          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          restore-keys: |
+            dist-weeder-${{ runner.os }}-
+
+      - name: Update package index
+        run: nix develop .#weeder --command task update
+
+      - name: weeder (fails on findings; non-gating)
+        run: |
+          set -eo pipefail
+          nix develop .#weeder --command task weeder 2>&1 | tee weeder.out
+
+      - name: Render weeder findings to the run summary
+        if: always()
+        run: |
+          {
+            echo '## weeder — library code not yet reachable from the app entry';
+            echo;
+            echo '_Non-gating: fails the job, not the CI gate. These are built/tested but not yet wired into the app entry (Ecluse.run) — feature scaffolding that shrinks as slices land._';
+            echo;
+            echo '```';
+            grep -E ':[0-9]+:[0-9]+:' weeder.out || echo '(no findings)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save weeder build (dist-weeder, main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-weeder
+          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+
+  stan:
+    name: Haskell static analysis (stan — fails, never gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # FAILS on findings (a visible red signal) but is NOT a `gate` dependency, so it
+    # never blocks a merge. Stan analyses GHC HIE files for partial functions + potential bugs
+    # that Semgrep (no Haskell) and hlint (no type info) can't see, scoped by .stan.toml to a Warning floor.
+    # Builds its own dist-stan, like weeder. Warm deps (restored from main) keep it cheap.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Restore stan build (dist-stan)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-stan
+          key: dist-stan-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          restore-keys: |
+            dist-stan-${{ runner.os }}-
+
+      - name: Update package index
+        run: nix develop .#stan --command task update
+
+      - name: stan (fails on findings; non-gating)
+        run: |
+          set -eo pipefail
+          nix develop .#stan --command task stan 2>&1 | tee stan.out
+
+      - name: Render stan findings to the run summary
+        if: always()
+        run: |
+          {
+            echo '## stan — Haskell static analysis (non-gating: fails the job, not the CI gate)';
+            echo;
+            echo 'Partial functions and potential bugs (HIE-based) at the Warning floor. Nothing is ignored without an explicit decision; run "task stan-all" locally for the full set incl Performance/space-leak.';
+            echo;
+            echo '```';
+            sed -E 's/\x1b\[[0-9;]*m//g' stan.out 2>/dev/null || echo '(no output)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save stan build (dist-stan, main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-stan
+          key: dist-stan-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
