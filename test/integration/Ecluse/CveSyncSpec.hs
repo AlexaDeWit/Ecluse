@@ -72,7 +72,7 @@ import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 
@@ -105,6 +105,7 @@ spec =
                                         { rdWithCveLookup = withSlotLookup slot
                                         , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
                                         , rdBreakerReporter = noBreakerReporter
+                                        , rdFaultReporter = noFaultReporter
                                         }
                                 syncEnv =
                                     SyncEnv

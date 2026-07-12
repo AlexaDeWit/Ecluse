@@ -16,6 +16,7 @@ or bench drives.
 module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
     inertRuleDeps,
+    noFaultReporter,
 
     -- * Precedence pairing
     atDefaultPrecedence,
@@ -26,7 +27,7 @@ module Ecluse.Test.Rules (
 
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
-import Ecluse.Core.Rules (RuleDeps (..), evalRules, noBreakerReporter, prepare)
+import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..), evalRules, noBreakerReporter, prepare)
 import Ecluse.Core.Rules.Types (
     EvalContext,
     PrecededRule (PrecededRule),
@@ -45,7 +46,16 @@ inertRuleDeps =
         { rdWithCveLookup = \use -> use Nothing
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
+        , rdFaultReporter = noFaultReporter
         }
+
+{- | The inert 'FaultReporter': records nothing. Effectful-rule fault reporting is a
+production-only observer (the live composition logs through it), so every suite that
+builds a 'RuleDeps' or 'Resilience' uses this inert stand-in. Kept here rather than in
+the library because no library or executable code path uses it.
+-}
+noFaultReporter :: FaultReporter
+noFaultReporter = FaultReporter (\_ _ -> pass)
 
 {- | Pair a rule with its type's 'defaultPrecedence'. The live policy assigns
 each rule its configured precedence ("Ecluse.Config.Rule"); this is the fixture

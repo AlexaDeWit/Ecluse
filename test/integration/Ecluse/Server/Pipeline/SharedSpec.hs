@@ -31,6 +31,7 @@ import Ecluse.Runtime.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (noFaultReporter)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 import Katip (Environment (Environment), closeScribes)
@@ -50,7 +51,7 @@ mkEffectful name prec cfg align eval = do
         PreparedRule
             { prepName = name
             , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime)
+            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime noFaultReporter)
             , prepEval = \_ pd -> eval pd
             }
 

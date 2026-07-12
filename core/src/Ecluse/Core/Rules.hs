@@ -62,6 +62,7 @@ module Ecluse.Core.Rules (
     evalRules,
     renderDecision,
     renderDuration,
+    cveIdsInReason,
 
     -- * The resilience harness
     runEffectfulRule,
@@ -72,6 +73,7 @@ module Ecluse.Core.Rules (
     newBreaker,
     BreakerReporter (..),
     noBreakerReporter,
+    FaultReporter (..),
 ) where
 
 import Data.Text qualified as T
@@ -90,6 +92,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
+    FaultReporter (..),
     Resilience (..),
     backoffPolicy,
     defaultEffectfulConfig,
@@ -123,6 +126,11 @@ data RuleDeps = RuleDeps
     , rdBreakerReporter :: BreakerReporter
     {- ^ The observer effectful rules report their breaker transitions to
     (@ecluse.rule.breaker.state@); 'noBreakerReporter' when unobserved.
+    -}
+    , rdFaultReporter :: FaultReporter
+    {- ^ The observer effectful rules report an exhausted evaluation's fault detail to
+    (the rendered query fault or timeout), for the operator diagnostic log;
+    'noFaultReporter' when unobserved. It never reaches the client-facing message.
     -}
     }
 
@@ -224,6 +232,27 @@ denyVerdict params cve pd = do
     eco = pkgEcosystem (pkgName pd)
     name = renderPackageName (pkgName pd)
     version = renderVersion (pkgVersion pd)
+
+{- | Recover the advisory ids a 'DenyIfCve' denial named, from the rendered decision
+message the denial audit line carries. The deny reason 'denyVerdict' builds embeds the
+ids between @"affected by "@ and @" (CVSS"@; this reads them back so the audit line can
+name the CVE without threading a structured field through the pure decision path (the
+"Ecluse.Core.Server.Pipeline.Internal" @Metadata@ contract adds audit data at that
+layer). A message carrying no such segment (a non-CVE denial) yields @[]@. Kept beside
+'denyVerdict' so the two move together; 'Ecluse.Core.RulesSpec' round-trips one against
+the other so a reword of either fails the build.
+-}
+cveIdsInReason :: Text -> [Text]
+cveIdsInReason message
+    | T.null afterCvss = []
+    | otherwise = filter (not . T.null) (map T.strip (T.splitOn ", " ids))
+  where
+    -- 'stripPrefix' drops the marker without an O(n) 'Data.Text.length' on it (STAN-0208);
+    -- 'Nothing' (the marker absent) leaves an empty body, so 'afterCvss' is empty and the
+    -- guard yields @[]@.
+    (_, afterAffected) = T.breakOn "affected by " message
+    body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
+    (ids, afterCvss) = T.breakOn " (CVSS" body
 
 -- The CVE rule's verdict against a loaded advisory database.
 remediationVerdict :: CveLookup -> PackageDetails -> IO RuleVerdict
@@ -345,6 +374,7 @@ resilienceFor deps = \case
                     , resAlignment = alignment
                     , resBreaker = breaker
                     , resBreakerReporter = rdBreakerReporter deps
+                    , resFaultReporter = rdFaultReporter deps
                     , resClock = getCurrentTime
                     }
 

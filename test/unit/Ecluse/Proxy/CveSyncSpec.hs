@@ -39,6 +39,7 @@ import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Rules (noFaultReporter)
 
 spec :: Spec
 spec = do
@@ -109,13 +110,13 @@ spec = do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
             swapIn (csSlot handle) (DbEtag "e1") fakeDb
-            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
             swapIn (csSlot handle) (DbEtag "e1") fakeDb
-            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 
     describe "cveSyncReady -- the first-sync readiness gate" $ do

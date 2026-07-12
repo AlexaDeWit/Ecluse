@@ -20,7 +20,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
 
 import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Types
@@ -101,6 +101,7 @@ depsWith rows =
         { rdWithCveLookup = \use -> use (Just (fakeCveLookup rows))
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
+        , rdFaultReporter = noFaultReporter
         }
 
 {- | One advisory naming @thing\@1.0.0@ (the version 'pkg' builds) as its exact
@@ -242,6 +243,25 @@ spec = do
         it "fails open (skips) when configured onUnavailable=skip and no database is loaded" $
             decideWith inertRuleDeps [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))] (pkg Nothing 0)
                 >>= (`shouldSatisfy` isBlockedByDefault)
+
+    describe "cveIdsInReason -- recovering advisory ids for the denial audit line" $ do
+        -- The deny reason 'denyVerdict' builds (asserted verbatim by the DenyIfCve
+        -- describe above); the audit layer reads the ids back from it, so the two must
+        -- stay in lockstep. A reword of either fails one of these.
+        let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
+        it "recovers the id a DenyIfCve denial named" $
+            cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
+        it "recovers several ids" $
+            cveIdsInReason "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)"
+                `shouldBe` ["CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"]
+        it "recovers them from the wrapped decision message the audit line carries" $
+            -- The audit layer sees the rendered decision's wrapping, not the raw reason.
+            cveIdsInReason ("thing@1.0.0 was denied by DenyIfCve: " <> denyReason)
+                `shouldBe` ["GHSA-affect-0001"]
+        it "yields nothing for a non-CVE denial" $ do
+            cveIdsInReason "runs code on install: postinstall" `shouldBe` []
+            cveIdsInReason "thing@1.0.0 was denied by DenyInstallTimeExecution: runs code on install"
+                `shouldBe` []
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
@@ -403,6 +423,7 @@ spec = do
                         { rdWithCveLookup = \_ -> throwString "advisory database exploded"
                         , rdCurrentAdvisoryEtag = pure Nothing
                         , rdBreakerReporter = noBreakerReporter
+                        , rdFaultReporter = noFaultReporter
                         }
                 policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
             -- An old enough version still rides the ordinary allow.
