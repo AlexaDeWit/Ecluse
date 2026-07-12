@@ -14,7 +14,7 @@ import Ecluse.Core.Telemetry.Metrics (
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
     MirrorResult (Failed, Published),
-    Provider (Adc, CodeArtifact, Static),
+    Provider (CodeArtifact, GcpArtifactRegistry, Static),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
     StatusClass (Status2xx, Status5xx),
     Tier (Effectful, Structural),
@@ -80,7 +80,7 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordMirrorPublishDuration m 2.5
         recordCredentialRefresh m CodeArtifact Refreshed
         recordCredentialRefresh m Static RefreshFailed
-        recordCredentialRefresh m Adc Refreshed
+        recordCredentialRefresh m GcpArtifactRegistry Refreshed
         recordCredentialTokenTtl m CodeArtifact 3600
         pure () :: Expectation
 

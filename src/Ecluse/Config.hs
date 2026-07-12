@@ -14,7 +14,6 @@ module Ecluse.Config (
     MountConfig (..),
     QueueBackend (..),
     CredentialBackend (..),
-    MirrorCredentialProvider (..),
     Url (..),
     mkUrl,
     unUrl,

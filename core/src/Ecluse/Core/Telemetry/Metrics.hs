@@ -256,7 +256,7 @@ data StatusClass = Status2xx | Status3xx | Status4xx | Status5xx | StatusOther
 instance Universe StatusClass where universe = universeGeneric
 
 -- | The outbound-credential provider a refresh\/ttl signal concerns.
-data Provider = CodeArtifact | Static | Adc
+data Provider = CodeArtifact | Static | GcpArtifactRegistry
     deriving stock (Eq, Generic, Show)
 
 instance Universe Provider where universe = universeGeneric
@@ -420,7 +420,7 @@ labelValue = \case
     LProvider p -> case p of
         CodeArtifact -> "codeartifact"
         Static -> "static"
-        Adc -> "adc"
+        GcpArtifactRegistry -> "gcp-artifact-registry"
     LCause c -> case c of
         Timeout -> "timeout"
         Connection -> "connection"

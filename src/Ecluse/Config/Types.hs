@@ -12,8 +12,6 @@ module Ecluse.Config.Types (
     parseQueueBackend,
     CredentialBackend (..),
     parseCredentialBackend,
-    MirrorCredentialProvider (..),
-    parseMirrorCredentialProvider,
     MountConfig (..),
     AppConfig (..),
     MountRegistries (..),
@@ -74,7 +72,7 @@ parseQueueBackend = parseWire
 data CredentialBackend
     = CodeArtifactCredential
     | StaticCredential
-    | AdcCredential
+    | GcpArtifactRegistryCredential
     deriving stock (Eq, Ord, Show)
 
 instance WireVocab CredentialBackend where
@@ -82,26 +80,11 @@ instance WireVocab CredentialBackend where
     wireTable =
         (CodeArtifactCredential, "codeartifact")
             :| [ (StaticCredential, "static")
-               , (AdcCredential, "adc")
+               , (GcpArtifactRegistryCredential, "gcp-artifact-registry")
                ]
 
 parseCredentialBackend :: Text -> Either Text CredentialBackend
 parseCredentialBackend = parseWire
-
-newtype MirrorCredentialProvider = MirrorCredentialProvider CredentialBackend
-    deriving stock (Eq)
-
-instance WireVocab MirrorCredentialProvider where
-    wireKind = "mirror-target credential provider"
-    wireTable =
-        (MirrorCredentialProvider StaticCredential, "static")
-            :| [ (MirrorCredentialProvider CodeArtifactCredential, "codeartifact")
-               , (MirrorCredentialProvider AdcCredential, "gcp-artifact-registry")
-               ]
-
-parseMirrorCredentialProvider :: Text -> Either Text CredentialBackend
-parseMirrorCredentialProvider raw =
-    (\(MirrorCredentialProvider backend) -> backend) <$> parseWire raw
 
 data MountConfig = MountConfig
     { mntPrivateUpstream :: Maybe RegistryUrl

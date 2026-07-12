@@ -26,8 +26,8 @@ spec = describe "renderBootError" $
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
         renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "ECLUSE_QUEUE_URL"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
-        renderBootError (MirrorCredentialProviderUnavailable AdcCredential)
-            `shouldSatisfy` infixed "adc"
+        renderBootError (MirrorCredentialProviderUnavailable GcpArtifactRegistryCredential)
+            `shouldSatisfy` infixed "gcp-artifact-registry"
         renderBootError (CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN"
         renderBootError (CodeArtifactConfigInvalid "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id")

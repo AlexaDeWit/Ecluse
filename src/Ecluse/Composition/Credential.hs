@@ -178,7 +178,7 @@ planMirrorCredential :: Ecosystem -> AppConfig -> MountConfig -> Either [BootErr
 planMirrorCredential eco app mcfg = case mntCredentialProvider mcfg of
     StaticCredential -> Right Nothing
     CodeArtifactCredential -> Just <$> resolveCodeArtifactConfig eco app mcfg
-    AdcCredential -> Left [MirrorCredentialProviderUnavailable AdcCredential]
+    GcpArtifactRegistryCredential -> Left [MirrorCredentialProviderUnavailable GcpArtifactRegistryCredential]
 
 {- | Resolve the CodeArtifact inputs for the mirror-target token, or the aggregated
 boot errors naming each input that could not be resolved.

@@ -9,7 +9,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (CredentialBackend (..), MirrorCredentialProvider (..), QueueBackend (..), mkUrl, parseCredentialBackend, parseMirrorCredentialProvider, parseQueueBackend, unUrl)
+import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, parseQueueBackend, unUrl)
 import Ecluse.Core.Wire (parseWire, renderWire)
 
 spec :: Spec
@@ -47,54 +47,24 @@ backendSpec = describe "backend selection" $ do
         it "round-trips each backend through parse/render" $ do
             parseWire "codeartifact" `shouldBe` Right CodeArtifactCredential
             parseWire "static" `shouldBe` Right StaticCredential
-            parseWire "adc" `shouldBe` Right AdcCredential
+            parseWire "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
             renderWire CodeArtifactCredential `shouldBe` "codeartifact"
             renderWire StaticCredential `shouldBe` "static"
-            renderWire AdcCredential `shouldBe` "adc"
+            renderWire GcpArtifactRegistryCredential `shouldBe` "gcp-artifact-registry"
         it "rejects an unknown name, naming the accepted set" $
             (parseWire "vault" :: Either Text CredentialBackend)
-                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
+                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
 
     describe "parseCredentialBackend" $ do
         it "parses codeartifact to CodeArtifactCredential" $
             parseCredentialBackend "codeartifact" `shouldBe` Right CodeArtifactCredential
         it "parses static to StaticCredential" $
             parseCredentialBackend "static" `shouldBe` Right StaticCredential
-        it "parses adc to AdcCredential" $
-            parseCredentialBackend "adc" `shouldBe` Right AdcCredential
+        it "parses gcp-artifact-registry to GcpArtifactRegistryCredential" $
+            parseCredentialBackend "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
         it "rejects unknown backends" $
             parseCredentialBackend "vault"
-                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
-
-    describe "MirrorCredentialProvider" $ do
-        let unProvider (MirrorCredentialProvider x) = x
-        it "round-trips each backend through parse/render" $ do
-            (unProvider <$> parseWire "static") `shouldBe` Right StaticCredential
-            (unProvider <$> parseWire "codeartifact") `shouldBe` Right CodeArtifactCredential
-            (unProvider <$> parseWire "gcp-artifact-registry") `shouldBe` Right AdcCredential
-            renderWire (MirrorCredentialProvider StaticCredential) `shouldBe` "static"
-            renderWire (MirrorCredentialProvider CodeArtifactCredential) `shouldBe` "codeartifact"
-            renderWire (MirrorCredentialProvider AdcCredential) `shouldBe` "gcp-artifact-registry"
-        it "rejects an unknown name, naming the accepted set" $ do
-            let res = parseWire "vault" :: Either Text MirrorCredentialProvider
-            void res `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
-
-    describe "parseMirrorCredentialProvider" $ do
-        it "parses codeartifact to CodeArtifactCredential" $
-            parseMirrorCredentialProvider "codeartifact" `shouldBe` Right CodeArtifactCredential
-        it "parses static to StaticCredential" $
-            parseMirrorCredentialProvider "static" `shouldBe` Right StaticCredential
-        it "parses gcp-artifact-registry to AdcCredential" $
-            parseMirrorCredentialProvider "gcp-artifact-registry" `shouldBe` Right AdcCredential
-        it "rejects unknown backends" $
-            parseMirrorCredentialProvider "vault"
-                `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
-        it "rejects empty string" $
-            parseMirrorCredentialProvider ""
-                `shouldBe` Left "unknown mirror-target credential provider \"\" (expected one of: static, codeartifact, gcp-artifact-registry)"
-        it "rejects whitespace string" $
-            parseMirrorCredentialProvider "   "
-                `shouldBe` Left "unknown mirror-target credential provider \"   \" (expected one of: static, codeartifact, gcp-artifact-registry)"
+                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
 
 urlSpec :: Spec
 urlSpec = describe "Url" $ do
