@@ -88,7 +88,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
 
 spec :: Spec
 spec = do
@@ -188,7 +188,7 @@ spec = do
                     PreparedRule
                         { prepName = "EffRule"
                         , prepPrecedence = 300
-                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime)
+                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime noFaultReporter)
                         , prepEval = \_ _ -> pure (NoDecision "noop")
                         }
             evalTier [effectful] `shouldBe` Metric.Effectful

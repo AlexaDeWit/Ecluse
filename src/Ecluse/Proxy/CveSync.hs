@@ -14,6 +14,7 @@ module Ecluse.Proxy.CveSync (
     sweepStaleTemps,
     sweepStep,
     cveRuleDepsFor,
+    katipFaultReporter,
     cveSyncReady,
     cveSyncScheduleFor,
 ) where
@@ -34,7 +35,7 @@ import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
-import Ecluse.Core.Rules (RuleDeps (..))
+import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, s3CveFetch)
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
@@ -44,13 +45,27 @@ lookup borrows through that ecosystem's own slot when the sync plan carries
 one, and abstains otherwise, so a mount's rules can never read a neighbouring
 ecosystem's advisory database.
 -}
-cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> Ecosystem -> RuleDeps
-cveRuleDepsFor plan reporter eco =
+cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> FaultReporter -> Ecosystem -> RuleDeps
+cveRuleDepsFor plan reporter faultReporter eco =
     RuleDeps
         { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco plan)
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . csSlot) (Map.lookup eco plan)
         , rdBreakerReporter = reporter
+        , rdFaultReporter = faultReporter
         }
+
+{- | A 'FaultReporter' that logs an exhausted effectful-rule evaluation's fault detail
+to a katip @WarningS@ line (the @rule@ and @fault@ fields), so a live advisory-database
+query fault is diagnosable rather than collapsing to a bare @Unavailable@. The rendered
+detail is bounded (the driver's @SQLError@ text or a timeout); it carries no secret (a
+'Ecluse.Core.Credential.Secret' redacts under @show@) and never reaches the client
+response.
+-}
+katipFaultReporter :: LogEnv -> FaultReporter
+katipFaultReporter logEnv =
+    FaultReporter $ \ruleName detail ->
+        runKatipContextT logEnv (moduleField "Ecluse.Core.Rules" <> sl "rule" ruleName <> sl "fault" detail) mempty $
+            logFM WarningS (ls ("effectful rule evaluation faulted" :: Text))
 
 {- | The readiness gate over the sync plan: ready once every configured
 ecosystem's advisory database has first-synced. The flags flip one way, so

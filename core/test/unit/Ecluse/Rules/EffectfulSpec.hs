@@ -29,12 +29,13 @@ import Ecluse.Core.Rules (
  )
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
+    FaultReporter (..),
     Resilience (..),
     backoffPolicy,
     defaultEffectfulConfig,
     newBreaker,
  )
-import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Rules (inertRuleDeps, noFaultReporter)
 
 -- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
 -- 'prepName' -- to exercise the resilience harness and the parallel engine without any
@@ -138,7 +139,7 @@ mkRuleClocked clock reporter name prec cfg align eval = do
         PreparedRule
             { prepName = name
             , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker reporter clock)
+            , prepResilience = Just (Resilience cfg align breaker reporter clock noFaultReporter)
             , prepEval = \_ pd -> eval pd
             }
 
@@ -453,6 +454,27 @@ spec = do
             fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
             fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "DenyCve: the rule source circuit breaker is open"
             readIORef attempts `shouldReturn` 2
+
+        it "reports an exhausted evaluation's fault detail to the fault reporter" $ do
+            -- The confined 'CveQueryFault' detail (the rendered 'SQLError') was
+            -- discarded, leaving an operator only a bare 'Unavailable'. It now reaches
+            -- the fault reporter, so a live-database query fault is diagnosable; the
+            -- client-facing decision message stays generic.
+            captured <- newIORef []
+            breaker <- newBreaker
+            let reporter = FaultReporter (\name detail -> modifyIORef' captured ((name, detail) :))
+                rule =
+                    PreparedRule
+                        { prepName = "DenyCve"
+                        , prepPrecedence = 1
+                        , prepResilience = Just (Resilience fastConfig{ecBackoff = []} FailDeny breaker noBreakerReporter (pure now) reporter)
+                        , prepEval = \_ _ -> throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorNotADatabase")
+                        }
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldSatisfy` isUnavailable
+            reports <- readIORef captured
+            map fst reports `shouldBe` ["DenyCve"] -- a single attempt (empty backoff), one report
+            any (\(_, detail) -> "SQLite3 returned ErrorNotADatabase" `T.isInfixOf` detail) reports `shouldBe` True
 
         it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do
             -- The no-advisory-database verdict is deterministic and in-process, so the

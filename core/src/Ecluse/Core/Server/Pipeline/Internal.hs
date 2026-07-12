@@ -49,6 +49,7 @@ module Ecluse.Core.Server.Pipeline.Internal (
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
 import Ecluse.Core.Cve (DbEtag (..))
@@ -65,7 +66,7 @@ import Ecluse.Core.Package.Integrity (
     classifyArtifacts,
  )
 import Ecluse.Core.Registry (UrlFormationError)
-import Ecluse.Core.Rules (PreparedRule (prepResilience))
+import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
@@ -350,6 +351,17 @@ denialAuditPayload da =
   where
     metadataPayload (Metadata m) = Map.foldrWithKey (\k v acc -> sl k v <> acc) mempty m
 
+{- | The advisory ids a denial named, recovered from its rendered message and folded
+into the audit line's 'Metadata' as a comma-joined @cve@ field. Empty for a non-CVE
+denial, so the field appears only when an advisory drove the refusal. Recovered at this
+layer via 'cveIdsInReason' rather than threaded through the pure decision path, per the
+'Metadata' contract.
+-}
+cveMetadata :: Text -> Metadata
+cveMetadata message = case cveIdsInReason message of
+    [] -> mempty
+    ids -> Metadata (Map.singleton "cve" (T.intercalate ", " ids))
+
 {- | Emit one audit log line per denied version, __denials only__ (an admit logs
 nothing). Companion to 'recordDenials', which counts the same denials as metrics.
 The 'DbEtag' is the advisory database active at emit (from the request's
@@ -361,8 +373,8 @@ logDenials pkg etag = traverse_ logOne
   where
     logOne vv = case vvDecision vv of
         Admit -> pass
-        Reject (Rejection reason _) ->
+        Reject (Rejection reason message) ->
             let (rule, reasonClass) = denialLabels reason
-                audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag mempty
+                audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag (cveMetadata message)
              in katipAddContext (denialAuditPayload audit) $
                     logFM WarningS (ls ("denied" :: Text))

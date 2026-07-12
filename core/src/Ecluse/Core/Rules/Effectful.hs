@@ -30,6 +30,10 @@ module Ecluse.Core.Rules.Effectful (
     defaultEffectfulConfig,
     newBreaker,
 
+    -- * Effectful-fault observation
+    FaultReporter (..),
+    reportFault,
+
     -- * Running an evaluation through it
     runResilient,
     backoffPolicy,
@@ -54,6 +58,7 @@ import Ecluse.Core.Breaker (
  )
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules.Types
+import Ecluse.Core.Text (displayExceptionT)
 
 {- | The resilience policy wrapped around an effectful rule's IO: the timeout\/retry\/
 breaker knobs, the per-source circuit-breaker state, its observer, and the
@@ -82,7 +87,26 @@ data Resilience = Resilience
     is what makes the cooldown start when the failure is recorded, not when the retry
     run began.
     -}
+    , resFaultReporter :: FaultReporter
+    {- ^ The observer an exhausted evaluation reports its fault detail to (the rendered
+    exception, or a timeout), so a live-database query fault is diagnosable from the
+    operator log rather than collapsing to a bare @Unavailable@. Inert
+    ('noFaultReporter') for an unobserved rule; the composition root installs the live
+    one. It never reaches the client-facing decision message.
+    -}
     }
+
+{- | The observer an exhausted effectful evaluation reports its fault detail to: the
+deciding rule's name and the rendered fault (an exception's 'displayException', or a
+timeout). A telemetry-agnostic callback in the shape of 'Ecluse.Core.Breaker.BreakerReporter',
+so the pure rules engine names no logger; the composition root closes a katip line over
+it. Fires once per exhausted evaluation, never on a verdict or a still-cooling breaker.
+-}
+newtype FaultReporter = FaultReporter (Text -> Text -> IO ())
+
+-- | Report one exhausted evaluation's fault: the rule name and the rendered detail.
+reportFault :: FaultReporter -> Text -> Text -> IO ()
+reportFault (FaultReporter report) = report
 
 {- | Run one effectful rule evaluation through its 'Resilience' policy: the breaker
 admission gate, then the per-attempt timeout under bounded retry, then the breaker
@@ -110,13 +134,17 @@ runResilient res name evalAt pd = do
 {- Settle a finished retry run against the breaker: a returned verdict resets the
 breaker and is passed on 'Decided'; an exhausted run advances the breaker and resolves
 to the rule's aligned 'Unavailable'. -}
-settleOutcome :: Resilience -> Text -> UTCTime -> Either Transience RuleVerdict -> IO RuleEvaluation
+settleOutcome :: Resilience -> Text -> UTCTime -> Either (Transience, Text) RuleVerdict -> IO RuleEvaluation
 settleOutcome res name now = \case
     Right verdict -> do
         commitBreaker res recordSuccess
         pure (Decided verdict)
-    Left transience -> do
+    Left (transience, detail) -> do
         commitBreaker res (tripOnFailure (resConfig res) now)
+        -- Surface the fault detail to the operator log before it collapses to the
+        -- client-facing generic reason: an exhausted evaluation otherwise leaves only a
+        -- bare 'Unavailable', hiding a live-database query fault's cause.
+        reportFault (resFaultReporter res) name detail
         pure (exhausted res name transience "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until the
@@ -125,7 +153,7 @@ taken at face value and __not__ retried; 'Left' the transient 'Transience' when 
 attempt faulted (an exception or a timeout), the only condition a retry might clear.
 'retrying' re-runs solely on a 'Left', so a deterministic verdict never enters the
 retry loop. -}
-attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either Transience RuleVerdict)
+attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
 attemptWithRetry res evalAt pd =
     retrying (backoffPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
   where
@@ -146,12 +174,12 @@ is a decided value taken at face value. 'Left' the transient 'Transience' only w
 harness itself could not obtain a verdict: the rule's IO threw, or the attempt timed
 out. Those are the sole retryable conditions -- a fault a later attempt might clear --
 and the sole inputs to the breaker; a verdict is never either. -}
-attemptOnce :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either Transience RuleVerdict)
+attemptOnce :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
 attemptOnce res evalAt pd = do
     result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt pd))
     pure $ case result of
-        Left _ -> Left transient -- the rule's IO threw
-        Right Nothing -> Left transient -- the attempt timed out
+        Left e -> Left (transient, "the rule threw: " <> displayExceptionT e) -- the rule's IO threw
+        Right Nothing -> Left (transient, "the attempt timed out") -- the attempt timed out
         Right (Just verdict) -> Right verdict -- a verdict is decided; never retried
   where
     transient = transientCause (resConfig res)
