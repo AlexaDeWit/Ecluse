@@ -65,14 +65,12 @@ module Ecluse.Core.Package.Integrity (
 
     -- ** The public-integrity floor (hard-floored at SHA-256)
     MinIntegrity,
-    defaultMinIntegrity,
     mkMinIntegrity,
     parseMinIntegrity,
     unMinIntegrity,
 
     -- ** The trusted-integrity floor (loosenable below SHA-256)
     MinTrustedIntegrity,
-    defaultMinTrustedIntegrity,
     mkMinTrustedIntegrity,
     parseMinTrustedIntegrity,
     unMinTrustedIntegrity,
@@ -168,12 +166,6 @@ never admitted on a sub-SHA-256 digest.
 newtype MinIntegrity = MinIntegrity HashAlg
     deriving stock (Eq, Show)
 
-{- | The default public-integrity floor: SHA-256, which is also the __hard minimum__
-the floor may never be set below.
--}
-defaultMinIntegrity :: MinIntegrity
-defaultMinIntegrity = MinIntegrity SHA256
-
 {- | Build a 'MinIntegrity', rejecting any algorithm weaker than SHA-256 (the hard
 floor). A weak floor is a configuration error, never a silent clamp: a public version
 admitted on a SHA-1 digest could be substituted by a collision, defeating the gate.
@@ -213,10 +205,6 @@ operator's own trusted source.
 -}
 newtype MinTrustedIntegrity = MinTrustedIntegrity HashAlg
     deriving stock (Eq, Show)
-
--- | The default trusted-integrity floor: SHA-256, the same secure default as the public floor.
-defaultMinTrustedIntegrity :: MinTrustedIntegrity
-defaultMinTrustedIntegrity = MinTrustedIntegrity SHA256
 
 {- | Build a 'MinTrustedIntegrity'. Any /known/ algorithm is accepted -- including the
 broken SHA-1 and MD5, which an operator may deliberately loosen the trusted floor to --

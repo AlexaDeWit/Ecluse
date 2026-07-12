@@ -29,15 +29,17 @@ here; the decision logic does not (it is reused by every ecosystem). See
 
 == URL rewriting
 
-'rewriteTarballUrls' rewrites each version's @dist.tarball@ to
+'rewriteVersion' rewrites one version object's @dist.tarball@ to
 @{mount-base}\/{pkg}\/-\/{file}@, so a client resolving metadata /through/ the
 proxy also downloads the bytes through it rather than going straight to upstream
 and bypassing the gate (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
 mounts", whose URL rewriting is load-bearing). Keeping artifacts same-host also keeps npm's auth
-flowing, which a separate artifact host would silently drop. The mount's
-externally-visible base URL is __supplied by the caller__; this
-transform performs no IO. It is __idempotent__: re-deriving @{pkg}@ and @{file}@ from
-an already-rewritten URL yields the same URL, so applying it more than once is safe.
+flowing, which a separate artifact host would silently drop. The
+@{mount-base}\/{pkg}@ prefix is __supplied by the caller__;
+'assembleMergedPackument' derives it from the mount base and the document's own
+safety-gated @name@ as it places each surviving version. The transform performs
+no IO. It is __idempotent__: re-deriving @{file}@ from an already-rewritten URL
+yields the same URL, so applying it more than once is safe.
 
 == Assembling the served document
 
@@ -55,14 +57,13 @@ sees admitted versions (presence in the packument /is/ availability -- see
 The fused single pass is deliberate: restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times
 per request, and this transform sits on the serve path's hot loop (see
-@docs\/architecture\/performance.md@). The rewrite honours the same gate as
-'rewriteTarballUrls': the base document's own @name@ is validated component-wise
-('safeName') before it is interpolated, and a document with no usable name has no
-URLs rewritten.
+@docs\/architecture\/performance.md@). The rewrite gates the interpolated name:
+the base document's own @name@ is validated component-wise ('safeName') before it
+is interpolated, and a document with no usable name has no URLs rewritten.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
     -- * URL rewriting
-    rewriteTarballUrls,
+    rewriteVersion,
 
     -- * Assembling the served document
     assembleMergedPackument,
@@ -81,37 +82,6 @@ import Ecluse.Core.Server.Route (isSafeComponent)
 import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
-{- | Rewrite every version's @dist.tarball@ to @{base}\/{pkg}\/-\/{file}@, so the
-artifact is fetched back through this mount rather than directly from upstream.
-
-@base@ is the mount's externally-visible base URL (including any path prefix),
-supplied by the caller; a trailing slash on it is ignored. @{pkg}@ is the
-packument's own @name@ (the scoped @\@scope\/name@ form npm uses in URLs), read
-from the document so the transform is self-contained. @{file}@ is the upstream
-tarball URL's last path segment -- the artifact filename -- preserved verbatim so
-the bytes a client integrity-checks are unchanged.
-
-Total and lossless: a version with no @dist@ object, no @tarball@ string, or a
-@tarball@ with no filename segment is left untouched, as is a document with no
-usable @name@; every unmodelled key is relayed unchanged. Rewriting is
-__idempotent__ -- a second pass derives the same @{pkg}@ and @{file}@ and so
-produces the same URL.
-
-The @name@ is __upstream-controlled__ (it is the packument's own field), so each
-of its structural components -- the scope and base name either side of a @\@scope\/@
-prefix -- is gated through "Ecluse.Core.Server.Route.isSafeComponent" before it is
-interpolated. A name carrying a traversal, an embedded separator, or a control
-character is rejected and the document is left untouched rather than emit a
-@dist.tarball@ that aims a client outside the package's own path.
--}
-rewriteTarballUrls :: Text -> Value -> Value
-rewriteTarballUrls base = \case
-    Object o
-        | Just pkg <- stringField "name" o
-        , safeName pkg ->
-            Object (adjustObject "versions" (mapValues (rewriteVersion (joinUrl base pkg))) o)
-    other -> other
-
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
 rewritten @dist.tarball@ path: every structural component (the scope and base name
 either side of an @\@scope\/@ prefix, or the whole name when unscoped) must pass
@@ -128,8 +98,23 @@ safeName name = all isSafeComponent components
              in if T.null base then [name] else [scope, T.drop 1 base]
         Nothing -> [name]
 
-{- | Rewrite one version object's @dist.tarball@ under the given @{base}\/{pkg}@
-prefix, leaving the object untouched if it carries no rewritable tarball.
+{- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the
+artifact is fetched back through this mount rather than directly from upstream.
+
+@prefix@ is the mount's @{base}\/{pkg}@ -- the externally-visible base URL joined
+with the package's URL form -- supplied by the caller. @{file}@ is the existing
+tarball URL's last path segment (the artifact filename), preserved verbatim so
+the bytes a client integrity-checks are unchanged.
+
+Total and lossless: a version with no @dist@ object, no @tarball@ string, or a
+@tarball@ with no filename segment is left untouched; every unmodelled key is
+relayed unchanged. Rewriting is __idempotent__ -- a second pass derives the same
+@{file}@ and so produces the same URL.
+
+A @{pkg}@ read from a document's own @name@ is __upstream-controlled__, so it
+must be gated component-wise through "Ecluse.Core.Server.Route.isSafeComponent"
+before it reaches the prefix: 'assembleMergedPackument' performs that gate as it
+places each surviving version, and a caller building its own prefix owns it.
 -}
 rewriteVersion :: Text -> Value -> Value
 rewriteVersion prefix = \case
@@ -178,10 +163,10 @@ preserved by construction. @dist-tags@ is the plan's reconciled map ('mpDistTags
 surviving-version instants ('mpTime', rendered as normalised ISO-8601) plus the
 base document's non-version @created@\/@modified@ bookkeeping.
 
-The tarball rewrite is the same per-version transform 'rewriteTarballUrls' applies,
-fused into the assembly so the versions object is built once rather than rebuilt by
-a second whole-document pass; it is gated identically (the base document's own
-@name@, validated by 'safeName', with no rewrite when the name is unusable).
+The tarball rewrite applies 'rewriteVersion' to each surviving version as it is
+placed, so the versions object is built once rather than rebuilt by a second
+whole-document pass; the interpolated prefix is gated on the base document's own
+@name@ (validated by 'safeName'), with no rewrite when the name is unusable.
 
 The caller decides what to do with an empty plan; an empty 'mpSurvivors' simply
 assembles an empty @versions@ object. A non-object base document contributes no
@@ -204,10 +189,9 @@ assembleMergedPackument mountBase bySource plan base =
         Object o -> o
         _ -> mempty
 
-    -- The per-version tarball rewrite, resolved once for the whole assembly: the
-    -- same @{base}/{pkg}@ prefix and safe-name gate as 'rewriteTarballUrls', over
-    -- the base document's self-reported @name@. No usable or safe name -> no
-    -- rewrite, exactly as the whole-document transform behaves.
+    -- The per-version tarball rewrite, resolved once for the whole assembly:
+    -- 'rewriteVersion' under the @{base}/{pkg}@ prefix, over the base document's
+    -- safe-name-gated self-reported @name@. No usable or safe name -> no rewrite.
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = case stringField "name" baseObject of
         Just pkg | safeName pkg -> rewriteVersion (joinUrl mountBase pkg)
@@ -287,12 +271,6 @@ timeBookkeepingKeys = ["created", "modified"]
 -- runs once per surviving version per request.
 renderTime :: UTCTime -> Text
 renderTime = renderIso8601Utc
-
--- | Map a function over every value of an 'Object', leaving a non-object as-is.
-mapValues :: (Value -> Value) -> Value -> Value
-mapValues f = \case
-    Object o -> Object (fmap f o)
-    other -> other
 
 {- | Apply a function to the value at @key@ in an object, only when that key is
 present. A missing key is left absent (no key is fabricated), preserving lossless

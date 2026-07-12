@@ -38,7 +38,6 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (ack, receive),
@@ -83,7 +82,7 @@ import Ecluse.Core.Worker (
     newWorkerHeartbeat,
     runWorkerM,
  )
-import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 

@@ -38,11 +38,11 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo)
-import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
+import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Rules (inertRuleDeps)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | The serve-transform benches: realistic over the corpus, scaled over synthetic versions.

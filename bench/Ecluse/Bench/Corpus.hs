@@ -90,9 +90,9 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution),
-    atDefaultPrecedence,
  )
 import Ecluse.Test.Package (validSha1, validSha512Sri)
+import Ecluse.Test.Rules (atDefaultPrecedence)
 
 {- | A size\/shape tier for a corpus entry, ordering the corpus small-to-heavy and
 labelling the rendered benchmark groups so a reader can see where on the distribution

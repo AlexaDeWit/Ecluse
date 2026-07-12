@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
@@ -61,6 +61,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web

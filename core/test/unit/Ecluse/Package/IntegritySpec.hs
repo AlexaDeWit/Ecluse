@@ -17,8 +17,6 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     assertedAlg,
     classifyArtifacts,
-    defaultMinIntegrity,
-    defaultMinTrustedIntegrity,
     meetsFloor,
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -28,6 +26,8 @@ import Ecluse.Core.Package.Integrity (
     unMinTrustedIntegrity,
  )
 import Ecluse.Test.Package (
+    defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
     unsafeHash,
     validSha1,
     validSha256,

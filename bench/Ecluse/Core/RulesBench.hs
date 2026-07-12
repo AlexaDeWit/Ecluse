@@ -29,10 +29,11 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
-import Ecluse.Core.Rules (evalRules, inertRuleDeps, prepare)
+import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
  )
+import Ecluse.Test.Rules (inertRuleDeps)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | The rule-sweep benches: realistic over the corpus, scaled over synthetic versions.

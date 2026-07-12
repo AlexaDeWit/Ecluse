@@ -20,7 +20,6 @@ import Data.Time (getCurrentTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
@@ -28,7 +27,7 @@ import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpResolveVersion, wpRules))
-import Ecluse.Test.Package (sampleArtifact, sampleDetails)
+import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 
 {- | An admit-everything worker re-evaluation policy for the npm ecosystem: every version
 resolves present through an injected resolver (no real metadata fetch) and an always-allow

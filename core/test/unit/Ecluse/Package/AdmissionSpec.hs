@@ -51,7 +51,6 @@ import Ecluse.Core.Package.Integrity (
     assertedAlg,
     authoritativeDigest,
     classifyArtifacts,
-    defaultMinIntegrity,
  )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (
@@ -62,7 +61,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
-import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash, unsafeSriHashes)
+import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails, unsafeHash, unsafeSriHashes)
 
 -- The blessed splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
