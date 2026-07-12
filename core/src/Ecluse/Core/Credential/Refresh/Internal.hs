@@ -22,7 +22,6 @@ module Ecluse.Core.Credential.Refresh.Internal (
     RefreshReporter (..),
     noRefreshReporter,
     CredentialReporters (..),
-    noCredentialReporters,
 
     -- * Failure
     CredentialError (..),
@@ -107,8 +106,7 @@ noRefreshReporter = RefreshReporter (const pass) (const pass)
 
 {- | The telemetry observers a refreshing provider records through: the mint circuit
 breaker's state changes and each refresh attempt's outcome. Bundled so the composition
-root passes one value to the provider constructors; 'noCredentialReporters' is the inert
-default the provider carries when telemetry is off (or before the substrate exists).
+root passes one value to the provider constructors.
 -}
 data CredentialReporters = CredentialReporters
     { crBreakerReporter :: BreakerReporter
@@ -116,10 +114,6 @@ data CredentialReporters = CredentialReporters
     , crRefreshReporter :: RefreshReporter
     -- ^ Observes each refresh outcome (@ecluse.credential.refresh@ \/ @.token.ttl@).
     }
-
--- | Inert observers for both signals: the provider records nothing.
-noCredentialReporters :: CredentialReporters
-noCredentialReporters = CredentialReporters noBreakerReporter noRefreshReporter
 
 {- | How a 'refreshingProvider' mints, times, and protects its token. The two
 effectful leaves ('rcMint', 'rcClock') and the jitter source ('rcJitter') are

@@ -30,7 +30,6 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmLimits, npmManager),
-    defaultNpmConfig,
     fetchMetadataFormBounded,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
@@ -43,6 +42,7 @@ import Ecluse.Core.Registry.Npm.Wire (
     AbbreviatedPackument (apkmtDistTags, apkmtName, apkmtVersions),
  )
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
+import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 
 {- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm
 our JSON decoding and protocol handling match reality.

@@ -14,8 +14,8 @@ import Amazonka qualified as AWS
 import Amazonka.Auth (fromKeys)
 
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret)
-import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..), providerForEnv)
+import Ecluse.Test.Credential (noCredentialReporters)
 
 {- | Component test for the CodeArtifact credential leaf with __no live AWS__: an
 in-process HTTP stub answers @GetAuthorizationToken@ with a canned response (the

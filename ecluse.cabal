@@ -136,8 +136,6 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Publish
-    Ecluse.Core.Registry.Pypi.Wire
-    Ecluse.Core.Registry.Rubygems.Wire
     Ecluse.Core.Rules
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Types
@@ -459,12 +457,17 @@ library ecluse-test-support
   hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Containers
+    Ecluse.Test.Credential
     Ecluse.Test.Cve
+    Ecluse.Test.Metrics
     Ecluse.Test.Osv
     Ecluse.Test.OsvDb
     Ecluse.Test.Package
     Ecluse.Test.Port
     Ecluse.Test.Queue
+    Ecluse.Test.Registry.Npm
+    Ecluse.Test.Registry.Pypi.Wire
+    Ecluse.Test.Registry.Rubygems.Wire
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
@@ -494,6 +497,7 @@ library ecluse-test-support
     , sqlite-simple     ^>=0.4
     , text              ^>=2.1
     , time              ^>=1.12
+    , universe-base     ^>=1.1
     , wai               ^>=3.2
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
@@ -541,8 +545,8 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.Registry.PublishSpec
-    Ecluse.Registry.Pypi.WireSpec
-    Ecluse.Registry.Rubygems.WireSpec
+    Ecluse.Test.Registry.Pypi.WireSpec
+    Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec

@@ -87,8 +87,8 @@ credentials, no permission) fails here at construction rather than on the first
 mirror write.
 
 The 'CredentialReporters' carry the telemetry observers the refresh policy records
-through (the mint breaker's state and each refresh outcome); pass
-'Ecluse.Core.Credential.Refresh.noCredentialReporters' for an unobserved provider.
+through (the mint breaker's state and each refresh outcome); pass inert
+'CredentialReporters' for an unobserved provider.
 -}
 newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider reporters cfg =

@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Registry.Pypi.WireSpec (spec) where
+module Ecluse.Test.Registry.Pypi.WireSpec (spec) where
 
 import Data.Aeson (eitherDecode)
 import Test.Hspec
 
-import Ecluse.Core.Registry.Pypi.Wire (ProjectJson, projectVersions)
+import Ecluse.Test.Registry.Pypi.Wire (ProjectJson, projectVersions)
 
 spec :: Spec
-spec = describe "Ecluse.Core.Registry.Pypi.Wire" $ do
+spec = describe "Ecluse.Test.Registry.Pypi.Wire" $ do
     it "reads the published versions from the releases map" $ do
         let body = "{\"info\":{},\"releases\":{\"1.0.0\":[],\"2.0.0a1\":[{\"url\":\"x\"}]}}"
         (projectVersions <$> eitherDecode body) `shouldBe` Right ["1.0.0", "2.0.0a1"]

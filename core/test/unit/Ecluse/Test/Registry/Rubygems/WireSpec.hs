@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Registry.Rubygems.WireSpec (spec) where
+module Ecluse.Test.Registry.Rubygems.WireSpec (spec) where
 
 import Data.Aeson (eitherDecode)
 import Test.Hspec
 
-import Ecluse.Core.Registry.Rubygems.Wire (VersionListing, listingVersions)
+import Ecluse.Test.Registry.Rubygems.Wire (VersionListing, listingVersions)
 
 spec :: Spec
-spec = describe "Ecluse.Core.Registry.Rubygems.Wire" $ do
+spec = describe "Ecluse.Test.Registry.Rubygems.Wire" $ do
     it "reads each entry's number, preserving order" $ do
         let body = "[{\"number\":\"7.1.0\",\"platform\":\"ruby\"},{\"number\":\"7.0.8\"}]"
         (listingVersions <$> eitherDecode body) `shouldBe` Right ["7.1.0", "7.0.8"]

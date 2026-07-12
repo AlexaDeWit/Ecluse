@@ -9,11 +9,11 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret)
-import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Runtime.Credential.CodeArtifact (
     CodeArtifactConfig (..),
     newCodeArtifactProvider,
  )
+import Ecluse.Test.Credential (noCredentialReporters)
 
 {- | Smoke test for the one outbound-credential surface no emulator covers:
 CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so -- like the

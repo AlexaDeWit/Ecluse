@@ -41,9 +41,6 @@ the request pipeline's authority model, decided upstream of this module.
 module Ecluse.Core.Registry.Npm (
     -- * Construction
     NpmClientConfig (..),
-    defaultNpmConfig,
-    publicRegistryBaseUrl,
-    publicRegistryUrl,
 
     -- * Bounded metadata fetch
     fetchMetadataFormBounded,
@@ -84,9 +81,7 @@ import Ecluse.Core.Security (
     LimitError,
     Limits,
     boundedRead,
-    defaultLimits,
  )
-import Ecluse.Core.Security.Egress.Internal (RegistryUrl (RegistryUrl))
 
 {- | Everything this data plane needs to talk to one npm-speaking registry: the
 base URL, the shared HTTP 'Manager', and an optional injected bearer token.
@@ -112,33 +107,6 @@ data NpmClientConfig = NpmClientConfig
     aborting fail-closed past the cap rather than buffering an unbounded body.
     -}
     }
-
-{- | The canonical public npm registry base URL, @https://registry.npmjs.org@.
-The default target when no managed backend is configured.
--}
-publicRegistryBaseUrl :: Text
-publicRegistryBaseUrl = "https://registry.npmjs.org"
-
-{- | The canonical public npm registry as an https 'RegistryUrl': the
-'publicRegistryBaseUrl' text, https by construction. The default @ECLUSE_PUBLIC_UPSTREAM@
-when none is configured.
--}
-publicRegistryUrl :: RegistryUrl
-publicRegistryUrl = RegistryUrl publicRegistryBaseUrl
-
-{- | An anonymous client config against the public registry ('publicRegistryBaseUrl'),
-using the given shared 'Manager' and the secure-default response bounds
-('Ecluse.Core.Security.defaultLimits'). Override 'npmBaseUrl'/'npmToken'/'npmLimits' for
-a managed backend or a per-deployment budget.
--}
-defaultNpmConfig :: Manager -> NpmClientConfig
-defaultNpmConfig manager =
-    NpmClientConfig
-        { npmBaseUrl = publicRegistryBaseUrl
-        , npmManager = manager
-        , npmToken = Nothing
-        , npmLimits = defaultLimits
-        }
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
 conditional-GET 'Validators', reporting __every__ fetch failure as a

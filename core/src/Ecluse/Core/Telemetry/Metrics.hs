@@ -31,20 +31,16 @@ module Ecluse.Core.Telemetry.Metrics (
     -- * The metric-name catalogue
     MetricName (..),
     metricName,
-    allMetricNames,
 
     -- * Label keys (the closed set)
     LabelKey (..),
     labelKeyName,
-    allLabelKeys,
-    highCardinalityKeys,
 
     -- * Bounded label values
     Decision (..),
     ReasonClass (..),
     Upstream (..),
     StatusClass (..),
-    statusClassOf,
     Provider (..),
     Cause (..),
     Tier (..),
@@ -175,14 +171,9 @@ metricName = \case
     CredentialRefresh -> "ecluse.credential.refresh"
     CredentialTokenTtlSeconds -> "ecluse.credential.token.ttl.seconds"
 
--- | Every metric in the catalogue (the Generic-derived 'Universe' enumeration).
-allMetricNames :: [MetricName]
-allMetricNames = universe
-
 {- | The closed set of metric label keys. Every label Écluse attaches is one of these
 bounded-domain keys. High-cardinality identifiers (@package@, @version@, @scope@, a
-denial @message@) are deliberately __absent__ -- see 'highCardinalityKeys' -- so they
-can never become a metric label.
+denial @message@) are deliberately __absent__, so they can never become a metric label.
 -}
 data LabelKey
     = KeyDecision
@@ -216,17 +207,6 @@ labelKeyName = \case
     KeyCause -> "cause"
     KeyBreakerSource -> "source"
     KeyTier -> "tier"
-
--- | Every label key in the closed set.
-allLabelKeys :: [LabelKey]
-allLabelKeys = universe
-
-{- | The high-cardinality identifiers that must __never__ be metric labels: they live
-on spans and the structured log line instead. The label-domain guard asserts none of
-these is a 'LabelKey' wire name; there is, by construction, no 'Label' that produces one.
--}
-highCardinalityKeys :: [Text]
-highCardinalityKeys = ["package", "version", "scope", "message"]
 
 -- | The serve decision (@ecluse.serve.decision@).
 data Decision = Admit | Deny | Unavailable
@@ -440,17 +420,6 @@ labelValue = \case
     LRelayAnomaly a -> case a of
         RelayOddShape -> "odd_shape"
         RelayNonSuccess -> "non_success"
-
-{- | Classify an HTTP status code into its bounded 'StatusClass', so a status never
-becomes a per-code label.
--}
-statusClassOf :: Int -> StatusClass
-statusClassOf code
-    | code >= 200 && code < 300 = Status2xx
-    | code >= 300 && code < 400 = Status3xx
-    | code >= 400 && code < 500 = Status4xx
-    | code >= 500 && code < 600 = Status5xx
-    | otherwise = StatusOther
 
 {- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument is
 recorded with. Every value is bounded, so the attribute set an instrument ever sees is
