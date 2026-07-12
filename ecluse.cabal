@@ -457,6 +457,7 @@ library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
   exposed-modules:
+    Ecluse.Test.Container.Image
     Ecluse.Test.Containers
     Ecluse.Test.Credential
     Ecluse.Test.Cve
@@ -569,6 +570,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.StreamSpec
     Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec
+    Ecluse.Test.Container.ImageSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.TextSpec

@@ -184,10 +184,23 @@ Inspect what is currently lingering with `docker ps --filter label=com.ecluse.te
 is never pulled.** Écluse is a supply-chain-security tool, so this is an invariant, not a
 convenience: a tag can be re-pointed to a poisoned image between one pull and the next, while
 a `@sha256:` digest is immutable and content-addressed, so the bytes are verified on every
-pull. The pins live at the harness sites that name each image (`test/e2e/.../Harness/Docker.hs`
-for the e2e data plane; `test/integration/.../Ministack.hs` and the telemetry specs for the
-integration tier), each with an adjacent comment recording the human-readable version the
-digest resolves from, so a reader (and Renovate) can still see what it is.
+pull.
+
+The invariant is a *type*, not a scan. A pulled image is a `PinnedImageRef`
+(`Ecluse.Test.Container.Image`) whose constructor is hidden, reached only through the
+validating `mkPinnedImageRef`, which accepts `name@sha256:<64 lowercase hex>` and rejects a
+bare tag. Every `docker run` / `docker build FROM` site takes an `ImageRef`, either
+`PinnedExternal` for an image pulled from a registry (which must be pinned) or `LocallyBuilt`
+for the product image the run builds itself (never pulled, so never pinned), and renders it to
+a string only at the call to `docker`. Because a pull site accepts only a validated
+`PinnedImageRef`, an unpinned pull is unrepresentable there rather than something to detect
+after the fact; each harness resolves its raw literals through `mkPinnedImageRef` at startup
+and fails loudly on an invalid one, so an unpinned literal aborts the suite (in CI) before it
+pulls anything. The pins live at the harness sites that name each image
+(`test/e2e/.../Harness/Docker.hs` for the e2e data plane; `test/integration/.../Ministack.hs`
+and the telemetry specs for the integration tier), each with an adjacent comment recording the
+human-readable version the digest resolves from, so a reader (and Renovate) can still see what
+it is.
 
 Both tiers pull those pinned images (ministack, the OTLP collector, nginx, Verdaccio) from
 Docker Hub at run time. On the shared, unauthenticated GitHub-hosted runners that pool is
@@ -198,7 +211,9 @@ integration jobs warm those images into the local cache before the suite runs, v
 retries; the harness's own `docker run` / `docker build FROM` then reuse the cached image. It
 is best-effort (a still-failing pull only warns and lets the suite try again), and the
 references it is given mirror the harness digest pins verbatim, so it warms the exact image
-the suite will pull and adds no new trust surface.
+the suite will pull. The pre-pull list is a cache-warming convenience, not the trust boundary:
+that is the typed harness pull above, so a stray tag in the pre-pull refs would be a cache miss,
+never a way to slip an unpinned image past the suite.
 
 ## What gates, and what doesn't
 
