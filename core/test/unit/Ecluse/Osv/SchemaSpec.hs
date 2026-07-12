@@ -4,6 +4,9 @@
 
 module Ecluse.Osv.SchemaSpec (spec) where
 
+import Prelude hiding (universe)
+
+import Data.Universe.Class (Universe (..))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Osv.Schema (MetaKey, osvDbFileName, renderMetaKey)

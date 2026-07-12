@@ -63,7 +63,7 @@ data TransportCause
       over whatever a client library reports.
       -}
       TransportProtocol
-    deriving stock (Eq, Show, Bounded, Enum)
+    deriving stock (Eq, Show)
 
 {- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
 pathological rendered exception (an embedded response body, a long certificate

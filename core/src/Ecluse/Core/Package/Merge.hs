@@ -224,7 +224,7 @@ data DivergencePolicy
       version then fails to resolve it rather than receive a contested copy.
       -}
       FailClosed
-    deriving stock (Eq, Ord, Show, Enum, Bounded)
+    deriving stock (Eq, Ord, Show)
 
 {- | Parse an operator-supplied divergence policy (the @ECLUSE_DIVERGENCE_POLICY@ value):
 @warn@ or @fail-closed@, case-insensitively and tolerant of @fail_closed@\/@failclosed@

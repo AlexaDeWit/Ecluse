@@ -35,6 +35,9 @@ module Ecluse.Core.Osv.Schema (
     renderMetaKey,
 ) where
 
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
+
 {- | The table-schema epoch: the version of the artifact's shape, shared by
 the Pilot writer and the proxy reader.
 
@@ -167,7 +170,11 @@ data MetaKey
       MetaSourceUrl
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+-- Enumerate every MetaKey from the type itself, so a new key is covered without a
+-- hand-maintained list. Derived from Generic, not a partial Enum/Bounded pair.
+instance Universe MetaKey where universe = universeGeneric
 
 -- | The key's stored form in the @meta@ table.
 renderMetaKey :: MetaKey -> Text

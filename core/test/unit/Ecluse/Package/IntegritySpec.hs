@@ -4,6 +4,9 @@
 
 module Ecluse.Package.IntegritySpec (spec) where
 
+import Prelude hiding (universe)
+
+import Data.Universe.Class (Universe (..))
 import Test.Hspec
 
 import Ecluse.Core.Package (
@@ -62,7 +65,7 @@ spec = do
             -- new 'HashAlg'; this pins that the arm is actually present for every
             -- floor-clearing algorithm. Enumerated over the whole 'HashAlg' set, so a new
             -- constructor is checked automatically.
-            [alg | alg <- [minBound .. maxBound], meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
+            [alg | alg <- universe, meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
                 `shouldBe` []
 
         it "the bare SRI wrapper neither clears the floor nor is computable (it names no algorithm)" $ do
