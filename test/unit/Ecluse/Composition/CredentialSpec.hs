@@ -103,7 +103,7 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
 
     it "refuses to build when the gcp-artifact-registry provider is selected (not built)" $ do
         -- 'CredentialProviders' has no 'Show', so the Left is extracted to compare.
-        env <- expectEnv (overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "adc" staticEnvVars)
+        env <- expectEnv (overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry" staticEnvVars)
         result <- initCredentialProviders noCredentialReporters env
         leftToMaybe result `shouldBe` Just [MirrorCredentialProviderUnavailable AdcCredential]
 
@@ -125,7 +125,7 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
         planMirrorCredential Npm env (cfgMounts env Map.! Npm) `shouldBe` Right Nothing
 
     it "refuses the gcp-artifact-registry provider as not built" $ do
-        env <- expectEnv (overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "adc" staticEnvVars)
+        env <- expectEnv (overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry" staticEnvVars)
         planMirrorCredential Npm env (cfgMounts env Map.! Npm) `shouldBe` Left [MirrorCredentialProviderUnavailable AdcCredential]
 
     it "resolves CodeArtifact inputs from the explicit MIRROR_TARGET_CODEARTIFACT_* keys" $ do

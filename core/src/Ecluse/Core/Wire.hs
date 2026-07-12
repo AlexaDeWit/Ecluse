@@ -16,11 +16,8 @@ human noun for the set. 'renderWire' and 'parseWire' are derived from it once an
 dispatched by type, so the rendered names, the parse, and the accepted-set message
 can no longer drift apart: there is a single list of names per type.
 
-The vocabulary is keyed by type, which means one type speaks exactly one vocabulary.
-Where a type must be spoken two ways -- a credential provider is named differently as
-a mirror-target selector than as a per-mount field -- the second vocabulary is a
-@newtype@ over the first with its own instance (see
-'Ecluse.Config.parseMirrorCredentialProvider').
+The vocabulary is keyed by type, so each type speaks exactly one vocabulary: the one
+'wireTable' names its values in both directions.
 
 The only contract is the round trip: for every value an instance's table names,
 @'parseWire' ('renderWire' x) == Right x@. It holds by construction, since both
