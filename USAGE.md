@@ -126,12 +126,13 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
 Écluse still runs if you diverge, but each deviation trades away a protection, and one is
 **silent** (Écluse can't detect it, so nothing warns you):
 
-- **Collapsing the registries onto one store** (leaving `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` /
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` unset). The perimeter still holds, but first-party and
+- **Collapsing the registries onto one store** (declaring `ECLUSE_MOUNTS__NPM__MIRROR_TARGET`
+  equal to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either). The
+  perimeter still holds, but first-party and
   public-derived packages share one store, so you lose provenance separation, per-provenance
   scanning, and clean post-incident scoping. The proxy logs a boot warning for each pair of a
-  mount's registry endpoints that resolve to the same registry (the mirror folding onto the
-  private upstream included), and **Écluse Dredger refuses to boot** if
+  mount's registry endpoints that resolve to the same registry, and **Écluse Dredger refuses to
+  boot** if
   `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
   first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html#threat-10)
   and #16.)
@@ -155,9 +156,11 @@ policy and the mount map. A single-mount npm deployment on the default policy ne
 
 A mount serves only when you declare it: setting any `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable (or
 any key under `mounts.<ecosystem>` in the document) activates that mount, and an active mount must
-define its private upstream or the boot fails naming the missing key. A mount you never mention
-stays off. Declaring the public upstream and mirror target explicitly alongside the private
-upstream is strongly recommended; endpoints that resolve to the same registry are logged as boot
+define its private upstream **and** declare its mirror target or the boot fails naming each
+missing key. The mirror target is explicit even when it equals the private upstream: activation
+implies a mirror write, and the target is never implied from another endpoint. A mount you never
+mention stays off. Declaring the public upstream explicitly as well is recommended; endpoints that
+resolve to the same registry are logged as boot
 warnings (see [Deviating from the Golden Path](#deviating-from-the-golden-path)).
 
 The table below is the complete environment-variable reference. A value resolves as defaults <
@@ -173,7 +176,7 @@ rationale behind each setting are in
 | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes |  | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). Required to activate the mount: any other `ECLUSE_MOUNTS__NPM__*` key set without it is a boot error. |
 | `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
 | `ECLUSE_PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | Yes |  | Registry that approved packages are mirrored to. Required for every active mount, and declared explicitly even when it equals `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` (one registry, read and written); unset ⇒ boot error naming the key. The write credential is chosen separately via `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
 | `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER` | No | `codeartifact` | Mirror-target write credential: `codeartifact` (mints a short-lived token under the container/task role, the shipped default) or `static` (a fixed `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`). `gcp-artifact-registry` is recognised but not yet built. |
 | `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | No |  | Static write token, used when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static`. |
 | `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN` | Depends | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host. |

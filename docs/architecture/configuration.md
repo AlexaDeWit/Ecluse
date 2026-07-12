@@ -29,11 +29,15 @@ A mount serves only when the operator declares it. The shipped defaults carry a 
 template per ecosystem (the canonical public upstream and the default credential provider),
 and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
 `ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
-upstream: a declared-but-incomplete mount is a boot error naming the missing key, never a
+upstream and declare its mirror target: a declared-but-incomplete mount is a boot error naming
+each missing key, never a
 mount that silently vanishes from service, and a mount the operator never mentions stays
-off without ceremony. Declaring every registry endpoint explicitly is the recommended
+off without ceremony. The mirror target is explicit even when it equals the private upstream:
+activation implies a mirror write (there are no serve-only mounts), so the write's destination
+is always the operator's own stated intent, never implied from another endpoint. Declaring the
+public upstream explicitly as well is the recommended
 posture; endpoints of one mount that resolve to the same registry are each logged as a
-boot warning (the mirror target folding onto the private upstream included), since a
+boot warning (a mirror target declared equal to the private upstream included), since a
 shared store narrows provenance separation and what maintenance tooling can safely do
 (see [USAGE → Deviating from the Golden Path](../../USAGE.md#deviating-from-the-golden-path)).
 
@@ -295,8 +299,9 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
   a complete new rule (a typo'd default name, an `"enabled": false` against a non-existent rule,
   a patch missing the `type` it needs to stand alone) is rejected.
 - A declared mount must be complete. Any operator-supplied key under `mounts.<ecosystem>`
-  activates that mount, and an active mount without a `privateUpstream` is rejected at boot,
-  naming the mount and the key (every incomplete mount in one report); the shipped
+  activates that mount, and an active mount without a `privateUpstream` or without an explicit
+  `mirrorTarget` is rejected at boot,
+  naming the mount and each missing key (every incomplete mount in one report); the shipped
   per-ecosystem templates alone never activate anything.
 - Credential references must resolve. A mount whose [credential strategy](access-model.md) draws
   on an uninitialised provider (a `service` mount with no read provider, or a mirror target

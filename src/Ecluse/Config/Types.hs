@@ -194,6 +194,12 @@ data ConfigError
     | PolicyErrors [PolicyError]
     | -- | An operator-declared (active) mount does not define its private upstream.
       MountMissingPrivateUpstream Ecosystem
+    | {- | An operator-declared (active) mount does not declare its mirror target.
+      The declaration is required even when the intended value equals the private
+      upstream: activation implies a mirror write, and the target is never implied
+      from another endpoint.
+      -}
+      MountMissingMirrorTarget Ecosystem
     deriving stock (Eq, Show)
 
 renderConfigError :: ConfigError -> Text
@@ -207,5 +213,15 @@ renderConfigError (MountMissingPrivateUpstream eco) =
             <> "\" is declared in the configuration, so it must define its private upstream: set mounts."
             <> name
             <> ".privateUpstream in the config document (or "
+            <> envKey
+            <> "), or remove the mount's keys to leave it unmounted"
+renderConfigError (MountMissingMirrorTarget eco) =
+    let name = ecosystemName eco
+        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__MIRROR_TARGET"
+     in "mount \""
+            <> name
+            <> "\" is declared in the configuration, so it must declare its mirror target explicitly (even when it equals the private upstream): set mounts."
+            <> name
+            <> ".mirrorTarget in the config document (or "
             <> envKey
             <> "), or remove the mount's keys to leave it unmounted"
