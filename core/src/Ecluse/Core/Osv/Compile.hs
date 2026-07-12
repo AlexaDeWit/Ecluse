@@ -14,7 +14,7 @@ import Data.Time (getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Version (showVersion)
 import Database.SQLite.Simple
-import Katip (KatipContext, Severity (..), logFM, ls)
+import Katip (KatipContext, Severity (..), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 import Paths_ecluse (version)
 import System.Directory (createDirectoryIfMissing, removeFile)
 import System.FilePath ((</>))
@@ -34,7 +34,8 @@ import Ecluse.Core.Osv.Stream (
     streamOsvUrl,
     systemicDrop,
  )
-import OpenTelemetry.Trace.Core (TracerProvider)
+import OpenTelemetry.Context qualified as Ctx
+import OpenTelemetry.Trace.Core (SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
 {- | Compile an ecosystem's OSV advisory export into the SQLite artifact and
 return its path. The artifact's name, epoch stamp, and @meta@ table follow the
@@ -43,47 +44,67 @@ contract in "Ecluse.Core.Osv.Schema".
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
     let dbFile = outDir </> osvDbFileName ecosystem
+        mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
 
     -- Ensure clean state
     liftIO $ createDirectoryIfMissing True outDir
     liftIO $ catchIOError (removeFile dbFile) (const $ pure ())
 
-    bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
-        liftIO $ initSchema conn
-        ingest <- newOsvIngest defaultIngestLimits
+    -- The whole compile pass is one span: ecosystem and source stamped up front, the
+    -- row count and drop tally once the stream settles, and a systemic-drop abort marks
+    -- the span errored so an abandoned run is legible from the trace alone.
+    bracket
+        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.compile" defaultSpanArguments{kind = Internal}) mTracer)
+        (mapM_ (`endSpan` Nothing))
+        $ \mSpan -> do
+            forM_ mSpan $ \sp -> do
+                addAttribute sp "ecluse.osv.ecosystem" ecosystem
+                addAttribute sp "ecluse.osv.source_url" (toText urlStr)
 
-        -- The fetch runs under a truncated exponential backoff (see
-        -- 'Ecluse.Core.Osv.Retry'): a transient osv.dev failure is retried with
-        -- jittered, capped, and count-bounded backoff rather than tight-looping, so
-        -- an outage cannot get our egress IP rate-limited or banned. Batches commit
-        -- incrementally, so a mid-stream drop can leave a partial table behind; each
-        -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
-        -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
-        -- under the dedup index's uniqueness, so a re-run would duplicate those ranges.)
-        -- The ingest tally is reset alongside the table so it reflects only the final
-        -- attempt.
-        withOsvRetry defaultOsvRetryPolicy $ do
-            resetIngestStats ingest
-            liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
-            runConduit $
-                streamOsvUrl mTracerProvider ingest urlStr
-                    .| CL.filter ((== ecosystem) . extEcosystem)
-                    .| CL.chunksOf 2000
-                    .| sinkSqlite conn
+            bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
+                liftIO $ initSchema conn
+                ingest <- newOsvIngest defaultIngestLimits
 
-        -- The stream drops an over-large or malformed advisory rather than halting, so a
-        -- few poisoned records never freeze the feed. But a systemically corrupt payload
-        -- must not become a fresh-looking artifact that silently omits advisories: on a
-        -- systemic drop rate, abandon the run before 'writeMeta' finalises it, so a
-        -- consumer keeps its last-good db instead.
-        stats <- readIngestStats ingest
-        when (systemicDrop stats) $ do
-            logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> renderDrops stats))
-            throwIO (PilotIngestAborted stats)
+                -- The fetch runs under a truncated exponential backoff (see
+                -- 'Ecluse.Core.Osv.Retry'): a transient osv.dev failure is retried with
+                -- jittered, capped, and count-bounded backoff rather than tight-looping, so
+                -- an outage cannot get our egress IP rate-limited or banned. Batches commit
+                -- incrementally, so a mid-stream drop can leave a partial table behind; each
+                -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
+                -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
+                -- under the dedup index's uniqueness, so a re-run would duplicate those ranges.)
+                -- The ingest tally is reset alongside the table so it reflects only the final
+                -- attempt.
+                withOsvRetry defaultOsvRetryPolicy $ do
+                    resetIngestStats ingest
+                    liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
+                    runConduit $
+                        streamOsvUrl mTracerProvider ingest urlStr
+                            .| CL.filter ((== ecosystem) . extEcosystem)
+                            .| CL.chunksOf 2000
+                            .| sinkSqlite conn
 
-        rowCount <- liftIO $ writeMeta conn ecosystem urlStr
-        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+                -- The stream drops an over-large or malformed advisory rather than halting, so a
+                -- few poisoned records never freeze the feed. But a systemically corrupt payload
+                -- must not become a fresh-looking artifact that silently omits advisories: on a
+                -- systemic drop rate, abandon the run before 'writeMeta' finalises it, so a
+                -- consumer keeps its last-good db instead.
+                stats <- readIngestStats ingest
+                forM_ mSpan $ \sp -> do
+                    addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
+                    addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
+                    addAttribute sp "ecluse.osv.dropped_malformed" (show (statDroppedMalformed stats) :: Text)
+                when (systemicDrop stats) $ do
+                    forM_ mSpan $ \sp -> setStatus sp (Error "systemic advisory drop rate; compile abandoned")
+                    katipAddContext (dropFields ecosystem stats) $
+                        logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> renderDrops stats))
+                    throwIO (PilotIngestAborted stats)
+
+                rowCount <- liftIO $ writeMeta conn ecosystem urlStr
+                forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
+                katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
+                    logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
 
     pure dbFile
 
@@ -97,6 +118,15 @@ renderDrops s =
         <> " oversize / "
         <> show (statDroppedMalformed s)
         <> " malformed"
+
+-- The drop tally as structured log fields, shared by the completion and abort lines
+-- so both carry the same ecosystem/accepted/dropped shape an operator can filter on.
+dropFields :: Text -> IngestStats -> SimpleLogPayload
+dropFields ecosystem s =
+    sl "ecosystem" ecosystem
+        <> sl "accepted" (statAccepted s)
+        <> sl "dropped_oversize" (statDroppedOversize s)
+        <> sl "dropped_malformed" (statDroppedMalformed s)
 
 initSchema :: Connection -> IO ()
 initSchema conn = do

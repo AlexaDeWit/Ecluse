@@ -5,12 +5,9 @@
 
 {- | Compile the fixture corpus into a real @osv.db@ artifact.
 
-This lives in @ecluse-test-support-app@ rather than @ecluse-test-support@
-because it runs the corpus through Pilot's actual compiler, which is in the
-@ecluse@ application library, and the core unit suite's partition forbids that
-dependency (see the @ecluse-core-unit@ stanza note in @ecluse.cabal@).
-App-tier suites depend on this library and exercise the real artifact; the
-core suite keeps to a pure fake lookup.
+Serves a corpus version through a local HTTP stub and runs it through Pilot's
+actual compiler ('Ecluse.Core.Osv.Compile.compileOsvToSqlite', in @ecluse-core@),
+so a suite exercises a genuine artifact rather than a hand-built one.
 -}
 module Ecluse.Test.OsvDb (
     withFixtureOsvDb,

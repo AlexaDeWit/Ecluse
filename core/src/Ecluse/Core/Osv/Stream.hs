@@ -61,7 +61,7 @@ import Data.ByteString qualified as BS
 import Katip (KatipContext, Severity (..), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
 import OpenTelemetry.Context qualified as Ctx
-import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, tracerOptions)
+import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, tracerOptions)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extractFromAdvisory, osvId)
 
@@ -176,7 +176,8 @@ streamOsvUrl mTracerProvider ingest urlStr = do
     bracketP
         (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.stream" defaultSpanArguments{kind = Internal}) mTracer)
         (mapM_ (`endSpan` Nothing))
-        ( \_ -> do
+        ( \mSpan -> do
+            forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_url" (toText urlStr)
             -- 'setRequestCheckStatus' makes a non-2xx response throw a
             -- 'StatusCodeException' at the header boundary. This is deliberate: it
             -- lets the backoff wrapper (see 'Ecluse.Core.Osv.Retry') see a 502

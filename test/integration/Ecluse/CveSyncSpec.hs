@@ -9,10 +9,10 @@ booted proxy (the ratified acceptance criterion on the sync slice):
    (@403@), and the audit body carries both the fast lane's abstain reason
    (no advisory database is loaded) and the quarantine's: proof the CVE rule
    ran, abstained for the stated cause, and the ordinary policy governed.
-2. The @osv.db@ compiled by __Pilot's real pipeline__ over the shared advisory
-   corpus is uploaded to the ministack S3 bucket; the running sync task's next
-   poll detects, verifies, and shadow-swaps it, with no restart and no
-   configuration change.
+2. Pilot's real one-shot pipeline (@runPilotCompile@ with @--upload@) compiles the
+   shared advisory corpus into an @osv.db@ and uploads it to the ministack S3 bucket
+   through @exportToS3@; the running sync task's next poll detects, verifies, and
+   shadow-swaps it, with no restart and no configuration change.
 3. The identical request now returns @200@ with the version served: the fast
    lane opened because a synced advisory names it as the exact fix.
 
@@ -30,7 +30,6 @@ import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody), defaultRequest, request, runSession, setPath)
-import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (tryAny)
@@ -63,17 +62,18 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, withMinistack)
+import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
-import Ecluse.Test.OsvDb (withFixtureOsvDb)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (testServeAdmission)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
@@ -127,10 +127,11 @@ spec =
                                 deniedBody `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
                                 deniedBody `shouldSatisfy` T.isInfixOf "minimum age"
 
-                                -- Publish the artifact Pilot's real pipeline compiles
-                                -- from the shared corpus; the running task's next poll
-                                -- verifies and swaps it in. No restart, no new config.
-                                withFixtureOsvDb CorpusV1 (uploadArtifact awsEnv bucket)
+                                -- Publish through Pilot's real one-shot pipeline
+                                -- (compile the corpus, then upload via exportToS3); the
+                                -- running task's next poll verifies and swaps it in. No
+                                -- restart, no new config.
+                                publishViaPilot appCfg CorpusV1
 
                                 -- Phase 2: the identical request is admitted, and the
                                 -- served document carries the fixed version.
@@ -170,12 +171,29 @@ createBucketWithRetry awsEnv bucket attempts =
             | attempts <= 1 -> fail ("CveSyncSpec: bucket never became creatable: " <> show err)
             | otherwise -> threadDelay 500_000 >> createBucketWithRetry awsEnv bucket (attempts - 1)
 
--- Upload the compiled artifact under its own (stable, epoch-carrying) file name,
--- the key the sync task polls.
-uploadArtifact :: AWS.Env -> Text -> FilePath -> IO ()
-uploadArtifact awsEnv bucket dbPath = runResourceT $ do
-    body <- liftIO (AWS.chunkedFile 1_048_576 dbPath)
-    void (AWS.send awsEnv (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey (toText (takeFileName dbPath))) body))
+-- Publish the advisory artifact through Pilot's real one-shot pipeline: fetch the
+-- corpus zip from a local stub, compile it, and upload it to the bucket via
+-- 'exportToS3' -- the same compile-then-upload cycle the Pilot worker runs, not a
+-- direct PutObject. The compile output lands in its own temp dir, distinct from the
+-- proxy's sync data dir, mirroring the separate-disk Pilot and proxy roles. The
+-- upload target (bucket and endpoint) is read from the same 'AppConfig' the proxy booted.
+publishViaPilot :: AppConfig -> CorpusVersion -> IO ()
+publishViaPilot appCfg v = do
+    zipBytes <- osvCorpusZip v
+    logEnv <- newTestLogEnv
+    withStub status200 zipBytes $ \stub ->
+        withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
+            void $
+                runPilotCompile
+                    logEnv
+                    telemetryDisabled
+                    appCfg
+                    PilotCompileOptions
+                        { pcoEcosystem = "npm"
+                        , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
+                        , pcoOutDir = pilotDir
+                        , pcoUpload = True
+                        }
 
 -- The in-process proxy: the real serve application over the fast-lane policy
 -- (the quarantine plus AllowIfRemediatesCve, both at their shipped defaults),

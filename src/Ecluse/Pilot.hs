@@ -100,7 +100,7 @@ exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => 
 exportNpm telemetry appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
     dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (cfgOsvDataDir appCfg) "npm" (osvExportUrl (cfgOsvExportBaseUrl appCfg) "npm")
-    exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucketName dbPath
+    exportToS3 (telemetryTracerProvider telemetry) (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucketName dbPath
 
 {- | Options for the one-shot 'runPilotCompile' mode: which ecosystem's export
 to compile, where to fetch it from, and where the artifact lands.
@@ -149,5 +149,5 @@ runPilotCompile logEnv telemetry appCfg opts = do
             when (pcoUpload opts) $
                 case cfgVulnerabilityDatabaseBucket appCfg of
                     Nothing -> throwIO PilotUploadUnconfigured
-                    Just bucket -> exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dbFile
+                    Just bucket -> exportToS3 (telemetryTracerProvider telemetry) (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dbFile
             pure dbFile
