@@ -1,16 +1,14 @@
 # Stan configuration for Écluse. The `stan` job runs Stan at this floor and FAILS on any
-# finding above it (a visible red signal), but it is NOT a CI-gate dependency, so it never
-# blocks a merge. `task stan` reproduces it and prints "clean at the configured floor" when
-# nothing remains; `task stan-all` shows the full set, including the Style findings this floor
-# drops.
+# finding above it, and it IS a CI-gate dependency, so a finding above the floor blocks the
+# merge. `task stan` reproduces it and prints "clean at the configured floor" when nothing
+# remains; `task stan-all` shows the full set, including the Style findings this floor drops.
 #
 # The floor drops the Style severity (cosmetic opinions we have not adopted) and, by explicit
 # whole-inspection EXCLUDE, three inspections whose findings here are correct by construction
 # (see below). Everything else stays ARMED: the Performance severity, and the safety signal of
 # partial functions (#Partial) and the anti-pattern / potential-bug findings (#AntiPattern,
-# #PotentialBug). A finding in an armed inspection is meant to fail the job and be triaged:
-# fixed at source, or accepted only by an explicit `ignore` decision pinned to its source line
-# below.
+# #PotentialBug). A finding in an armed inspection is meant to fail the gate and be triaged:
+# fixed at source, or accepted only by an explicit decision recorded below.
 #
 # Armed and clean at source (no findings; listed so a regression is recognised, not re-triaged):
 #   * #Partial STAN-0010 / STAN-0011 / STAN-0012 (partial succ / pred / toEnum): the sum types
@@ -32,19 +30,20 @@
 #     that rot has produced a phantom miscount before; a whole-inspection exclude has no rot
 #     vector, mirroring the STAN-0213 exclude. The cost is that the #Infinite-on-list signal goes
 #     dark, which is low value where no infinite list is held.
+#
+# STAN-0212 (unsafe functions) stays ARMED everywhere except one dedicated module, so it still
+# catches a real `unsafePerformIO` or `unsafeCoerce` anywhere it matters, including Ecluse.Config
+# itself. The only accepted finding is the compile-time `embedFile` splice of the committed
+# default config (a Template Haskell embed of an in-repo asset, safe by construction), which now
+# lives alone in Ecluse.Config.DefaultConfig. Because that module holds nothing but the embed, its
+# source lines never shift, so the exclude is scoped to the FILE (like the whole-inspection
+# excludes above) rather than pinned to a line and column. A file-scoped exclude has no rot vector,
+# where the old per-observation `OBS-STAN-0212-…:<line>:<col>` pins rotted every time Config.hs
+# moved and left the floor red until they were re-pinned.
 check =
   [ { type = "Exclude", severity = "Style", scope = "all" }
   , { type = "Exclude", id = "STAN-0213", scope = "all" }
   , { type = "Exclude", id = "STAN-0103", scope = "all" }
   , { type = "Exclude", id = "STAN-0101", scope = "all" }
+  , { type = "Exclude", id = "STAN-0212", file = "src/Ecluse/Config/DefaultConfig.hs" }
   ]
-
-# STAN-0212 (unsafe functions) stays ARMED, so it still catches a real `unsafePerformIO` or
-# `unsafeCoerce`. The only accepted findings are the two compile-time `embedFile` splices of the
-# committed default config: a Template Haskell embed of an in-repo asset, safe by construction.
-# These two pins are accepted as rot-prone but stable (the config embed rarely moves), the trade
-# for keeping the inspection armed rather than excluding it wholesale.
-[[ignore]]
-  id = "OBS-STAN-0212-ZUcJjk-55:25"   # Config.hs:55 `$(embedFile "config/default.yaml")` in defaultPolicy
-[[ignore]]
-  id = "OBS-STAN-0212-ZUcJjk-104:39"  # Config.hs:104 `$(embedFile "config/default.yaml")` in parseDefaultAst

@@ -260,6 +260,7 @@ library
     Ecluse.Config
     Ecluse.CLI
     Ecluse.Config.Aeson
+    Ecluse.Config.DefaultConfig
     Ecluse.Config.Parser
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
