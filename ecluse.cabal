@@ -457,6 +457,7 @@ library ecluse-test-support
   hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Containers
+    Ecluse.Test.Credential
     Ecluse.Test.Cve
     Ecluse.Test.Metrics
     Ecluse.Test.Osv

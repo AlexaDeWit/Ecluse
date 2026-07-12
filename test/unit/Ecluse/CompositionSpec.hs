@@ -29,7 +29,6 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Core.Credential (unSecret)
-import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
@@ -43,6 +42,7 @@ import Ecluse.Core.Server.Context (
     PublishDeps (..),
  )
 import Ecluse.Core.Server.Response (appendHelp)
+import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Rules (inertRuleDeps)
 

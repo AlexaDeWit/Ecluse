@@ -20,14 +20,12 @@ import Ecluse.Core.Telemetry.Metrics (
     LabelKey,
     MirrorResult (..),
     ReasonClass (..),
-    StatusClass (Status2xx, Status3xx, Status4xx, Status5xx, StatusOther),
     breakerStateCode,
     labelKey,
     labelKeyName,
     metricAttributes,
     metricName,
     renderLabel,
-    statusClassOf,
  )
 import Ecluse.Test.Metrics (allLabelKeys, allMetricNames, highCardinalityKeys)
 
@@ -153,13 +151,6 @@ renderSpec = describe "renderLabel" $ do
         fst (renderLabel (LCacheResult Hit)) `shouldBe` "result"
         fst (renderLabel (LMirrorResult Published)) `shouldBe` "result"
         fst (renderLabel (LCredentialResult Refreshed)) `shouldBe` "result"
-
-    it "classifies an HTTP status into its bounded class" $ do
-        statusClassOf 200 `shouldBe` Status2xx
-        statusClassOf 301 `shouldBe` Status3xx
-        statusClassOf 404 `shouldBe` Status4xx
-        statusClassOf 503 `shouldBe` Status5xx
-        statusClassOf 100 `shouldBe` StatusOther
 
 -- The bounded-label universe: every label constructible from a finite value domain
 -- (the operator-bounded `rule` excepted, since its domain is configuration, not an

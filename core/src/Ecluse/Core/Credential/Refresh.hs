@@ -61,7 +61,6 @@ module Ecluse.Core.Credential.Refresh (
     RefreshReporter (..),
     noRefreshReporter,
     CredentialReporters (..),
-    noCredentialReporters,
 
     -- * Failure
     CredentialError (..),
@@ -73,7 +72,6 @@ import Ecluse.Core.Credential.Refresh.Internal (
     RefreshConfig (..),
     RefreshReporter (..),
     defaultRefreshConfig,
-    noCredentialReporters,
     noRefreshReporter,
     refreshingProvider,
  )

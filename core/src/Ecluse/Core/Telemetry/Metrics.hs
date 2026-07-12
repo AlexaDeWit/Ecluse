@@ -41,7 +41,6 @@ module Ecluse.Core.Telemetry.Metrics (
     ReasonClass (..),
     Upstream (..),
     StatusClass (..),
-    statusClassOf,
     Provider (..),
     Cause (..),
     Tier (..),
@@ -421,17 +420,6 @@ labelValue = \case
     LRelayAnomaly a -> case a of
         RelayOddShape -> "odd_shape"
         RelayNonSuccess -> "non_success"
-
-{- | Classify an HTTP status code into its bounded 'StatusClass', so a status never
-becomes a per-code label.
--}
-statusClassOf :: Int -> StatusClass
-statusClassOf code
-    | code >= 200 && code < 300 = Status2xx
-    | code >= 300 && code < 400 = Status3xx
-    | code >= 400 && code < 500 = Status4xx
-    | code >= 500 && code < 600 = Status5xx
-    | otherwise = StatusOther
 
 {- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument is
 recorded with. Every value is bounded, so the attribute set an instrument ever sees is

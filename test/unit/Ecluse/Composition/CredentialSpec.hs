@@ -28,9 +28,9 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Config (AppConfig (cfgMounts), CredentialBackend (..))
 import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
-import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
+import Ecluse.Test.Credential (noCredentialReporters)
 
 spec :: Spec
 spec = do
