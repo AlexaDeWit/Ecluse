@@ -92,9 +92,7 @@ a 'ParseError', as before -- distinct from a present-but-different name.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
-    parsePackageInfo,
     parsePackageInfoFromValue,
-    parseVersionDetails,
     parseVersionList,
     projectVersionEntry,
 
@@ -145,7 +143,7 @@ import Ecluse.Core.Registry.Npm.Wire (
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
-import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
+import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
 {- The packument as this projection needs to read it: the wire fields plus the
 per-version @_npmUser@ that "Ecluse.Core.Registry.Npm.Wire" intentionally leaves off
@@ -263,21 +261,6 @@ data Projection
       NameMismatch Text
     deriving stock (Eq, Show)
 
-{- | Project a fetched metadata response into the packument-level 'PackageInfo' for
-the requested package. Pure and total: a body that is not a decodable npm packument
-is reported as a 'ParseError', never thrown.
-
-The requested name is the validation authority. A document whose self-reported name
-__disagrees__ with the request cannot yield a valid view of the requested package,
-so it is reported as a 'ParseError' here -- the typed-view accessor admits only a
-matching document. The finer 'Projection' (a mismatch distinguished from a decode
-failure) is surfaced by 'parsePackageInfoFromValue', which the serve layer uses to
-distinguish a misreporting origin from an undecodable one.
--}
-parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
-parsePackageInfo requestedName resp =
-    decodePackument resp >>= projectValidated requestedName >>= requireMatch
-
 {- | Project an __already-decoded__ packument @Value@ into a 'Projection' for the
 requested package, without re-parsing any bytes. This is the entry point the serve
 layer uses when it has already decoded the upstream body to a raw @Value@ (the
@@ -309,16 +292,6 @@ projectValidated requestedName pkmt = do
             then Projected info
             else NameMismatch (renderPackageName (infoName info))
 
-{- Collapse a 'Projection' to the typed view the handle's @parsePackageInfo@ field
-returns: a match is the 'PackageInfo'; a mismatch is a 'ParseError', because the
-typed-view accessor cannot yield a valid view of the requested package from a
-document that is for a different one. -}
-requireMatch :: Projection -> Either ParseError PackageInfo
-requireMatch = \case
-    Projected info -> Right info
-    NameMismatch reported ->
-        Left (ParseError ("upstream packument self-reported the name " <> reported <> ", which is not the requested package"))
-
 -- Project a decoded 'WirePackument' into the domain 'PackageInfo', taking the name
 -- from the upstream's self-reported @name@ (validated against the request by
 -- 'projectValidated'). Shared by the validating entry points and the version-detail
@@ -334,18 +307,6 @@ projectPackageInfo pkmt = do
             , infoInvalidEntries = wpInvalidEntries pkmt
             }
 
-{- | Project a fetched metadata response into the 'PackageDetails' for a single
-version. Fails with a 'ParseError' if the body does not decode or the requested
-version is absent from the packument.
--}
-parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
-parseVersionDetails resp version = do
-    info <- decodePackument resp >>= projectPackageInfo
-    case Map.lookup (renderVersion version) (infoVersions info) of
-        Just details -> Right details
-        Nothing ->
-            Left (ParseError ("version not present in packument: " <> renderVersion version))
-
 {- | Project a __single version object__ -- one entry of a packument's @versions@ map,
 as a raw 'Value' -- into its 'PackageDetails', given the requested package name, the
 version key it sits under, and its publish time (the packument's @time[version]@, if
@@ -357,7 +318,7 @@ decode (see "Ecluse.Core.Registry.Npm.SelectiveDecode"), which extracts only the
 version object and its publish time from the packument bytes, projects it through the
 __same__ code the whole-packument path runs over every version -- so the resulting
 'PackageDetails' is identical to @'Map.lookup'@-ing the version out of a full
-'parsePackageInfo'. The element-wise leniency is identical too: a version object missing
+'parsePackageInfoFromValue' projection. The element-wise leniency is identical too: a version object missing
 its @dist@\/@tarball@ (or otherwise unprojectable) yields 'Nothing', i.e. a genuine
 absence, never a half-built snapshot.
 -}

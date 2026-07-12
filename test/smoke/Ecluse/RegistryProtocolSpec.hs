@@ -32,8 +32,8 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmLimits, npmManager),
     fetchMetadataFormBounded,
  )
+import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated, Full),
     noValidators,
@@ -97,11 +97,11 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                 -- The typed channel reports the unreachable-registry case as a value.
                 pendingWith "npm registry unreachable (offline); smoke test skipped"
             Right response ->
-                case Project.parsePackageInfo isOdd response of
+                case projectNpmManifest defaultLimits isOdd (responseBody response) of
                     Left err ->
                         expectationFailure ("live packument failed to project: " <> show err)
-                    Right info -> do
-                        -- The data plane reached npm and the projection round-trips:
+                    Right (info, _raw) -> do
+                        -- The data plane reached npm and the live projection round-trips:
                         -- the package name comes back as published, and `latest` is
                         -- always a dist-tag.
                         renderPackageName (infoName info) `shouldBe` "is-odd"

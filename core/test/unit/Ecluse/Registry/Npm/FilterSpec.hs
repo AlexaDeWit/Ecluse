@@ -26,18 +26,18 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Filter (
     assembleMergedPackument,
     rewriteVersion,
  )
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
+import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan),
  )
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
 spec :: Spec
@@ -684,11 +684,15 @@ fixtureName v = npmName (nameOf v)
                 mkPackageName Npm (Just (mkScope scopeText)) bare
         _ -> mkPackageName Npm Nothing raw
 
--- | Project and decode the same bytes, so the 'PackageInfo' and 'Value' agree.
+{- | Project a fixture through the live serve projection ('projectNpmManifest') and hold
+onto the decoded 'Value' too, so the 'PackageInfo' and the 'Value' the assembly edits
+agree (they are the same parse). The requested name is the body's own self-reported name,
+so name validation is a guaranteed pass and these tests exercise filtering, not it.
+-}
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
     v <- decodeValue bs
-    info <- orFailParse (parsePackageInfo (fixtureName v) (RegistryResponse bs))
+    info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
     pure (info, v)
 
 {- | The outcome of the serve composition under test: the assembled served document
@@ -753,7 +757,7 @@ decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStr
 loadOrFail :: ByteString -> H.PropertyT IO (PackageInfo, Value)
 loadOrFail bs = do
     v <- decodeOrFail bs
-    info <- either (\e -> annotateShow e >> failure) pure (parsePackageInfo (fixtureName v) (RegistryResponse bs))
+    info <- either (\e -> annotateShow e >> failure) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
     pure (info, v)
 
 asObject :: Value -> KeyMap Value
@@ -820,6 +824,3 @@ topLevelKey key v = KeyMap.lookup key (asObject v)
 
 encode :: Text -> ByteString
 encode = encodeUtf8
-
-orFailParse :: Either ParseError a -> IO a
-orFailParse = either (\e -> fail ("unexpected ParseError: " <> show e)) pure
