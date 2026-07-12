@@ -50,11 +50,12 @@ import Ecluse.Integration.Ministack (
     freshQueueUrl,
     withMinistack,
  )
-import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Support (testServeAdmission)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
@@ -179,7 +180,8 @@ buildEnv queue mirrorUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv publishClient queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission publishClient queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
 
 -- The single npm mount: the public origin is the loopback upstream stub, the private
 -- origin is the 404 stub (so every request misses to public), and the mirror target is

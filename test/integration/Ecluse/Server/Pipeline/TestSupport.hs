@@ -64,7 +64,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (Version)
-import Ecluse.Runtime.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env (envQueue), newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (
     MountBinding (..),
     application,
@@ -72,6 +72,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -613,7 +614,8 @@ newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').

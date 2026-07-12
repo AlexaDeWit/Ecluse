@@ -36,9 +36,10 @@ import Ecluse.Integration.Ministack (
     unwrapQ,
     withMinistack,
  )
-import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Support (testServeAdmission)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
@@ -214,7 +215,8 @@ envFor queue mirrorUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- A scribe-free LogEnv (no stdout output during the integration run).
 newTestLogEnv :: IO LogEnv

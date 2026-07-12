@@ -37,9 +37,7 @@ Request handlers read this 'Env' through a per-request
 module Ecluse.Runtime.Env (
     -- * Composition root
     Env (..),
-    newEnv,
     newEnvWithAdmission,
-    withEnv,
     withEnvWithAdmission,
 
     -- * Runtime projections
@@ -58,7 +56,7 @@ import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
-import Ecluse.Core.Server.Admission (ServeAdmission, unlimitedServeAdmission)
+import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
 import Ecluse.Core.Worker (WorkerHeartbeat, WorkerPolicies, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
@@ -144,32 +142,26 @@ data Env = Env
     -}
     }
 
-{- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
-'Manager's (one per origin: the untrusted public\/artifact fetches and the trusted
-private upstream, both the validating TLS manager).
+{- | Assemble an 'Env' from its constructed handles, an explicit process-wide serve
+admission handle, and the two data-plane HTTP 'Manager's (one per origin: the untrusted
+public\/artifact fetches and the trusted private upstream, both the validating TLS
+manager). The executable passes the admission handle sized from its configured bound.
 
 The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
 arguments rather than built here: a 'Manager' owns a connection pool whose lifetime
-should be bracketed by the caller that also owns teardown (see 'withEnv'), and
-injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup --
+should be bracketed by the caller that also owns teardown (see 'withEnvWithAdmission'),
+and injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup,
 so it can be exercised in tests against in-memory handle doubles with no sockets
 opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnv = newEnvWithAdmission unlimitedServeAdmission
-
-{- | Assemble an 'Env' with an explicit process-wide serve admission handle. The
-executable uses this form with its configured bound; 'newEnv' retains the unlimited
-embedding default for tests whose subject is unrelated to overload.
--}
 newEnvWithAdmission :: ServeAdmission -> RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
 newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     -- The metric instruments are built once here from the telemetry handle: created on
     -- its meter provider when enabled, on the SDK's no-op meter when off (so they are
-    -- inert without an SDK). Building them in 'newEnv' keeps the construction the single
-    -- source of telemetry-derived state, so no caller threads a separate handle.
+    -- inert without an SDK). Building them in 'newEnvWithAdmission' keeps the construction
+    -- the single source of telemetry-derived state, so no caller threads a separate handle.
     metrics <- newMetrics telemetry
     -- The dd log identity is resolved from the (already-normalised) OTEL_* environment,
     -- the same precedence table the exporter uses, so logs and traces share one identity.
@@ -189,30 +181,11 @@ newEnvWithAdmission admission registry queue manager privateManager metadataCach
             , envWorkerHeartbeat = heartbeat
             }
 
-{- | Assemble an 'Env' and run an action within its scope -- the scope the server
-and worker run in. The composition root __borrows__ every resource it holds (the
-'Manager's, the 'Telemetry' providers); each is owned and torn down by the caller
-that supplied it, so this root has nothing of its own to release and needs no
-teardown bracket.
--}
-withEnv ::
-    (MonadIO m) =>
-    RegistryClient ->
-    MirrorQueue ->
-    Manager ->
-    Manager ->
-    MetadataCache ->
-    LogEnv ->
-    Telemetry ->
-    WorkerHeartbeat ->
-    (Env -> m a) ->
-    m a
-withEnv =
-    withEnvWithAdmission unlimitedServeAdmission
-
 {- | Assemble an 'Env' carrying an explicit serve admission handle and run an action
-within its scope. This is the production form of 'withEnv'; resource ownership is
-otherwise identical -- the root borrows its handles and releases nothing of its own.
+within its scope: the scope the server and worker run in. The composition root
+__borrows__ every resource it holds (the 'Manager's, the 'Telemetry' providers); each
+is owned and torn down by the caller that supplied it, so this root has nothing of its
+own to release and needs no teardown bracket.
 -}
 withEnvWithAdmission ::
     (MonadIO m) =>

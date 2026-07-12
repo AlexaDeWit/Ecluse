@@ -41,7 +41,7 @@ import Ecluse.Core.Rules (inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, unlimitedServeAdmission, withServeAdmission)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -197,7 +197,11 @@ a real (no-TLS) manager shared by both legs, a fresh cache, and an in-memory que
 -}
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
-    mkRuntimeWith unlimitedServeAdmission metricsPort
+    -- A generously-bounded admission the runtime carries but these tests never gate on
+    -- (the admission-specific cases wrap 'withServeAdmission' with their own tuned handle);
+    -- the high capacity keeps it from ever interfering.
+    admission <- newServeAdmission 1_000_000
+    mkRuntimeWith admission metricsPort
 
 mkRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
 mkRuntimeWith admission metricsPort = do

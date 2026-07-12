@@ -15,13 +15,14 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
-import Ecluse.Core.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (..), MetadataCache, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Runtime.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
+import Ecluse.Runtime.Env (Env (..), newEnvWithAdmission, newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if
@@ -58,9 +59,21 @@ so assembling an 'Env' opens no handle and writes nothing to stdout.
 newTestLogEnv :: IO LogEnv
 newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
--- | A metadata cache on the default config (touches no network).
+{- | A cache config for the assembly tests: a short TTL over modest entry and byte
+budgets. The exact tunables are immaterial here (no eviction is exercised); the
+fixture is local so the spec depends on no particular default-config export.
+-}
+testCacheConfig :: CacheConfig
+testCacheConfig =
+    CacheConfig
+        { cacheTtl = 60
+        , cacheMaxEntries = 1024
+        , cacheMaxBytes = 256 * 1024 * 1024
+        }
+
+-- | A metadata cache on the local test config (touches no network).
 newTestCache :: IO MetadataCache
-newTestCache = newMetadataCache defaultCacheConfig
+newTestCache = newMetadataCache testCacheConfig
 
 {- | The npm front door the split-ready server test drives: a single npm mount with
 no packument-serve or publish dependencies, assembled through the public binding
@@ -79,7 +92,8 @@ newTestEnv = do
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -101,7 +115,7 @@ ver = mkVersion Npm "1.0.0"
 
 spec :: Spec
 spec = do
-    describe "newEnv" $ do
+    describe "newEnvWithAdmission" $ do
         it "assembles an Env from injected handle doubles, with no network" $ do
             -- Construction must not touch the network: it only gathers the handles
             -- and the manager. A clean return is the assertion.
@@ -156,14 +170,15 @@ spec = do
             isNothing (telemetryTracerProvider (envTelemetry env)) `shouldBe` True
             isNothing (telemetryMeterProvider (envTelemetry env)) `shouldBe` True
 
-    describe "withEnv" $ do
+    describe "withEnvWithAdmission" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newTestMemoryQueue
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
-            withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
+            admission <- testServeAdmission
+            withEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
@@ -171,9 +186,10 @@ spec = do
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
+            admission <- testServeAdmission
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
+            outcome <- try (withEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"

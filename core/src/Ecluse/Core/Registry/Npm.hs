@@ -22,10 +22,11 @@ proxying tractable.
 
 == Streaming and buffering
 
-'Ecluse.Core.Registry.Npm.Request.artifactRequest' marks its request __non-decompressing__
-so a tarball is opaque binary that must reach the client byte-for-byte. The
-request is exposed so the web layer can relay the open body __without buffering
-the whole artifact in memory__. The mirror worker, which must read the whole
+The artifact request builders ('Ecluse.Core.Registry.Npm.Request.artifactRequestByFile'
+and 'Ecluse.Core.Registry.Npm.Request.artifactRequestByUrl') mark their request
+__non-decompressing__ so a tarball is opaque binary that must reach the client
+byte-for-byte. The request is exposed so the web layer can relay the open body
+__without buffering the whole artifact in memory__. The mirror worker, which must read the whole
 artifact to verify its integrity before publishing, buffers it (bounded) through
 'Ecluse.Core.Worker.Fetch.fetchArtifactBytes' instead.
 

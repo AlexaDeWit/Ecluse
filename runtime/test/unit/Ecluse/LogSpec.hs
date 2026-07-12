@@ -215,6 +215,21 @@ spec = do
                     line `shouldSatisfy` T.isInfixOf "DenyInstallTimeExecution"
                 _ -> expectationFailure "expected exactly one JSON log line"
 
+        it "round-trips a newline-bearing message: the decoded msg equals the exact original" $ do
+            let original = "denied\nfor cause" :: Text
+            captured <- captureStdout $ do
+                logEnv <- newLogEnv JsonLog (Environment "test")
+                runKatipT logEnv $
+                    logF deniedContext (Namespace ["serve"]) WarningS (logStr original)
+                _ <- closeScribes logEnv
+                pure ()
+            -- The escaped newline in the single physical JSONL line decodes back to the
+            -- exact newline-bearing message: the JSON string escaping is lossless, not
+            -- merely one-line-safe.
+            case filter (not . T.null) (T.lines captured) of
+                [line] -> lineMsg line `shouldBe` Just original
+                other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))
+
         it "writes a ConsoleLog event in the human-readable bracketed form" $ do
             captured <- captureStdout $ do
                 logEnv <- newLogEnv ConsoleLog (Environment "test")
@@ -263,6 +278,12 @@ spec = do
     isObjectValue = \case
         Right (Object _) -> True
         _ -> False
+
+    -- The top-level msg field decoded back from a serialised JSON log line.
+    lineMsg :: Text -> Maybe Text
+    lineMsg line = case eitherDecodeStrict (encodeUtf8 line) of
+        Right o -> parseMaybe (.: "msg") (o :: Object)
+        Left _ -> Nothing
 
     -- Newline-bearing messages whose escaping the JSONL line must preserve.
     escapeCases :: [(Text, Text)]
