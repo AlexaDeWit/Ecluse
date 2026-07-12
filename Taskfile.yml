@@ -383,6 +383,7 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/rewrite-haddock-dep-links.test.sh
+      - bash scripts/check-image-digest-pinning.test.sh
 
   weeder:
     desc: Report app-unreachable library code

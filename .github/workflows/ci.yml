@@ -257,6 +257,16 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
+      # Enforce the container-image digest-pinning invariant across the test harness
+      # and the workflow pull sites: every image a test tier pulls, runs, or builds
+      # FROM must be nailed to an immutable @sha256: digest, never a mutable tag (a tag
+      # can be re-pointed at a poisoned image; a digest cannot). Pure bash, so it runs
+      # as its own step and fails the gate fast if a tag (or a dependency-bot PR that
+      # rewrites a digest back to a tag) slips in. Precision and false-positive coverage
+      # are gated by scripts/check-image-digest-pinning.test.sh (task test-scripts).
+      - name: Enforce container image digest pinning
+        run: bash scripts/check-image-digest-pinning.sh
+
       - name: Static checks
         env:
           GH_TOKEN: ${{ github.token }}
