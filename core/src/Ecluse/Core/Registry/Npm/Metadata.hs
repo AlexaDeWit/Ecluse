@@ -60,6 +60,7 @@ import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     RegistryResponse (responseBody),
  )
+import Ecluse.Core.Registry.Egress (enforceArtifactScheme, enforceArtifactSchemeDetails)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
@@ -72,8 +73,6 @@ import Ecluse.Core.Registry.Npm (
  )
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
-    enforceTarballScheme,
-    enforceTarballSchemeDetails,
     parsePackageInfoFromValue,
     projectName,
     projectVersionEntry,
@@ -142,7 +141,7 @@ fetchNpmManifest tracing config name =
             let body = responseBody response
              in spanMetadataDecode tracing name $
                     pure
-                        ( manifestOf (digestOf body) . first (enforceTarballScheme (npmBaseUrl config))
+                        ( manifestOf (digestOf body) . first (enforceArtifactScheme (npmBaseUrl config))
                             <$> projectNpmManifest (npmLimits config) name body
                         )
   where
@@ -198,7 +197,7 @@ fetchNpmVersion tracing config name version =
         Left fault -> pure (Left (fetchFaultError fault))
         Right response ->
             spanMetadataDecode tracing name $
-                pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
+                pure ((>>= enforceArtifactSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails' (or the
 typed 'MetadataError'), without decoding the other versions. Pure and total.

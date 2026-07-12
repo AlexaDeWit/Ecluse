@@ -96,16 +96,12 @@ module Ecluse.Core.Registry.Npm.Project (
     parseVersionList,
     projectVersionEntry,
 
-    -- * Egress-scheme normalisation
-    enforceTarballScheme,
-    enforceTarballSchemeDetails,
-
     -- * Name validation
     Projection (..),
     projectName,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), Object, Value (String), eitherDecodeStrict, withObject, (.!=), (.:?))
+import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -141,8 +137,6 @@ import Ecluse.Core.Registry.Npm.Wire (
     VersionManifest (..),
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
-import Ecluse.Core.Security (hostAddress)
-import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
 {- The packument as this projection needs to read it: the wire fields plus the
@@ -326,66 +320,6 @@ projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe
 projectVersionEntry name version publishedAt value =
     projectDetails name version publishedAt <$> parseMaybe parseJSON value
 
-{- | Normalise every served version's @dist.tarball@ scheme against the https-only
-egress policy ('Ecluse.Core.Security.Egress.resolveTarballUrl'), given the
-@upstreamBaseUrl@ the packument was served from. An https tarball is kept, a same-host
-@http@ tarball is __upgraded__ to https, and a version whose tarball is @http@ on a
-foreign host (or any non-http(s) URL) is __dropped__ from the served set and recorded as
-an 'Ecluse.Core.Package.InvalidVersionManifest' carrying the offending URL (the #486
-drop-and-record contract), so the version is never dialled in plaintext and the drop is
-observable.
-
-The enforcement applies only when the upstream is __https__ (in production every
-configured upstream is https by construction). A non-https upstream is the test\/dev
-loopback opt-in, whose tarballs are left untouched. Applied as a projection post-step at
-the fetch boundary, where the upstream URL is known, so the projection stays context-free.
--}
-enforceTarballScheme :: Text -> PackageInfo -> PackageInfo
-enforceTarballScheme upstreamBaseUrl info =
-    case httpsUpstreamHost upstreamBaseUrl of
-        Nothing -> info
-        Just upstreamHost ->
-            let (kept, drops) = Map.foldrWithKey (step upstreamHost) (Map.empty, []) (infoVersions info)
-             in info{infoVersions = kept, infoInvalidEntries = infoInvalidEntries info <> drops}
-  where
-    step upstreamHost rawVersion details (keptAcc, dropAcc) =
-        case resolveDetails upstreamHost details of
-            Right ok -> (Map.insert rawVersion ok keptAcc, dropAcc)
-            Left (reason, badUrl) ->
-                (keptAcc, InvalidEntry InvalidVersionManifest rawVersion (String badUrl) reason : dropAcc)
-
-{- | The single-version form of 'enforceTarballScheme' for the selective decode path:
-'Nothing' drops the version (its @dist.tarball@ is non-https and not upgradeable), a
-'Just' carries the version with each artifact's URL normalised to https. A non-https
-(test\/dev loopback) upstream leaves the version untouched.
--}
-enforceTarballSchemeDetails :: Text -> PackageDetails -> Maybe PackageDetails
-enforceTarballSchemeDetails upstreamBaseUrl details =
-    case httpsUpstreamHost upstreamBaseUrl of
-        Nothing -> Just details
-        Just upstreamHost -> rightToMaybe (resolveDetails upstreamHost details)
-
--- The bare host of an @https@ upstream base URL, or 'Nothing' for a non-https (test/dev
--- loopback) upstream whose tarballs the scheme enforcement leaves untouched.
-httpsUpstreamHost :: Text -> Maybe Text
-httpsUpstreamHost baseUrl
-    | "https://" `T.isPrefixOf` T.toLower baseUrl = Just (hostAddress baseUrl)
-    | otherwise = Nothing
-
--- Resolve every artifact of a version against the egress policy: 'Right' the version
--- with each @artUrl@ normalised to https, or 'Left' the drop reason and the first
--- offending URL.
-resolveDetails :: Text -> PackageDetails -> Either (Text, Text) PackageDetails
-resolveDetails upstreamHost details =
-    (\arts -> details{pkgArtifacts = arts}) <$> traverse (resolveArtifact upstreamHost) (pkgArtifacts details)
-
--- Normalise one artifact's URL: keep https, upgrade a same-host http, drop otherwise.
-resolveArtifact :: Text -> Artifact -> Either (Text, Text) Artifact
-resolveArtifact upstreamHost art =
-    case resolveTarballUrl upstreamHost (artUrl art) of
-        Right resolved -> Right art{artUrl = registryUrlText resolved}
-        Left reason -> Left (reason, artUrl art)
-
 {- | Extract the list of available versions from a fetched metadata response, in
 the packument's @versions@ key order. Fails with a 'ParseError' only if the body
 does not decode.
@@ -484,7 +418,8 @@ digests: the legacy SHA-1 @shasum@ and the modern @integrity@ SRI string. Each
 present, non-empty digest becomes an algorithm-tagged 'Hash'; a content-empty
 digest is treated as absent, so neither a real digest is dropped nor an empty one
 fabricated. The @dist.tarball@ URL is carried verbatim here; its scheme is normalised
-against the https-only egress policy afterward by 'enforceTarballScheme'.
+against the https-only egress policy afterward by
+'Ecluse.Core.Registry.Egress.enforceArtifactScheme'.
 -}
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =

@@ -122,6 +122,7 @@ library ecluse-core
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Adapter
     Ecluse.Core.Registry.Adapter.Types
+    Ecluse.Core.Registry.Egress
     Ecluse.Core.Registry.Fault
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
@@ -541,6 +542,7 @@ test-suite ecluse-core-unit
     Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.AdapterSpec
+    Ecluse.Registry.EgressSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec
