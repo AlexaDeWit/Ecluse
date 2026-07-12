@@ -80,7 +80,7 @@ jobs:
         run: >-
           bash scripts/docker-prepull.sh
           ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
-          otel/opentelemetry-collector:0.119.0
+          otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
 
       - name: Cabal checks (build, coverage, doctest, cabal-check)
         run: nix develop .#ci --command task cabal-checks
@@ -227,8 +227,8 @@ jobs:
           bash scripts/docker-prepull.sh
           ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
           otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
-          verdaccio/verdaccio:5
-          nginx:alpine
+          verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
+          nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
       - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
         run: nix develop --command task test-e2e

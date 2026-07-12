@@ -229,10 +229,12 @@ data Collector = Collector
 collectorPort :: TC.Port
 collectorPort = 4318
 
--- A pinned OTLP Collector image. The core distribution carries the OTLP receiver and
--- the @debug@ exporter the assertion reads.
+-- A pinned OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest
+-- rather than the mutable tag: a supply-chain tool never pulls a tag, which could be
+-- re-pointed at a poisoned image. This digest matches the e2e harness's collector pin. The
+-- core distribution carries the OTLP receiver and the @debug@ exporter the assertion reads.
 collectorImage :: Text
-collectorImage = "otel/opentelemetry-collector:0.119.0"
+collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
 {- A derived image that bakes the @--config env:OTELCOL_CONFIG@ command into the
 collector. testcontainers 0.5.3 appends @setCmd@ to @docker start@ (which rejects it),

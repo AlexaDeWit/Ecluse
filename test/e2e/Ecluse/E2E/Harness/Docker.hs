@@ -124,8 +124,11 @@ withGlobalDataPlane action = do
                     verd = "ecluse-e2e-global-verd-" <> sfx
                     stub = "ecluse-e2e-global-stub-" <> sfx
                     mini = "ecluse-e2e-global-mini-" <> sfx
+                    -- verdaccio/verdaccio:5, pinned by its multi-arch index digest: a
+                    -- supply-chain tool never pulls a mutable tag (a tag can be re-pointed at
+                    -- a poisoned image; an immutable @sha256@ digest cannot).
                     verdRun =
-                        (dockerRun verd net "verdaccio/verdaccio:5")
+                        (dockerRun verd net "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c")
                             { drAliases = ["verdaccio"]
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
@@ -133,8 +136,9 @@ withGlobalDataPlane action = do
                     -- One nginx terminates TLS for both registry stubs, so it answers to two
                     -- in-network aliases (`upstream` and `mirror`) -- the multi-alias the raw
                     -- docker CLI supports and testcontainers 0.5.3.0 does not.
+                    -- nginx:alpine, pinned by digest for the same supply-chain reason.
                     stubRun =
-                        (dockerRun stub net "nginx:alpine")
+                        (dockerRun stub net "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa")
                             { drAliases = ["upstream", "mirror"]
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
