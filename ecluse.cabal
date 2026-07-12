@@ -160,6 +160,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Internal
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
+    Ecluse.Core.Server.RoutePattern
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
     Ecluse.Core.Supervision
@@ -546,6 +547,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.PublishSpec
     Ecluse.Registry.Npm.RequestSpec
     Ecluse.Registry.Npm.RouteSpec
+    Ecluse.Registry.Npm.RouteTableSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.Registry.PublishSpec

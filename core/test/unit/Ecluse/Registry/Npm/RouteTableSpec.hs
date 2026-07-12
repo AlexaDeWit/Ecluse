@@ -1,0 +1,165 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+-- TupleSections: the frozen reference classifier copies 'takeScoped''s (,rest) form.
+{-# LANGUAGE TupleSections #-}
+
+{- | The pattern-derived npm classifier is held against a __frozen reference__: an
+exact copy of the hand-written classifier as it stood before the derivation. The
+equivalence property drives both with generated requests and asserts they agree, so
+the move to 'Ecluse.Core.Server.RoutePattern' is proven behaviour-preserving on the
+security-critical routing path.
+-}
+module Ecluse.Registry.Npm.RouteTableSpec (spec) where
+
+import Data.Text qualified as T
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
+import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
+import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.QuickCheck (modifyMaxSuccess)
+
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
+import Ecluse.Core.Registry.Npm.Route (classify)
+import Ecluse.Core.Server.Route (Filename (Filename), Route (..), isSafeComponent)
+import Ecluse.Core.Version (mkVersion)
+
+spec :: Spec
+spec = do
+    describe "classify is derived from npmPatterns (equivalence to the frozen reference)" $ do
+        modifyMaxSuccess (const 5000) $
+            it "agrees with the reference classifier over generated requests" $
+                hedgehog $ do
+                    method <- forAll genMethod
+                    segments <- forAll genSegments
+                    classify method segments === referenceClassify method segments
+
+        -- Worked examples: also documentation of the grammar the engine now derives.
+        it "GET /-/ping is the liveness probe" $
+            classify methodGet ["-", "ping"] `shouldBe` Ping
+        it "GET /-/v1/search is the (unsupported) search route" $
+            classify methodGet ["-", "v1", "search"] `shouldBe` Search
+        it "GET /{package} is a packument" $
+            classify methodGet ["lodash"] `shouldBe` Packument (mkPackageName Npm Nothing "lodash")
+        it "both scoped-name wire encodings normalise to the same packument" $
+            classify methodGet ["@scope", "pkg"] `shouldBe` classify methodGet ["@scope/pkg"]
+        it "GET /{package}/-/{file}.tgz is a tarball" $
+            classify methodGet ["lodash", "-", "lodash-1.0.0.tgz"]
+                `shouldBe` Tarball (mkPackageName Npm Nothing "lodash") (mkVersion Npm "1.0.0") (Filename "lodash-1.0.0.tgz")
+        it "a tarball whose basename is for another package is denied (path confusion)" $
+            classify methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Unsupported
+        it "PUT /{package} is a publish" $
+            classify methodPut ["lodash"] `shouldBe` Publish (mkPackageName Npm Nothing "lodash")
+        it "the publish path treats a lone \"-\" as a package (the read/write asymmetry)" $
+            classify methodPut ["-"] `shouldBe` Publish (mkPackageName Npm Nothing "-")
+        it "an unknown meta-route denies" $
+            classify methodGet ["-", "bogus"] `shouldBe` Unsupported
+        it "a HEAD reads like a GET" $
+            classify methodHead ["lodash"] `shouldBe` Packument (mkPackageName Npm Nothing "lodash")
+
+-- Generators -----------------------------------------------------------------
+
+genMethod :: Gen Method
+genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
+
+{- | Mount-relative segment lists that exercise the tricky grammar: scoped names in
+both encodings, the reserved @"-"@ prefix, tarball shapes, hostile components, and
+random fuzz.
+-}
+genSegments :: Gen [Text]
+genSegments = Gen.list (Range.linear 0 4) genSegment
+
+genSegment :: Gen Text
+genSegment =
+    Gen.choice
+        [ Gen.element
+            [ "lodash"
+            , "@scope/pkg"
+            , "@scope"
+            , "pkg"
+            , "-"
+            , "-foo"
+            , "ping"
+            , "v1"
+            , "search"
+            , ".."
+            , "."
+            , "foo/bar"
+            , "lodash-1.0.0.tgz"
+            , "code-frame-7.0.0.tgz"
+            , ""
+            , "@"
+            , "@/x"
+            , "@scope/"
+            ]
+        , Gen.text (Range.linear 0 8) (Gen.element ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', '1', '2', '3', '4'])
+        ]
+
+-- The frozen reference classifier --------------------------------------------
+--
+-- An exact copy of the hand-written npm classifier as it stood before it was derived
+-- from 'npmPatterns'. It shares no code with the implementation under test, so the
+-- equivalence property is a genuine cross-check of the pattern engine, not a tautology.
+-- Scaffolding for the derivation; safe to retire once confidence is banked.
+
+referenceClassify :: Method -> [Text] -> Route
+referenceClassify method segments
+    | method == methodPut = refPublish segments
+    | otherwise = refRead segments
+
+refRead :: [Text] -> Route
+refRead ("-" : meta) = refMeta meta
+refRead segments = refPackage segments
+
+refPublish :: [Text] -> Route
+refPublish segments = case refTakePackage segments of
+    Just (name, []) -> Publish name
+    _ -> Unsupported
+
+refMeta :: [Text] -> Route
+refMeta = \case
+    ["ping"] -> Ping
+    ["v1", "search"] -> Search
+    _ -> Unsupported
+
+refPackage :: [Text] -> Route
+refPackage segments = case refTakePackage segments of
+    Nothing -> Unsupported
+    Just (name, rest) -> refDispatch name rest
+  where
+    refDispatch name = \case
+        [] -> Packument name
+        ["-", file] | isSafeComponent file -> refTarball name file
+        _ -> Unsupported
+
+refTakePackage :: [Text] -> Maybe (PackageName, [Text])
+refTakePackage [] = Nothing
+refTakePackage (seg : rest)
+    | "@" <- T.take 1 seg = refTakeScoped seg rest
+    | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
+    | otherwise = Nothing
+
+refTakeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
+refTakeScoped seg rest =
+    case T.breakOn "/" (T.drop 1 seg) of
+        (scope, base)
+            | not (T.null base) -> (,rest) <$> refScopedName scope (T.drop 1 base)
+        _ -> case rest of
+            (base : more) -> (,more) <$> refScopedName (T.drop 1 seg) base
+            _ -> Nothing
+
+refScopedName :: Text -> Text -> Maybe PackageName
+refScopedName scope base
+    | isSafeComponent scope && isSafeComponent base =
+        Just (mkPackageName Npm (Just (mkScope scope)) base)
+    | otherwise = Nothing
+
+refTarball :: PackageName -> Text -> Route
+refTarball name file =
+    case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
+        Just version
+            | not (T.null version) -> Tarball name (mkVersion Npm version) (Filename file)
+        _ -> Unsupported

@@ -11,8 +11,12 @@ path to a shared "Ecluse.Core.Server.Route".
 'classify' turns an npm request -- its HTTP method and the already-mount-stripped,
 percent-decoded path segments -- into a 'Route', so the whole npm routing table is
 unit-testable with __no server__: feed it a method and segments, assert the
-'Route'. The agnostic dispatcher carries a route classifier per mount; this module
-is npm's, wired in at the composition root.
+'Route'. It is __derived__ from 'npmPatterns', an ordered list of declarative
+'Ecluse.Core.Server.RoutePattern.RoutePattern's the generic engine matches, so the
+grammar is a value rather than hand-written control flow (which lets the same
+description later render its OpenAPI path template for the manifest). The agnostic
+dispatcher carries a route classifier per mount; this module is npm's, wired in at
+the composition root.
 
 A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the match:
 a @PUT@ over a bare-package path is a 'Publish', while every read method (@GET@,
@@ -64,11 +68,18 @@ module Ecluse.Core.Registry.Npm.Route (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types.Method (StdMethod (GET, PUT), methodPut)
+import Network.HTTP.Types.Method (StdMethod (GET, PUT))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
+import Ecluse.Core.Server.RoutePattern (
+    Capture (Capture, capConsume),
+    MethodMatch (MethodPut, MethodRead),
+    PatternSeg (SegCap, SegLit),
+    RoutePattern (RoutePattern),
+    classifyWith,
+ )
 import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Lit, Param), RouteSpec (RouteSpec))
 import Ecluse.Core.Version (Version, mkVersion)
 
@@ -82,55 +93,101 @@ a real package name can never begin with @\'-\'@; only then is the path read as 
 package request. See the module header for the npm conventions this encodes.
 -}
 classify :: Classifier
-classify method segments
-    | method == methodPut = classifyPublish segments
-    | otherwise = classifyRead segments
+classify = classifyWith npmPatterns
 
-{- Classify a read request's path (any non-@PUT@ method): reserved meta-routes
-first, then a package request. A @HEAD@ takes this same path as its @GET@ -- the
-dispatcher answers it bodiless -- so the read grammar is method-independent. -}
-classifyRead :: [Text] -> Route
-classifyRead ("-" : meta) = classifyMeta meta
-classifyRead segments = classifyPackage segments
+{- | npm's route grammar as data: the ordered 'RoutePattern's the front door routes
+on ('classify', via 'Ecluse.Core.Server.RoutePattern.classifyWith'). The pattern
+__structure__ (the literal segments, the capture arity, the ordering, the
+packument-vs-tarball split) lives here; the security-critical __leaf__ parsing stays
+in the named functions the captures and builders reference ('takePackage' for a
+package unit, 'tarballRoute' for the artifact coordinate).
 
-{- Classify a @PUT@ as an npm publish. npm publishes a package with @PUT \/{pkg}@,
-the version manifest and tarball carried in the body, so a publish is exactly a
-__bare-package__ path (no trailing segments) -- both scoped encodings handled by
-'takePackage'. A @PUT@ to anything else (a tarball slot, a meta-route, trailing
-junk) is 'Unsupported' (deny by default); the version is /not/ read from the path
-here -- it lives in the relayed document. -}
-classifyPublish :: [Text] -> Route
-classifyPublish segments =
-    case takePackage segments of
-        Just (name, []) -> Publish name
-        _ -> Unsupported
-
-{- Classify a reserved meta-route -- the segments __after__ the leading @"-"@.
-Only the routes the proxy actually serves are recognised; every other meta-route
-is 'Unsupported' (never re-interpreted as a package).
+Ordering follows npm's conventions (see the module header): the reserved meta-routes
+(@\/-\/ping@, @\/-\/v1\/search@) are literal and tried first, and the read package
+capture 'capPackageRead' refuses a bare leading @"-"@ (the meta prefix, never a
+read package), so an unrecognised @\/-\/…@ read denies rather than being read as a
+package. The publish capture 'capPackage' does not refuse it, matching the front
+door's existing asymmetry (the write path never treated a leading @"-"@ as a meta-route).
 -}
-classifyMeta :: [Text] -> Route
-classifyMeta = \case
-    ["ping"] -> Ping
-    ["v1", "search"] -> Search
-    _ -> Unsupported
+npmPatterns :: [RoutePattern NpmCap]
+npmPatterns =
+    [ RoutePattern MethodRead [SegLit "-", SegLit "ping"] (buildConst Ping)
+    , RoutePattern MethodRead [SegLit "-", SegLit "v1", SegLit "search"] (buildConst Search)
+    , RoutePattern MethodRead [SegCap capPackageRead, SegLit "-", SegCap capFilename] buildTarball
+    , RoutePattern MethodRead [SegCap capPackageRead] buildPackument
+    , RoutePattern MethodPut [SegCap capPackage] buildPublish
+    ]
 
-{- Classify a non-meta path as a package request. Splits off the leading
-package unit (handling both scoped encodings) and dispatches on what trails it: a
-bare package is a 'Packument', @\/-\/{file}.tgz@ a 'Tarball' when its basename
-parses for the package, anything else 'Unsupported'.
+{- | The captured values npm's routes produce: a parsed package unit, or a raw,
+safety-checked artifact file name. Each pattern's builder consumes these positionally.
 -}
-classifyPackage :: [Text] -> Route
-classifyPackage segments =
-    case takePackage segments of
-        Nothing -> Unsupported
-        Just (name, rest) -> dispatch name rest
-  where
-    dispatch name = \case
-        [] -> Packument name
-        ["-", file]
-            | isSafeComponent file -> tarballRoute name file
-        _ -> Unsupported
+data NpmCap
+    = NpmPackage PackageName
+    | NpmFilename Text
+
+-- | A builder for a route with no captures (the literal meta-routes @ping@ and @search@).
+buildConst :: Route -> [NpmCap] -> Maybe Route
+buildConst route _ = Just route
+
+-- | @GET \/{package}@: a bare package unit is a packument request.
+buildPackument :: [NpmCap] -> Maybe Route
+buildPackument = \case
+    [NpmPackage name] -> Just (Packument name)
+    _ -> Nothing
+
+-- | @PUT \/{package}@: a bare package unit under the write method is a publish.
+buildPublish :: [NpmCap] -> Maybe Route
+buildPublish = \case
+    [NpmPackage name] -> Just (Publish name)
+    _ -> Nothing
+
+{- | @GET \/{package}\/-\/{filename}@: an artifact request. 'tarballRoute' applies
+the __cross-capture__ path-confusion check (the file's basename must parse for /this/
+package) and reads the version, denying a mismatched name (a 'Just' 'Unsupported',
+never a fabricated coordinate).
+-}
+buildTarball :: [NpmCap] -> Maybe Route
+buildTarball = \case
+    [NpmPackage name, NpmFilename file] -> Just (tarballRoute name file)
+    _ -> Nothing
+
+{- | The package capture as the __publish__ path reads it: one npm package unit, both
+scoped wire encodings handled by 'takePackage' (which may consume one or two segments).
+Accepts any component 'takePackage' accepts, including a lone @"-"@ (a package literally
+named @"-"@), matching @classifyPublish@'s prior behaviour.
+-}
+capPackage :: Capture NpmCap
+capPackage =
+    Capture
+        "package"
+        "The package name, URL-encoded; a scoped name is `@scope%2Fname`."
+        (fmap (first NpmPackage) . takePackage)
+
+{- | The package capture as the __read__ paths (packument, tarball) read it: as
+'capPackage', but a bare leading @"-"@ segment is refused, since a read of @\/-\/…@ is
+a reserved meta-route, never a package (a real npm package name never is a lone @"-"@).
+-}
+capPackageRead :: Capture NpmCap
+capPackageRead =
+    capPackage
+        { capConsume = \case
+            "-" : _ -> Nothing
+            segs -> capConsume capPackage segs
+        }
+
+{- | The artifact-file capture: one segment, accepted only when it is a safe component
+('isSafeComponent'); the coordinate parse (the @.tgz@ basename and the version) is
+'tarballRoute''s, applied in 'buildTarball'.
+-}
+capFilename :: Capture NpmCap
+capFilename =
+    Capture
+        "filename"
+        "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`."
+        ( \case
+            seg : rest | isSafeComponent seg -> Just (NpmFilename seg, rest)
+            _ -> Nothing
+        )
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and
 the remaining segments. A leading segment beginning with @\'\@\'@ is a scoped
