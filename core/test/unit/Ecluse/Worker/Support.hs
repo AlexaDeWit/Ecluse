@@ -41,13 +41,12 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (receive),
+    MirrorQueue (ack, receive),
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
-    queueFault,
+    queueTransportFault,
  )
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact,
@@ -86,19 +85,21 @@ import Ecluse.Core.Worker (
  )
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 {- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__
 over a 'WorkerRuntime' of test doubles -- no application 'Ecluse.Env.Env', no
 OpenTelemetry SDK.
 
 This is the partition's proof that the worker is genuinely core: it constructs the worker
-runtime from a recording publish client, an in-memory queue, a real HTTP manager, a fresh
-heartbeat, and the worker metric/tracing port doubles, then runs the loop and the per-job
-processing through the core 'runWorkerM' against a scribe-less @katip@ environment. The
-integrity gate, the publish/ack/redeliver outcomes, the heartbeat, and the loop's
-catch-log-backoff supervision are all exercised over those doubles. The same paths are
-covered through a __real SQS queue__ in the integration suite's @Ecluse.WorkerSpec@; this
-pins that the loop runs over the ports.
+runtime from a recording publish client, the production in-memory queue (test-configured
+through "Ecluse.Test.Queue"), a real HTTP manager, a fresh heartbeat, and the worker
+metric/tracing port doubles, then runs the loop and the per-job processing through the
+core 'runWorkerM' against a scribe-less @katip@ environment. The integrity gate, the
+publish outcomes, the worker's ack decisions (observed at the handle; see
+'recordingAckQueue'), the heartbeat, and the loop's catch-log-backoff supervision are all
+exercised over those doubles. The same paths are covered through a __real SQS queue__ in
+the integration suite's @Ecluse.WorkerSpec@; this pins that the loop runs over the ports.
 -}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────────
@@ -274,8 +275,16 @@ directly to swap in 'mirrorListingClient' or 'probeUnreachableClient';
 -}
 withRuntimeRegistry :: (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimeRegistry mkClient policies metricsPort body = do
+    queue <- newTestMemoryQueue
+    withRuntimeQueue queue mkClient policies metricsPort (`body` queue)
+
+{- | 'withRuntimeRegistry' over a __caller-supplied__ queue, so a test can observe
+the worker's queue-side decisions on a wrapped handle (see 'recordingAckQueue') or
+drive the loop against a misbehaving one.
+-}
+withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
+withRuntimeQueue queue mkClient policies metricsPort body = do
     logRef <- newIORef (PublishLog [] [])
-    queue <- newInMemoryQueue
     manager <- newManager defaultManagerSettings
     heartbeat <- newWorkerHeartbeat
     let runtime =
@@ -289,7 +298,7 @@ withRuntimeRegistry mkClient policies metricsPort body = do
                 , wrInjectTraceContext = id
                 , wrPolicies = policies
                 }
-    body runtime queue logRef
+    body runtime logRef
 
 {- | 'withRuntimeRegistry' with the recording publish client answering the given
 publish outcome -- the common case.
@@ -310,26 +319,12 @@ withRuntime :: Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef 
 withRuntime = withRuntimeWith noopWorkerMetricsPort
 
 {- | Build a 'WorkerRuntime' over a caller-supplied queue (the publish client is the
-never-succeeding recording double, unused here) and run the body against it. Lets a
-test drive the supervised loop against a queue whose @receive@ misbehaves.
+never-consulted recording double) and run the body against it. Lets a test drive
+the supervised loop against a queue whose @receive@ misbehaves.
 -}
 withQueueRuntime :: MirrorQueue -> (WorkerRuntime -> IO a) -> IO a
-withQueueRuntime queue body = do
-    logRef <- newIORef (PublishLog [] [])
-    manager <- newManager defaultManagerSettings
-    heartbeat <- newWorkerHeartbeat
-    let runtime =
-            WorkerRuntime
-                { wrQueue = queue
-                , wrRegistry = recordingClient logRef (Right ())
-                , wrManager = manager
-                , wrHeartbeat = heartbeat
-                , wrMetrics = noopWorkerMetricsPort
-                , wrTracing = passthroughWorkerTracingPort
-                , wrInjectTraceContext = id
-                , wrPolicies = admitPolicies
-                }
-    body runtime
+withQueueRuntime queue body =
+    withRuntimeQueue queue (`recordingClient` Right ()) admitPolicies noopWorkerMetricsPort (\runtime _logRef -> body runtime)
 
 -- ── ingest re-evaluation fixtures ───────────────────────────────────────────────
 
@@ -525,12 +520,12 @@ poll again, not die.
 -}
 faultingReceiveQueue :: IORef Int -> IO MirrorQueue
 faultingReceiveQueue calls = do
-    base <- newInMemoryQueue
+    base <- newTestMemoryQueue
     pure
         base
             { receive = do
                 atomicModifyIORef' calls (\n -> (n + 1, ()))
-                pure (Left (queueFault TransportUnreachable "receive: simulated queue outage"))
+                pure (Left (queueTransportFault (transportFault TransportUnreachable "receive: simulated queue outage")))
             }
 
 {- | A queue whose @receive@ always __throws__, counting each call: the handle's
@@ -540,7 +535,7 @@ stays pinned by a test.
 -}
 throwingReceiveQueue :: IORef Int -> IO MirrorQueue
 throwingReceiveQueue calls = do
-    base <- newInMemoryQueue
+    base <- newTestMemoryQueue
     pure
         base
             { receive = do
@@ -571,19 +566,19 @@ unformable-URL arm, distinct from a reachable-but-failing fetch.
 unformableUrl :: Text
 unformableUrl = "not a url"
 
--- Enqueue a job on the in-memory double, unwrapping its never-faulting typed
+-- Enqueue a job on the test queue, unwrapping its never-faulting typed
 -- channel: a 'Left' is a broken test premise, failed loudly.
 enqueue_ :: MirrorQueue -> MirrorJob -> IO ()
 enqueue_ queue job =
     enqueue queue job >>= \case
-        Left fault -> fail ("enqueue faulted on the in-memory double: " <> show fault)
+        Left fault -> fail ("enqueue faulted on the test queue: " <> show fault)
         Right () -> pass
 
--- Receive the currently-visible batch, unwrapping the never-faulting typed channel.
+-- Receive the currently-queued batch, unwrapping the never-faulting typed channel.
 receive_ :: MirrorQueue -> IO [QueueMessage]
 receive_ queue =
     receive queue >>= \case
-        Left fault -> fail ("receive faulted on the in-memory double: " <> show fault)
+        Left fault -> fail ("receive faulted on the test queue: " <> show fault)
         Right messages -> pure messages
 
 -- Enqueue a job, receive it, and return its receipt handle so the per-job processing
@@ -595,18 +590,19 @@ enqueueAndReceive queue job = do
         [message] -> pure (msgReceipt message, job)
         other -> fail ("expected exactly one message, got " <> show other)
 
--- ── spec ────────────────────────────────────────────────────────────────────────
-
--- Poll the queue up to @n@ times, returning 'True' as soon as a message reappears
--- (the un-acked job redelivered). The in-memory double may hold a visibility-extended
--- message past one reclaim pass, so more than one poll can be needed.
-pollUntilRedelivered :: MirrorQueue -> Int -> IO Bool
-pollUntilRedelivered _ 0 = pure False
-pollUntilRedelivered queue n =
-    receive queue >>= \case
-        Right [] -> pollUntilRedelivered queue (n - 1)
-        Right _ -> pure True
-        Left fault -> fail ("receive faulted on the in-memory double: " <> show fault)
+{- | The test queue with its 'ack' field wrapped to record each acked receipt, so
+a test asserts the worker's retire-vs-retry decision directly at the handle. The
+production memory backend removes a job at delivery and never redelivers, so the
+decision is not observable through the queue's own state; the redelivery
+consequence of an un-acked message over a redelivering backend is pinned against
+real SQS in the integration suite's @Ecluse.WorkerSpec@.
+-}
+recordingAckQueue :: IO (MirrorQueue, IO [ReceiptHandle])
+recordingAckQueue = do
+    base <- newTestMemoryQueue
+    acked <- newIORef []
+    let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
+    pure (recording, reverse <$> readIORef acked)
 
 -- ── small predicates ─────────────────────────────────────────────────────────────
 

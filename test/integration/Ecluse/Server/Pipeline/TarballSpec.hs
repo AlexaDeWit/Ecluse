@@ -9,11 +9,11 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Network.HTTP.Types (methodGet, methodHead, status200, status404)
 import Network.HTTP.Types.Header (hIfNoneMatch)
 import Network.Wai (responseLBS)
@@ -62,7 +62,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "falls through to the public origin when the private upstream URL is unformable" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         let breakPrivate d = d{pdPrivateBaseUrl = ""}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -91,7 +91,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "on a private miss: gates the version, streams from public, and enqueues a mirror job" $ do
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueue queue privateUp publicUp Nothing $ \app env publicPort -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -185,7 +185,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- enqueue a mirror job the worker could only drop after a round trip.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status404 [] "gone")
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueue queue privateUp publicUp Nothing $ \app env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 404
@@ -197,7 +197,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- tripwire, never a validator -- but no mirror job is enqueued for it.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status200 [("Content-Type", "text/html")] "<html>not a tarball</html>")
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueue queue privateUp publicUp Nothing $ \app env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -280,7 +280,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a cross-host public dist.tarball under AnyAllowlistedHost when the host is allowlisted" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost, pdMirrorTarget = "http://cross.localhost:9"}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -290,7 +290,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "refuses a cross-host public dist.tarball under AnyAllowlistedHost when the host is off the allowlist" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -334,7 +334,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" (pdPrivateBaseUrl d)}
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200

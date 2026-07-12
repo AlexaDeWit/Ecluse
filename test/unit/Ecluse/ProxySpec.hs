@@ -13,31 +13,35 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Proxy (mountBindingFor, npmServerConfig, unconfiguredRegistry)
+import Ecluse.Proxy (mountBindingFor, unconfiguredRegistry)
 import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
-import Ecluse.Runtime.Server (MountBinding (..), application)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 newTestManager :: IO Manager
 newTestManager = newManager defaultManagerSettings
 
 newTestEnv :: IO Env
 newTestEnv = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
     newEnv unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
+{- | The composed npm front door: a single npm mount with no packument-serve or
+publish dependencies, assembled through the public binding resolver exactly as
+the composition root would ('mountBindingFor' over npm).
+-}
 npmApp :: IO Application
-npmApp = application npmServerConfig <$> newTestEnv
+npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))) <$> newTestEnv
 
 spec :: Spec
 spec = do
-    describe "npmServerConfig -- the composed npm front door" $
+    describe "the composed npm front door (a bare npm mount over mkServerConfig)" $
         with npmApp $ do
             it "mounts npm at /npm (answers /npm/-/ping locally with 200 {})" $
                 get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}

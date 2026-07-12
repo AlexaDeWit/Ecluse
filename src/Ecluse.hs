@@ -92,7 +92,6 @@ module Ecluse (
     runWorker,
 
     -- * npm front door
-    npmServerConfig,
     mountBindingFor,
 
     -- * Composition glue (exposed for direct testing)

@@ -42,7 +42,6 @@ import Network.Wai.Test (defaultRequest, setPath)
 import System.Mem (performMajorGC)
 import Test.Hspec
 
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Server.Pipeline.TestSupport (
     artifactUpstream,
     privateArtifactHit,
@@ -50,6 +49,7 @@ import Ecluse.Server.Pipeline.TestSupport (
     withProxyEnv,
     withProxyEnvQueue,
  )
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 spec :: Spec
 spec = describe "bounded-memory streaming (S54): residency invariant on the tarball relay" $ do
@@ -115,7 +115,7 @@ publicMissPeak :: Int -> IO Word64
 publicMissPeak size = do
     privateUp <- privateArtifactMiss
     publicUp <- artifactUpstream "1.0.0" (syntheticArtifact size)
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     withProxyEnvQueue queue privateUp publicUp Nothing $ \app _env _publicPort -> do
         (st, served, peak) <- streamProbe Nothing app
         st `shouldBe` 200

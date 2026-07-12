@@ -9,12 +9,12 @@ import Test.Hspec
 import UnliftIO (withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
-import Ecluse.Core.Queue (MirrorJob, MirrorQueue (..), newEnqueueBuffer, queueFault)
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Queue (MirrorJob, MirrorQueue (..), newEnqueueBuffer, queueTransportFault)
 import Ecluse.Queue.Support (otherJob, sampleJob, thirdJob, unwrap)
 
-{- | Tests for the contract module's buffered producer hand-off. The two in-memory
-backends' coverage lives beside them in "Ecluse.Queue.MemorySpec".
+{- | Tests for the contract module's buffered producer hand-off. The in-memory
+backend's coverage lives beside it in "Ecluse.Queue.MemorySpec".
 -}
 spec :: Spec
 spec = do
@@ -44,7 +44,7 @@ spec = do
             let flaky job = do
                     failNow <- atomicModifyIORef' failFirst (False,)
                     if failNow
-                        then pure (Left (queueFault TransportUnreachable "backend unavailable"))
+                        then pure (Left (queueTransportFault (transportFault TransportUnreachable "backend unavailable")))
                         else Right () <$ modifyIORef' delivered (<> [job])
             (q, drainLoop) <-
                 newEnqueueBuffer

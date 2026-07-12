@@ -29,7 +29,6 @@ import UnliftIO (throwIO)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
@@ -41,6 +40,7 @@ import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 {- | An in-process publication-target double: it records the @Authorization@ header
 and the body of every @PUT@ it receives (so the credential-passthrough and
@@ -104,7 +104,7 @@ fakeRegistry =
 
 newTestEnv :: IO Env
 newTestEnv = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")

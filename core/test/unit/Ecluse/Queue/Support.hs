@@ -21,8 +21,8 @@ import Ecluse.Core.Queue (MirrorJob (..), QueueFault)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
-{- | A 'Left' escaping a backend that has no fault to report (the in-memory
-double, the bounded backend, the buffered hand-off) is a broken test premise:
+{- | A 'Left' escaping a backend that has no fault to report (the bounded
+in-memory backend, the buffered hand-off) is a broken test premise:
 re-raise it loudly and typed.
 -}
 newtype UnexpectedQueueFault = UnexpectedQueueFault QueueFault
@@ -36,7 +36,7 @@ unwrap act = act >>= either (throwIO . UnexpectedQueueFault) pure
 
 {- | A sample mirror job. The in-memory queue under test does not inspect a
 job's contents -- it only carries it from 'enqueue' to 'receive' -- so one fixed
-job suffices for the FIFO / ack / redelivery assertions.
+job suffices for the FIFO / cap / drop-reporting assertions.
 -}
 sampleJob :: MirrorJob
 sampleJob =

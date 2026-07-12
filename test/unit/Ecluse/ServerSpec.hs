@@ -30,7 +30,6 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
@@ -61,6 +60,7 @@ import Ecluse.Runtime.Server (
     serverMiddleware,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders -- it never fetches -- so a handle that
@@ -77,7 +77,7 @@ newTestManager = newManager defaultManagerSettings
 -- | Assemble an 'Env' from the handle doubles, touching no network.
 newTestEnv :: IO Env
 newTestEnv = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")

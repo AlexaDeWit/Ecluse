@@ -19,7 +19,6 @@ import UnliftIO.Exception (impureThrow, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
@@ -31,6 +30,7 @@ import Ecluse.Runtime.Env (newEnv, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Katip (Environment (Environment), closeScribes)
 import Network.Wai.Handler.Warp (testWithApplication)
 
@@ -171,7 +171,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "refuses an oversized private packument fail-closed, serving only the public set" $ do
         privateUp <- servingUpstream (oversizedPackument "9.9.9")
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -180,7 +180,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "503s when the only (public) packument is oversized and the private upstream is down" $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream (oversizedPackument "1.0.0")
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
@@ -188,7 +188,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "refuses a version-flood public packument fail-closed (nothing served from it)" $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream versionFloodPackument
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
@@ -196,7 +196,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "serves the public set when a version-flood document arrives on the private leg" $ do
         privateUp <- servingUpstream versionFloodPackument
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -205,7 +205,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "refuses a deeply-nested public document fail-closed (503 with the private upstream down)" $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream deeplyNestedBody
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
@@ -213,7 +213,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "serves the public set when a deeply-nested document arrives on the private leg" $ do
         privateUp <- servingUpstream deeplyNestedBody
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -222,7 +222,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
     it "serves normally when every document is within the bounds (no false refusal)" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
@@ -248,7 +248,7 @@ captureBreachLog :: LByteString -> IO Text
 captureBreachLog privateBody = do
     privateUp <- servingUpstream privateBody
     publicUp <- failingUpstream
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
@@ -309,7 +309,7 @@ perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fau
         -- the mount's own error shape carrying no fault detail.
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
-        queue <- newInMemoryQueue
+        queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing withBottomingAssemble $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 500

@@ -35,7 +35,7 @@ import Network.Wai.Test (
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
@@ -43,9 +43,8 @@ import Ecluse.Core.Queue (
     MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
-    queueFault,
+    queueTransportFault,
  )
-import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -72,6 +71,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -727,8 +727,8 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
             k (application cfg env) env publicPort
 
 {- | Run an assertion against a proxy over the two upstream doubles and the proxy's
-own 'Env' (over a vanilla in-memory queue), so a test can drain the enqueued mirror
-jobs.
+own 'Env' (over the test-configured in-memory queue), so a test can drain the
+enqueued mirror jobs.
 -}
 withProxyEnv ::
     Upstream ->
@@ -736,7 +736,7 @@ withProxyEnv ::
     Maybe Text ->
     (forall a. (Application -> Env -> IO a) -> IO a)
 withProxyEnv privateUp publicUp inbound k = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     withProxyEnvQueue queue privateUp publicUp inbound (\app env _port -> k app env)
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
@@ -761,7 +761,7 @@ withProxyEffectful ::
     Upstream ->
     (forall a. (Application -> IO a) -> IO a)
 withProxyEffectful effectful privateUp publicUp k = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
@@ -844,12 +844,19 @@ headTarball version bearer =
     baseRequest =
         defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
 
--- | Drain every mirror job currently enqueued on the proxy's queue, in FIFO order.
+{- | Drain every mirror job currently enqueued on the proxy's queue, in FIFO order.
+The bounded backend delivers batches (up to its batch cap per receive), so this
+polls until an empty batch; on the test queue's short poll window an empty poll
+returns promptly.
+-}
 drainJobs :: Env -> IO [MirrorJob]
-drainJobs env =
-    receive (envQueue env) >>= \case
-        Right messages -> pure (map msgJob messages)
-        Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
+drainJobs env = go []
+  where
+    go acc =
+        receive (envQueue env) >>= \case
+            Right [] -> pure (reverse acc)
+            Right messages -> go (reverse (map msgJob messages) <> acc)
+            Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
 
 -- The decoded JSON body of a proxy response, or 'Null' if it did not decode (a
 -- non-JSON body then surfaces as a plain assertion mismatch, not a crash).
@@ -1063,7 +1070,7 @@ jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl 
 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do
-    queue <- newInMemoryQueue
+    queue <- newTestMemoryQueue
     -- The typed producer channel: a backend fault is the 'Left' value the serve
     -- path's best-effort enqueue counts and swallows.
-    pure queue{enqueue = \_ -> pure (Left (queueFault TransportUnreachable "enqueue failed (test double)"))}
+    pure queue{enqueue = \_ -> pure (Left (queueTransportFault (transportFault TransportUnreachable "enqueue failed (test double)")))}
