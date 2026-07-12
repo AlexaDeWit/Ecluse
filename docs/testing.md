@@ -231,6 +231,13 @@ Two things about the split are easy to get backwards, so I'll state them plainly
   standing case where a behaviour can *only* be observed against a live service (the token
   mint) is an explicitly-accepted residual risk, called out in the slice, not the default.
 
+Beyond the test tiers, two static-analysis jobs gate as well. **`weeder`** reports library
+code not reachable from the application entry point (`Ecluse.run`); **`stan`** runs HIE-based
+partial-function and potential-bug analysis at the floor set in `.stan.toml`. Each runs as its
+own parallel job that the CI `gate` depends on, and any finding above its floor fails the job
+and blocks the merge. Among the always-on jobs, only `smoke` (live registries) stays
+non-gating.
+
 ## Coverage: Codecov (gating)
 
 Coverage is measured per **gating** suite and reported to

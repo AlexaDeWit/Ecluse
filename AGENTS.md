@@ -109,8 +109,9 @@ docs/     architecture and design documents
 ## CI, security, and repository gates
 
 - The unified CI workflow and tier semantics are documented in [`docs/testing.md`](docs/testing.md).
-  The terminal `gate` job is the branch-protection authority; smoke, weeder, Stan, vulnerability
-  scanning, and Codecov's server-side statuses have their documented non-gating roles.
+  The terminal `gate` job is the branch-protection authority; the weeder and Stan analysis jobs
+  gate through it, while smoke, vulnerability scanning, and Codecov's server-side statuses have
+  their documented non-gating roles.
 - Pin every GitHub Action to a full commit SHA and follow the cache rules in
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - Do not add `.semgrepignore` entries or `nosemgrep` comments without repo-owner approval.

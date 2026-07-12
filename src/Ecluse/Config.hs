@@ -2,7 +2,6 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Ecluse.Config (
     Config (..),
@@ -34,13 +33,13 @@ import Data.Aeson (Result (..), Value (..), fromJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither, withObject, (.!=), (.:?))
-import Data.FileEmbed (embedFile)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Yaml (decodeEither')
 
 import Ecluse.Config.Aeson ()
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
 import Ecluse.Config.Rule
 import Ecluse.Config.Types
@@ -51,12 +50,11 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 {- HLINT ignore defaultPolicy "Avoid restricted function" -}
 defaultPolicy :: RulePolicy
 defaultPolicy =
-    let defaultBytes = $(embedFile "config/default.yaml")
-     in case decodeEither' defaultBytes of
-            Right ast -> case parseRulesPatch ast of
-                Right globalRules -> either (error . show) id (resolvePolicy emptyPolicy globalRules)
-                Left e -> error ("Invalid default policy JSON: " <> T.pack e)
-            Left e -> error ("Invalid default policy YAML: " <> show e)
+    case decodeEither' defaultConfigBytes of
+        Right ast -> case parseRulesPatch ast of
+            Right globalRules -> either (error . show) id (resolvePolicy emptyPolicy globalRules)
+            Left e -> error ("Invalid default policy JSON: " <> T.pack e)
+        Left e -> error ("Invalid default policy YAML: " <> show e)
 
 {- | Load the full configuration: defaults, the optional operator document, and the
 environment overlay, merged strongest-last, then parsed, activated, and resolved.
@@ -102,7 +100,7 @@ mountKeysOf (Object o) = case KeyMap.lookup "mounts" o of
 mountKeysOf _ = []
 
 parseDefaultAst :: Either [ConfigError] Value
-parseDefaultAst = case decodeEither' $(embedFile "config/default.yaml") of
+parseDefaultAst = case decodeEither' defaultConfigBytes of
     Right ast -> Right ast
     Left err -> Left [ParseError ("config/default.yaml is invalid YAML: " <> T.pack (show err))]
 
