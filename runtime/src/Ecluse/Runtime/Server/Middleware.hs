@@ -24,7 +24,6 @@ module Ecluse.Runtime.Server.Middleware (
     probeApplication,
 
     -- * Neutral response shapes
-    pong,
     jsonResponse,
 ) where
 
@@ -119,12 +118,6 @@ readiness drain checkReady =
             checkReady <&> \case
                 False -> jsonResponse status503 "{\"status\":\"awaiting startup readiness\"}"
                 True -> jsonResponse status200 "{\"status\":\"ready\"}"
-
-{- | @\/-\/ping@: answered locally with @200 {}@, since the client is only
-checking that the proxy endpoint it talks to is up. No upstream round-trip.
--}
-pong :: Response
-pong = jsonResponse status200 "{}"
 
 {- A path matching no configured mount: a generic @404 Not Found@ in @text\/plain@.
 This tier sits above the mounts, so there is no ecosystem to shape it -- the body is

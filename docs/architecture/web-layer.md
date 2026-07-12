@@ -41,6 +41,37 @@ Only `GET`, `HEAD`, and `PUT` are answered (`PUT /{pkg}` is the publish; a `HEAD
 `GET` and is served bodiless). Any other method, and anything unrecognised, is `Unsupported` → 404, so
 deny-by-default holds at the routing layer for methods as well as paths.
 
+### From route to action
+
+A classified `Route` is interpreted exactly once, by `routeAction` in `Ecluse.Core.Server.Dispatch`.
+It is total over the sum, so a new serve action cannot be introduced without deciding there how it is
+carried out, and it splits every route into one of two kinds:
+
+```haskell
+data RouteAction
+  = AnswerLocally (MountRenderer -> Response)                    -- pure, no upstream
+  | RunPipeline   (Request -> Respond -> Handler ResponseReceived)  -- the data plane
+```
+
+`Ping`, `Search`, and `Unsupported` are answered locally; `Packument`, `Tarball`, and `Publish` run
+the [data-plane pipeline](#control-plane-vs-data-plane). Whether a route's dependencies are actually
+wired is the handler's own question, read from the request context: a mount with no packument
+dependencies answers `501`, and one with no publication target answers a publish with `405` (see
+[Multi-ecosystem mounts](#multi-ecosystem-mounts)).
+
+The `HEAD` branch is taken here rather than by the classifier, because a `HEAD` is a bodiless variant
+of its `GET`, not a distinct action. That is load-bearing on the artifact path, where running the
+`GET` handler and discarding the body would stream a whole artifact to nowhere (see
+[HEAD on artifacts](#head-on-artifacts)).
+
+Dispatch is ecosystem-agnostic: a `Route` names an action shared across registries, so every mount
+reaches the same handlers and only the (method, path) → `Route` mapping is per-ecosystem. `Route` is
+therefore the hub the three concerns meet at, and each matches on it once: the pattern table
+**produces** it, `routeAction` **acts** on it, and the [capability manifest](#capability-manifest)
+**documents** it. The WAI layer (`Ecluse.Runtime.Server`) holds no route knowledge of its own; it
+asks for the action and either responds with it or runs it under the
+[request perimeter](#the-typed-request-perimeter).
+
 ## Multi-ecosystem mounts
 
 A single Écluse process serves one or more ecosystems from one listener by **mounting** each registry

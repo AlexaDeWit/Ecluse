@@ -148,6 +148,7 @@ library ecluse-core
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
+    Ecluse.Core.Server.Dispatch
     Ecluse.Core.Server.Fault
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
@@ -568,6 +569,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.Pipeline.TarballSpec
     Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.AdmissionSpec
+    Ecluse.Server.DispatchSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec

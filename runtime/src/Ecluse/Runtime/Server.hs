@@ -26,19 +26,17 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 
 Responses split into __two tiers__:
 
-* __Above the mounts -- neutral, server-owned.__ The orchestration health probes
+* __Above the mounts, neutral and server-owned.__ The orchestration health probes
   (@\/livez@, @\/readyz@) are answered at the top level, and a path matching __no__
-  configured mount is a generic @404 Not Found@ in @text\/plain@ -- there is no
+  configured mount is a generic @404 Not Found@ in @text\/plain@: there is no
   ecosystem to shape it.
 
-* __Within a matched mount -- the mount's renderer.__ The classified 'Route'
-  renders through that mount's 'Ecluse.Core.Server.Response.MountRenderer', in the
-  ecosystem's own error surface: @\/-\/ping@ is answered locally with @200 {}@,
-  @\/-\/v1\/search@ is @501@ (search is not an install path), an unrecognised
-  in-mount path is @404@ (deny by default), and the package\/artifact routes
-  ('Packument', 'Tarball') are recognised but, without serve dependencies wired,
-  return an explicit @501 Not Implemented@ rather than a fabricated success -- their
-  fetch → rules → serve pipeline lives outside this module.
+* __Within a matched mount.__ The classified 'Ecluse.Core.Server.Route.Route' is
+  interpreted by 'Ecluse.Core.Server.Dispatch.routeAction', which says whether the
+  route is answered locally (a pure response through the mount's
+  'Ecluse.Core.Server.Response.MountRenderer') or run through the data-plane pipeline.
+  This module holds __no route knowledge of its own__: it asks for the action and
+  either responds with it or runs it under the request perimeter.
 
 Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
@@ -93,7 +91,7 @@ module Ecluse.Runtime.Server (
 
 import Data.List (dropWhileEnd)
 import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
-import Network.HTTP.Types (Method, Status, hContentType, methodHead, status404, status500, status501)
+import Network.HTTP.Types (Method, Status, hContentType, status500)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -107,10 +105,10 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (srMetrics),
     runHandler,
  )
+import Ecluse.Core.Server.Dispatch (RouteAction (AnswerLocally, RunPipeline), routeAction)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
-import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
 import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
-import Ecluse.Core.Server.Route (Route (..))
+import Ecluse.Core.Server.Route (Route)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
@@ -133,7 +131,6 @@ import Ecluse.Runtime.Server.Middleware (
     defaultRequestSizeLimit,
     goingAwayMiddleware,
     jsonResponse,
-    pong,
     probeApplication,
     sizeLimitMiddleware,
     timeoutSeconds,
@@ -248,47 +245,31 @@ dispatch cfg env request respond =
         Just (binding, classified) -> serve env binding classified request respond
         Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
 
-{- Serve a classified route under its matched mount. Dispatch builds the
-per-request 'RequestCtx' once -- the request runtime ('serveRuntimeOf') paired with the
-matched 'MountBinding' -- and the effectful 'Packument' and 'Tarball' routes run in the
-'Handler' reader over it, so the handler reads the mount's serve dependencies and
-renderer from context rather than as threaded arguments (the deps-or-@501@ decision
-is the handler's). Every other route renders to a pure 'Response' through the
-mount's renderer.
+{- Serve a classified route under its matched mount.
 
-A @HEAD@ on the 'Tarball' route is dispatched to 'headTarball', which gates the
-artifact identically to the @GET@ path but probes the upstream as a @HEAD@ and relays
-the headers with no body -- so a bodiless @HEAD@ can never open and pump the full
-artifact body (the reason @Autohead@ is deliberately not used; see 'serverMiddleware').
-A @HEAD@ on the 'Packument' route is likewise dispatched to 'headPackument', which runs
-the identical gating and merge as the @GET@ path and emits the same status and headers
-(the would-be body's @Content-Length@ and the own @ETag@) with no body -- the
-HTTP-correctness half of explicit-@HEAD@ handling (a packument body is assembled
-locally, so it carries no artifact-egress amplification).
-
-The 'Publish' route (a @PUT \/{pkg}@, recognised by the method-aware classifier) is
-dispatched to 'servePublish', the first-party publish relay: it enforces the
-anti-shadowing scope guard before any write and relays the publish to the publication
-target with the publisher's own forwarded credential, or @405@ when no publication
-target is configured (the opt-in is off).
+The route's interpretation is 'routeAction' ("Ecluse.Core.Server.Dispatch"), which is
+where the 'Ecluse.Core.Server.Route.Route' sum is matched and where the @HEAD@ mode is
+chosen; this function only carries out the two kinds of action it can return. An
+'AnswerLocally' route is a pure 'Response' through the mount's renderer. A
+'RunPipeline' route is discharged to 'IO' under the typed request perimeter, over the
+per-request 'RequestCtx' dispatch builds once here (the request runtime
+'serveRuntimeOf' paired with the matched 'MountBinding'), so the handler reads its
+mount's serve dependencies and renderer from context rather than as threaded
+arguments. The deps-or-stub decision is the handler's: a mount with no packument deps
+answers the recognised-but-unwired @501@, and one with no publication target answers
+a publish with @405@.
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
-    case classified of
-        Packument name
-            | isHead -> guardedServe (headPackument name request)
-            | otherwise -> guardedServe (servePackument name request)
-        Tarball name version filename
-            | isHead -> guardedServe (headTarball name version filename request)
-            | otherwise -> guardedServe (serveTarball name version filename request)
-        Publish name -> guardedServe (servePublish name request)
-        _ -> respond (renderRoute (bindingRenderer binding) classified)
+    case routeAction (requestMethod request) classified of
+        AnswerLocally toResponse -> respond (toResponse renderer)
+        -- The data-plane handler under the typed request perimeter: it is discharged
+        -- through 'run', and the perimeter's observation channel is the bounded
+        -- @ecluse.serve.perimeter.faults@ metric plus the audit log line.
+        RunPipeline handler -> perimeterGuard observeFault renderer respond (run . handler request)
   where
-    -- One effectful route under the typed request perimeter: the handler is
-    -- discharged through 'run', and the perimeter's observation channel is the
-    -- bounded @ecluse.serve.perimeter.faults@ metric plus the audit log line.
-    guardedServe handlerOn =
-        perimeterGuard observeFault (bindingRenderer binding) respond (run . handlerOn)
+    renderer :: MountRenderer
+    renderer = bindingRenderer binding
 
     observeFault fault = do
         mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
@@ -318,9 +299,6 @@ serve env binding classified request respond =
 
     ctx :: RequestCtx
     ctx = RequestCtx runtime binding
-
-    isHead :: Bool
-    isHead = requestMethod request == methodHead
 
 {- | The typed request perimeter over one effectful route: run the handler with a
 commit-tracking respond, catching only __synchronous__ escapes (asynchronous
@@ -396,27 +374,9 @@ stripPrefixSegments _ _ = Nothing
 dropTrailingSlashes :: [Text] -> [Text]
 dropTrailingSlashes = dropWhileEnd (== "")
 
-{- Render a non-effectful in-mount classified 'Route' to a pure response through
-the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
-@\/-\/v1\/search@ is a @501@ pointer; an unrecognised in-mount path is a @404@ --
-every error in the mount's own surface. The effectful 'Packument', 'Tarball', and
-'Publish' routes are dispatched to the 'Handler' by 'serve' before reaching here;
-their branches below are the defensive @501@ fallback should that routing ever change.
--}
-renderRoute :: MountRenderer -> Route -> Response
-renderRoute renderer = \case
-    Ping -> pong
-    Search -> renderedError renderer status501 "search is not supported by this proxy; use the public registry's website to discover packages"
-    Packument _ -> renderedError renderer status501 notYetServedMessage
-    Tarball{} -> renderedError renderer status501 notYetServedMessage
-    Publish _ -> renderedError renderer status501 notYetServedMessage
-    Unsupported -> renderedError renderer status404 "not found"
-  where
-    notYetServedMessage :: Text
-    notYetServedMessage = "this route is recognised but not yet served by this proxy"
-
 -- An in-mount error response: the status, with the body shaped by the mount's
--- renderer. A meta-route error carries no operator help message.
+-- renderer. The perimeter's neutral @500@ is the one such response the web layer
+-- still owns; every route's own body is shaped in "Ecluse.Core.Server.Dispatch".
 renderedError :: MountRenderer -> Status -> Text -> Response
 renderedError renderer status message =
     let RenderedBody contentType body = renderError renderer Nothing message
