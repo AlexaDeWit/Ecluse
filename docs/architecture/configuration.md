@@ -76,10 +76,12 @@ by Écluse.
 endpoint selects a [`CredentialProvider`](cloud-backends.md#credential-provider): cloud-managed
 (CodeArtifact / Artifact Registry, a token minted from the ambient cloud identity) or a static token.
 
-The mirror-write credential is explicit and does not fold when the mirror-target URL folds onto the
+The mirror-write credential is explicit even when the mirror-target URL is declared equal to the
 private upstream: under the default `passthrough` the private upstream carries no Écluse credential,
 while the mirror write runs on the async worker under Écluse's own identity, so the two are chosen
-independently. The read-side and publish-target providers follow the same prefixed-provider pattern;
+independently. Provider granularity follows the credential's real scope: a CodeArtifact token is
+minted per domain, so mounts whose resolved CodeArtifact identities coincide share one provider
+(one boot mint, one refresh schedule, one breaker). The read-side and publish-target providers follow the same prefixed-provider pattern;
 see [USAGE](../../USAGE.md#environment-variables) for the exact keys.
 
 How reads are credentialled is the mount's

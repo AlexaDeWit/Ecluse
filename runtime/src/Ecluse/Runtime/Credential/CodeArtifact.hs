@@ -76,7 +76,7 @@ data CodeArtifactConfig = CodeArtifactConfig
     minted token actually carries, so this is only a preference.
     -}
     }
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 {- | Build a refreshing 'CredentialProvider' backed by CodeArtifact
 @GetAuthorizationToken@. Discovers AWS credentials the standard way

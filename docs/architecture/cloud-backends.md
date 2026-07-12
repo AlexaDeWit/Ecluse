@@ -156,14 +156,18 @@ enqueues), which the existing handle can accommodate if it ever arises.
 
 Both managed registries speak the npm protocol over HTTPS and differ only in how the
 bearer token is obtained and refreshed, so they sit behind the
-[`CredentialProvider`](#credential-provider) handle while the `RegistryClient` data plane
+[`CredentialProvider`](#credential-provider) handle while the npm data plane
 (`http-client`) is identical across them.
 
 ### Credential provider
 
-Outbound auth (proxy → registry) is its own handle, separate from
-[`RegistryClient`](registry-model.md#registry-abstraction). A `CredentialProvider`
-yields the current bearer token for a registry endpoint, refreshing before expiry:
+Outbound auth (proxy → registry) is its own handle, separate from the
+[protocol boundary](registry-model.md#registry-abstraction). A `CredentialProvider`
+yields the current bearer token for a registry endpoint, refreshing before expiry.
+Provider granularity follows the credential's real scope, not the mount count: a
+CodeArtifact token is minted per domain, so mounts whose resolved CodeArtifact
+identities coincide share one provider (one boot mint, one refresh schedule, one
+breaker), while each mount still names its own reference:
 
 ```haskell
 newtype CredentialProvider = CredentialProvider

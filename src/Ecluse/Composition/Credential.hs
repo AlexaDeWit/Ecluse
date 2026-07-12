@@ -17,6 +17,12 @@ to an __initialised__ provider, or the app halts at boot (see
 @static@ backend has a leaf (from @ECLUSE_MIRROR_TARGET_TOKEN@); a mount naming
 @codeartifact@ or @adc@ resolves to no provider and is an honest boot failure.
 
+Provider granularity follows the credential's real scope, not the mount count: a
+CodeArtifact token is minted per domain, not per repository endpoint, so mounts
+whose resolved CodeArtifact identities coincide ('codeArtifactIdentityGroups')
+share one provider -- one eager boot mint, one refresh schedule, one breaker --
+while each still looks its provider up by its own ecosystem.
+
 The pure half of the selection ('planMirrorCredential',
 'resolveCodeArtifactConfig') is separated from the effectful build
 ('initCredentialProviders' minting an eager CodeArtifact token) so the resolution
@@ -36,6 +42,7 @@ module Ecluse.Composition.Credential (
     resolveCodeArtifactConfig,
 
     -- * Internals exported for testing
+    codeArtifactIdentityGroups,
     parseCodeArtifactHost,
 ) where
 
@@ -103,24 +110,39 @@ initCredentialProviders reporters app = do
         then pure (Left errs)
         else do
             let validPlans = [(eco, mcfg, mca) | (eco, mcfg, Right mca) <- plans]
-            results <- traverse (\(eco, mcfg, mca) -> initProviderFor reporters eco mcfg mca) validPlans
-            let (initErrs, valid) = partitionEithers results
+            -- The static leaf is stateless, so it stays per mount; the CodeArtifact
+            -- providers are built once per distinct resolved identity and fanned
+            -- out to every ecosystem that resolved it.
+            let statics = [(eco, provider) | (eco, mcfg, Nothing) <- validPlans, Just provider <- [staticTokenProvider mcfg]]
+            results <- traverse (initSharedCodeArtifact reporters) (codeArtifactIdentityGroups [(eco, ca) | (eco, _, Just ca) <- validPlans])
+            let (initErrs, shared) = partitionEithers results
             if not (null initErrs)
                 then pure (Left (concat initErrs))
-                else pure (Right (CredentialProviders (Map.fromList [(eco, p) | (eco, Just p) <- valid])))
+                else pure (Right (CredentialProviders (Map.fromList (statics <> concat shared))))
 
--- One mount plan's provider build, the effectful half of 'initCredentialProviders':
--- no CodeArtifact selection means the static token provider when its token is set
--- (else no provider, the unresolved-reference case the boot check rejects); a
--- CodeArtifact selection mints once eagerly, a throw rendered as a
--- 'CodeArtifactMintFailed' boot error so it joins the aggregated failure block.
-initProviderFor :: CredentialReporters -> Ecosystem -> MountConfig -> Maybe CodeArtifactConfig -> IO (Either [BootError] (Ecosystem, Maybe CredentialProvider))
-initProviderFor reporters eco mcfg = \case
-    Nothing -> pure (Right (eco, staticTokenProvider mcfg))
-    Just caConfig ->
-        tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
-            Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
-            Right provider -> Right (eco, Just provider)
+-- One shared CodeArtifact provider per distinct resolved identity, the effectful
+-- half of 'initCredentialProviders': the generic refresh/cache wrapper around the
+-- mint leaf is built once (minting once eagerly, a throw rendered as a
+-- 'CodeArtifactMintFailed' boot error so it joins the aggregated failure block)
+-- and fanned out to every ecosystem in the group, so a shared domain carries one
+-- refresh schedule and one breaker rather than one per mount.
+initSharedCodeArtifact :: CredentialReporters -> (CodeArtifactConfig, NonEmpty Ecosystem) -> IO (Either [BootError] [(Ecosystem, CredentialProvider)])
+initSharedCodeArtifact reporters (caConfig, ecosystems) =
+    tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
+        Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
+        Right provider -> Right [(eco, provider) | eco <- toList ecosystems]
+
+{- | Group the mounts' resolved CodeArtifact identities: one group per distinct
+'CodeArtifactConfig' (domain, owner, region, and the requested token duration),
+carrying every ecosystem that resolved it. The mint's real scope is the domain,
+not the repository endpoint, so ecosystems whose mirror targets live in one
+domain legitimately share one provider; a differing duration is a different
+requested credential and keeps its own. Pure, so the sharing decision is pinned
+without touching AWS.
+-}
+codeArtifactIdentityGroups :: [(Ecosystem, CodeArtifactConfig)] -> [(CodeArtifactConfig, NonEmpty Ecosystem)]
+codeArtifactIdentityGroups plans =
+    Map.toAscList (Map.fromListWith (<>) [(ca, eco :| []) | (eco, ca) <- plans])
 
 -- The static mirror-target write provider, when its token
 -- (ECLUSE_MIRROR_TARGET_TOKEN) is configured.
@@ -167,9 +189,9 @@ key, else (b) by parsing the mirror-target URL host__ of the form
 fallback). The region resolves explicit key → host → @AWS_REGION@: the endpoint host
 encodes the domain's authoritative region, so it outranks the process-wide
 @AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
-caller's). The mirror-target URL is the resolved one -- an unset @ECLUSE_MIRROR_TARGET@
-has already folded onto the private upstream -- so a private-upstream CodeArtifact
-endpoint is parsed too. The optional token-duration carries through
+caller's). The mirror-target URL is the mount's own explicit declaration (config
+load requires one per active mount), so the host parsed is exactly the registry the
+worker writes to. The optional token-duration carries through
 ('cfgMirrorCodeArtifactTokenDuration').
 
 The @{owner}@ is a 12-digit AWS account id: a resolved owner (from either source)
@@ -192,13 +214,13 @@ resolveCodeArtifactConfig eco app mcfg =
                     }
         (errs, _) -> Left errs
   where
-    -- An unset mirror target falls back to the private upstream (the fold the
-    -- Haddock above describes); with neither set the parse yields 'Nothing', so
-    -- a still-unresolved input is reported as its missing explicit key.
+    -- The mirror target is declared per active mount (config load enforces it);
+    -- a non-CodeArtifact host parses to 'Nothing', so a still-unresolved input is
+    -- reported as its missing explicit key.
     parsed :: Maybe (Text, Text, Text)
     parsed =
         parseCodeArtifactHost . hostAddress . registryUrlText
-            =<< (mntMirrorTarget mcfg <|> mntPrivateUpstream mcfg)
+            =<< mntMirrorTarget mcfg
 
     resolve :: Text -> [Maybe Text] -> Either BootError Text
     resolve key candidates =
