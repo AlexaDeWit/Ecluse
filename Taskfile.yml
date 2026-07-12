@@ -397,7 +397,7 @@ tasks:
       - stan --hiedir dist-stan
       - |
         n=$(bash -c 'stan --hiedir dist-stan --json-output | jq ".observations | length"'); \
-        if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (non-gating job fails)"; exit 1; fi; \
+        if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (fails the gate)"; exit 1; fi; \
         echo "stan: clean at the configured floor"
 
   stan-all:

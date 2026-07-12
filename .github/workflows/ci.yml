@@ -308,15 +308,125 @@ jobs:
 
       - name: Build library Haddock (checks.docs flake check)
         run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs
+
+  weeder:
+    name: Dead-code check (weeder)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Fails on any finding (a red signal) and IS a `gate` dependency, so a finding
+    # blocks the merge. weeder reports library code not reachable from the application
+    # entry point. Runs on EVERY PR so a newly-introduced unreachable definition is
+    # caught on the PR that adds it. Runs as its own parallel job (a heavy
+    # -fwrite-ide-info build), not folded into static-checks. Warm deps (restored from
+    # main) keep it cheap.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      # dist-weeder is deliberately NOT cached: the builddir is rebuilt from
+      # scratch each run. weeder scans every .hie under dist-weeder, and cabal
+      # cannot delete the artifacts of removed source files, so any restored
+      # builddir risks feeding weeder orphaned .hie for modules that no longer
+      # exist. That is a false red, or a false green now that weeder gates
+      # (the same staleness measured on stan: 132 observations against a true
+      # floor of 35, 140 modules scanned where the tree had 122). The
+      # dependency closure still comes warm from the cabal-store cache, so a
+      # cold builddir is only the first-party packages, a few minutes. Do not
+      # reintroduce a dist-weeder cache without a per-run orphan-.hie prune:
+      # keying on the source tree alone does not clean a restored builddir.
+      - name: Update package index
+        run: nix develop .#weeder --command task update
+
+      - name: weeder (fails on findings)
+        run: |
+          set -eo pipefail
+          nix develop .#weeder --command task weeder 2>&1 | tee weeder.out
+
+      - name: Render weeder findings to the run summary
+        if: always()
+        run: |
+          {
+            echo '## weeder: library code not reachable from the app entry';
+            echo;
+            echo '_Gating: any finding fails this job and the CI gate. A finding is a definition built into the library but not wired into the app entry (Ecluse.run); land its wiring in the same slice, or root it in weeder.toml._';
+            echo;
+            echo '```';
+            grep -E ':[0-9]+:[0-9]+:' weeder.out || echo '(no findings)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  stan:
+    name: Haskell static analysis (stan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Fails on any finding above the floor (a red signal) and IS a `gate` dependency,
+    # so a finding blocks the merge. Stan analyses GHC HIE files for partial functions +
+    # potential bugs that Semgrep (no Haskell) and hlint (no type info) can't see, scoped
+    # by .stan.toml to a Warning floor. Runs as its own parallel job (a heavy
+    # -fwrite-ide-info build into dist-stan, like weeder), not folded into static-checks.
+    # Warm deps (restored from main) keep it cheap.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      # dist-stan is deliberately NOT cached, exactly like dist-weeder above:
+      # stan scans every .hie under the builddir, cabal cannot delete the
+      # artifacts of removed source files, and a restored builddir would hand
+      # stan orphaned .hie for modules that no longer exist (the staleness that
+      # once reported 132 observations against a true floor of 35). The
+      # dependency closure comes warm from the cabal-store cache, so a fresh
+      # builddir is only the first-party packages. See the weeder job's comment
+      # for the full rationale.
+      - name: Update package index
+        run: nix develop .#stan --command task update
+
+      - name: stan (fails on findings)
+        run: |
+          set -eo pipefail
+          nix develop .#stan --command task stan 2>&1 | tee stan.out
+
+      - name: Render stan findings to the run summary
+        if: always()
+        run: |
+          {
+            echo '## stan: Haskell static analysis (gating: any finding above the floor fails this job and the CI gate)';
+            echo;
+            echo 'Partial functions and potential bugs (HIE-based) at the Warning floor. Nothing is ignored without an explicit decision; run "task stan-all" locally for the full set incl Performance/space-leak.';
+            echo;
+            echo '```';
+            sed -E 's/\x1b\[[0-9;]*m//g' stan.out 2>/dev/null || echo '(no output)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
   gate:
     name: CI gate
     # The single Required check. Runs after every other gating job regardless of
     # result, and fails unless all of them succeeded. Wire new required checks in
-    # by adding them to `needs` here — never as additional required checks. smoke
+    # by adding them to `needs` here, never as additional required checks. smoke
     # is intentionally absent: it runs on PRs for visibility but is non-gating, so
     # the gate never waits on (or fails because of) it. e2e IS a dependency: it runs
     # as its own parallel job (hermetic, reliably green) and the gate blocks on it.
-    needs: [build-test, static-checks, docs, e2e]
+    # weeder and stan are dependencies too: each is its own parallel -fwrite-ide-info
+    # job, and a dead-code or static-analysis finding above the floor blocks the merge.
+    needs: [build-test, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
