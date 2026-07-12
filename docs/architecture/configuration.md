@@ -29,11 +29,15 @@ A mount serves only when the operator declares it. The shipped defaults carry a 
 template per ecosystem (the canonical public upstream and the default credential provider),
 and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
 `ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
-upstream: a declared-but-incomplete mount is a boot error naming the missing key, never a
+upstream and declare its mirror target: a declared-but-incomplete mount is a boot error naming
+each missing key, never a
 mount that silently vanishes from service, and a mount the operator never mentions stays
-off without ceremony. Declaring every registry endpoint explicitly is the recommended
+off without ceremony. The mirror target is explicit even when it equals the private upstream:
+activation implies a mirror write (there are no serve-only mounts), so the write's destination
+is always the operator's own stated intent, never implied from another endpoint. Declaring the
+public upstream explicitly as well is the recommended
 posture; endpoints of one mount that resolve to the same registry are each logged as a
-boot warning (the mirror target folding onto the private upstream included), since a
+boot warning (a mirror target declared equal to the private upstream included), since a
 shared store narrows provenance separation and what maintenance tooling can safely do
 (see [USAGE → Deviating from the Golden Path](../../USAGE.md#deviating-from-the-golden-path)).
 
@@ -72,10 +76,12 @@ by Écluse.
 endpoint selects a [`CredentialProvider`](cloud-backends.md#credential-provider): cloud-managed
 (CodeArtifact / Artifact Registry, a token minted from the ambient cloud identity) or a static token.
 
-The mirror-write credential is explicit and does not fold when the mirror-target URL folds onto the
+The mirror-write credential is explicit even when the mirror-target URL is declared equal to the
 private upstream: under the default `passthrough` the private upstream carries no Écluse credential,
 while the mirror write runs on the async worker under Écluse's own identity, so the two are chosen
-independently. The read-side and publish-target providers follow the same prefixed-provider pattern;
+independently. Provider granularity follows the credential's real scope: a CodeArtifact token is
+minted per domain, so mounts whose resolved CodeArtifact identities coincide share one provider
+(one boot mint, one refresh schedule, one breaker). The read-side and publish-target providers follow the same prefixed-provider pattern;
 see [USAGE](../../USAGE.md#environment-variables) for the exact keys.
 
 How reads are credentialled is the mount's
@@ -295,8 +301,9 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
   a complete new rule (a typo'd default name, an `"enabled": false` against a non-existent rule,
   a patch missing the `type` it needs to stand alone) is rejected.
 - A declared mount must be complete. Any operator-supplied key under `mounts.<ecosystem>`
-  activates that mount, and an active mount without a `privateUpstream` is rejected at boot,
-  naming the mount and the key (every incomplete mount in one report); the shipped
+  activates that mount, and an active mount without a `privateUpstream` or without an explicit
+  `mirrorTarget` is rejected at boot,
+  naming the mount and each missing key (every incomplete mount in one report); the shipped
   per-ecosystem templates alone never activate anything.
 - Credential references must resolve. A mount whose [credential strategy](access-model.md) draws
   on an uninitialised provider (a `service` mount with no read provider, or a mirror target

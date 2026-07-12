@@ -92,18 +92,20 @@ cold mirror back-fills heavily for a few days, then settles), so an extra deploy
 not yet worth it. It carries its own health/liveness surface (a consume-loop heartbeat /
 last-successful-poll), distinct from the server's HTTP readiness.
 
-The worker consumes the composition root's publish-side `RegistryClient`: it
-`publishArtifact`s approved packages to the mirror target, paired with the global
-[`CredentialProvider`](#credential-provider) for the token. That handle is resolved per
-ecosystem, the same `ecosystem → RegistryClient` resolution the mounts key on. The serve
+The worker publishes through each job ecosystem's own bundle: the composition root
+marries that ecosystem's protocol codec (from its adapter) to the shared publish
+transport at the mount's declared mirror target, paired with the
+[`CredentialProvider`](#credential-provider) for the token, and the bundle carries the
+married `MirrorPublish` capability. The serve
 path does not share it: each packument upstream builds its own client over the shared
-HTTP manager (two upstreams, per-origin credentials), so the handle is publish-side only.
+HTTP manager (two upstreams, per-origin credentials), so the capability is publish-side
+only.
 
 ## Cloud backends
 
 Écluse couples to a cloud provider in exactly **two handles**, both records of functions
 (the Handle pattern), so a provider is an additive backend, not a structural change, the
-same posture as [`RegistryClient`](registry-model.md#registry-abstraction):
+same posture as the [registry abstraction](registry-model.md#registry-abstraction):
 
 1. **`MirrorQueue`**, the durable hand-off from the request path to the mirror worker
    (see [Mirror Queue](#mirror-queue)).
@@ -111,8 +113,9 @@ same posture as [`RegistryClient`](registry-model.md#registry-abstraction):
    registry endpoint (private upstream or mirror target) rather than a static-credential
    one (see [Credential Provider](#credential-provider)).
 
-These two are the cloud axis. The ecosystem axis is
-[`RegistryClient`](registry-model.md#registry-abstraction), which is cloud-agnostic, so
+These two are the cloud axis. The ecosystem axis is the
+[adapter's capability record](registry-model.md#registry-abstraction), which is
+cloud-agnostic, so
 the npm protocol and data plane, including publish, is written once and reused across
 every cloud (a managed registry is just an npm endpoint plus a token; no per-cloud
 publish path, no object-store handle). The proxy core, rules engine, web layer, and CVE
@@ -122,7 +125,7 @@ additive behind these two handles, with Azure the worked example (see
 
 ### Handles: records of functions
 
-Every handle, `RegistryClient`, `MirrorQueue`, `CredentialProvider`, is a record whose
+Every handle, `MirrorPublish`, `MirrorQueue`, `CredentialProvider`, is a record whose
 fields are functions (the Handle pattern), built by a per-backend smart constructor
 (`newSqsQueue :: SqsConfig -> IO MirrorQueue`). The record type is the interface, the
 smart constructor a concrete implementation, and its closure captures that backend's
@@ -153,14 +156,18 @@ enqueues), which the existing handle can accommodate if it ever arises.
 
 Both managed registries speak the npm protocol over HTTPS and differ only in how the
 bearer token is obtained and refreshed, so they sit behind the
-[`CredentialProvider`](#credential-provider) handle while the `RegistryClient` data plane
+[`CredentialProvider`](#credential-provider) handle while the npm data plane
 (`http-client`) is identical across them.
 
 ### Credential provider
 
-Outbound auth (proxy → registry) is its own handle, separate from
-[`RegistryClient`](registry-model.md#registry-abstraction). A `CredentialProvider`
-yields the current bearer token for a registry endpoint, refreshing before expiry:
+Outbound auth (proxy → registry) is its own handle, separate from the
+[protocol boundary](registry-model.md#registry-abstraction). A `CredentialProvider`
+yields the current bearer token for a registry endpoint, refreshing before expiry.
+Provider granularity follows the credential's real scope, not the mount count: a
+CodeArtifact token is minted per domain, so mounts whose resolved CodeArtifact
+identities coincide share one provider (one boot mint, one refresh schedule, one
+breaker), while each mount still names its own reference:
 
 ```haskell
 newtype CredentialProvider = CredentialProvider
@@ -321,7 +328,7 @@ Its arms split into easy and risky:
   `499b84ac-1321-427f-aa17-267ca6975798`.
 - **Managed registry, unchanged.** Azure Artifacts feeds speak the npm protocol over HTTPS
   (`https://pkgs.dev.azure.com/{org}/{project}/_packaging/{feed}/npm/registry/`), so they
-  ride the existing npm `RegistryClient` plus an Entra bearer, no per-cloud publish path.
+  ride the existing npm protocol implementation plus an Entra bearer, no per-cloud publish path.
   (Azure Artifacts' upstream sources are a registry-composition feature, the analogue of
   CodeArtifact external connections, and the same
   [don't bypass the gate](registry-model.md#registry-level-composition-the-recommended-topology)

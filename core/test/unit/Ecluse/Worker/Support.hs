@@ -51,7 +51,6 @@ import Ecluse.Core.Registry (
     MirrorArtifact,
     ParseError (ParseError),
     PublishFault,
-    RegistryClient (..),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
  )
@@ -61,6 +60,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionPresent),
  )
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
 import Ecluse.Core.Security (HostPort, Limits)
@@ -77,8 +77,8 @@ import Ecluse.Core.Worker (
     JobOutcome (Dropped, Retried),
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
  )
@@ -91,7 +91,7 @@ over a 'WorkerRuntime' of test doubles -- no application 'Ecluse.Env.Env', no
 OpenTelemetry SDK.
 
 This is the partition's proof that the worker is genuinely core: it constructs the worker
-runtime from a recording publish client, the production in-memory queue (test-configured
+runtime from a recording publish double on every bundle, the production in-memory queue (test-configured
 through "Ecluse.Test.Queue"), a real HTTP manager, a fresh heartbeat, and the worker
 metric/tracing port doubles, then runs the loop and the per-job processing through the
 core 'runWorkerM' against a scribe-less @katip@ environment. The integrity gate, the
@@ -213,10 +213,10 @@ jobWith url =
         , jobTraceContext = Nothing
         }
 
--- ── a recording publish client ─────────────────────────────────────────────────
+-- ── a recording publish capability ──────────────────────────────────────────────
 
 {- | What a publish captured: the raw verified bytes it was handed, and the artifact
-descriptor whose digests the real client's publish document is assembled from (the
+descriptor whose digests the real codec's publish document is assembled from (the
 descriptor-sourcing case pins it to the re-admitted artifact's exactly).
 -}
 data PublishLog = PublishLog
@@ -224,87 +224,97 @@ data PublishLog = PublishLog
     , plArtifacts :: [MirrorArtifact]
     }
 
-{- | A registry-handle double whose 'publishArtifact' records each call and returns
-the given fixed outcome. The mirror-presence probe (the worker's first step) answers
-__absent__ -- an unparseable metadata body, the same shape a production mirror gives a
-package it does not hold -- so every test drives the full pipeline unless it swaps in
-'mirrorListingClient'. The parse fields the worker never exercises return an inert
-'ParseError' rather than a fabricated success.
+{- | A publish-capability double whose 'mpPublishArtifact' records each call and
+returns the given fixed outcome. The mirror-presence probe (the worker's first
+step) answers __absent__ -- an unparseable metadata body, the same shape a
+production mirror gives a package it does not hold -- so every test drives the
+full pipeline unless it swaps in 'mirrorListingPublish'.
 -}
-recordingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
-recordingClient logRef outcome =
-    RegistryClient
-        { fetchMetadata = const (pure (Right (RegistryResponse "")))
-        , publishArtifact = \_ _ artifact document -> do
+recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+recordingPublish logRef outcome =
+    MirrorPublish
+        { mpProbeMetadata = const (pure (Right (RegistryResponse "")))
+        , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
+        , mpPublishArtifact = \_ _ artifact document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l}, ()))
             pure outcome
-        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
-        , parseVersionDetails = \_ _ -> Left (ParseError "unused")
-        , parseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
         }
 
-{- | 'recordingClient' whose mirror-presence probe __confirms__ the given versions
+{- | 'recordingPublish' whose mirror-presence probe __confirms__ the given versions
 present at the mirror target, for the dedup short-circuit tests.
 -}
-mirrorListingClient :: IORef PublishLog -> Either PublishFault () -> [Version] -> RegistryClient
-mirrorListingClient logRef outcome versions =
-    (recordingClient logRef outcome)
-        { parseVersionList = const (Right versions)
+mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
+mirrorListingPublish logRef outcome versions =
+    (recordingPublish logRef outcome)
+        { mpParseVersionList = const (Right versions)
         }
 
-{- | 'recordingClient' whose mirror-presence probe reports a __transport fault__ (a
+{- | 'recordingPublish' whose mirror-presence probe reports a __transport fault__ (a
 mirror outage) as the typed 'FetchTransport' value, for the probe-cannot-tell
 fall-through tests.
 -}
-probeUnreachableClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
-probeUnreachableClient logRef outcome =
-    (recordingClient logRef outcome)
-        { fetchMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
+probeUnreachablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeUnreachablePublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
         }
+
+{- | Give every bundle in the map the same publish capability: the runtime builders
+below inject their recording double this way, mirroring how the composition root
+gives each mount its own married capability.
+-}
+withPublish :: MirrorPublish -> WorkerPolicies -> WorkerPolicies
+withPublish publish = Map.map (\p -> p{wpPublish = publish})
 
 -- ── building a worker runtime over doubles ──────────────────────────────────────
 
-{- | Build a 'WorkerRuntime' over a caller-supplied registry-handle double (given the
-publish log, so its publishes still record), a real no-TLS manager (for the stub
-upstream), a fresh queue + heartbeat, the given worker metrics port, and the given
-per-ecosystem re-evaluation policies, then run the body against it. The queue and the
-publish log are returned so a test can drive and inspect them. The probe tests use this
-directly to swap in 'mirrorListingClient' or 'probeUnreachableClient';
-'withRuntimePolicies' is this over 'recordingClient'.
+{- | Build a 'WorkerRuntime' whose every bundle carries the caller-supplied publish
+double (given the publish log, so its publishes still record), over a real no-TLS
+manager (for the stub upstream), a fresh queue + heartbeat, the given worker
+metrics port, and the given per-ecosystem policies, then run the body against it.
+The queue and the publish log are returned so a test can drive and inspect them.
+The probe tests use this directly to swap in 'mirrorListingPublish' or
+'probeUnreachablePublish'; 'withRuntimePolicies' is this over 'recordingPublish'.
 -}
-withRuntimeRegistry :: (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
-withRuntimeRegistry mkClient policies metricsPort body = do
+withRuntimeRegistry :: (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimeRegistry mkPublish policies metricsPort body = do
     queue <- newTestMemoryQueue
-    withRuntimeQueue queue mkClient policies metricsPort (`body` queue)
+    withRuntimeQueue queue mkPublish policies metricsPort (`body` queue)
 
 {- | 'withRuntimeRegistry' over a __caller-supplied__ queue, so a test can observe
 the worker's queue-side decisions on a wrapped handle (see 'recordingAckQueue') or
 drive the loop against a misbehaving one.
 -}
-withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
-withRuntimeQueue queue mkClient policies metricsPort body = do
+withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
+withRuntimeQueue queue mkPublish policies metricsPort body = do
     logRef <- newIORef (PublishLog [] [])
+    withWiredRuntime queue (withPublish (mkPublish logRef) policies) metricsPort (`body` logRef)
+
+{- | The base runtime builder over bundles that already carry their own publish
+capabilities (nothing injected), so a test wiring distinct capabilities per
+ecosystem -- the foreign-bundle decoy pins -- observes exactly what it wired.
+-}
+withWiredRuntime :: MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
+withWiredRuntime queue policies metricsPort body = do
     manager <- newManager defaultManagerSettings
     heartbeat <- newWorkerHeartbeat
-    let runtime =
-            WorkerRuntime
-                { wrQueue = queue
-                , wrRegistry = mkClient logRef
-                , wrManager = manager
-                , wrHeartbeat = heartbeat
-                , wrMetrics = metricsPort
-                , wrTracing = passthroughWorkerTracingPort
-                , wrInjectTraceContext = id
-                , wrPolicies = policies
-                }
-    body runtime logRef
+    body
+        WorkerRuntime
+            { wrQueue = queue
+            , wrManager = manager
+            , wrHeartbeat = heartbeat
+            , wrMetrics = metricsPort
+            , wrTracing = passthroughWorkerTracingPort
+            , wrInjectTraceContext = id
+            , wrPolicies = policies
+            }
 
-{- | 'withRuntimeRegistry' with the recording publish client answering the given
+{- | 'withRuntimeRegistry' with the recording publish double answering the given
 publish outcome -- the common case.
 -}
 withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimePolicies policies metricsPort outcome =
-    withRuntimeRegistry (`recordingClient` outcome) policies metricsPort
+    withRuntimeRegistry (`recordingPublish` outcome) policies metricsPort
 
 {- | 'withRuntimePolicies' with the default admitting policy ('admitPolicies'), so the
 integrity-gate and publish tests exercise their own path while ingest re-evaluation always
@@ -317,13 +327,13 @@ withRuntimeWith = withRuntimePolicies admitPolicies
 withRuntime :: Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntime = withRuntimeWith noopWorkerMetricsPort
 
-{- | Build a 'WorkerRuntime' over a caller-supplied queue (the publish client is the
-never-consulted recording double) and run the body against it. Lets a test drive
+{- | Build a 'WorkerRuntime' over a caller-supplied queue (the publish double is the
+never-consulted recording one) and run the body against it. Lets a test drive
 the supervised loop against a queue whose @receive@ misbehaves.
 -}
 withQueueRuntime :: MirrorQueue -> (WorkerRuntime -> IO a) -> IO a
 withQueueRuntime queue body =
-    withRuntimeQueue queue (`recordingClient` Right ()) admitPolicies noopWorkerMetricsPort (\runtime _logRef -> body runtime)
+    withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies noopWorkerMetricsPort (\runtime _logRef -> body runtime)
 
 -- ── ingest re-evaluation fixtures ───────────────────────────────────────────────
 
@@ -440,7 +450,20 @@ npmPolicy resolve rules =
         , wpMinIntegrity = defaultMinIntegrity
         , wpArtifactHostHonoured = const True
         , wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
+        , wpPublish = unwiredPublish
         , wpNow = pure epoch
+        }
+
+{- | The publish placeholder 'npmPolicy' carries: the runtime builders swap in the
+recording double ('withPublish'), so an effectful use of this one is a broken test
+premise, failed loudly rather than fabricating an outcome.
+-}
+unwiredPublish :: MirrorPublish
+unwiredPublish =
+    MirrorPublish
+        { mpProbeMetadata = const (throwIO (SimulatedContractEscape "unwiredPublish: probe consulted"))
+        , mpParseVersionList = const (Left (ParseError "unwiredPublish: nothing to parse"))
+        , mpPublishArtifact = \_ _ _ _ -> throwIO (SimulatedContractEscape "unwiredPublish: publish consulted")
         }
 
 {- | The default admitting policy the integrity-gate and publish tests run under: the version

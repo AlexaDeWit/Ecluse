@@ -102,6 +102,16 @@ spec = do
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
+        it "aborts fast at boot when an active mount declares no mirror target" $ do
+            -- Every mounted ecosystem must declare its mirror target explicitly,
+            -- even when it equals the private upstream; activation never implies one.
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst) awsRunEnv)
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+            traverse_ (unsetEnv . fst) awsRunEnv
+            -- The typed process supervisor maps the boot abort to exit 2.
+            outcome `shouldBe` Left (ExitFailure 2)
+
         it "aborts fast at boot when codeartifact is selected but its domain cannot be resolved" $ do
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact"

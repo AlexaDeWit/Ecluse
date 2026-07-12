@@ -7,7 +7,6 @@ module Ecluse.Server.FaultSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Fault (
@@ -27,9 +26,6 @@ instance Exception UnknownEscape
 
 spec :: Spec
 spec = describe "classifyEscape (the request perimeter's vocabulary)" $ do
-    it "classifies the unwired-handle fault as a GateFault" $
-        rqCause (classifyEscape (toException RegistryUnconfigured)) `shouldBe` GateFault
-
     it "classifies a response-bound breach as a GateFault" $
         rqCause (classifyEscape (toException (ResponseBoundExceeded (BodyTooLarge 1024)))) `shouldBe` GateFault
 

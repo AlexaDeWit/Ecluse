@@ -18,12 +18,13 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse (runWorker)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SRI), mkPackageName)
+import Ecluse.Core.Package (Hash, HashAlg (SRI), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
  )
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
+import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -60,11 +61,12 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
-                        env <- envFor queue mirrorUrl
+                        env <- envFor queue
+                        policies <- faithfulPolicies mirrorUrl
                         unwrapQ (enqueue queue (job upstreamUrl))
                         -- Run the supervised loop against the real queue until it has
                         -- published, then cancel it.
-                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
+                        runLoopUntil policies env (publishedAtLeast publishLog 1)
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The job was acked, so it does not redeliver.
@@ -75,13 +77,14 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
-                        env <- envFor queue mirrorUrl
+                        env <- envFor queue
                         -- The version's current-metadata digest (the set the worker
                         -- re-admits and verifies against) is well-formed but does not
                         -- match the served bytes: a tampered artifact. The worker must
                         -- refuse to publish.
+                        tamperPolicies <- policiesFor mirrorUrl (unsafeHash SRI mismatchSri :| [])
                         unwrapQ (enqueue queue (job upstreamUrl))
-                        runLoopFor (admitAllPolicies (unsafeHash SRI mismatchSri :| [])) env 4_000_000
+                        runLoopFor tamperPolicies env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
 
@@ -92,9 +95,10 @@ spec =
                     -- successful publish and acks, so the job does not redeliver.
                     withMirrorTarget status409 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
-                        env <- envFor queue mirrorUrl
+                        env <- envFor queue
+                        policies <- faithfulPolicies mirrorUrl
                         unwrapQ (enqueue queue (job upstreamUrl))
-                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 1)
+                        runLoopUntil policies env (publishedAtLeast publishLog 1)
                         leftover <- unwrapQ (receive queue)
                         leftover `shouldBe` []
 
@@ -104,7 +108,8 @@ spec =
                     -- must not ack, so the message redelivers -- a real second delivery.
                     withMirrorTarget status503 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
-                        env <- envFor queue mirrorUrl
+                        env <- envFor queue
+                        policies <- faithfulPolicies mirrorUrl
                         unwrapQ (enqueue queue (job upstreamUrl))
                         -- Observe the redelivery through the worker's /own/ second
                         -- publish attempt: a transient 503 is never acked, so the message
@@ -133,7 +138,7 @@ spec =
                         -- redelivered within budget. Waiting on the worker's /second/ PUT
                         -- removes that race entirely: the second PUT cannot happen unless
                         -- the release ran and the message redelivered.
-                        runLoopUntil faithfulPolicies env (publishedAtLeast publishLog 2)
+                        runLoopUntil policies env (publishedAtLeast publishLog 2)
                         published <- readIORef publishLog
                         -- The one un-acked job was delivered and PUT more than once -- a
                         -- real redelivery -- and every PUT targeted its publish path. We
@@ -149,12 +154,13 @@ spec =
                 withUpstream $ \_upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl _publishLog -> do
                         queue <- freshQueue container "worker-heartbeat" defaultQueueOptions{qoWaitSeconds = 1}
-                        env <- envFor queue mirrorUrl
+                        env <- envFor queue
+                        policies <- faithfulPolicies mirrorUrl
                         pollBefore <- lastPoll (envWorkerHeartbeat env)
                         pollBefore `shouldBe` Nothing
                         -- No job enqueued: an idle loop still completes real polls, so
                         -- the heartbeat must advance from Nothing.
-                        runLoopFor faithfulPolicies env 3_000_000
+                        runLoopFor policies env 3_000_000
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
 
@@ -173,11 +179,27 @@ whose digest the served bytes cannot satisfy, distinct from a malformed digest.
 mismatchSri :: Text
 mismatchSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
 
-{- | The faithful current-metadata policies: the re-admitted artifact carries the
-served bytes' true digest, so verification passes and the pipeline publishes.
+{- | The faithful current-metadata policies for a mirror target: the re-admitted
+artifact carries the served bytes' true digest, so verification passes and the
+pipeline publishes through the bundle's marriage at that target.
 -}
-faithfulPolicies :: WorkerPolicies
-faithfulPolicies = admitAllPolicies (unsafeHash SRI trueSri :| [])
+faithfulPolicies :: Text -> IO WorkerPolicies
+faithfulPolicies mirrorUrl = policiesFor mirrorUrl (unsafeHash SRI trueSri :| [])
+
+{- | Admit-everything policies whose bundle publishes through the production
+marriage (npm's codec over the shared transport) at the given mirror target, with
+a static test bearer -- the same construction the composition root performs.
+-}
+policiesFor :: Text -> NonEmpty Hash -> IO WorkerPolicies
+policiesFor mirrorUrl digests = do
+    manager <- newManager defaultManagerSettings
+    let transport =
+            MirrorTransport
+                { ptManager = manager
+                , ptMintToken = pure (Just (mkSecret "test-token"))
+                , ptLimits = defaultLimits
+                }
+    pure (admitAllPolicies (newMirrorPublish transport mirrorUrl npmPublishCodec) digests)
 
 -- The path the job's artifact URL appends to the upstream stub base.
 artifactPath :: Text
@@ -202,22 +224,14 @@ job upstreamUrl =
         , jobTraceContext = Nothing
         }
 
-envFor :: MirrorQueue -> Text -> IO Env
-envFor queue mirrorUrl = do
+envFor :: MirrorQueue -> IO Env
+envFor queue = do
     manager <- newManager defaultManagerSettings
-    publishClient <-
-        newNpmClient
-            NpmClientConfig
-                { npmBaseUrl = mirrorUrl
-                , npmManager = manager
-                , npmToken = Just (mkSecret "test-token")
-                , npmLimits = defaultLimits
-                }
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- A scribe-free LogEnv (no stdout output during the integration run).
 newTestLogEnv :: IO LogEnv

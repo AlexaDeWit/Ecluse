@@ -50,7 +50,7 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
@@ -151,6 +151,7 @@ spec =
 s3EnvVars :: Text -> Text -> [(String, String)]
 s3EnvVars endpointUrl bucket =
     [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", toString bucket)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL", toString endpointUrl)
@@ -182,20 +183,12 @@ proxyApp :: RuleDeps -> Text -> Text -> IO Application
 proxyApp ruleDeps privateUrl publicUrl = do
     prepared <- prepare ruleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
     manager <- newManager defaultManagerSettings
-    publishClient <-
-        newNpmClient
-            NpmClientConfig
-                { npmBaseUrl = privateUrl
-                , npmManager = manager
-                , npmToken = Nothing
-                , npmLimits = defaultLimits
-                }
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     queue <- newTestMemoryQueue
     admission <- testServeAdmission
-    env <- newEnvWithAdmission admission publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
     let deps =
             PackumentDeps
                 { pdPrivateBaseUrl = privateUrl

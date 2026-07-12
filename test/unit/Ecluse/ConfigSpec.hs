@@ -29,9 +29,13 @@ spec = do
                     (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
             mountCollisionWarnings cfg `shouldBe` []
 
-        it "warns when the mirror target folds onto the private upstream" $
+        it "warns when the mirror target is declared equal to the private upstream" $
             shouldWarnOnce
-                (npmMountDoc [("privateUpstream", "https://priv.example.test")])
+                ( npmMountDoc
+                    [ ("privateUpstream", "https://priv.example.test")
+                    , ("mirrorTarget", "https://priv.example.test")
+                    ]
+                )
                 ["mirrorTarget", "privateUpstream", "https://priv.example.test"]
 
         it "warns when the mirror target equals the public upstream" $

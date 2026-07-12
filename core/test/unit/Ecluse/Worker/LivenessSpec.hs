@@ -43,9 +43,6 @@ import Ecluse.Core.Queue (
     ReceiptHandle,
     enqueue,
  )
-import Ecluse.Core.Registry (
-    RegistryClient (..),
- )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
@@ -56,7 +53,7 @@ import Ecluse.Core.Worker (
     JobOutcome (Dropped, Retried, Succeeded),
     WorkerM,
     WorkerPolicies,
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,

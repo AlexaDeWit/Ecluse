@@ -11,7 +11,7 @@ import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
@@ -33,12 +33,13 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
     JobOutcome (Retried, Succeeded),
-    WorkerPolicy (wpBuildArtifactRequest),
+    WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
  )
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Worker.Support
 
 spec :: Spec
@@ -237,6 +238,26 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
+        it "publishes through the publish capability keyed by the job's own ecosystem" $
+            -- The policies map also carries a PyPI bundle with its own recording
+            -- publish capability: the npm job's probe and publish must both ride
+            -- npm's, so the foreign ecosystem's capability records nothing.
+            withUpstream $ \url -> do
+                npmLog <- newIORef (PublishLog [] [])
+                decoyLog <- newIORef (PublishLog [] [])
+                let npmBundle = (npmPolicy presentResolver [admitRule]){wpPublish = recordingPublish npmLog (Right ())}
+                    decoyBundle = (npmPolicy presentResolver [admitRule]){wpPublish = recordingPublish decoyLog (Right ())}
+                    policies = Map.fromList [(Npm, npmBundle), (PyPI, decoyBundle)]
+                queue <- newTestMemoryQueue
+                withWiredRuntime queue policies noopWorkerMetricsPort $ \runtime -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef npmLog
+                    length published `shouldBe` 1
+                    decoyPublished <- plDocuments <$> readIORef decoyLog
+                    decoyPublished `shouldBe` []
+
         it "retries when the job ecosystem's own request formation refuses the URL, without publishing" $
             -- The npm bundle's builder is swapped for one that cannot form a request:
             -- the refusal the fetch surfaces is that bundle's (there is no other
@@ -310,7 +331,7 @@ spec = do
             -- deny is non-retryable, so the worker acks the job (the retire decision,
             -- observed at the handle) rather than leaving it for the backend to redeliver.
             (queue, ackedReceipts) <- recordingAckQueue
-            withRuntimeQueue queue (`recordingClient` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
+            withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue (jobWith unreachableUrl)
                 messages <- receive_ queue
                 runWM runtime (processBatch messages)
@@ -319,13 +340,13 @@ spec = do
                 acked <- ackedReceipts
                 acked `shouldBe` map msgReceipt messages
     describe "processJob: the mirror-presence dedup probe" $ do
-        -- The default 'recordingClient' answers the probe with an unparseable body (the
+        -- The default 'recordingPublish' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that
         -- fall-through; these cover the confirmed-present skip and the cannot-tell arms.
         it "acks an already-mirrored version without fetching or publishing" $
             -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
-            withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+            withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldBe` Succeeded
@@ -337,7 +358,7 @@ spec = do
             -- as a typed value and the job must run the full gated pipeline (here, to
             -- a publish), never be skipped or failed on the probe alone.
             withUpstream $ \url ->
-                withRuntimeRegistry (`probeUnreachableClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                withRuntimeRegistry (`probeUnreachablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
@@ -348,7 +369,7 @@ spec = do
             -- Presence is judged per version: a package already partially mirrored must
             -- still mirror its missing versions.
             withUpstream $ \url ->
-                withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [otherVer]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [otherVer]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
@@ -357,7 +378,7 @@ spec = do
 
         it "acks the skipped duplicate, retiring it from the queue" $ do
             (queue, ackedReceipts) <- recordingAckQueue
-            withRuntimeQueue queue (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
+            withRuntimeQueue queue (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue (jobWith unreachableUrl)
                 messages <- receive_ queue
                 runWM runtime (processBatch messages)
@@ -400,7 +421,7 @@ spec = do
         it "acks a successfully-mirrored job, retiring it from the queue" $
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
+                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
@@ -410,7 +431,7 @@ spec = do
         it "does not ack a transiently-failed job (left for the backend to redeliver)" $
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingClient` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
+                withRuntimeQueue queue (`recordingPublish` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
@@ -426,7 +447,7 @@ spec = do
             -- rather than leaving it for the backend to redeliver indefinitely.
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingClient` Right ()) (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort $ \runtime logRef -> do
+                withRuntimeQueue queue (`recordingPublish` Right ()) (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort $ \runtime logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)

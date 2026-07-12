@@ -10,11 +10,10 @@ import Test.Hspec
 import UnliftIO (evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
-import Ecluse (mountBindingFor, runServer, runWorker, unconfiguredRegistry)
+import Ecluse (mountBindingFor, runServer, runWorker)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
-import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Core.Server.Cache (CacheConfig (..), MetadataCache, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnvWithAdmission, newWorkerHeartbeat, withEnvWithAdmission)
@@ -23,29 +22,6 @@ import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, tele
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Support (testServeAdmission)
-
-{- | A registry-handle double: the @parse*@ fields return fixed pure results and
-the effectful fields are never invoked by these tests, so they refuse loudly if
-they ever are. This lets an 'Env' be assembled without a real backend or any
-network.
--}
-fakeRegistry :: RegistryClient
-fakeRegistry =
-    RegistryClient
-        { fetchMetadata = const unused
-        , publishArtifact = \_ _ _ _ -> unused
-        , parsePackageInfo = \_ _ -> Left parseStub
-        , parseVersionDetails = \_ _ -> Left parseStub
-        , parseVersionList = \(RegistryResponse body) -> Left (ParseError (decodeUtf8 body))
-        }
-  where
-    unused :: IO a
-    unused = throwString "fakeRegistry: effectful field not used in this test"
-
-    parseStub :: ParseError
-    parseStub = ParseError "fake"
-
--- | A credential-handle double: a fixed, non-expiring token.
 
 {- | A manager built from 'defaultManagerSettings' (no TLS, no connection opened
 on construction), so assembling an 'Env' touches no network.
@@ -93,7 +69,7 @@ newTestEnv = do
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -121,14 +97,6 @@ spec = do
             -- and the manager. A clean return is the assertion.
             _env <- newTestEnv
             pure ()
-
-        it "wires the registry handle through unchanged (a pure parse field round-trips)" $ do
-            -- The registry double's 'parseVersionList' echoes the response body as
-            -- the parse error, so reaching it through 'envRegistry' proves the
-            -- exact handle we injected is the one stored.
-            env <- newTestEnv
-            let result = parseVersionList (envRegistry env) (RegistryResponse "echo-me")
-            result `shouldBe` Left (ParseError "echo-me")
 
         it "wires the queue handle through (a job enqueued via Env is received via Env)" $ do
             env <- newTestEnv
@@ -178,7 +146,7 @@ spec = do
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
-            withEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
+            withEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
@@ -189,7 +157,7 @@ spec = do
             admission <- testServeAdmission
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
+            outcome <- try (withEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"
@@ -213,28 +181,3 @@ spec = do
             -- No re-evaluation policies are needed here: the queue is empty, so the loop
             -- only ever long-polls (no job to re-evaluate), which is what this asserts.
             timeout 100000 (runWorker mempty env) `shouldReturn` Nothing
-
-    describe "unconfiguredRegistry" $ do
-        it "refuses every effectful call loudly rather than fabricating a result" $ do
-            -- A no-backend handle must not silently return a fake success: every
-            -- effectful op throws, so a misconfiguration fails fast instead of
-            -- serving phantom data or reporting a publish that never happened.
-            shouldRefuse (fetchMetadata unconfiguredRegistry pkg)
-            {- HLINT ignore "Avoid restricted function" -}
-            shouldRefuse (publishArtifact unconfiguredRegistry pkg ver (error "publishArtifact should not evaluate the artifact in this test") "bytes")
-
-        it "fails every parse with an explanatory error" $ do
-            let resp = RegistryResponse "anything"
-                expected :: Either ParseError b
-                expected = Left (ParseError "no registry backend configured")
-            parsePackageInfo unconfiguredRegistry pkg resp `shouldBe` expected
-            parseVersionDetails unconfiguredRegistry resp ver `shouldBe` expected
-            parseVersionList unconfiguredRegistry resp `shouldBe` expected
-  where
-    -- Assert an effectful handle call throws rather than returning a value.
-    shouldRefuse :: IO a -> Expectation
-    shouldRefuse act = do
-        outcome <- try act
-        case outcome of
-            Left (_ :: SomeException) -> pure ()
-            Right _ -> expectationFailure "expected the unconfigured handle to refuse"

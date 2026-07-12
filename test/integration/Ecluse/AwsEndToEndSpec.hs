@@ -32,18 +32,21 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
     endpointFor,
     freshQueueUrl,
@@ -99,7 +102,7 @@ spec =
                     simpleBody resp `shouldBe` tarballBytes
                     -- The worker long-polls the same SQS queue, fetches the artifact,
                     -- verifies it against the re-admitted digest, and publishes it.
-                    runLoopUntil (tpEnv proxy) (publishedAtLeast (tpMirrorLog proxy) 1)
+                    runLoopUntil (tpPolicies proxy) (tpEnv proxy) (publishedAtLeast (tpMirrorLog proxy) 1)
                     published <- readIORef (tpMirrorLog proxy)
                     length published `shouldSatisfy` (>= 1)
                     published `shouldSatisfy` all (== "/left-pad")
@@ -110,6 +113,7 @@ spec =
 data TestProxy = TestProxy
     { tpApp :: Application
     , tpEnv :: Env
+    , tpPolicies :: WorkerPolicies
     , tpMirrorLog :: IORef [ByteString]
     }
 
@@ -127,10 +131,11 @@ withAwsProxy container queueName body =
         withPublicUpstream $ \publicUrl ->
             withMirrorTarget $ \mirrorUrl mirrorLog -> do
                 queue <- configDrivenQueue container queueName
-                env <- buildEnv queue mirrorUrl
+                env <- buildEnv queue
+                policies <- workerPoliciesAt mirrorUrl
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
                 let app = application (mkServerConfig [binding]) env
-                body TestProxy{tpApp = app, tpEnv = env, tpMirrorLog = mirrorLog}
+                body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog}
 
 {- Build the SQS-backed mirror queue through the production composition root: create a
 queue in the container, then resolve the backend from an environment layer carrying the
@@ -156,6 +161,7 @@ configDrivenQueue container queueName = do
 sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
     [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_QUEUE_URL", toString queueUrl)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
@@ -163,26 +169,34 @@ sqsEnvVars queueUrl endpointUrl =
     , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
--- The composition-root 'Env' over the real SQS queue and the publish client aimed at
--- the mirror-target stub. The guarded data-plane manager opts loopback in so the
--- in-process upstream/artifact fetches reach the WAI stubs.
-buildEnv :: MirrorQueue -> Text -> IO Env
-buildEnv queue mirrorUrl = do
+-- The composition-root 'Env' over the real SQS queue. The guarded data-plane
+-- manager opts loopback in so the in-process upstream/artifact fetches reach the
+-- WAI stubs.
+buildEnv :: MirrorQueue -> IO Env
+buildEnv queue = do
     guardedManager <- newManager defaultManagerSettings
     trusted <- newManager defaultManagerSettings
-    publishClient <-
-        newNpmClient
-            NpmClientConfig
-                { npmBaseUrl = mirrorUrl
-                , npmManager = trusted
-                , npmToken = Just (mkSecret "e2e-publish-token")
-                , npmLimits = defaultLimits
-                }
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission publishClient queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
+
+{- The worker's admit-everything bundles publishing through the production marriage
+(npm's codec over the shared transport) at the mirror-target stub, with a static
+test bearer -- the same construction the composition root performs. The resolver
+carries the true digest of the bytes the public stub serves, so verification
+passes and the pipeline publishes. -}
+workerPoliciesAt :: Text -> IO WorkerPolicies
+workerPoliciesAt mirrorUrl = do
+    trusted <- newManager defaultManagerSettings
+    let transport =
+            MirrorTransport
+                { ptManager = trusted
+                , ptMintToken = pure (Just (mkSecret "e2e-publish-token"))
+                , ptLimits = defaultLimits
+                }
+    pure (admitAllPolicies (newMirrorPublish transport mirrorUrl npmPublishCodec) (unsafeHash SRI sha512Integrity :| []))
 
 -- The single npm mount: the public origin is the loopback upstream stub, the private
 -- origin is the 404 stub (so every request misses to public), and the mirror target is
@@ -352,14 +366,9 @@ newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 condition holds, then tear it down. The loop never returns on its own, so it is raced
 against a condition-poller ('race_'); a hard timeout bounds the whole thing so a failing
 test cannot hang. -}
-runLoopUntil :: Env -> IO Bool -> IO ()
-runLoopUntil env done =
+runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
+runLoopUntil policies env done =
     void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
-  where
-    -- The worker verifies the fetched bytes against the digests its re-evaluation
-    -- re-admits from current metadata (the injected resolver), so the resolver must
-    -- carry the true digest of the bytes the public stub serves.
-    policies = admitAllPolicies (unsafeHash SRI sha512Integrity :| [])
 
 -- A generous hard ceiling, far above a healthy fetch → verify → publish cycle even
 -- under @-fhpc@ instrumentation, so it only ever fires on a genuine hang.

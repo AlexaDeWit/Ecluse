@@ -691,28 +691,28 @@ you reach for `throwIO`, ask which kind of failure you are holding:
   to a boundary built to log it and fail closed. `BootAborted` and the credential
   breaker's `CredentialError` are this category.
 
-The same surface can sit on either side of the line depending on context. The npm
-handle returns an unformable publish URL as a `PublishUrlUnformable` value,
+The same surface can sit on either side of the line depending on context. The
+mirror write returns an unformable publish URL as a `PublishUrlUnformable` value,
 because the mirror worker has a real decision to make (drop it and never retry, as
-against a `PublishRejected` it should leave un-acked and redeliver). The *same*
-unformable URL from the unconfigured null handle is a typed `RegistryUnconfigured`
-exception, because there is no request to decide about: the handle was wired
-wrong, and the only correct move is to fail loudly.
+against a `PublishRejected` it should leave un-acked and redeliver). A
+credential-refresh wrapper built without its mint leaf throws the typed
+`Unconfigured` exception instead, because there is no request to decide about: the
+handle was wired wrong, and the only correct move is to fail loudly.
 
 ```haskell
 -- A value: the worker pattern-matches and chooses retry vs. drop.
-publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishFault ())
+mpPublishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 
 -- An exception: a misconfigured composition root has nothing to decide.
-refuse = throwIO RegistryUnconfigured
+unconfigured field = throwIO (Unconfigured field)
 ```
 
 **Rule 11.2: If you throw, throw a typed `Exception`, never a stringly one.**
 `stringException`, `throwString`, and `userError` are banned (`.hlint.yaml`):
 they erase the type, so nothing downstream can catch the condition by category or
 read its cause, and a `try` decays into grepping a message. Give the condition a
-type with an `Exception` instance (a nullary type like `RegistryUnconfigured`, or
-a small sum), exactly as the codebase already does for `BootAborted`. A typed
+type with an `Exception` instance (a nullary marker type, or a small sum like
+`CredentialError`), exactly as the codebase already does for `BootAborted`. A typed
 exception is catchable, testable, and self-describing; a string is none of those.
 
 **Rule 11.3, Surface errors as values; do not thread `ExceptT` through the base

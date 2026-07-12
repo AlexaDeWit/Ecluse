@@ -26,7 +26,6 @@ import Network.TLS qualified as TLS
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import UnliftIO (evaluate)
 
-import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
@@ -36,7 +35,6 @@ import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
-    RegistryClient (fetchMetadata, parsePackageInfo, parseVersionDetails, parseVersionList),
     RegistryResponse (..),
     UrlFormationError (EmptyBaseUrl),
  )
@@ -45,17 +43,12 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
     defaultNpmConfig,
     fetchMetadataFormBounded,
-    newNpmClient,
-    newNpmPublishClient,
     publicRegistryBaseUrl,
  )
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
-import Ecluse.Core.Version (Version, mkVersion)
 
 import Ecluse.Test.Stub (
-    headerValue,
-    lastCaptured,
     stubConfig,
     withStub,
     withStubHeaders,
@@ -159,7 +152,7 @@ transportFaultSpec = describe "transport faults as values" $ do
     causeOf = tfCause . classifyTransport
 
 configAndWiringSpec :: Spec
-configAndWiringSpec = describe "config and handle wiring" $ do
+configAndWiringSpec = describe "config wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig manager
@@ -173,37 +166,8 @@ configAndWiringSpec = describe "config and handle wiring" $ do
         _ <- evaluate (npmManager config)
         pure ()
 
-    it "mints the credential per metadata fetch on the publish-side handle" $
-        -- The worker's mirror-presence probe reads the mirror target through the
-        -- publish handle, and a managed mirror requires auth on reads as on writes:
-        -- fetchMetadata must mint per call (as publishArtifact does), never fall back
-        -- to the config's (anonymous) token.
-        withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
-            config <- stubConfig stub
-            client <- newNpmPublishClient config (pure (Just (mkSecret "minted-token")))
-            _ <- fetchMetadata client isOdd
-            captured <- lastCaptured stub
-            headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
-
-    it "wires the parse* projections into the handle's pure fields" $ do
-        manager <- newManager defaultManagerSettings
-        client <- newNpmClient (defaultNpmConfig manager)
-        -- A minimal packument projects through the fields the client installed,
-        -- proving each pure projection is reachable via the assembled handle.
-        let resp = RegistryResponse "{\"name\":\"is-odd\"}"
-        case parsePackageInfo client isOdd resp of
-            Left err -> fail ("expected a successful projection, got: " <> show err)
-            Right _info -> pure ()
-        -- No versions in this body, so the version list is empty and a
-        -- per-version lookup is absent -- both reach the wired field.
-        parseVersionList client resp `shouldBe` Right []
-        parseVersionDetails client resp v1 `shouldSatisfy` isLeft
-
 isOdd :: PackageName
 isOdd = mkPackageName Npm Nothing "is-odd"
-
-v1 :: Version
-v1 = mkVersion Npm "1.0.0"
 
 -- A body comfortably larger than the tight 64-byte cap the bounded-body test sets.
 oversizedBody :: ByteString

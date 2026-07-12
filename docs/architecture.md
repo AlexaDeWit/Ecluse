@@ -117,7 +117,7 @@ flowchart TD
 | Document | Covers |
 | --- | --- |
 | [Diagrams](architecture/diagrams.md) | Mermaid visual companion: system overview, packument / tarball / worker sequences, rules and credential lifecycles. |
-| [Registry Model](architecture/registry-model.md) | The four registry roles (two reads, two writes) and the `RegistryClient` handle. |
+| [Registry Model](architecture/registry-model.md) | The four registry roles (two reads, two writes) and the registry abstraction. |
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signals the rules engine consumes. |
 | [Web Layer](architecture/web-layer.md) | Raw-WAI front door: routing and multi-ecosystem mounts, the control/data-plane split, streaming, middleware, and graceful shutdown. |
 | [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI capability manifest and the synthesised-packument schema. |
@@ -142,7 +142,7 @@ flowchart TD
   [capability manifest](architecture/api-surface.md): Écluse documents its coverage, not
   npm's full packument / registry contract, which clients hardcode.
 - Non-npm adapters: the ecosystem adapter registry, the mount model, and the
-  `RegistryClient` handle accommodate them (see
+  protocol codec over the shared publish transport accommodate them (see
   [Multi-ecosystem mounts](architecture/web-layer.md#multi-ecosystem-mounts)), but only npm
   ships at launch. PyPI and RubyGems are planned.
 - Cloud IAM validation at the proxy edge (gateway concern).

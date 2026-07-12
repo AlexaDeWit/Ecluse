@@ -67,8 +67,8 @@ reason. No Docker needed (loopback WAI stubs only). Run: `cabal test ecluse-resi
 > unit-tested with an injected clock; the *real* cloud mint runs end-to-end only in the
 > (non-gating) smoke tier. The managed registry's npm protocol is just HTTPS+JSON, so it's
 > covered once, against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI
-> stub through the `RegistryClient` handle, a deliberate benefit of keeping protocol, queue,
-> and credentials as separate handles.
+> stub through the bundle's publish capability, a deliberate benefit of keeping protocol,
+> queue, and credentials as separate handles.
 
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 

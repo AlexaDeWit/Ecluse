@@ -59,9 +59,10 @@ The publication target adds the one client-driven write path. A client's `npm pu
 (`PUT /{pkg}`) is accepted at the mount and relayed to the publication target, so the proxy
 mediates the publish the same way it mediates reads.
 
-- **What it writes.** First-party / internal packages the client publishes, using the same
-  `RegistryClient.publishArtifact` primitive as the mirror target but with a different trigger,
-  content, and credential (the mirror target is *proxy*-written with approved public packages).
+- **What it writes.** First-party / internal packages the client publishes, relayed as the
+  client's own document with a different trigger,
+  content, and credential from the mirror write (the mirror target is *proxy*-written with
+  approved public packages through the worker's per-ecosystem publish capability).
 - **Anti-shadowing guard (the load-bearing control).** A publish is refused unless its package
   name falls within the operator's configured publish scope allow-list (the MVP mechanism; e.g.
   `@acme/*`). This stops a client publishing a name that shadows an existing public package, a
@@ -178,8 +179,8 @@ order-independent; only the positional labels track input order.
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
   nothing resolves does the request error (per the [serve error model](web-layer.md#error-model)).
 
-The merge lives above the [`RegistryClient`](#registry-abstraction) handle, as a pure,
-ecosystem-agnostic operation over `PackageInfo`, not inside an adapter: the handle stays
+The merge lives above the [protocol boundary](#registry-abstraction), as a pure,
+ecosystem-agnostic operation over `PackageInfo`, not inside an adapter: each read handle stays
 single-registry, and the core fans out across the configured upstreams, parses each, and folds the
 results. So a new ecosystem does not re-implement merging, and the merge is unit-tested over
 hand-built `PackageInfo` with no network. The merged document is one no single upstream produces,
@@ -296,28 +297,28 @@ internal registry disconnected from public is an operator-architecture invariant
 
 ## Registry abstraction
 
-The proxy core is registry-agnostic. The `RegistryClient` record is the sole interface between the
-proxy logic and any specific registry protocol:
+The proxy core is registry-agnostic. An ecosystem registers one capability record
+(`RegistryAdapter`, resolved through the adapter registry at the composition root and nowhere
+else), whose slices are the sole interface between the proxy logic and that registry's protocol:
+the web-facing serve surface (path grammar and denial renderer), the metadata capability (the
+read-handle constructor and packument assembly), the artifact request formation, and the publish
+capability. The mirror write inside the publish capability splits along what genuinely varies per
+ecosystem: the adapter contributes a **protocol codec** (`PublishCodec`: publish document assembly
+and request formation, the presence probe's request and version-list projection, and the status
+semantics), and the environment supplies a **shared publish transport** (the trusted-path
+connection manager, the credential mint, the response bound, and the fault classification). The
+composition root marries the two per mounted ecosystem into the `MirrorPublish` handle each worker
+bundle carries, so a new ecosystem contributes protocol and never transport.
 
-```haskell
-data RegistryClient = RegistryClient
-  { fetchMetadata    :: PackageName -> IO (Either FetchFault RegistryResponse)
-  , publishArtifact  :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-  , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
-  , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
-  , parseVersionList :: RegistryResponse -> Either ParseError [Version]
-  }
-```
-
-The effectful fields return plain `IO`, not `App`: an adapter closes over its own state (HTTP
-manager, credentials) and never imports the proxy's `Env`/`App`, so backends stay decoupled from the
-core. Each reports its failures as a typed value (`FetchFault` on the read, `PublishFault` on the
-write; both carry a transport arm classified at the adapter edge), so no fetch or publish fault
-rides up as an exception and a caller's fall-through or retry-vs-drop decision is total at the call
-site. The `parse*` fields are pure. See
-[Technology Stack → the effect model](technology-stack.md#key-decisions). `parsePackageInfo` takes
-the route-requested `PackageName` as a validation input, so the adapter validates the upstream's
-self-reported name against it rather than trusting it (see
+The effectful operations return plain `IO`, not `App`: an implementation closes over its own state
+(HTTP manager, credentials) and never imports the proxy's `Env`/`App`, so backends stay decoupled
+from the core. Each reports its failures as a typed value (`FetchFault` on a read, `PublishFault`
+on the mirror write; both carry a transport arm classified at the boundary), so no fetch or publish
+fault rides up as an exception and a caller's fall-through or retry-vs-drop decision is total at
+the call site. The projections are pure. See
+[Technology Stack → the effect model](technology-stack.md#key-decisions). The packument projection
+takes the route-requested `PackageName` as a validation input, so the adapter validates the
+upstream's self-reported name against it rather than trusting it (see
 [route name validation](#the-route-name-is-the-served-names-validation-authority)).
 
 Nothing above the registry layer imports registry-specific types: the proxy core operates only on
@@ -327,11 +328,15 @@ adapter projects its wire format into these types. Only the npm registry protoco
 the abstraction exists from day one to make future backends (PyPI, RubyGems) additive rather than
 structural.
 
-`RegistryClient` deliberately carries no authentication, because protocol and auth are orthogonal:
+The protocol vocabulary deliberately carries no authentication, because protocol and auth are
+orthogonal:
 AWS CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio/Nexus all speak the same npm
-protocol and differ only in how a bearer token is obtained. Folding "CodeArtifact-ness" into the npm
-adapter would force a near-duplicate adapter per cloud; instead the npm `RegistryClient` is used
-unchanged and paired with a [`CredentialProvider`](cloud-backends.md#credential-provider) that mints
+protocol and differ only in how a bearer token is obtained. Folding "CodeArtifact-ness" into the
+npm
+adapter would force a near-duplicate adapter per cloud; instead the npm protocol implementation is
+used
+unchanged and paired with a [`CredentialProvider`](cloud-backends.md#credential-provider) that
+mints
 the token. The backend matrix is therefore *ecosystem × credential provider*, composing freely
 (npm-on-CodeArtifact, npm-on-Artifact-Registry, pypi-on-static). See
 [Cloud Backends](cloud-backends.md#cloud-backends).

@@ -66,8 +66,10 @@ A mount is __active__ when the operator overlay (the document or the
 @ECLUSE_MOUNTS__*@ environment variables) declares any key under
 @mounts.\<ecosystem\>@; the mounts shipped in @config\/default.yaml@ are dormant
 per-ecosystem templates until then. Every active mount must define its private
-upstream or the load fails with 'MountMissingPrivateUpstream' (one error per
-incomplete mount), so a declared mount can never silently vanish from service.
+upstream and declare its mirror target (explicitly, even when the two are equal) or
+the load fails with 'MountMissingPrivateUpstream' \/ 'MountMissingMirrorTarget' (one
+error per missing declaration), so a declared mount can never silently vanish from
+service and no mirror target is ever implied from another endpoint.
 -}
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
@@ -136,17 +138,22 @@ resolveMounts globalPolicy appConfig =
         ([], mounts) -> Right (Map.fromList mounts)
         (errs, _) -> Left (concat errs)
   where
-    resolveOne (eco, mcfg) = case mntPrivateUpstream mcfg of
-        Nothing -> Left [MountMissingPrivateUpstream eco]
-        Just privateUpstream -> case resolveMount globalPolicy eco privateUpstream mcfg of
-            Left errs -> Left [PolicyErrors errs]
-            Right mount -> Right (eco, mount)
+    resolveOne (eco, mcfg) = case (mntPrivateUpstream mcfg, mntMirrorTarget mcfg) of
+        (Just privateUpstream, Just mirrorTarget) ->
+            case resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg of
+                Left errs -> Left [PolicyErrors errs]
+                Right mount -> Right (eco, mount)
+        (mPrivate, mMirror) ->
+            Left
+                ( [MountMissingPrivateUpstream eco | isNothing mPrivate]
+                    <> [MountMissingMirrorTarget eco | isNothing mMirror]
+                )
 
-{- | Project an active mount, whose private upstream the caller has already
-established (see 'resolveMounts'), onto its served form.
+{- | Project an active mount, whose private upstream and explicit mirror target the
+caller has already established (see 'resolveMounts'), onto its served form.
 -}
-resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> MountConfig -> Either [PolicyError] Mount
-resolveMount globalPolicy eco privateUpstream mcfg = do
+resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [PolicyError] Mount
+resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolvePolicy globalPolicy (mntAdditionalRules mcfg)
     Right $
         Mount
@@ -157,7 +164,7 @@ resolveMount globalPolicy eco privateUpstream mcfg = do
                     , regPublicUpstream = mntPublicUpstream mcfg
                     , regMirrorTarget =
                         MirrorTarget
-                            { mtUrl = fromMaybe privateUpstream (mntMirrorTarget mcfg)
+                            { mtUrl = mirrorTarget
                             , mtCredential = mntCredentialProvider mcfg
                             }
                     }
@@ -169,11 +176,11 @@ rulesOf = Map.elems . policyRules
 
 {- | Boot-time advisory: one warning per pair of an active mount's resolved
 registry endpoints that point at the same registry. Each collapse is supported by
-the proxy (the mirror target folds onto the private upstream when unset), but a
-distinct registry per endpoint is the recommended posture, so every collision is
-surfaced once at boot. A publication target equal to the private upstream is the
-documented publish arrangement and is not warned. Comparison is textual on the
-validated URL, insensitive to trailing slashes.
+the proxy (declaring the mirror target equal to the private upstream is a valid
+arrangement), but a distinct registry per endpoint is the recommended posture, so
+every collision is surfaced once at boot. A publication target equal to the private
+upstream is the documented publish arrangement and is not warned. Comparison is
+textual on the validated URL, insensitive to trailing slashes.
 -}
 mountCollisionWarnings :: Config -> [Text]
 mountCollisionWarnings config =

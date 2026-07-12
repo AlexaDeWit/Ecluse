@@ -7,8 +7,8 @@ an exception that escaped a handler before the response was committed.
 
 The serve pipeline reports every routine failure as a value (metadata errors,
 fetch faults, rule decisions), so an exception reaching the perimeter is either
-one of the few __recognised typed channels__ -- a wiring fault like
-'RegistryUnconfigured', a response-bound breach, the response-assembly leg's
+one of the few __recognised typed channels__ -- a response-bound breach, the
+response-assembly leg's
 confined 'RenderEscape' marker -- or an invariant break nothing classified.
 'classifyEscape' folds whichever it is into a 'RequestFault': the bounded cause
 feeds the @ecluse.serve.perimeter.faults@ metric, the rendered detail feeds the
@@ -22,7 +22,6 @@ module Ecluse.Core.Server.Fault (
 ) where
 
 import Ecluse.Core.Fault (boundedDetail)
-import Ecluse.Core.Registry (RegistryUnconfigured)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, RenderFault, UnclassifiedFault))
 import Ecluse.Core.Text (displayExceptionT)
@@ -57,7 +56,6 @@ rendering carried for the log line.
 -}
 classifyEscape :: SomeException -> RequestFault
 classifyEscape escape
-    | Just (_ :: RegistryUnconfigured) <- fromException escape = fault GateFault escape
     | Just (_ :: ResponseBoundExceeded) <- fromException escape = fault GateFault escape
     | Just (RenderEscape inner) <- fromException escape = fault RenderFault inner
     | otherwise = fault UnclassifiedFault escape

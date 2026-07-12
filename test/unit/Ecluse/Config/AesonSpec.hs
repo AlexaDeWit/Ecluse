@@ -48,14 +48,36 @@ spec = describe "decodeDocument" $ do
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> configMounts doc `shouldBe` mempty
 
-    it "activates a mount from the environment layer alone (the one-variable launch)" $
-        case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")] Nothing of
+    it "activates a mount from the environment layer alone" $
+        case loadConfig
+            [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+            ]
+            Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "fails loudly when a document-declared mount omits its private upstream" $
         loadConfig [] (Just "{\"mounts\":{\"npm\":{}}}")
             `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
+
+    it "fails loudly when a document-declared mount omits its mirror target" $
+        -- Activation implies a mirror write, so the target is an explicit per-mount
+        -- declaration, never implied from the private upstream.
+        loadConfig [] (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}")
+            `shouldSatisfy` decodeErrorMentions "mounts.npm.mirrorTarget"
+
+    it "loads a mount whose mirror target is declared equal to its private upstream" $
+        -- Equality with the private upstream is a valid arrangement; only the
+        -- declaration itself is mandatory.
+        case loadConfig
+            []
+            ( Just
+                "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://one.example.test\",\
+                \\"mirrorTarget\":\"https://one.example.test\"}}}"
+            ) of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "fails loudly when an environment key activates a mount without an upstream" $
         loadConfig [("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")] Nothing
@@ -65,6 +87,11 @@ spec = describe "decodeDocument" $ do
         let outcome = loadConfig [] (Just "{\"mounts\":{\"npm\":{},\"pypi\":{}}}")
         outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
+
+    it "reports a mount's missing private upstream and missing mirror target together" $ do
+        let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")] Nothing
+        outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM"
+        outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
 
     it "loads the bounded serve and connection-pool defaults" $
         case loadConfig [] Nothing of
@@ -195,11 +222,19 @@ spec = describe "decodeDocument" $ do
 
     describe "registry URL entries (the egress gate authorises each entry's host:port pair)" $ do
         it "accepts an upstream URL with an explicit port" $
-            case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")] Nothing of
+            case loadConfig
+                [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")
+                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                ]
+                Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
         it "accepts an upstream URL with a bracketed IPv6 host and a port" $
-            case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")] Nothing of
+            case loadConfig
+                [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")
+                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                ]
+                Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
         it "rejects an upstream URL with a non-numeric port, naming the value (fails closed at boot)" $

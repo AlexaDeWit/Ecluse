@@ -135,6 +135,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
+    Ecluse.Core.Registry.Publish
     Ecluse.Core.Registry.Pypi.Wire
     Ecluse.Core.Registry.Rubygems.Wire
     Ecluse.Core.Rules
@@ -257,6 +258,7 @@ library
     Ecluse.Composition.Credential
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.Sizing
+    Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
     Ecluse.Config.Aeson
@@ -538,6 +540,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
+    Ecluse.Registry.PublishSpec
     Ecluse.Registry.Pypi.WireSpec
     Ecluse.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
@@ -640,6 +643,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec

@@ -6,8 +6,8 @@
 component is reached.
 
 'Env' is the one place backend choice is resolved. It holds the proxy's __handles__
--- the registry-protocol client, the mirror queue, and the outbound-credential
-provider -- each an opaque record of functions (the Handle pattern) whose closures
+-- the mirror queue foremost -- each an opaque record of functions (the Handle
+pattern) whose closures
 already capture their backend's private state. Nothing downstream inspects which
 backend a handle is; it only applies the field. Alongside the handles it carries the
 shared @http-client@ 'Manager' that the data plane (metadata fetch, artifact
@@ -55,7 +55,6 @@ import Katip (LogEnv, katipAddContext)
 import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (RegistryClient)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
@@ -75,15 +74,6 @@ data Env = Env
     {- ^ The process-wide brief-wait bound for metadata-bearing serve work
     ("Ecluse.Core.Server.Admission"). It is projected into every request runtime,
     so all mounts share one aggregate cap and one waiting room.
-    -}
-    , envRegistry :: RegistryClient
-    {- ^ The registry-protocol handle the mirror __worker__ publishes approved
-    packages through. The request serve path does __not__ read it: each upstream
-    of a packument merge builds its own client over 'envManager' (two upstreams, with
-    per-origin credentials), so this slot is the __publish side__. One npm client serves
-    every cloud, since protocol and auth are orthogonal axes; until a backend is
-    configured behind it the slot is a refusing placeholder (see
-    'Ecluse.unconfiguredRegistry').
     -}
     , envQueue :: MirrorQueue
     {- ^ The mirror-queue handle: the durable hand-off from the request path to the
@@ -156,8 +146,8 @@ opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
-newEnvWithAdmission :: ServeAdmission -> RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat = do
+newEnvWithAdmission :: ServeAdmission -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     -- The metric instruments are built once here from the telemetry handle: created on
     -- its meter provider when enabled, on the SDK's no-op meter when off (so they are
     -- inert without an SDK). Building them in 'newEnvWithAdmission' keeps the construction
@@ -169,7 +159,6 @@ newEnvWithAdmission admission registry queue manager privateManager metadataCach
     pure
         Env
             { envServeAdmission = admission
-            , envRegistry = registry
             , envQueue = queue
             , envManager = manager
             , envPrivateManager = privateManager
@@ -190,7 +179,6 @@ own to release and needs no teardown bracket.
 withEnvWithAdmission ::
     (MonadIO m) =>
     ServeAdmission ->
-    RegistryClient ->
     MirrorQueue ->
     Manager ->
     Manager ->
@@ -200,13 +188,13 @@ withEnvWithAdmission ::
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
+withEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
     -- The connection pool behind each 'Manager' and the telemetry providers behind
     -- the 'Telemetry' handle are owned and released by whoever provided them (the
     -- manager's caller; 'Ecluse.Runtime.Telemetry.withTelemetry' for the providers), and the
     -- handles hold no resource this root acquired -- so assembly needs no teardown
     -- bracket; the 'Env' simply scopes the action.
-    env <- liftIO (newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat)
+    env <- liftIO (newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat)
     action env
 
 {- | Project the request runtime ("Ecluse.Core.Server.Context.ServeRuntime") the serve
@@ -230,8 +218,8 @@ serveRuntimeOf env =
         }
 
 {- | Project the worker runtime ("Ecluse.Core.Worker.WorkerRuntime") the mirror worker
-is closed over from the composition root: the mirror queue, the publish-side registry
-client, the untrusted data-plane manager, the consume-loop heartbeat, and the
+is closed over from the composition root: the mirror queue, the untrusted
+data-plane manager, the consume-loop heartbeat, and the
 OpenTelemetry-backed worker metric and tracing ports
 ('Ecluse.Runtime.Telemetry.Instruments.workerMetricsPortOf',
 'Ecluse.Runtime.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry point -- it
@@ -239,17 +227,18 @@ gathers existing handles and wraps the instrument and telemetry handles in their
 ports -- so the core loop reads its backends through the core interface without depending
 on this application 'Env' (the analogue of 'serveRuntimeOf' for the serve path).
 
-The per-ecosystem re-evaluation bundles are passed in rather than read from the 'Env':
-they are derived from the served mounts (the same prepared rules, artifact request
-formation, and public origin the serve path gates with), which the composition root
-resolves alongside the handles, so the worker re-runs current policy against a job
-before mirroring it through one codepath with the serve gate.
+The per-ecosystem bundles are passed in rather than read from the 'Env':
+they are derived from the served mounts and the resolved publish targets (the same
+prepared rules, artifact request formation, and public origin the serve path gates
+with, plus each mount's married mirror-write capability), which the composition root
+resolves alongside the handles ('Ecluse.Composition.Worker.workerPoliciesFor'), so
+the worker re-runs current policy against a job before mirroring it through one
+codepath with the serve gate, and publishes through the job ecosystem's own bundle.
 -}
 workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =
     WorkerRuntime
         { wrQueue = envQueue env
-        , wrRegistry = envRegistry env
         , wrManager = envManager env
         , wrHeartbeat = envWorkerHeartbeat env
         , wrMetrics = workerMetricsPortOf (envMetrics env)

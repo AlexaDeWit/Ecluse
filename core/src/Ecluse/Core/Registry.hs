@@ -2,43 +2,35 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The registry-protocol handle: the sole interface between the proxy core and
-any specific registry's wire protocol.
+{- | The registry-protocol vocabulary: the payload and typed-fault types every
+registry-facing capability shares.
 
-This is the __ecosystem (protocol) axis__ -- fetch, publish, and parse -- and
-nothing more (see @docs\/architecture\/registry-model.md@ → "Registry
-Abstraction"). It is a __record of functions__ (the Handle pattern): a backend's
-smart constructor returns a 'RegistryClient' whose closures capture that
-backend's private state (an HTTP manager). The proxy core operates only on
-'Ecluse.Core.Package.PackageInfo' (the packument-level view) and
-'Ecluse.Core.Package.PackageDetails' (the per-version snapshot the rules engine
-evaluates); an adapter projects its wire format into those, and nothing above
-the registry layer sees registry-specific structures.
+This is the __ecosystem (protocol) axis__' common ground (see
+@docs\/architecture\/registry-model.md@ → "Registry Abstraction"): the raw fetched
+document ('RegistryResponse'), the mirror-write descriptor ('MirrorArtifact'),
+and one typed fault channel per exchange -- 'FetchFault' for a metadata read,
+'PublishFault' for the mirror write, 'PublishRelayFault' for the first-party
+relay, with 'UrlFormationError' the protocol-independent request-formation
+failure they all share. The capabilities that speak a protocol over these types
+live beside them: the metadata read handle in "Ecluse.Core.Registry.Metadata",
+the mirror write's codec-over-transport split in "Ecluse.Core.Registry.Publish",
+and each ecosystem's capability record in "Ecluse.Core.Registry.Adapter".
 
 Two design points are load-bearing:
 
-* __The effectful fields return 'IO', not @App@.__ An adapter closes over its
-  own state (HTTP manager, credentials) and never imports the proxy's
-  @Env@\/@App@, so backends stay decoupled from the core (no import cycle) -- see
-  @docs\/architecture\/technology-stack.md@ → "Key Decisions". The @parse*@
-  fields are __pure__ ('Either'): parsing a fetched response is a total,
-  side-effect-free projection (/parse, don't validate/).
+* __Failures are values.__ Each exchange reports every failure -- transport
+  included -- in its typed channel, never a throw, so a consumer's fall-through
+  or retry-vs-drop decision is total at the call site
+  (/parse, don't validate/; see @docs\/architecture\/fault-model.md@).
 
-* __'RegistryClient' deliberately carries no authentication.__ Protocol and auth
-  are orthogonal axes: every managed npm registry (AWS CodeArtifact, GCP Artifact
-  Registry, a self-hosted Verdaccio) speaks the same npm protocol and differs
-  only in how a bearer token is minted, which lives behind the separate
-  "Ecluse.Core.Credential" handle. So one npm 'RegistryClient' is reused across every
-  cloud rather than near-duplicated per provider.
-
-The abstraction is the sole interface, so a new ecosystem backend (PyPI,
-RubyGems, …) is an additive constructor behind this record rather than a
-structural change.
+* __The vocabulary carries no authentication.__ Protocol and auth are orthogonal
+  axes: every managed npm registry (AWS CodeArtifact, GCP Artifact Registry, a
+  self-hosted Verdaccio) speaks the same npm protocol and differs only in how a
+  bearer token is minted, which lives behind the separate
+  "Ecluse.Core.Credential" handle. So one protocol implementation is reused
+  across every cloud rather than near-duplicated per provider.
 -}
 module Ecluse.Core.Registry (
-    -- * Protocol handle
-    RegistryClient (..),
-
     -- * Fetch payload
     RegistryResponse (..),
 
@@ -53,13 +45,11 @@ module Ecluse.Core.Registry (
     UrlFormationError (..),
     PublishRelayResponse (..),
     PublishRelayFault (..),
-    RegistryUnconfigured (..),
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (Hash, PackageDetails, PackageInfo, PackageName)
+import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Security (LimitError)
-import Ecluse.Core.Version (Version)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
 document, as returned by 'fetchMetadata'. It is kept opaque-of-bytes here so the
@@ -76,7 +66,7 @@ newtype RegistryResponse = RegistryResponse
 integrity digests, and declared size of the artifact the worker's ingest
 re-evaluation __re-admitted__ under current policy. The worker derives it entirely
 from current metadata -- the queue payload carries no digest or size -- so the
-'publishArtifact' document can only ever name what the shared admission gate
+published document can only ever name what the shared admission gate
 floor-checked (see "Ecluse.Core.Worker.Job").
 
 'maHashes' is a 'NonEmpty' because admission refuses a digest-less version (the
@@ -111,8 +101,9 @@ newtype ParseError = ParseError
     deriving stock (Eq, Show)
 
 {- | Why publishing an artifact to a registry failed -- a genuine write fault
-reported by 'publishArtifact' (an 'Ecluse.Core.Queue' job is then left un-acked and
-retried; see @docs\/architecture\/cloud-backends.md@).
+reported by the mirror write ('Ecluse.Core.Registry.Publish.mpPublishArtifact';
+an 'Ecluse.Core.Queue' job is then left un-acked and retried; see
+@docs\/architecture\/cloud-backends.md@).
 
 This is the __write-path__ fault and nothing more: forming the request URL is a
 separate concern (a 'UrlFormationError'), so a read-path fetch can no longer
@@ -181,18 +172,6 @@ data PublishRelayFault
       RelayBoundExceeded LimitError
     deriving stock (Eq, Show)
 
-{- | The handle slot is filled but no backend is wired behind it: every effectful
-field of 'Ecluse.Proxy.unconfiguredRegistry' refuses with this typed throw. A
-composition fault with no per-request decision -- a justified typed exception
-rather than a value a caller might fall through -- recognised by the worker's
-supervision policy (it fails the process up rather than retrying forever) and by
-the request perimeter's escape classification.
--}
-data RegistryUnconfigured = RegistryUnconfigured
-    deriving stock (Eq, Show)
-
-instance Exception RegistryUnconfigured
-
 {- | The response from the publication target after relaying a publish document.
 Kept in memory (no streaming) -- the relayed body is small (typically a JSON
 envelope and a tarball under the target's size limit), and buffering it whole lets the
@@ -228,43 +207,8 @@ data PublishFault
       status returned (a connection failure, a TLS error, a timeout), carried as its
       rendered detail. __Retryable__: the transport may recover, so the job is left
       un-acked and redelivered, exactly as a 'PublishRejected'. Surfacing it as a value
-      is what lets 'publishArtifact' honour its total, never-thrown contract.
+      is what lets the mirror write ('Ecluse.Core.Registry.Publish.mpPublishArtifact')
+      honour its total, never-thrown contract.
       -}
       PublishTransport Text
     deriving stock (Eq, Show)
-
-{- | The registry-protocol handle -- a record of functions over a backend whose
-private state the closures capture. The effectful fields return 'IO' (decoupled
-from the core); the @parse*@ fields are pure. See the module header.
--}
-data RegistryClient = RegistryClient
-    { fetchMetadata :: PackageName -> IO (Either FetchFault RegistryResponse)
-    {- ^ Fetch a package's metadata document (its packument) from the registry. A
-    failure is reported as a 'FetchFault' __value__ -- an unformable URL, a bound
-    breach, or a transport fault -- never thrown, so a consumer's fall-through
-    decision is total at the call site.
-    -}
-    , publishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-    {- ^ Publish one version's artifact to the registry, given its metadata
-    ('MirrorArtifact': filename, integrity hashes, declared size) and the raw
-    tarball bytes. The adapter is responsible for assembling the
-    ecosystem-specific publish document from these inputs. Idempotent at the
-    protocol level (versions are immutable), so a redelivered mirror job's
-    re-publish is safe. A failure is reported as a 'PublishFault' __value__ --
-    'PublishRejected' or 'PublishTransport' (retry) or 'PublishUrlUnformable' (drop)
-    -- never thrown, so the worker's retry-vs-drop decision is total at the call site.
-    -}
-    , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
-    {- ^ Project a fetched metadata response into the packument-level
-    'PackageInfo' for the requested package. The 'PackageName' is the identity the
-    request is for -- the proxy always knows it from the route -- supplied so the
-    projection has the requested identity available alongside the upstream
-    document's self-reported @name@.
-    -}
-    , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
-    {- ^ Project a fetched metadata response into the per-version
-    'PackageDetails' for a specific version.
-    -}
-    , parseVersionList :: RegistryResponse -> Either ParseError [Version]
-    -- ^ Extract the list of available versions from a fetched metadata response.
-    }

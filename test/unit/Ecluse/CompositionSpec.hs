@@ -18,6 +18,7 @@ import Ecluse.Composition.Support (
     noTokenEnvVars,
     staticEnvVars,
     withoutCredentialProvider,
+    withoutMirrorTargetUrl,
  )
 import Ecluse.Config (
     Config (configApp),
@@ -89,6 +90,7 @@ planFrom envVars mDocBytes = do
             toBoot (PolicyErrors es) = map PolicyBootError es
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(MountMissingMirrorTarget _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
         Right cfg -> do
             initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
                 Left pErrs -> pure (Left pErrs)
@@ -291,6 +293,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         -- the private upstream the activation contract requires.
         let pypiEnv =
                 ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM", "https://priv.example.test")
+                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET", "https://mir.example.test")
                     : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")
                     : staticEnvVars
         _ <- expectEnv pypiEnv
@@ -298,6 +301,17 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         planFrom pypiEnv (Just (mountDoc "pypi" "static")) >>= \case
             Left errs -> errs `shouldBe` [MissingAdapter PyPI]
             Right _ -> expectationFailure "expected boot failure"
+
+    it "fails when an active mount declares no mirror target" $ do
+        -- Activation implies a mirror write: the target must be declared explicitly
+        -- (even when it equals the private upstream), so a mount without one is a
+        -- rendered boot error, never an implied endpoint.
+        let env = withoutMirrorTargetUrl staticEnvVars
+        planFrom env Nothing >>= \case
+            Left errs ->
+                errs
+                    `shouldBe` [PolicyBootError (UnknownRuleType "mount" (renderConfigError (MountMissingMirrorTarget Npm)))]
+            Right _ -> expectationFailure "expected a missing-mirror-target boot error"
 
     it "fails on a mount missing codeartifact config" $ do
         let env = withoutCredentialProvider staticEnvVars

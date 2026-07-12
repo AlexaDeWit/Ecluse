@@ -48,7 +48,7 @@ consumer's URLs. A mount binds, as one unit, the ecosystem's registered capabili
 boot): its serve surface (the path grammar and the error renderer, the client-facing
 denial/error surface, so the agnostic layer holds no ecosystem body shape; see
 [Error model](#error-model)), its four [registry roles](registry-model.md#registry-roles)
-over the [`RegistryClient`](registry-model.md#registry-abstraction) handle, and an optional
+over the [protocol boundary](registry-model.md#registry-abstraction), and an optional
 per-ecosystem [rule refinement](configuration.md#rule-policy) that merges over the shared
 policy. The single-npm
 setup is the degenerate case, still under its own derived prefix.

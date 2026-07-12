@@ -30,19 +30,18 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry (RegistryUnconfigured (RegistryUnconfigured))
+import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
-import Ecluse.Proxy (unconfiguredRegistry)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
@@ -85,7 +84,7 @@ newTestEnv = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-
@@ -483,7 +482,7 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         outcome `shouldSatisfy` isRight
 
     it "answers a recognised pre-commit escape with the neutral 500, observed as a GateFault" $ do
-        (statuses, observed, _) <- driveGuard (\_respond -> throwIO RegistryUnconfigured)
+        (statuses, observed, _) <- driveGuard (\_respond -> throwIO (ResponseBoundExceeded (BodyTooLarge 1024)))
         statuses `shouldBe` [500]
         observed `shouldBe` [GateFault]
 

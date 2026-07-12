@@ -20,8 +20,9 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (RegistryClient, UrlFormationError)
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
+import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -35,10 +36,12 @@ record of concrete handles and abstract ports (the Handle pattern), assembled by
 composition root ('Ecluse.Env.workerRuntimeOf') and read by the loop through the
 'WorkerM' reader.
 
-The mirror queue is the demand-driven hand-off the loop consumes; the publish-side
-registry client writes approved artifacts to the mirror target; the untrusted
+The mirror queue is the demand-driven hand-off the loop consumes; the untrusted
 data-plane manager fetches the artifact bytes (the validating TLS manager, over an
-https-only @dist.tarball@); the heartbeat is the loop's liveness surface. The metric and
+https-only @dist.tarball@); the heartbeat is the loop's liveness surface. The
+mirror write is not a runtime slot: it rides each ecosystem's bundle
+('wpPublish'), so every job publishes through its own ecosystem's married
+capability. The metric and
 tracing ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
 "Ecluse.Core.Telemetry.Span"); the application supplies their OpenTelemetry-backed
 implementations, so the loop records without naming a telemetry backend. There is no log
@@ -47,10 +50,6 @@ field: the loop logs through the ambient @katip@ context the entry point establi
 data WorkerRuntime = WorkerRuntime
     { wrQueue :: MirrorQueue
     -- ^ The mirror-queue handle the consume loop long-polls and acks against.
-    , wrRegistry :: RegistryClient
-    {- ^ The publish-side registry handle approved artifacts are written to the mirror
-    target through.
-    -}
     , wrManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ artifact fetch (over
     an https-only @dist.tarball@).
@@ -75,10 +74,10 @@ data WorkerRuntime = WorkerRuntime
     -}
     }
 
-{- | The per-ecosystem re-evaluation bundle the worker re-runs current policy through
-before it mirrors a job: a resolver that fetches and projects the single version's
-metadata, the prepared rule set, the integrity floor, the tarball-host gate, the
-artifact request formation, and the wall-clock the age rules read.
+{- | The per-ecosystem bundle the worker dispatches every job through: a resolver
+that fetches and projects the single version's metadata, the prepared rule set,
+the integrity floor, the tarball-host gate, the artifact request formation, the
+married mirror-write capability, and the wall-clock the age rules read.
 
 The resolver is the __shared__ single-version fetch-and-project
 ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
@@ -88,7 +87,9 @@ values; and the request formation is the mount ecosystem's own
 ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl') -- so the worker's ingest
 decision and the serve-time decision run one codepath
 ('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any per-source
-breaker state is shared, never forked.
+breaker state is shared, never forked. The publish capability is likewise the mount's
+own, so the presence probe and the mirror write speak the job ecosystem's protocol
+at that ecosystem's declared mirror target, never a neighbour's.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
@@ -120,6 +121,14 @@ data WorkerPolicy = WorkerPolicy
     fetched with the same request formation the serve path streams with. Riding this
     bundle means a job whose ecosystem has none never reaches a fetch: it is
     fail-closed with the rest of the bundle.
+    -}
+    , wpPublish :: MirrorPublish
+    {- ^ The mount's married mirror-write capability
+    ('Ecluse.Core.Registry.Publish.newMirrorPublish': the adapter's protocol codec
+    over the shared publish transport, bound to the mount's declared mirror
+    target). The presence probe and the verified-bytes publish both ride it, so a
+    job can only ever consult the capability keyed by its own ecosystem; a job
+    whose ecosystem carries no bundle is fail-closed before any of this runs.
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive
