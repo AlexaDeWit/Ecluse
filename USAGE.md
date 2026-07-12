@@ -134,7 +134,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   mount's registry endpoints that resolve to the same registry, and **Écluse Dredger refuses to
   boot** if
   `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
-  first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html#threat-10)
+  first-party data loss. (Register [threat: Registry collapse](https://ecluse-proxy.com/threat-model.html#registry-collapse-erases-provenance-and-per-store-policy))
   and #16.)
 - **Pointing the private upstream at a registry that itself draws from public** (say a CodeArtifact
   repo with the stock `npm-store` upstream to npmjs). This is the **dangerous one**, and Écluse
@@ -142,7 +142,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   gate instead of through it, nullifying the rules, integrity floor, and freshness quarantine.
   Aggregate **trusted stores only** into the private upstream (your first-party store plus Écluse's
   mirror), and let the gated mirror be the only way public content enters. (Register
-  [threat #15](https://ecluse-proxy.com/threat-model.html#threat-15).)
+  bypassing the proxy's rules, age-quarantine, and integrity floor. (Register [threat: Private-upstream aggregation](https://ecluse-proxy.com/threat-model.html#private-upstream-aggregation-admits-the-public-registry-bypassing-the-gate).)
 
 The other deviations self-announce: an open edge (`ECLUSE_AUTH_TOKEN` unset) leans on your network
 boundary, a static publish credential fails closed at boot without that edge, and a `static`
@@ -218,7 +218,7 @@ rationale behind each setting are in
 | `ECLUSE_MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
 | `ECLUSE_MIN_PUBLIC_INTEGRITY` | No | `sha256` | Minimum integrity algorithm a **public** (untrusted) version's digest must meet: `sha256`, `sha384`, `sha512`, or `blake2b`. A weaker or absent digest is refused with `403`. Hard-floored at SHA-256: `sha1`/`md5`/an unknown name is rejected at startup. The trusted path has its own loosenable floor (`ECLUSE_MIN_TRUSTED_INTEGRITY`). |
 | `ECLUSE_MIN_TRUSTED_INTEGRITY` | No | `sha256` | Minimum integrity algorithm a **trusted** (private) version's digest must meet. Defaults to `sha256`, so a SHA-1-only or hashless private version is dropped like a public one, but unlike the public floor is **loosenable below SHA-256** (`sha1`/`md5`) for a legacy private mirror. An unknown name is rejected at load. |
-| `ECLUSE_DIVERGENCE_POLICY` | No | `warn` | What to do when a shared version's private and public copies contradict on a shared integrity algorithm ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)). Either way the trusted copy wins the bytes, a `WARNING` is logged, and `ecluse.registry.merge.divergence` is incremented. `warn` serves the trusted copy and relies on the alarm; `fail-closed` additionally withholds the contested version from the served listing (dropping any `dist-tag`, including `latest`, that pointed at it), so a resolver pinned to it fails to resolve rather than receive a contested copy. An unknown value is rejected at load. |
+| `ECLUSE_DIVERGENCE_POLICY` | No | `warn` | What to do when a shared version's private and public copies contradict on a shared integrity algorithm ([threat: Undetected artifact substitution](https://ecluse-proxy.com/threat-model.html#undetected-artifact-substitution-across-upstreams)). Either way the trusted copy wins the bytes, a `WARNING` is logged, and `ecluse.registry.merge.divergence` is incremented. `warn` serves the trusted copy and relies on the alarm; `fail-closed` additionally withholds the contested version from the served listing (dropping any `dist-tag`, including `latest`, that pointed at it), so a resolver pinned to it fails to resolve rather than receive a contested copy. An unknown value is rejected at load. |
 
 Configuration is validated in full at startup and the process refuses to start on any problem (an
 unknown rule type, a bad URL, an unresolved policy reference): a misconfiguration is a loud,
@@ -569,7 +569,7 @@ The internal design, for when you need the _why_:
 - [Architecture overview](docs/architecture.md)
 - [Configuration & Authentication](docs/architecture/configuration.md)
 - [Security invariants & network egress](docs/architecture/security.md)
-- [Threat model](https://ecluse-proxy.com/threat-model.html), the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
+- [Threat model](https://ecluse-proxy.com/threat-model.html), the STRIDE register, generated from the ThreatCL model ([`threat-modelling/ecluse.hcl`](threat-modelling/ecluse.hcl))
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting & URL rewriting](docs/architecture/web-layer.md#web-layer)
 - [Release & supply-chain operations](docs/architecture/release-supply-chain.md)

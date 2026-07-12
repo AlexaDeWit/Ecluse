@@ -250,7 +250,7 @@
         # Site rendering: pandoc turns the repo's Markdown into the published site
         # pages (`make site`). Only the Pages publish uses it, so it rides in the
         # default (human) shell below but is kept out of the lean CI set.
-        docsInputs = [ pkgs.pandoc pkgs.go-task ];
+        docsInputs = [ pkgs.pandoc pkgs.go-task threatcl ];
 
         # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
         # by hash and copied into the published site (see Makefile `site`) so diagrams
@@ -374,6 +374,21 @@
           ldflags = [ "-s" "-w" "-X main.Version=${version}" ];
         };
 
+        threatcl = pkgs.buildGoModule rec {
+          pname = "threatcl";
+          version = "0.5.2";
+          src = pkgs.fetchFromGitHub {
+            owner = "threatcl";
+            repo = "threatcl";
+            rev = "v${version}";
+            sha256 = "0nz5jk4mq8x95h3bjqhbpdal9dg462z32xf8y7z4bjd7cixqx490";
+          };
+          vendorHash = "sha256-kQnZXVQVMMfxZR0TIET4m64kEEKJJiy2otqeetlkLqU=";
+          doCheck = false;
+          ldflags = [ "-s" "-w" "-X main.version=${version}" ];
+        };
+
+
         # Opt-in only: entirely separate from default/ci so it imposes nothing on
         # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md).
         mcpInputs = [
@@ -389,6 +404,7 @@
           default = ecluse;
           ecluse = ecluse;
           agent-lsp = agent-lsp; # LSP<->MCP bridge (see mcpInputs); `nix build .#agent-lsp`
+          threatcl = threatcl;
 
           # The exact stripped, static binary that ships inside the image
           # (`justStaticExecutables`, no Haskell-library closure). Exposed so the
