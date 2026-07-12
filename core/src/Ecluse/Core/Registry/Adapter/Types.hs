@@ -57,6 +57,7 @@ import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (MountRenderer)
 import Ecluse.Core.Server.Route (Classifier)
+import Ecluse.Core.Server.RouteSpec (RouteSpec)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -94,7 +95,14 @@ stands alone rather than sharing shape with the protocol slices.
 data AdapterServe = AdapterServe
     { serveClassifier :: Classifier
     {- ^ The ecosystem's path grammar, mapping a mount-relative request to a shared
-    'Ecluse.Core.Server.Route.Route'.
+    'Ecluse.Core.Server.Route.Route'. The authoritative parser the server routes on.
+    -}
+    , serveRoutes :: NonEmpty RouteSpec
+    {- ^ The same grammar as data: the declarative 'RouteSpec' projection of
+    'serveClassifier', one per served 'Ecluse.Core.Server.Route.Route'. The capability
+    manifest ("Ecluse.Manifest") renders this rather than re-describing the path
+    grammar, and a correspondence test holds each spec's example against
+    'serveClassifier', so the documented surface cannot drift from what is routed.
     -}
     , serveRenderer :: MountRenderer
     -- ^ The ecosystem body shape an in-mount denial or error renders through.

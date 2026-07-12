@@ -82,10 +82,12 @@ Everything else unrecognised stays `Unsupported` → `404`.
 
 ## Capability manifest
 
-Écluse publishes a capability manifest: an OpenAPI 3 document, generated at build time from the closed
-`Route` enumeration above across the configured [mounts](#multi-ecosystem-mounts) and published to the
-docs site (not served, no `GET /openapi.json` route). Generating it from the same enumeration the
-server routes on means it cannot drift. The full rationale, schema strategy, and publish pipeline are
+Écluse publishes a capability manifest: an OpenAPI 3 document, generated at build time and published to
+the docs site (not served, no `GET /openapi.json` route). It is rendered from each mounted adapter's
+declarative route grammar (`serveRoutes`, a `RouteSpec` per served `Route`), the same grammar the
+`classify` router above routes on, across the configured [mounts](#multi-ecosystem-mounts). A
+correspondence test holds the documented paths and methods against that classifier, so the manifest
+cannot drift from what the server serves. The full rationale, schema strategy, and publish pipeline are
 the canonical [API Surface & Capability Manifest](api-surface.md).
 
 ## Control plane vs. data plane
