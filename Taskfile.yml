@@ -384,27 +384,48 @@ tasks:
     cmds:
       - bash scripts/rewrite-haddock-dep-links.test.sh
 
+  analysis-build:
+    desc: Build exe:ecluse with .hie output for weeder and stan
+    # weeder and stan want the same artefact: exe:ecluse built with -fwrite-ide-info.
+    # One build serves both. Building it per-tool instead would have each cabal build
+    # clone the amazonka source-repository-package into its own builddir at the same
+    # moment, and two concurrent clones of one repo get the connection reset: git exits
+    # 128 and reddens the whole of `check` on a clean tree (#826).
+    #
+    # `run: once` is load-bearing. weeder and stan both depend on this task and run
+    # concurrently, and go-task's default (`always`) honours both calls: that is two
+    # builds again, now racing into ONE builddir. With `once`, go-task dedupes on the
+    # task name and the second caller blocks until the first execution finishes, so stan
+    # waits for the build rather than reading a half-written dist-analysis.
+    run: once
+    cmds:
+      - cabal build exe:ecluse --builddir=dist-analysis --ghc-options=-fwrite-ide-info
+
   weeder:
     desc: Report app-unreachable library code
+    deps:
+      - analysis-build
     cmds:
-      - cabal build exe:ecluse --builddir=dist-weeder --ghc-options=-fwrite-ide-info
-      - weeder --hie-directory dist-weeder
+      - weeder --hie-directory dist-analysis
 
   stan:
     desc: Haskell static analysis
+    deps:
+      - analysis-build
     cmds:
-      - cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
-      - stan --hiedir dist-stan
+      - stan --hiedir dist-analysis
       - |
-        n=$(bash -c 'stan --hiedir dist-stan --json-output | jq ".observations | length"'); \
+        n=$(bash -c 'stan --hiedir dist-analysis --json-output | jq ".observations | length"'); \
         if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (fails the gate)"; exit 1; fi; \
         echo "stan: clean at the configured floor"
 
   stan-all:
     desc: Full stan report incl Performance/space-leak
+    deps:
+      - analysis-build
     cmds:
-      - cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
-      - stan --hiedir dist-stan --no-default
+      - stan --hiedir dist-analysis --no-default
+
   cabal-checks:
     desc: Run all Cabal-dependent checks sequentially
     cmds:
@@ -430,19 +451,20 @@ tasks:
 
   analysis-checks:
     desc: Dead-code (weeder) and Haskell static analysis (stan)
-    # weeder and stan each build the exe with -fwrite-ide-info into their own
-    # builddir, so they run concurrently with each other but AFTER the cabal and
-    # static tiers (see `check`), never piled onto the coverage build's Docker
-    # ministack. Both fail on findings (weeder natively; stan via its own exit),
-    # so this tier reddens `check` until the tree is clean of both.
+    # Both tools share one -fwrite-ide-info build (analysis-build), then read its .hie
+    # output. Reading is read-only, so they still run concurrently with each other; only
+    # the build is serialised, which is where the contention actually was. The tier runs
+    # AFTER the cabal and static tiers (see `check`), never piled onto the coverage
+    # build's Docker ministack. Both fail on findings (weeder natively; stan via its own
+    # exit), so this tier reddens `check` until the tree is clean of both.
     deps:
       - weeder
       - stan
 
   check:
     desc: Pre-push checks (build, tests, doctest, lint, Semgrep, dead-code, static analysis)
-    # cabal and static tiers run concurrently first; the analysis tier follows so
-    # its two ide-info builds do not contend with the coverage build for CPU.
+    # cabal and static tiers run concurrently first; the analysis tier follows so its
+    # ide-info build does not contend with the coverage build for CPU.
     deps:
       - cabal-checks
       - static-checks
