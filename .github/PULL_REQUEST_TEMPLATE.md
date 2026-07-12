@@ -9,7 +9,7 @@ Security fixes: coordinate privately first; see SECURITY.md.
 
 ## Checklist
 
-- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
+- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep, weeder, stan)
 - [ ] Docs updated in this PR (README / `docs/` / AGENTS.md) where behaviour, interfaces, or config changed
 - [ ] Conventional Commit subjects; commits are GPG-signed
 - [ ] Every commit is signed off, DCO (`git commit -s`)
