@@ -32,9 +32,11 @@ Run `task --list` for the full list (the integration/smoke suites, `nix-build`, 
 drift.
 
 **Before you push,** run `task check` clean: build (`-Werror`), units (strict assertions),
-doctest over the Haddock `>>>` examples, `fourmolu --mode check`, `hlint`, and Semgrep (zero
-findings). It's a full `-Werror` build of every component, so on a cold checkout or under
-contention it runs 10+ minutes. `task gate` adds the Docker-bound integration suite and the
+doctest over the Haddock `>>>` examples, `fourmolu --mode check`, `hlint`, Semgrep (zero
+findings), and the two analysis tiers, `weeder` (dead code) and `stan` (Haskell static
+analysis), each of which fails `check` on any finding. It's a full `-Werror` build of every
+component plus two `-fwrite-ide-info` builds for the analysis tiers, so on a cold checkout or
+under contention it runs well over 10 minutes. `task gate` adds the Docker-bound integration suite and the
 Haddock build, the two tiers `task check` lacks (`task test-integration` runs the integration
 suite alone). Performance tests aren't a push requirement; they're verified server-side. The CI
 gate expects all those to pass, plus a live-registry smoke suite (`task test-smoke`) that's

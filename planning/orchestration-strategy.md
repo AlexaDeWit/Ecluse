@@ -281,12 +281,17 @@ The **fast floor** is the agent's whole local obligation before pushing:
 task check
 ```
 
-`task check` is the project's fast pre-push target, build, unit tests, doctest,
-fourmolu/hlint, Semgrep, `cabal check`, and workflow-lint: **the gate minus its
-Docker integration and Haddock tiers**, the slow parallelisable ones CI runs for
-you. The one hard stop within it is **Semgrep clean** (zero findings, no new ignores
-without the architect's approval). Then **push early, let CI parallelise the rest,
-and watch the real run to green** (`gh pr checks --watch`).
+`task check` is the pre-push target: build, unit tests, doctest, fourmolu/hlint,
+Semgrep, `cabal check`, and workflow-lint (the gating tiers you can run locally,
+minus the Docker integration and Haddock tiers CI parallelises for you), **plus
+dead-code (`weeder`) and Haskell static analysis (`stan`)**. Those last two are not
+yet CI-gate dependencies, but the repo treats them as required-to-fix in practice, so
+they run here ahead of their enforcement; each fails `check` on any finding. That
+makes `check` a superset of the gate's current requirements, not a subset, and adds
+two `-fwrite-ide-info` builds, so it is no longer a quick pass. The hard stops within
+it are **Semgrep clean** (zero findings, no new ignores without the architect's
+approval) and a clean weeder/stan floor. Then **push early, let CI parallelise the
+rest, and watch the real run to green** (`gh pr checks --watch`).
 
 Reproduce a tier locally **only to debug a red**, map the red CI job back to its
 `task` target and run just that one, never the whole gate wholesale. The gating
@@ -295,7 +300,7 @@ jobs (the `needs` of the terminal `gate` job in
 
 | Gating CI job                              | Local command                                          |
 | ------------------------------------------ | ------------------------------------------------------ |
-| `build-and-test` (build + unit)            | `task check` _(build, unit, format-check, lint, sast)_ |
+| `build-and-test` (build + unit)            | `task check` _(build, unit, format-check, lint, sast, weeder, stan)_ |
 | `lint` (fourmolu + hlint)                  | ↳ included in `task check`                             |
 | `semgrep` (`--config auto`, ERROR/WARNING) | ↳ included in `task check`                             |
 | `integration` (ministack / Docker)         | `task test-integration`                                |

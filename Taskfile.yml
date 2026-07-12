@@ -428,19 +428,33 @@ tasks:
       - test-scripts
       - site-stub
 
+  analysis-checks:
+    desc: Dead-code (weeder) and Haskell static analysis (stan)
+    # weeder and stan each build the exe with -fwrite-ide-info into their own
+    # builddir, so they run concurrently with each other but AFTER the cabal and
+    # static tiers (see `check`), never piled onto the coverage build's Docker
+    # ministack. Both fail on findings (weeder natively; stan via its own exit),
+    # so this tier reddens `check` until the tree is clean of both.
+    deps:
+      - weeder
+      - stan
+
   check:
-    desc: Fast pre-push checks
+    desc: Pre-push checks (build, tests, doctest, lint, Semgrep, dead-code, static analysis)
+    # cabal and static tiers run concurrently first; the analysis tier follows so
+    # its two ide-info builds do not contend with the coverage build for CPU.
     deps:
       - cabal-checks
       - static-checks
+    cmds:
+      - task: analysis-checks
 
   ci:
     desc: Reproduce the core CI pipeline locally
     cmds:
+      # weeder and stan are part of `check` now (via analysis-checks); not repeated here.
       - task: check
       - task: docs-check
-      - task: weeder
-      - task: stan
 
   gate:
     desc: Reproduce the full CI gate locally
