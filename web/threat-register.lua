@@ -131,8 +131,9 @@ function CodeBlock(el)
   local out_blocks = {}
 
   if mermaid_raw and mermaid_raw:match("%S") then
+    local escaped = mermaid_raw:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
     out_blocks[#out_blocks + 1] = pandoc.Header(2, { pandoc.Str("Diagrams") })
-    out_blocks[#out_blocks + 1] = pandoc.CodeBlock(mermaid_raw, pandoc.Attr("", {"mermaid"}))
+    out_blocks[#out_blocks + 1] = pandoc.RawBlock("html", '<pre class="mermaid">\n' .. escaped .. '</pre>')
   end
 
   out_blocks[#out_blocks + 1] = pandoc.Header(2, { pandoc.Str("Threat register") })
