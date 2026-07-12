@@ -2184,7 +2184,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -2200,6 +2200,17 @@
                   "mitigation": "Containment of this standing privilege is least-privilege IAM on the container/task role (write to Registry B only; CodeArtifact tokens bear the role's own permissions, so this is an IAM policy rather than a token-level scope), container-role minting over static credentials, and a minimal TTL (CodeArtifact caps at 12h); the publish runs with redirectCount=0 (the mint token is attached at withToken, the single bearer-attach point). The mirror queue is part of the same trust boundary and is isolated and managed at the infrastructure level: a job is unauthenticated data that directs the worker to fetch-and-publish, so queue-send access is equivalent to trusted-write access \u2014 scope the queue's IAM so only the serve role enqueues (SendMessage) and only the worker receives and acks. Message authenticity is deliberately controlled by access, not signatures, the standard pattern for an internal single-producer/single-consumer queue. The worker's own attack surface is small: it hashes the fetched bytes and forwards them unchanged (no decompression or tarball parsing), so a malicious artifact is a poor code-execution vector. The dist.integrity check is anti-tamper-in-transit and anti-downgrade (it fails closed when the strongest present digest is in an uncomputable algorithm, never downgrading to a forgeable weaker one): it proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. The poisoning-of-future-reads consequence is therefore bounded by admission-gate soundness (the trusted store is only as clean as what the gate admits, and only the gate may enqueue), the role's blast radius, and queue access control \u2014 not by the integrity check.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000107"
+                },
+                {
+                  "number": 22,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Mirror-write credential can be sent to a misconfigured registry target",
+                  "type": "Information disclosure",
+                  "description": "The mirror target URL and the mirror-write credential provider are configured separately. If an operator explicitly supplies a CodeArtifact credential identity while pointing ECLUSE_MOUNTS__NPM__MIRROR_TARGET at a different registry, the worker can attach a CodeArtifact bearer to that wrong endpoint. The default inferred CodeArtifact path fails closed for a non-CodeArtifact mirror host, but the explicit MIRROR_CODE_ARTIFACT_* path can still bind a minted token to an unrelated target.",
+                  "mitigation": "Open correctness work is tracked in #808: decide the intended provider/endpoint binding invariant and add either a boot-time guard or an explicit operator override for deliberate cross-binding. Until then, the operational control is to keep the mirror target and credential provider identity aligned, prefer deriving CodeArtifact identity from the mirror-target host when using CodeArtifact, and scope the container role write-only to the intended mirror store. Residual impact is primarily credential disclosure to the configured wrong endpoint; public registries should reject the bearer, but an attacker-controlled endpoint could log it.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000111"
                 }
               ],
               "trustBoundaryIds": []
