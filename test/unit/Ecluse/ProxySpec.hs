@@ -13,12 +13,13 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Proxy (mountBindingFor, unconfiguredRegistry)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 
 newTestManager :: IO Manager

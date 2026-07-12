@@ -108,7 +108,6 @@ import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, res
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorJob (
@@ -130,12 +129,12 @@ import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (inertRuleDeps, prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
@@ -157,8 +156,10 @@ import Ecluse.Core.Worker (
 import Ecluse.Runtime.Env (newEnvWithAdmission)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (unsafeHash, validSha1, validSha512Sri)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.

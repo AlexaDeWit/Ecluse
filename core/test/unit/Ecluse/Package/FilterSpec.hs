@@ -26,16 +26,15 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Package.Filter (FilterPlan (..), filterPlan)
-import Ecluse.Core.Rules (inertRuleDeps)
+import Ecluse.Core.Package.Filter (FilterPlan (..))
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
-    atDefaultPrecedence,
  )
 import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
+import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
 spec :: Spec
 spec = do

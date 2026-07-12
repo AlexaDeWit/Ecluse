@@ -464,6 +464,8 @@ library ecluse-test-support
     Ecluse.Test.Port
     Ecluse.Test.Queue
     Ecluse.Test.RegistryCapture
+    Ecluse.Test.Rules
+    Ecluse.Test.Server.Cache
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version

@@ -20,6 +20,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Types

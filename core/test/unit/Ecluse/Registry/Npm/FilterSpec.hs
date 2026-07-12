@@ -24,22 +24,21 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Package.Filter (filterPlan, fpDecisions, fpSurvivors, restrictToSurvivors)
+import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Filter (
     assembleMergedPackument,
-    rewriteTarballUrls,
+    rewriteVersion,
  )
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
-import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan),
-    atDefaultPrecedence,
  )
+import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
 spec :: Spec
 spec = do
@@ -74,62 +73,37 @@ publishedDaysAgo ageDays =
 base :: Text
 base = "https://proxy.test/npm"
 
+{- | The @{base}\/{pkg}@ prefix the per-version rewrite cases place tarballs
+under, as the assembly derives it for the unscoped fixture package.
+-}
+thingPrefix :: Text
+thingPrefix = base <> "/thing"
+
 rewriteSpec :: Spec
-rewriteSpec = describe "rewriteTarballUrls" $ do
-    it "rewrites dist.tarball under {base}/{pkg}/-/{file}" $ do
-        v <- decodeValue oneVersionPackument
-        tarballAt "1.0.0" (rewriteTarballUrls base v)
+rewriteSpec = describe "rewriteVersion" $ do
+    it "rewrites dist.tarball to {prefix}/-/{file}" $ do
+        v <- versionValue "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        versionTarball (rewriteVersion thingPrefix v)
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
-    it "rewrites a scoped package under {base}/@scope/name/-/{file}" $ do
-        v <- decodeValue scopedPackument
-        tarballAt "1.0.0" (rewriteTarballUrls base v)
-            `shouldBe` Just "https://proxy.test/npm/@myorg/thing/-/thing-1.0.0.tgz"
-
-    it "ignores a trailing slash on the base URL" $ do
-        v <- decodeValue oneVersionPackument
-        tarballAt "1.0.0" (rewriteTarballUrls "https://proxy.test/npm/" v)
-            `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
-
-    it "rewrites every version's tarball" $ do
-        v <- decodeValue multiVersionPackument
-        let r = rewriteTarballUrls base v
-        tarballAt "1.0.0" r `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
-        tarballAt "2.0.0" r `shouldBe` Just "https://proxy.test/npm/thing/-/thing-2.0.0.tgz"
-
-    it "preserves unmodelled keys (top-level, version, and dist)" $ do
-        v <- decodeValue packumentWithExtras
-        let r = rewriteTarballUrls base v
-        topLevelKey "_id" r `shouldBe` Just (String "thing")
-        distKey "1.0.0" "fileCount" r `shouldBe` Just (Aeson.Number 7)
-        versionKey "1.0.0" "customField" r `shouldBe` Just (String "kept")
+    it "preserves unmodelled keys on the version and dist objects" $ do
+        v <- versionValue "https://upstream.test/thing/-/thing-1.0.0.tgz" [("customField", "\"kept\""), ("dist-extra-marker", "true")]
+        let r = rewriteVersion thingPrefix v
+        bareVersionKey "customField" r `shouldBe` Just (String "kept")
+        bareDistKey "fileCount" r `shouldBe` Just (Aeson.Number 7)
 
     it "leaves a version with no dist object untouched" $ do
-        v <- decodeValue distlessPackument
-        rewriteTarballUrls base v `shouldBe` v
+        v <- decodeValue "{\"name\":\"thing\",\"version\":\"1.0.0\"}"
+        rewriteVersion thingPrefix v `shouldBe` v
 
     it "leaves a tarball with no filename segment untouched" $ do
-        v <- decodeValue trailingSlashTarballPackument
-        tarballAt "1.0.0" (rewriteTarballUrls base v) `shouldBe` Just "https://upstream.test/thing/"
+        v <- versionValue "https://upstream.test/thing/" []
+        versionTarball (rewriteVersion thingPrefix v) `shouldBe` Just "https://upstream.test/thing/"
 
     it "is idempotent" $ do
-        v <- decodeValue multiVersionPackument
-        let once = rewriteTarballUrls base v
-        rewriteTarballUrls base once `shouldBe` once
-
-    it "leaves a tarball untouched when the upstream-controlled name carries a traversal component" $ do
-        -- The packument's `name` is upstream-controlled. A name whose component is
-        -- a traversal would, if interpolated raw, build a `dist.tarball` aimed
-        -- outside the package's path; the rewrite must instead leave that version's
-        -- tarball as-is rather than emit a path-confusing URL.
-        v <- decodeValue traversalNamePackument
-        tarballAt "1.0.0" (rewriteTarballUrls base v)
-            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
-
-    it "leaves a tarball untouched when the upstream-controlled name carries a control character" $ do
-        v <- decodeValue controlCharNamePackument
-        tarballAt "1.0.0" (rewriteTarballUrls base v)
-            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+        v <- versionValue "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        let once = rewriteVersion thingPrefix v
+        rewriteVersion thingPrefix once `shouldBe` once
 
 filterSpec :: Spec
 filterSpec = describe "assembleMergedPackument (plan replay)" $ do
@@ -205,10 +179,25 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
+    it "rewrites a scoped survivor under {base}/@scope/name/-/{file} in the assembly pass" $ do
+        -- The prefix embeds the scoped @scope/name form npm uses in URLs; the
+        -- scope separator must survive the component-safety gate.
+        filtered <- filterTo scopedPackument
+        tarballAt "1.0.0" (Object (rawObject filtered))
+            `shouldBe` Just "https://proxy.test/npm/@myorg/thing/-/thing-1.0.0.tgz"
+
+    it "ignores a trailing slash on the mount base in the assembly pass" $ do
+        (info, v) <- loadPackument oneVersionPackument
+        applyToAt "https://proxy.test/npm/" ctx quarantine info v >>= \case
+            Assembled out ->
+                tarballAt "1.0.0" out
+                    `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
+            NoSurvivors _ -> expectationFailure "expected survivors, got NoSurvivors"
+
     it "leaves a tarball untouched when the document's name carries a traversal" $ do
-        -- The fused rewrite honours the same component-safety gate as
-        -- 'rewriteTarballUrls': an unsafe upstream-controlled name is never
-        -- interpolated, so the upstream URL is relayed unrewritten.
+        -- The fused rewrite gates the upstream-controlled name component-wise:
+        -- an unsafe name is never interpolated, so the upstream URL is relayed
+        -- unrewritten.
         filtered <- filterTo traversalNamePackument
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
@@ -264,25 +253,29 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
 
 propertiesSpec :: Spec
 propertiesSpec = describe "properties" $ do
-    it "rewriting is idempotent" $
+    it "per-version rewriting is idempotent" $
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             v <- decodeOrFail (renderPackument spec')
             b <- forAll genBase
-            let once = rewriteTarballUrls b v
-            rewriteTarballUrls b once === once
+            let p = T.dropWhileEnd (== '/') b <> "/" <> specName spec'
+                versions = objKeys "versions" (asObject v)
+                once = fmap (rewriteVersion p) versions
+            fmap (rewriteVersion p) once === once
 
-    it "every rewritten tarball is under {base}/{pkg}/-/" $
+    it "every served version's tarball is rewritten under {base}/{pkg}/-/" $
         hedgehog $ do
             spec' <- forAll genPackumentSpec
-            v <- decodeOrFail (renderPackument spec')
+            (info, v) <- loadOrFail (renderPackument spec')
             b <- forAll genBase
-            let r = rewriteTarballUrls b v
-                prefix = T.dropWhileEnd (== '/') b <> "/" <> specName spec' <> "/-/"
-            forM_ (specVersionStrings spec') $ \ver ->
-                case tarballAt ver r of
-                    Just url -> H.diff prefix T.isPrefixOf url
-                    Nothing -> annotateShow ver >> failure
+            let prefix = T.dropWhileEnd (== '/') b <> "/" <> specName spec' <> "/-/"
+            liftIO (applyToAt b ctx quarantine info v) >>= \case
+                NoSurvivors _ -> success
+                Assembled out ->
+                    forM_ (Map.keys (objKeys "versions" (asObject out))) $ \ver ->
+                        case tarballAt ver out of
+                            Just url -> H.diff prefix T.isPrefixOf url
+                            Nothing -> annotateShow ver >> failure
 
     it "no surviving versions or tags reference a denied version" $
         hedgehog $ do
@@ -349,18 +342,6 @@ scopedPackument =
         [("latest", "1.0.0")]
         [versionLit "@myorg/thing" "1.0.0" "https://upstream.test/@myorg/thing/-/thing-1.0.0.tgz" []]
         [("1.0.0", publishedDaysAgo 30)]
-
--- | Two versions, both old enough to survive (used by the rewrite tests).
-multiVersionPackument :: ByteString
-multiVersionPackument =
-    encodePackument
-        "thing"
-        Nothing
-        [("latest", "2.0.0")]
-        [ versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" []
-        , versionLit "thing" "2.0.0" "https://upstream.test/thing/-/thing-2.0.0.tgz" []
-        ]
-        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
 
 {- | 1.0.0 published 30 days ago (survives) and 2.0.0 published 1 day ago (denied
 by the quarantine); @latest@ upstream aims at the denied 2.0.0.
@@ -524,27 +505,6 @@ controlCharNamePackument =
             <> "\"}}"
         )
 
--- | A version with no @dist@ object at all.
-distlessPackument :: ByteString
-distlessPackument =
-    encode
-        ( "{\"name\":\"thing\",\"dist-tags\":{\"latest\":\"1.0.0\"},"
-            <> "\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\"}},"
-            <> "\"time\":{\"1.0.0\":\""
-            <> publishedDaysAgo 30
-            <> "\"}}"
-        )
-
--- | A version whose tarball URL ends in a slash (no filename segment).
-trailingSlashTarballPackument :: ByteString
-trailingSlashTarballPackument =
-    encodePackument
-        "thing"
-        Nothing
-        [("latest", "1.0.0")]
-        [versionLit "thing" "1.0.0" "https://upstream.test/thing/" []]
-        [("1.0.0", publishedDaysAgo 30)]
-
 -- | A packument with no @dist-tags@ object at all (a malformed-upstream edge).
 noDistTagsPackument :: ByteString
 noDistTagsPackument =
@@ -653,9 +613,6 @@ data PackumentSpec = PackumentSpec
     }
     deriving stock (Show)
 
-specVersionStrings :: PackumentSpec -> [Text]
-specVersionStrings = map fst . specVersions
-
 -- | The versions a generated spec's quarantine would deny (age < 7 days).
 deniedVersions :: PackumentSpec -> Set Text
 deniedVersions = Set.fromList . map fst . filter ((< 7) . snd) . specVersions
@@ -743,13 +700,14 @@ data AssembleResult
     | NoSurvivors [Decision]
     deriving stock (Eq, Show)
 
-{- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view,
-merge the gated survivor set, and assemble the plan onto the raw body under 'base'
--- the composition the serve layer performs for a single public origin. The tarball
-rewrite is fused into the assembly, so the result already carries mount-based URLs.
+{- | Decide the plan ('Ecluse.Test.Rules.filterPlan') over the typed view, merge
+the gated survivor set, and assemble the plan onto the raw body under the given
+mount base -- the composition the serve layer performs for a single public origin.
+The tarball rewrite is fused into the assembly, so the result already carries
+mount-based URLs.
 -}
-applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
-applyTo c rules info value = do
+applyToAt :: Text -> EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
+applyToAt mountBase c rules info value = do
     plan <- filterPlan inertRuleDeps c rules info
     pure $
         if Set.null (fpSurvivors plan)
@@ -757,8 +715,12 @@ applyTo c rules info value = do
             else case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
                 Just merged
                     | not (Map.null (mpSurvivors merged)) ->
-                        Assembled (assembleMergedPackument base (Map.singleton 0 value) merged value)
+                        Assembled (assembleMergedPackument mountBase (Map.singleton 0 value) merged value)
                 _ -> NoSurvivors (fpDecisions plan)
+
+-- | 'applyToAt' under the canonical fixture mount base.
+applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
+applyTo = applyToAt base
 
 -- | Assemble a fixture body, requiring survivors; returns the served packument.
 filterTo :: ByteString -> IO FilteredPackument
@@ -824,10 +786,28 @@ tarballAt ver v = do
         Just (String url) -> Just url
         _ -> Nothing
 
-distKey :: Text -> Key.Key -> Value -> Maybe Value
-distKey ver key v = do
-    Object vo <- Map.lookup ver (objKeys "versions" (asObject v))
-    Object dist <- KeyMap.lookup "dist" vo
+{- | A bare version-object 'Value' -- the versions-map entry 'rewriteVersion'
+operates on -- with the fixture name\/version and the given tarball URL and extras.
+-}
+versionValue :: Text -> [(Text, Text)] -> IO Value
+versionValue tarball extras = decodeValue (encode (snd (versionLit "thing" "1.0.0" tarball extras)))
+
+-- | The @dist.tarball@ of a bare version object.
+versionTarball :: Value -> Maybe Text
+versionTarball v = do
+    Object dist <- KeyMap.lookup "dist" (asObject v)
+    case KeyMap.lookup "tarball" dist of
+        Just (String url) -> Just url
+        _ -> Nothing
+
+-- | A top-level key of a bare version object.
+bareVersionKey :: Key.Key -> Value -> Maybe Value
+bareVersionKey key v = KeyMap.lookup key (asObject v)
+
+-- | A key of a bare version object's @dist@.
+bareDistKey :: Key.Key -> Value -> Maybe Value
+bareDistKey key v = do
+    Object dist <- KeyMap.lookup "dist" (asObject v)
     KeyMap.lookup key dist
 
 versionKey :: Text -> Key.Key -> Value -> Maybe Value

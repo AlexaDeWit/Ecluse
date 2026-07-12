@@ -42,7 +42,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (mountBindingFor, unconfiguredRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (
     DdContext (..),
@@ -60,6 +60,7 @@ import Ecluse.Runtime.Telemetry.Correlation (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | The integration tier for tracing: drive a request through an in-process Écluse

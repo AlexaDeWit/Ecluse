@@ -118,7 +118,6 @@ Residency gauge: @ecluse.metadata_cache.assembled.resident_bytes@.
 module Ecluse.Core.Server.Cache (
     -- * Configuration
     CacheConfig (..),
-    defaultCacheConfig,
 
     -- * The cache handle
     MetadataCache,
@@ -198,19 +197,6 @@ data CacheConfig = CacheConfig
     -}
     }
     deriving stock (Eq, Show)
-
-{- | The default cache tunables: a 60-second TTL, 1024 entries, and a 256 MiB resident
-budget: short enough that a new publish appears promptly, and large enough to hold a
-normal install's working set of packages while capping the resident memory a handful of
-heavy packuments could otherwise dominate.
--}
-defaultCacheConfig :: CacheConfig
-defaultCacheConfig =
-    CacheConfig
-        { cacheTtl = 60
-        , cacheMaxEntries = 1024
-        , cacheMaxBytes = 256 * 1024 * 1024
-        }
 
 {- | Which upstream a cached packument was fetched from: the dimension that
 partitions the cache by source so distinct upstreams never share an entry.

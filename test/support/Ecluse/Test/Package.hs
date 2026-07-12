@@ -7,15 +7,20 @@
 This mirrors the module under test: helpers that support exercising
 @Ecluse.Core.Package@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
 support library follows. It carries the digest plumbing every suite reuses --
-'unsafeHash', which lifts a known-good digest into a 'Hash', and the canonical
+'unsafeHash', which lifts a known-good digest into a 'Hash', the canonical
 well-formed digest fixtures (each the empty-input digest of its algorithm) that
-appear across the queue, integrity, env, and worker specs.
+appear across the queue, integrity, env, and worker specs, and the SHA-256
+admission-floor fixtures the suites and harnesses gate with.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
     unsafeHash,
     unsafeRegistryUrl,
     unsafeSriHashes,
+
+    -- * Integrity floor fixtures
+    defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
 
     -- * Canonical digest fixtures
     validSha1,
@@ -39,12 +44,18 @@ import Ecluse.Core.Package (
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
     Hash,
-    HashAlg,
+    HashAlg (SHA256),
     PackageDetails (..),
     PackageName,
     Trust (Untrusted),
     mkHash,
     mkSriHashes,
+ )
+import Ecluse.Core.Package.Integrity (
+    MinIntegrity,
+    MinTrustedIntegrity,
+    mkMinIntegrity,
+    mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Version (Version)
@@ -74,6 +85,26 @@ Errors on a non-https value, so a typo fails loudly.
 -}
 unsafeRegistryUrl :: Text -> RegistryUrl
 unsafeRegistryUrl = either error id . mkRegistryUrl
+
+{- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
+
+{- | The SHA-256 public-integrity floor fixture: the hard minimum
+'mkMinIntegrity' enforces, built through the public smart constructor (SHA-256
+always clears the hard floor, so the construction cannot fail). Suites and
+harnesses gate with it wherever an admission floor is needed and the floor
+itself is not the axis under test.
+-}
+defaultMinIntegrity :: MinIntegrity
+defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
+
+{- HLINT ignore defaultMinTrustedIntegrity "Avoid restricted function" -}
+
+{- | The SHA-256 trusted-integrity floor fixture: the same secure posture as
+'defaultMinIntegrity', built through 'mkMinTrustedIntegrity' (SHA-256 names a
+concrete algorithm, so the construction cannot fail).
+-}
+defaultMinTrustedIntegrity :: MinTrustedIntegrity
+defaultMinTrustedIntegrity = either error id (mkMinTrustedIntegrity SHA256)
 
 {- | Canonical well-formed digests -- each the empty-input digest of its algorithm,
 so every fixture 'Hash' is 'mkHash'-constructible and survives a validated decode

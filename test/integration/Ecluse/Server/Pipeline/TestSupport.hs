@@ -37,7 +37,6 @@ import UnliftIO.Exception (throwString)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
@@ -52,16 +51,15 @@ import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (PreparedRule, inertRuleDeps, prepare)
+import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
-    atDefaultPrecedence,
  )
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Env (Env (envQueue), newEnvWithAdmission, newWorkerHeartbeat)
@@ -71,7 +69,10 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.

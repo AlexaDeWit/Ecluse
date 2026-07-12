@@ -25,7 +25,6 @@ import Ecluse.Core.Rules (
     PreparedRule (..),
     evalRule,
     evalRules,
-    inertRuleDeps,
     runEffectfulRule,
  )
 import Ecluse.Core.Rules.Effectful (
@@ -35,6 +34,7 @@ import Ecluse.Core.Rules.Effectful (
     defaultEffectfulConfig,
     newBreaker,
  )
+import Ecluse.Test.Rules (inertRuleDeps)
 
 -- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
 -- 'prepName' -- to exercise the resilience harness and the parallel engine without any

@@ -33,7 +33,7 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (infoVersions)
-import Ecluse.Core.Registry.Npm.Filter (rewriteTarballUrls)
+import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
@@ -91,7 +91,7 @@ generatorTests =
             Map.size (infoVersions (projectInfo benchPackageName (syntheticPackumentValue sampleCount)))
                 @?= sampleCount
         , testCase "rewrites every tarball onto the proxy origin" $ do
-            let urls = tarballUrlsOf (rewriteTarballUrls syntheticProxyBase (syntheticPackumentValue sampleCount))
+            let urls = tarballUrlsOf (rewriteAllVersions (syntheticPackumentValue sampleCount))
             length urls @?= sampleCount
             assertBool
                 "every rewritten tarball should sit under the proxy origin"
@@ -100,6 +100,18 @@ generatorTests =
   where
     sampleCount :: Int
     sampleCount = 500
+
+    -- Apply the serve assembly's per-version rewrite to every version of the
+    -- synthetic packument, as the fused assembly pass does per survivor.
+    rewriteAllVersions :: Value -> Value
+    rewriteAllVersions = \case
+        Object top
+            | Just (Object versions) <- KeyMap.lookup "versions" top ->
+                Object (KeyMap.insert "versions" (Object (fmap (rewriteVersion versionPrefix) versions)) top)
+        other -> other
+
+    versionPrefix :: Text
+    versionPrefix = syntheticProxyBase <> "/" <> benchPackageText
 
     rewrittenPrefix :: Text
     rewrittenPrefix = syntheticProxyBase <> "/" <> benchPackageText <> "/-/"

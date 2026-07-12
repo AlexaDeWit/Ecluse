@@ -30,12 +30,13 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataUndecodable, MetadataUnreachable),
     digestOf,
  )
-import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 
 {- | Tests for the serve-path read handle's wiring: the full-manifest op resolving through
 the shared cache, and the single-version op's __hybrid__ topology -- the small

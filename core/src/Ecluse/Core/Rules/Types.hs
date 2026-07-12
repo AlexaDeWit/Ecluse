@@ -22,7 +22,6 @@ module Ecluse.Core.Rules.Types (
     -- * Precedence
     PrecededRule (..),
     defaultPrecedence,
-    atDefaultPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
     defaultAllowScopePrecedence,
@@ -201,10 +200,6 @@ defaultPrecedence = \case
     AllowByIdentity{} -> defaultAllowByIdentityPrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
-
--- | Pair a rule with its type's 'defaultPrecedence'.
-atDefaultPrecedence :: Rule -> PrecededRule
-atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
 
 {- | Default precedence of 'AllowIfOlderThan': the lowest band, a passive
 quarantine that yields to an explicit allow-list and to every deny.

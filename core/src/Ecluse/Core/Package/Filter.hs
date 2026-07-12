@@ -44,7 +44,6 @@ trusted /private/ set is the cross-upstream merge ("Ecluse.Core.Package.Merge").
 -}
 module Ecluse.Core.Package.Filter (
     FilterPlan (..),
-    filterPlan,
     filterPlanFromDecisions,
     restrictToSurvivors,
 ) where
@@ -53,8 +52,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
-import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
+import Ecluse.Core.Rules.Types (Decision (Admitted))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
 {- | The decisions filtering a single public packument owns, for the adapter to
@@ -82,32 +80,16 @@ data FilterPlan = FilterPlan
     }
     deriving stock (Eq, Show)
 
-{- | Decide a single public packument against a rule set: which versions survive,
-where @latest@ resolves, and every version's decision. 'IO' and total -- it reasons
-over the typed 'PackageInfo' alone, with no registry wire format in sight, deciding
-each version through the one engine ('Ecluse.Core.Rules.evalRules', over the
-'prepare'd policy), so the filter's per-version decision and the serve path share it.
-
-A version survives iff the engine 'Admitted' it; every other verdict drops it.
-@latest@ is resolved by 'Ecluse.Core.Version.selectLatest' from the upstream-tagged
-@latest@ (looked up among the versions, so a tag aimed at an absent version
-contributes nothing) and the surviving versions -- kept while it survives, else
-repointed downward to the highest stable survivor. The decisions are returned for
-__every__ version in key order, so the adapter has each denial's reason when
-nothing survives.
--}
-filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
-filterPlan deps ctx rules info = do
-    prepared <- prepare deps rules
-    decisions <- traverse (evalRules ctx prepared) (infoVersions info)
-    pure (filterPlanFromDecisions decisions info)
-
-{- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
-evaluating the pure tier here. This is the path the __effectful__ tier feeds: it
-decides each version in IO (see "Ecluse.Core.Rules"), then hands the decisions
-here for the same pure survivor\/@latest@ resolution 'filterPlan' performs. The
-decision map is keyed by raw version string and __must__ cover exactly the
-packument's versions; a version with no decision is treated as not surviving.
+{- | Build a 'FilterPlan' from per-version 'Decision's already taken. This is the
+path the __effectful__ tier feeds: it decides each version in IO (see
+"Ecluse.Core.Rules"), then hands the decisions here for the pure
+survivor\/@latest@ resolution. @latest@ is resolved by
+'Ecluse.Core.Version.selectLatest' from the upstream-tagged @latest@ (looked up
+among the versions, so a tag aimed at an absent version contributes nothing) and
+the surviving versions -- kept while it survives, else repointed downward to the
+highest stable survivor. The decision map is keyed by raw version string and
+__must__ cover exactly the packument's versions; a version with no decision is
+treated as not surviving.
 
 A version survives iff its decision is an 'Admitted'; every other
 verdict -- denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable' -- drops it,

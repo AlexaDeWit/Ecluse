@@ -32,12 +32,9 @@ import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
-    defaultMinIntegrity,
-    defaultMinTrustedIntegrity,
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
-import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -45,6 +42,8 @@ import Ecluse.Core.Server.Context (
     PublishDeps (..),
  )
 import Ecluse.Core.Server.Response (appendHelp)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Test.Rules (inertRuleDeps)
 
 {- | Tests for the composition root's boot-time wiring. They exercise the two
 promises of the slice: a valid configuration produces served mount bindings with

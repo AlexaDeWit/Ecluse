@@ -19,13 +19,12 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Core.Rules (evalRules, inertRuleDeps, prepare)
+import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowScope, DenyInstallTimeExecution),
-    atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (..),
@@ -46,6 +45,7 @@ import Ecluse.Core.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime

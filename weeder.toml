@@ -10,8 +10,23 @@
 # delete-this-dead-code list — which is exactly why the CI job is INFORMATIONAL
 # and never gates (see ci.yml → weeder).
 
-# Reachability roots: the executable entry point and Cabal's generated Paths_.
-roots = ["^Main\\.main$", "^Paths_"]
+# Reachability roots: the executable entry point and Cabal's generated Paths_,
+# plus one documented structural exception.
+#
+# Ecluse.Core.Security.Egress.DevHttp.loopbackRegistryUrl is rooted deliberately
+# rather than relocated out of ecluse-core: the plain-http RegistryUrl former is
+# locked inside the egress boundary on purpose (the raw constructor lives in the
+# unexposed Ecluse.Core.Security.Egress.Internal, and the https-only egress
+# design keeps that constructor unreachable from any exposed surface), so moving
+# the former to a test or bench library would widen that boundary. Its consumers
+# are the hermetic test tiers and the load harness, none of which weeder roots,
+# and the module only exists under the dev-http-egress flag (absent from a
+# release build).
+roots = [
+  "^Main\\.main$",
+  "^Paths_",
+  "^Ecluse\\.Core\\.Security\\.Egress\\.DevHttp\\.loopbackRegistryUrl$",
+]
 
 # Treat instance methods as roots, so lawful type-class instances aren't reported
 # just because the app has no direct call site for them.

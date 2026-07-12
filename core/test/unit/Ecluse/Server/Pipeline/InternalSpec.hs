@@ -46,13 +46,11 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
     defaultEffectfulConfig,
-    inertRuleDeps,
     newBreaker,
     noBreakerReporter,
     prepare,
@@ -62,7 +60,6 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Rule (AllowIfOlderThan),
     RuleVerdict (NoDecision),
-    atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
@@ -89,8 +86,9 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (unsafeHash, validSha1, validSha256)
+import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 spec :: Spec
 spec = do

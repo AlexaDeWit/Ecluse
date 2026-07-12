@@ -22,7 +22,6 @@ import Ecluse.Core.Server.Cache (
     MetadataCache,
     Source (..),
     cachedMetadata,
-    defaultCacheConfig,
     newMetadataCache,
     weighCacheEntry,
  )
@@ -301,13 +300,3 @@ spec = do
             _ <- resolveAssembled c "\"tag-b\"" (countingRender renders (mkBytes bigBytes 'b'))
             _ <- resolveAssembled c "\"tag-a\"" (countingRender renders (mkBytes bigBytes 'a'))
             readIORef renders `shouldReturn` 3
-
-    describe "defaultCacheConfig" $ do
-        it "uses a short, non-zero TTL" $
-            cacheTtl defaultCacheConfig `shouldSatisfy` (> 0)
-
-        it "bounds the cache to a positive entry count" $
-            cacheMaxEntries defaultCacheConfig `shouldSatisfy` (> 0)
-
-        it "bounds the cache to a positive resident-byte budget" $
-            cacheMaxBytes defaultCacheConfig `shouldSatisfy` (> 0)

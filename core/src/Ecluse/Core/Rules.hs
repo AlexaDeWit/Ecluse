@@ -45,7 +45,6 @@ harness lives in "Ecluse.Core.Rules.Effectful".
 module Ecluse.Core.Rules (
     -- * The boot-bound rule capabilities
     RuleDeps (..),
-    inertRuleDeps,
 
     -- * The built-in rule dispatch
     evalRule,
@@ -126,17 +125,6 @@ data RuleDeps = RuleDeps
     (@ecluse.rule.breaker.state@); 'noBreakerReporter' when unobserved.
     -}
     }
-
-{- | Rule capabilities with no advisory database and no breaker observer: the
-composition value before a CVE sync is configured, and the pure tests' default.
--}
-inertRuleDeps :: RuleDeps
-inertRuleDeps =
-    RuleDeps
-        { rdWithCveLookup = \use -> use Nothing
-        , rdCurrentAdvisoryEtag = pure Nothing
-        , rdBreakerReporter = noBreakerReporter
-        }
 
 {- | Evaluate a single built-in rule against a single package version -- the one place
 "how a rule decides" lives. The dispatch over the closed 'Rule' data: the pure
