@@ -138,15 +138,15 @@ resolveMounts globalPolicy appConfig =
   where
     resolveOne (eco, mcfg) = case mntPrivateUpstream mcfg of
         Nothing -> Left [MountMissingPrivateUpstream eco]
-        Just privateUpstream -> case resolveMount globalPolicy eco privateUpstream mcfg appConfig of
+        Just privateUpstream -> case resolveMount globalPolicy eco privateUpstream mcfg of
             Left errs -> Left [PolicyErrors errs]
             Right mount -> Right (eco, mount)
 
 {- | Project an active mount, whose private upstream the caller has already
 established (see 'resolveMounts'), onto its served form.
 -}
-resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> MountConfig -> AppConfig -> Either [PolicyError] Mount
-resolveMount globalPolicy eco privateUpstream mcfg app = do
+resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> MountConfig -> Either [PolicyError] Mount
+resolveMount globalPolicy eco privateUpstream mcfg = do
     policy <- resolvePolicy globalPolicy (mntAdditionalRules mcfg)
     Right $
         Mount
@@ -159,7 +159,6 @@ resolveMount globalPolicy eco privateUpstream mcfg app = do
                         MirrorTarget
                             { mtUrl = fromMaybe privateUpstream (mntMirrorTarget mcfg)
                             , mtCredential = mntCredentialProvider mcfg
-                            , mtQueue = cfgQueueBackend app
                             }
                     }
             , mountPolicy = rulesOf policy

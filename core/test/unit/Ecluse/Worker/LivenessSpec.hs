@@ -44,19 +44,8 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Registry (
-    ParseError (ParseError),
-    PublishError (PublishError),
-    PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
-    UrlFormationError (EmptyBaseUrl),
  )
-import Ecluse.Core.Registry.Metadata (
-    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
-    MetadataError (MetadataUndecodable),
-    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    fetchVersionDetails,
- )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
@@ -67,15 +56,11 @@ import Ecluse.Core.Worker (
     JobOutcome (Dropped, Retried, Succeeded),
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
     WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,
-    processBatch,
-    processJob,
     runWorkerM,
-    verifyIntegrity,
     workerHeartbeatStaleAfter,
     workerLoop,
  )
