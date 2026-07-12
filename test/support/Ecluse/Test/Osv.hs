@@ -7,9 +7,8 @@
 The committed JSON advisories under @test\/fixtures\/osv\/@ are the single
 source of truth for advisory-shaped test data. Everything a suite consumes is
 derived from them at test time: 'osvCorpusZip' assembles the osv.dev-shaped
-export archive in memory, and the app-tier helper (@Ecluse.Test.OsvDb@ in
-@ecluse-test-support-app@) compiles that archive into a real @osv.db@ through
-the same pipeline Pilot runs. Deriving instead of committing binaries means a
+export archive in memory, and @Ecluse.Test.OsvDb@ compiles that archive into a
+real @osv.db@ through the same pipeline Pilot runs. Deriving instead of committing binaries means a
 fixture can never drift from the artifact contract ("Ecluse.Core.Osv.Schema").
 
 The corpus is versioned: 'CorpusV2' is 'CorpusV1' plus an advisory for a

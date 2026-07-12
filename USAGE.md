@@ -362,6 +362,48 @@ need distinct, tightly scoped egress, and **both must run as singletons** (one r
   delete requests and to the instance-metadata endpoint for credentials. It holds a standing
   high-privilege delete capability, so isolate it from all untrusted networks.
 
+**Example: Écluse Pilot as a Kubernetes `CronJob`.** The one-shot compile-and-upload on a
+schedule, as a singleton (`concurrencyPolicy: Forbid` never overlaps a run), compiling to a
+scratch `emptyDir` and uploading `osv.db` to the configured bucket. Align the schedule with
+the proxy's `ECLUSE_CVE_DB_POLL_INTERVAL` (the proxy polls more often than Pilot publishes),
+and give the pod credentials for `s3:PutObject` (IRSA or workload identity preferred over
+mounted keys).
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecluse-pilot
+spec:
+  schedule: "0 * * * *"           # hourly; match to your ECLUSE_CVE_SYNC_INTERVAL
+  concurrencyPolicy: Forbid       # never overlap a run: preserves the singleton
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pilot
+              image: your-registry.example/ecluse:TAG   # the released Écluse image
+              args: ["pilot", "compile", "--out", "/tmp/osv", "--upload"]
+              env:
+                - name: ECLUSE_VULNERABILITY_DATABASE_BUCKET
+                  value: my-advisory-bucket
+                - name: AWS_REGION
+                  value: us-east-1
+                # Credentials via IRSA / workload identity preferred; otherwise mount keys.
+              volumeMounts:
+                - name: scratch
+                  mountPath: /tmp/osv
+              resources:
+                requests: { cpu: "250m", memory: "256Mi" }
+                limits: { memory: "512Mi" }
+          volumes:
+            - name: scratch
+              emptyDir: {}
+```
+
 ## Locking down CI egress (recommended)
 
 The controls above secure Écluse's own egress. This one secures your consumers', turning Écluse
