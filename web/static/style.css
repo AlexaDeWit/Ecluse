@@ -91,6 +91,7 @@ img { max-width: 100%; }
 .severity-low    { background: #dde7e0; color: #2e4a45; border-color: #c3d3c9; }
 .status-open      { background: #f3d9d2; color: #7a2718; border-color: #e0b7ac; }
 .status-mitigated { background: #d7e6da; color: #285c36; border-color: #b4d3bb; }
+.status-accepted  { background: #e4dfed; color: #46335f; border-color: #cfc4dd; }
 .status-na        { background: var(--tan); color: var(--muted); }
 h3.threat { scroll-margin-top: 1rem; }
 
