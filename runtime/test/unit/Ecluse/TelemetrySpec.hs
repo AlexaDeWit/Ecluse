@@ -42,7 +42,7 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
     withTelemetry,
  )
-import Ecluse.Runtime.Telemetry.Resolve (newExportFailureSink)
+import Ecluse.Runtime.Telemetry.ExportFailure (newExportFailureSink)
 
 {- | Tests for the OpenTelemetry substrate. They exercise the substrate's
 promises: the @ECLUSE_TELEMETRY@ master switch parses strictly (on \/ off \/

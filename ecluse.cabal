@@ -349,6 +349,7 @@ library ecluse-runtime
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
+    Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.Instruments
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
@@ -757,6 +758,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Telemetry.CorrelationSpec
     Ecluse.Telemetry.InstrumentsSpec
     Ecluse.Telemetry.ReportersSpec
+    Ecluse.Telemetry.ExportFailureSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec

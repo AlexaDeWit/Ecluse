@@ -40,7 +40,7 @@ pure pass-through that opens nothing to tear down.
 When enabled it also makes export failures __visible__: the OTLP span and metric
 exporters are wrapped so a failed export -- which @hs-opentelemetry 1.0.0.0@ otherwise
 drops silently -- is observed and routed through the shared @katip@ throttle
-("Ecluse.Runtime.Telemetry.Resolve"), the first failure logged plainly then a periodic
+("Ecluse.Runtime.Telemetry.ExportFailure"), the first failure logged plainly then a periodic
 heartbeat. The wrappers only /observe/; export semantics are unchanged, so an
 unreachable collector still degrades off the request path.
 
@@ -94,7 +94,7 @@ import OpenTelemetry.Trace (TracerProvider, initializeGlobalTracerProvider, shut
 import UnliftIO (bracket)
 import UnliftIO.Exception (catchAny)
 
-import Ecluse.Runtime.Telemetry.Resolve (
+import Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
     exportFailureSink,
     installExportErrorHandler,

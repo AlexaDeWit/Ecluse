@@ -228,7 +228,7 @@ orExit render = \case
 
 {- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
 the identity, normalise the @OTEL_*@ environment the SDK reads, and install the
-throttled export-error handler ("Ecluse.Runtime.Telemetry.Resolve.prepareTelemetry"). A no-op
+throttled export-error handler ("Ecluse.Runtime.Telemetry.ExportFailure"). A no-op
 when telemetry is off, so an unset @ECLUSE_TELEMETRY@ reads no process environment and
 configures nothing. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()

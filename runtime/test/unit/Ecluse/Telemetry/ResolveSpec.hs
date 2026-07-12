@@ -5,7 +5,6 @@
 module Ecluse.Telemetry.ResolveSpec (spec) where
 
 import Data.List (lookup)
-import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import System.Environment (unsetEnv)
 import Test.Hspec
 import UnliftIO (bracket_)
@@ -17,21 +16,16 @@ import Ecluse.Runtime.Telemetry.Resolve (
     EndpointSource (..),
     ResolvedTelemetry (..),
     TelemetryEndpoint (..),
-    ThrottleEmit (..),
-    ThrottleState (..),
-    initialThrottle,
     otelEnvironmentOverrides,
     prepareTelemetry,
     resolveTelemetry,
-    throttleStep,
  )
 
-{- | Tests for the telemetry config resolver and the export-failure throttle. They
-exercise the promises a downstream operator and the @dd@ log object depend on: the
-four-field precedence is __Datadog-value-wins → vanilla OpenTelemetry → default__; the
-resolved identity projects to the canonical @OTEL_*@ the SDK reads while preserving
-operator-set resource attributes; and SDK export errors are coalesced rather than
-flooded. The 'prepareTelemetry' cases drive the boot normalisation and restore the
+{- | Tests for the telemetry config resolver. They exercise the promises a downstream
+operator and the @dd@ log object depend on: the four-field precedence is
+__Datadog-value-wins → vanilla OpenTelemetry → default__, and the resolved identity
+projects to the canonical @OTEL_*@ the SDK reads while preserving operator-set resource
+attributes. The 'prepareTelemetry' cases drive the boot normalisation and restore the
 environment they set; everything else is pure and offline.
 -}
 spec :: Spec
@@ -39,7 +33,6 @@ spec = do
     resolveSpec
     overridesSpec
     prepareSpec
-    throttleSpec
 
 resolveSpec :: Spec
 resolveSpec = describe "resolveTelemetry" $ do
@@ -168,28 +161,3 @@ prepareSpec = describe "prepareTelemetry" $ do
         , "OTEL_EXPORTER_OTLP_PROTOCOL"
         , "OTEL_RESOURCE_ATTRIBUTES"
         ]
-
-throttleSpec :: Spec
-throttleSpec = describe "throttleStep" $ do
-    let t0 = UTCTime (fromGregorian 2026 1 1) 0
-        interval = 60
-
-    it "surfaces the first error and records when it was logged" $ do
-        let (state', emit) = throttleStep interval t0 initialThrottle
-        emit `shouldBe` EmitFirst
-        tsLastLogged state' `shouldBe` Just t0
-        tsSuppressed state' `shouldBe` 0
-
-    it "suppresses and counts errors within the window" $ do
-        let (state', _) = throttleStep interval t0 initialThrottle
-            (state'', emit) = throttleStep interval (addUTCTime 1 t0) state'
-        emit `shouldBe` EmitSuppress
-        tsSuppressed state'' `shouldBe` 1
-
-    it "surfaces a heartbeat once the window elapses, carrying the suppressed count and resetting" $ do
-        let (s1, _) = throttleStep interval t0 initialThrottle
-            (s2, _) = throttleStep interval (addUTCTime 1 t0) s1
-            (s3, emit) = throttleStep interval (addUTCTime 61 t0) s2
-        emit `shouldBe` EmitHeartbeat 2
-        tsSuppressed s3 `shouldBe` 0
-        tsLastLogged s3 `shouldBe` Just (addUTCTime 61 t0)
