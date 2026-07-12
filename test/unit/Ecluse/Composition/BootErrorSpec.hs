@@ -26,7 +26,7 @@ spec = describe "renderBootError" $
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
         renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "ECLUSE_QUEUE_URL"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
-        renderBootError (MirrorCredentialProviderUnavailable AdcCredential)
+        renderBootError (MirrorCredentialProviderUnavailable GcpArtifactRegistryCredential)
             `shouldSatisfy` infixed "gcp-artifact-registry"
         renderBootError (CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN"

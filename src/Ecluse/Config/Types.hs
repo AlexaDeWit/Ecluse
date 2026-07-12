@@ -72,7 +72,7 @@ parseQueueBackend = parseWire
 data CredentialBackend
     = CodeArtifactCredential
     | StaticCredential
-    | AdcCredential
+    | GcpArtifactRegistryCredential
     deriving stock (Eq, Ord, Show)
 
 instance WireVocab CredentialBackend where
@@ -80,7 +80,7 @@ instance WireVocab CredentialBackend where
     wireTable =
         (CodeArtifactCredential, "codeartifact")
             :| [ (StaticCredential, "static")
-               , (AdcCredential, "gcp-artifact-registry")
+               , (GcpArtifactRegistryCredential, "gcp-artifact-registry")
                ]
 
 parseCredentialBackend :: Text -> Either Text CredentialBackend

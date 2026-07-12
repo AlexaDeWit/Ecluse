@@ -47,10 +47,10 @@ backendSpec = describe "backend selection" $ do
         it "round-trips each backend through parse/render" $ do
             parseWire "codeartifact" `shouldBe` Right CodeArtifactCredential
             parseWire "static" `shouldBe` Right StaticCredential
-            parseWire "gcp-artifact-registry" `shouldBe` Right AdcCredential
+            parseWire "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
             renderWire CodeArtifactCredential `shouldBe` "codeartifact"
             renderWire StaticCredential `shouldBe` "static"
-            renderWire AdcCredential `shouldBe` "gcp-artifact-registry"
+            renderWire GcpArtifactRegistryCredential `shouldBe` "gcp-artifact-registry"
         it "rejects an unknown name, naming the accepted set" $
             (parseWire "vault" :: Either Text CredentialBackend)
                 `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
@@ -60,8 +60,8 @@ backendSpec = describe "backend selection" $ do
             parseCredentialBackend "codeartifact" `shouldBe` Right CodeArtifactCredential
         it "parses static to StaticCredential" $
             parseCredentialBackend "static" `shouldBe` Right StaticCredential
-        it "parses gcp-artifact-registry to AdcCredential" $
-            parseCredentialBackend "gcp-artifact-registry" `shouldBe` Right AdcCredential
+        it "parses gcp-artifact-registry to GcpArtifactRegistryCredential" $
+            parseCredentialBackend "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
         it "rejects unknown backends" $
             parseCredentialBackend "vault"
                 `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
