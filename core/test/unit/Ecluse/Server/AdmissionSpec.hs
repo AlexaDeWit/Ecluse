@@ -12,7 +12,6 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Server.Admission (
     ServeAdmission,
     newServeAdmissionTuned,
-    unlimitedServeAdmission,
     withServeAdmission,
  )
 import Ecluse.Test.Port (noopMetricsPort)
@@ -50,10 +49,6 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         admission <- newServeAdmissionTuned 2 2 shortWaitMicros
         result <- admit admission (pure (42 :: Int))
         result `shouldBe` Just 42
-
-    it "never refuses on the unlimited handle" $ do
-        result <- withServeAdmission noopMetricsPort unlimitedServeAdmission (pure (1 :: Int))
-        result `shouldBe` Just 1
 
     it "refuses instantly at capacity when the waiting room is zero (pure shed)" $ do
         admission <- newServeAdmissionTuned 1 0 generousWaitMicros

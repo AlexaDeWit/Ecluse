@@ -43,7 +43,7 @@ import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Proxy (unconfiguredRegistry)
-import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
+import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
     MountBinding (..),
@@ -61,6 +61,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders -- it never fetches -- so a handle that
@@ -82,7 +83,8 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-

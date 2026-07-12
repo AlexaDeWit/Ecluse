@@ -15,10 +15,11 @@ import Test.Hspec.Wai
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Proxy (mountBindingFor, unconfiguredRegistry)
-import Ecluse.Runtime.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 
 newTestManager :: IO Manager
 newTestManager = newManager defaultManagerSettings
@@ -30,7 +31,8 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    newEnvWithAdmission admission unconfiguredRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The composed npm front door: a single npm mount with no packument-serve or
 publish dependencies, assembled through the public binding resolver exactly as

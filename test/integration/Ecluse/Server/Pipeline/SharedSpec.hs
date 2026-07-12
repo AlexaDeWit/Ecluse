@@ -26,11 +26,12 @@ import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Runtime.Env (newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 import Katip (Environment (Environment), closeScribes)
 import Network.Wai.Handler.Warp (testWithApplication)
 
@@ -255,7 +256,8 @@ captureBreachLog privateBody = do
             metadataCache <- newMetadataCache defaultCacheConfig
             logEnv <- newLogEnv JsonLog (Environment "test")
             heartbeat <- newWorkerHeartbeat
-            env <- newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+            admission <- testServeAdmission
+            env <- newEnvWithAdmission admission fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
             baseDeps <- deps privatePort publicPort Nothing
             let cfg =
                     mkServerConfig

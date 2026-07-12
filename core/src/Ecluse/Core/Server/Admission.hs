@@ -38,7 +38,6 @@ acquisition and the protected run.
 module Ecluse.Core.Server.Admission (
     ServeAdmission,
     newServeAdmission,
-    unlimitedServeAdmission,
     withServeAdmission,
     serveAdmissionWaitMicros,
 
@@ -56,9 +55,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 {- | A process-wide serve admission handle. The constructor is hidden so only the
 checked acquire\/wait\/release operations can mutate its capacity and waiting room.
 -}
-data ServeAdmission
-    = UnlimitedServeAdmission
-    | BoundedServeAdmission BoundedAdmission
+newtype ServeAdmission = BoundedServeAdmission BoundedAdmission
 
 -- The bounded handle's state: the free slots, the current waiter count, and the
 -- tuning (room bound and wait budget) fixed at construction.
@@ -113,12 +110,6 @@ newServeAdmissionTuned capacity room waitMicros = do
                 , baWaitMicros = max 0 waitMicros
                 }
 
-{- | An admission handle that never refuses, for embedded applications and tests
-whose subject is unrelated to overload.
--}
-unlimitedServeAdmission :: ServeAdmission
-unlimitedServeAdmission = UnlimitedServeAdmission
-
 -- The outcome of the door transaction: a slot taken directly, a place taken in the
 -- waiting room, or a refusal (the room was full).
 data Gate = Admitted | Queued | Refused
@@ -156,7 +147,6 @@ A request that had to wait records @ecluse.serve.admission.queued@ on admission,
 the queue's work is visible beside the in-flight gauge and the shed decisions.
 -}
 withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)
-withServeAdmission _ UnlimitedServeAdmission action = Just <$> action
 withServeAdmission metrics (BoundedServeAdmission ba) action =
     UE.mask $ \restore -> do
         gate <- atomically (doorDecision ba)

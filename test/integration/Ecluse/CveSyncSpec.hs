@@ -65,13 +65,14 @@ import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, withMinistack)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
-import Ecluse.Runtime.Env (newEnv, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (testServeAdmission)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
@@ -191,7 +192,8 @@ proxyApp ruleDeps privateUrl publicUrl = do
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     queue <- newTestMemoryQueue
-    env <- newEnv publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    admission <- testServeAdmission
+    env <- newEnvWithAdmission admission publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
     let deps =
             PackumentDeps
                 { pdPrivateBaseUrl = privateUrl

@@ -186,7 +186,7 @@ runProxy bootEnv = do
     -- The metric instruments do not exist until the telemetry substrate is built, well
     -- below; this deferred handle lets the credential provider (constructed here, at
     -- boot) record through reporters that stay inert until 'installMetrics' makes them
-    -- live (in the 'withEnv' body). With telemetry off the eventual instruments are the
+    -- live (in the 'withEnvWithAdmission' body). With telemetry off the eventual instruments are the
     -- no-op-meter ones, so the reporters are inert either way.
     deferredMetrics <- newDeferredMetrics
     let credentialReporters =
@@ -282,7 +282,7 @@ runProxy bootEnv = do
     -- manager (the private origin's credential-forwarding path).
     publishClient <- resolvePublishClient privateManager publishTargets
     withEnvWithAdmission serveAdmission publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
-        -- The instruments now exist (built in 'withEnv' from the telemetry handle);
+        -- The instruments now exist (built in 'withEnvWithAdmission' from the telemetry handle);
         -- install them so the credential provider's deferred reporters go live for
         -- the rest of the run. They are the no-op-meter instruments when telemetry
         -- is off, so this is inert in that posture.

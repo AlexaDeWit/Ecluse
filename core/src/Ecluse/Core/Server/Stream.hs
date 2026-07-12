@@ -12,10 +12,11 @@ connection released when the handler returns lexically is already gone by the ti
 the body streams -- a use-after-free.
 
 Raw WAI avoids it by construction: 'Network.Wai.Application' is
-continuation-passing, so the upstream connection is acquired with @withResponse@
-__bracketed around the @respond@ call itself__. The connection then lives for
-exactly the duration of the streamed body and is closed only when Warp returns
-@ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it through
+continuation-passing, so the upstream connection is opened explicitly with
+@responseOpen@ before the response is committed and closed with @responseClose@ run
+through @finally@ around the whole streamed relay. The connection then lives for
+exactly the duration of the streamed body and is closed on every path, only once
+Warp has returned @ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it through
 the sink's bounded output buffer -- blocking on the socket send whenever it
 spills -- before pulling the next, so the proxy reads from upstream only as fast
 as the client drains, giving __constant memory regardless of artifact size__ with
