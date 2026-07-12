@@ -76,7 +76,7 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules (renderDecision)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     RetryAfter (..),
     Transience (..),

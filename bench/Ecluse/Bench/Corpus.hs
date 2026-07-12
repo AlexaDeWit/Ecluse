@@ -86,8 +86,8 @@ import Ecluse.Core.Package (
     mkScope,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Core.Rules.Types (
-    EvalContext (EvalContext),
+import Ecluse.Core.Rules.Decision (EvalContext (EvalContext))
+import Ecluse.Core.Rules.Policy (
     PrecededRule,
     Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution),
  )

@@ -14,7 +14,7 @@ canonical version string, so exact-fix matching is plain string equality and
 rides the @(package_name, fixed_version)@ index in one traversal. A fix
 published under a non-canonical version string misses the probe and simply
 waits out the ordinary quarantine; the operator workaround is an explicit
-'Ecluse.Core.Rules.Types.AllowByIdentity' rule.
+'Ecluse.Core.Rules.Policy.AllowByIdentity' rule.
 
 An artifact is accepted or rejected at 'openCveDb' (epoch stamp, integrity,
 strict-schema conformance, ecosystem), with rejection as a value: the caller

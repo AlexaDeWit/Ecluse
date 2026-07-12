@@ -203,12 +203,12 @@ data PackumentDeps = PackumentDeps
     'Nothing' leaves the edge open (the network layer guards it).
     -}
     , pdNow :: IO UTCTime
-    {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Types.EvalContext'.
+    {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Decision.EvalContext'.
     Injected so the time-sensitive age gate is deterministic under test.
     -}
     , pdAdvisoryEtag :: IO (Maybe DbEtag)
     {- ^ A non-pinning read of the active advisory database's 'DbEtag' for the
-    per-request 'Ecluse.Core.Rules.Types.EvalContext' (the same value
+    per-request 'Ecluse.Core.Rules.Decision.EvalContext' (the same value
     'Ecluse.Core.Rules.rdCurrentAdvisoryEtag' provides, bridged onto these deps
     because the serve gate is where the context is built). 'Nothing' when no
     database is loaded.

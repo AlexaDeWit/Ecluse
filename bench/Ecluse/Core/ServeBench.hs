@@ -41,7 +41,7 @@ import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Policy (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 

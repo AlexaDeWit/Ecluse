@@ -130,7 +130,7 @@ import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestB
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Policy (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)

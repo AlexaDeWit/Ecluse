@@ -40,7 +40,8 @@ import Ecluse.Test.Rules (inertRuleDeps, noFaultReporter)
 -- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
 -- 'prepName' -- to exercise the resilience harness and the parallel engine without any
 -- evaluation closure on the closed 'Rule' data.
-import Ecluse.Core.Rules.Types
+import Ecluse.Core.Rules.Decision
+import Ecluse.Core.Rules.Policy
 import Ecluse.Core.Version (mkVersion)
 
 {- | A fixed "now": the age-rule snapshot, and the base instant the injected breaker

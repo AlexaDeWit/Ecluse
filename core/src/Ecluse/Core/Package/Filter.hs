@@ -52,7 +52,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules.Types (Decision (Admitted))
+import Ecluse.Core.Rules.Decision (Decision (Admitted))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
 {- | The decisions filtering a single public packument owns, for the adapter to
@@ -92,7 +92,7 @@ __must__ cover exactly the packument's versions; a version with no decision is
 treated as not surviving.
 
 A version survives iff its decision is an 'Admitted'; every other
-verdict -- denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable' -- drops it,
+verdict -- denial, deny-by-default, or 'Ecluse.Core.Rules.Decision.Undecidable' -- drops it,
 so a fail-closed undecidable version is filtered out exactly like a denial, while its
 decision is still carried in 'fpDecisions' for the no-survivors status.
 -}

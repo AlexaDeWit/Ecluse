@@ -23,7 +23,8 @@ import Ecluse.Test.Package (sampleDetails)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
 
 import Ecluse.Core.Rules
-import Ecluse.Core.Rules.Types
+import Ecluse.Core.Rules.Decision
+import Ecluse.Core.Rules.Policy
 import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so age-based tests are deterministic.
@@ -262,33 +263,6 @@ spec = do
             cveIdsInReason "runs code on install: postinstall" `shouldBe` []
             cveIdsInReason "thing@1.0.0 was denied by DenyInstallTimeExecution: runs code on install"
                 `shouldBe` []
-
-    describe "PrecededRule" $ do
-        it "exposes the precedence and rule it was built with" $ do
-            -- The fields a config loader reads to patch a rule's precedence.
-            let pr = PrecededRule 250 DenyInstallTimeExecution
-            rulePrecedence pr `shouldBe` 250
-            prRule pr `shouldBe` DenyInstallTimeExecution
-        it "shows both fields" $
-            show (PrecededRule 250 DenyInstallTimeExecution)
-                `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
-
-    describe "defaultPrecedence" $ do
-        it "ranks every deny default strictly above every allow default" $ do
-            -- The out-of-the-box invariant: a matching deny overrides any allow.
-            let allows = [AllowScope (mkScope "x"), AllowIfOlderThan 0, AllowByIdentity "x", AllowIfRemediatesCve]
-            defaultPrecedence DenyInstallTimeExecution
-                `shouldSatisfy` (\d -> all ((d >) . defaultPrecedence) allows)
-        it "orders the allow band by explicitness: quarantine < fast lane < scope < identity" $
-            ( defaultAllowIfOlderThanPrecedence
-            , defaultAllowIfRemediatesCvePrecedence
-            , defaultAllowScopePrecedence
-            , defaultAllowByIdentityPrecedence
-            )
-                `shouldSatisfy` (\(q, f, s, i) -> q < f && f < s && s < i)
-        it "atDefaultPrecedence pairs a rule with its type default" $
-            atDefaultPrecedence DenyInstallTimeExecution
-                `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
 
     describe "prepare" $ do
         it "attaches the fail-open resilience (and its breaker) to AllowIfRemediatesCve" $

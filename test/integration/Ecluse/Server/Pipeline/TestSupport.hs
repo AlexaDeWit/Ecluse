@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
 import Ecluse.Core.Rules (PreparedRule, prepare)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Policy (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )

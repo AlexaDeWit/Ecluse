@@ -55,12 +55,12 @@ import Ecluse.Core.Rules (
     noBreakerReporter,
     prepare,
  )
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
-    Rule (AllowIfOlderThan),
     RuleVerdict (NoDecision),
  )
+import Ecluse.Core.Rules.Policy (Rule (AllowIfOlderThan))
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
     Metadata (..),

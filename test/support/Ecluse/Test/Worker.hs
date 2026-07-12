@@ -22,7 +22,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
+import Ecluse.Core.Rules.Decision (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)

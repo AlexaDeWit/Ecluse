@@ -62,7 +62,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
+import Ecluse.Core.Rules.Decision (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
 import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (

@@ -52,8 +52,9 @@ The library's vocabulary, roughly from the pure core outward:
 * __Domain model__: "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
   the rules reason over), "Ecluse.Core.Version" (version identity and per-ecosystem
   ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
-* __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
-  in "Ecluse.Core.Rules.Types".
+* __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rules an
+  operator selects in "Ecluse.Core.Rules.Policy", yielding the outcome vocabulary in
+  "Ecluse.Core.Rules.Decision".
 * __Protocol boundary__: "Ecluse.Core.Registry" (the shared registry-protocol
   vocabulary), "Ecluse.Core.Registry.Adapter" (the ecosystem adapter registry this
   composition root projects each mount's, publish target's, and worker's ecosystem

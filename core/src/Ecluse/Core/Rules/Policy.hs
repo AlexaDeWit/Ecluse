@@ -2,18 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Data types for the policy rules engine.
+{- | What an operator /selects/: the closed built-in rule vocabulary, and the precedence
+at which each rule competes.
 
-The evaluation model lives in "Ecluse.Core.Rules"; this module holds only the
-dependency-light types it operates on -- the closed built-in rule vocabulary config
-selects from, a rule's per-version result, and the overall decision.
-
-A 'Rule' is __evaluation-agnostic data__: it says /what/ a rule is, never /how/ it is
-evaluated. How a rule decides is a separate concern that lives in "Ecluse.Core.Rules"
-('Ecluse.Core.Rules.evalRule' dispatches over this data; the engine wraps it in a
-'Ecluse.Core.Rules.PreparedRule' to run it).
+This is the config-facing half of the rules engine. A 'Rule' is __evaluation-agnostic
+data__: it says /what/ a rule is, never /how/ it is evaluated. How a rule decides is a
+separate concern that lives in "Ecluse.Core.Rules" ('Ecluse.Core.Rules.evalRule'
+dispatches over this data; the engine wraps it in a 'Ecluse.Core.Rules.PreparedRule' to
+run it), and what an evaluation /returns/ lives in "Ecluse.Core.Rules.Decision".
 -}
-module Ecluse.Core.Rules.Types (
+module Ecluse.Core.Rules.Policy (
     -- * The built-in rule vocabulary
     Rule (..),
     DenyIfCveParams (..),
@@ -29,24 +27,11 @@ module Ecluse.Core.Rules.Types (
     defaultAllowByIdentityPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
     defaultDenyByIdentityPrecedence,
-
-    -- * Evaluation
-    EvalContext (..),
-    mkEvalContext,
-    Reason,
-    RuleVerdict (..),
-    RuleEvaluation (..),
-    FailureAlignment (..),
-    Decision (..),
-
-    -- * Unavailability
-    Transience (..),
-    RetryAfter (..),
 ) where
 
-import Data.Time (NominalDiffTime, UTCTime)
-import Ecluse.Core.Cve (DbEtag)
+import Data.Time (NominalDiffTime)
 import Ecluse.Core.Package (Scope)
+import Ecluse.Core.Rules.Decision (FailureAlignment)
 
 {- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator
 selects and refines in config. Most built-in rules reason only over the
@@ -125,10 +110,11 @@ data DenyIfCveParams = DenyIfCveParams
     -}
     , dicOnUnavailable :: FailureAlignment
     {- ^ How the rule resolves when the advisory database cannot answer (not
-    loaded, failing, or timed out): 'FailDeny' refuses the version (fail-closed,
-    the shipped default), 'FailNoDecision' skips the rule (fail-open, for the
-    operator whose availability outranks a blind gate; the skip is recorded in
-    the decision's audit reasons).
+    loaded, failing, or timed out): 'Ecluse.Core.Rules.Decision.FailDeny' refuses
+    the version (fail-closed, the shipped default),
+    'Ecluse.Core.Rules.Decision.FailNoDecision' skips the rule (fail-open, for the
+    operator whose availability outranks a blind gate; the skip is recorded in the
+    decision's audit reasons).
     -}
     }
     deriving stock (Eq, Show)
@@ -253,152 +239,3 @@ every other rule (including explicit allow-lists), to serve as a hard revocation
 -}
 defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
-
-{- | Ambient information a rule may need that is not part of the package itself:
-the wall-clock "now" for age calculations, and the active advisory database's
-identity for a decision's audit trail.
--}
-data EvalContext = EvalContext
-    { ctxNow :: UTCTime
-    -- ^ The wall-clock "now" for age-based rules.
-    , ctxAdvisoryEtag :: Maybe DbEtag
-    {- ^ The advisory database 'DbEtag' active when this request was admitted, or
-    'Nothing' when none is loaded (or on a path that does not consult one). It is
-    the artifact a denial's audit line names as active at emit; it is
-    deliberately __not__ "the database this decision was evaluated against",
-    since a shadow-swap may land mid-request. Resolved once per request.
-    -}
-    }
-    deriving stock (Eq, Show)
-
-{- | Assemble the ambient evaluation context -- the __one__ assembly point for every
-consumer (the packument sweep, the tarball gate, and the mirror worker's ingest
-re-evaluation), so what feeds a decision is defined once, not at each call site.
-
-The contract the single point holds: 'ctxNow' must come from the injected clock the
-mount's decisions share ('Ecluse.Core.Server.Context.pdNow', which the worker's
-bundle reuses), never an ad-hoc 'Data.Time.getCurrentTime', so the age gate cannot
-drift between contexts; 'ctxAdvisoryEtag' is __audit-only__ (it never enters a rule's
-decision), so a consumer that emits no audit line passes 'Nothing' without changing
-any decision.
--}
-mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
-mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
-
--- | A human-facing reason a rule attaches to its result, kept for the audit trail.
-type Reason = Text
-
-{- | What a single rule returns for a single package version: a __deterministic__
-verdict. The rule computes its answer -- over the package, and for the effectful rules
-the advisory database -- and returns one of these. A rule cannot manufacture an
-'Unavailable'; that is the distinction the resilience harness turns on. A verdict is a
-decided value the harness takes at face value, never a fault it retries.
-
-A verdict is __decisive__ iff it is 'Allow', 'Deny', or @'CannotVet' 'FailDeny' _@.
-'NoDecision' and @'CannotVet' 'FailNoDecision' _@ are __non-decisive__ no-ops; the
-engine collects their reasons (in boot order) for the deny-by-default audit trail.
--}
-data RuleVerdict
-    = -- | This rule admits the package (with a human reason). Decisive.
-      Allow Reason
-    | -- | This rule blocks the package (with a human reason). Decisive.
-      Deny Reason
-    | -- | This rule has no opinion; the reason is kept for the audit trail. A no-op.
-      NoDecision Reason
-    | {- | The rule reached the package but cannot vet it -- a __deterministic,
-      in-process absence__, not a fault (today: no advisory database is loaded). It
-      carries its own __failure alignment__: a 'FailDeny' rule is decisive
-      (fail-closed, → 'Undecidable'), a 'FailNoDecision' rule is a no-op (fail-open).
-      It carries __no__ 'Transience' on purpose: the absence is deterministic, so no
-      in-process retry can change it -- which is exactly why the harness must not
-      route it through the retry\/breaker path.
-      -}
-      CannotVet FailureAlignment Reason
-    deriving stock (Eq, Show)
-
-{- | The outcome the resilience harness produces for one rule: either the rule
-'Decided' (any 'RuleVerdict', taken at face value), or the harness could not obtain a
-verdict at all and the evaluation is 'Unavailable' -- the rule's IO threw, timed out,
-or its source circuit breaker was open. __Only the harness constructs 'Unavailable'__;
-a rule cannot, so the retry\/breaker machinery provably reacts only to a fault the
-harness itself observed, never to a verdict a rule deliberately returned.
-
-Decisive iff it credits a 'Decision': a decisive 'RuleVerdict', or an
-@'Unavailable' _ 'FailDeny' _@. A non-decisive verdict, or an @'Unavailable' _
-'FailNoDecision' _@, is a no-op whose reason is gathered for the audit trail.
--}
-data RuleEvaluation
-    = -- | The rule returned a verdict; the harness takes it at face value.
-      Decided RuleVerdict
-    | {- | The harness could not obtain a verdict: the rule's IO failed, timed out, or
-      its source circuit breaker is open. It carries the rule's __failure alignment__
-      (a 'FailDeny' evaluation is decisive → 'Undecidable', a 'FailNoDecision' one is a
-      no-op) and a 'Transience' recording whether a retry can help. Only the harness
-      builds this.
-      -}
-      Unavailable Transience FailureAlignment Reason
-    deriving stock (Eq, Show)
-
-{- | How a rule aligns when it cannot vet a version, or its evaluation faults.
-
-There is deliberately __no @FailAllow@__: a failed or uncomputable check must never
-/admit/ unvetted bytes. A rule whose verdict is load-bearing for safety fails
-__closed__ ('FailDeny'); a remediation\/allow-direction rule whose missing signal
-should not block availability fails __open__ ('FailNoDecision').
--}
-data FailureAlignment
-    = -- | __Fail closed.__ An uncomputable result is decisive: the version is not admitted.
-      FailDeny
-    | -- | __Fail open.__ An uncomputable result is a no-op: the rule simply does not fire.
-      FailNoDecision
-    deriving stock (Eq, Show)
-
-{- | The overall decision for a package version against a whole rule set.
-
-The deciding rule is credited by __name__ ('Text'): a rule's stable identity is its
-name (see 'ruleName'), independent of how it is evaluated.
--}
-data Decision
-    = -- | Admitted by the named rule, with its reason (was @Approved@\/@ApprovedEffectful@).
-      Admitted Text Reason
-    | -- | Blocked by the named rule, with its reason (was @Denied@\/@DeniedEffectful@).
-      Blocked Text Reason
-    | {- | No rule was decisive. Deny-by-default; carries every non-decisive reason,
-      in boot order, so the denial response can explain what was considered.
-      -}
-      BlockedByDefault [Reason]
-    | {- | Undecidable: a 'FailDeny' rule that could not be computed __won__, so the
-      version could not be vetted. Fail-closed -- it is not admitted (a packument
-      filters it out like a denial; a concrete artifact surfaces a @503@\/@500@ by the
-      serve error model). The 'Transience' carries whether a retry can help; the
-      'Reason' is the audit reason.
-      -}
-      Undecidable Transience Reason
-    deriving stock (Eq, Show)
-
-{- | Whether an unavailability is expected to resolve on its own.
-
-This is the single distinction the serve status mapping turns on: a transient cause
-('WillResolve') is worth retrying (a @503@); a permanent or internal one
-('WontResolve') is not, so it must not be dressed up as a retryable @503@ (it is a
-@500@). The resilience harness sets it from the nature of the failure: an upstream
-outage, rate limit, timeout, or open breaker is transient; an internal or parse
-fault is not.
--}
-data Transience
-    = {- | Transient -- a retry may succeed (an advisory source briefly down, a
-      timeout, an open circuit breaker). The optional 'RetryAfter' is the delay to
-      suggest to the client.
-      -}
-      WillResolve (Maybe RetryAfter)
-    | {- | Not expected to self-heal (an internal or parse error). Retrying cannot
-      help, so the request is a @500@, never a @503@.
-      -}
-      WontResolve
-    deriving stock (Eq, Show)
-
-{- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of seconds
-is never confused with some other integer when it reaches the response header.
--}
-newtype RetryAfter = RetryAfter Int
-    deriving stock (Eq, Ord, Show)

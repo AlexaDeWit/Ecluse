@@ -137,8 +137,9 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Publish
     Ecluse.Core.Rules
+    Ecluse.Core.Rules.Decision
     Ecluse.Core.Rules.Effectful
-    Ecluse.Core.Rules.Types
+    Ecluse.Core.Rules.Policy
     Ecluse.Core.Security
     Ecluse.Core.Security.Egress
     Ecluse.Core.Security.Host
@@ -554,6 +555,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Registry.Pypi.WireSpec
     Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
+    Ecluse.Rules.PolicySpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
     Ecluse.Security.EgressSpec

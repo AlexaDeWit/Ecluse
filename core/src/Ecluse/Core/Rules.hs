@@ -17,7 +17,7 @@ collected, in boot order, for the deny-by-default audit trail. If no rule is dec
 the package is 'BlockedByDefault'.
 
 __A rule is evaluation-agnostic data; how it is evaluated is a separate concern.__ The
-closed built-in vocabulary ('Ecluse.Core.Rules.Types.Rule') says /what/ a rule is;
+closed built-in vocabulary ('Ecluse.Core.Rules.Policy.Rule') says /what/ a rule is;
 'evalRule' is the single dispatch that says /how/ each built-in rule decides, closing
 over the boot-bound capabilities in 'RuleDeps'. The engine's runtime structure is the
 'PreparedRule': it pairs a rule's boot-order identity (precedence and name) with the
@@ -39,7 +39,8 @@ decisive rule, never the first to return in wall-clock time, and once the winner
 known every still-running strictly-later evaluation is cancelled. The cheap pure
 prefix is evaluated directly, so no IO an earlier decisive result would moot is ever
 launched. Evaluation is 'IO'-typed (a rule's evaluator may do IO), so there is no pure
-entry point. The rule data types live in "Ecluse.Core.Rules.Types"; the resilience
+entry point. The rules an operator selects live in "Ecluse.Core.Rules.Policy" and the
+vocabulary an evaluation returns lives in "Ecluse.Core.Rules.Decision"; the resilience
 harness lives in "Ecluse.Core.Rules.Effectful".
 -}
 module Ecluse.Core.Rules (
@@ -90,6 +91,7 @@ import Ecluse.Core.Breaker (
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
+import Ecluse.Core.Rules.Decision
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
     FaultReporter (..),
@@ -99,7 +101,7 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
     runResilient,
  )
-import Ecluse.Core.Rules.Types
+import Ecluse.Core.Rules.Policy
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (renderVersion)
 

@@ -126,7 +126,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
-import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
+import Ecluse.Core.Rules.Decision (EvalContext, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
     hostPortAddress,

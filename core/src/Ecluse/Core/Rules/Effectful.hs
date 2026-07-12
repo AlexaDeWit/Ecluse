@@ -57,7 +57,7 @@ import Ecluse.Core.Breaker (
     reportBreakerChange,
  )
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Rules.Types
+import Ecluse.Core.Rules.Decision
 import Ecluse.Core.Text (displayExceptionT)
 
 {- | The resilience policy wrapped around an effectful rule's IO: the timeout\/retry\/

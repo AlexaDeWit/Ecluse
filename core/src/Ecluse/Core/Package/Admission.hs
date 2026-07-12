@@ -33,7 +33,7 @@ import Ecluse.Core.Package.Integrity (
     classifyArtifacts,
  )
 import Ecluse.Core.Rules (PreparedRule, evalRules)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
  )
@@ -65,7 +65,7 @@ data ArtifactAdmission
       AdmissionDenied Decision
     | {- | The version could not be decided (a fail-closed rule whose evaluation was
       unavailable). Carries the 'Undecidable' 'Decision' with its
-      'Ecluse.Core.Rules.Types.Transience', so serve can choose @503@ vs @500@ and
+      'Ecluse.Core.Rules.Decision.Transience', so serve can choose @503@ vs @500@ and
       the worker can leave the job to redeliver.
       -}
       AdmissionUndecidable Decision

@@ -14,9 +14,9 @@ import Test.Hspec
 import Ecluse.Config (defaultPolicy)
 import Ecluse.Config.Rule
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (FailureAlignment (..))
+import Ecluse.Core.Rules.Policy (
     DenyIfCveParams (..),
-    FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
     defaultAllowByIdentityPrecedence,

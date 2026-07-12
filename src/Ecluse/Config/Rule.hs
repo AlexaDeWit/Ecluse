@@ -21,9 +21,9 @@ import Data.Time (NominalDiffTime)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (FailureAlignment (..))
+import Ecluse.Core.Rules.Policy (
     DenyIfCveParams (..),
-    FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
     defaultPrecedence,
@@ -191,8 +191,8 @@ checkRestatedType name entry rule = case entryType entry of
 {- | The rule type names the diagnostics recognise: the vocabulary
 'checkRestatedType' treats as a real-but-mismatched type (a 'MalformedRule')
 rather than an unknown one (an 'UnknownRuleType'). Exported so a test can pin it
-against drift from the 'Ecluse.Core.Rules.Types.Rule' constructors, their
-'buildRule' branches, and 'Ecluse.Core.Rules.Types.ruleName'.
+against drift from the 'Ecluse.Core.Rules.Policy.Rule' constructors, their
+'buildRule' branches, and 'Ecluse.Core.Rules.Policy.ruleName'.
 -}
 knownRuleTypes :: [Text]
 knownRuleTypes =

@@ -28,8 +28,8 @@ module Ecluse.Test.Rules (
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..), evalRules, noBreakerReporter, prepare)
-import Ecluse.Core.Rules.Types (
-    EvalContext,
+import Ecluse.Core.Rules.Decision (EvalContext)
+import Ecluse.Core.Rules.Policy (
     PrecededRule (PrecededRule),
     Rule,
     defaultPrecedence,

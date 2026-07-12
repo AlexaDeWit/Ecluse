@@ -31,9 +31,11 @@ import Ecluse.Core.Registry.Npm.Filter (
     rewriteVersion,
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted),
     EvalContext (EvalContext),
+ )
+import Ecluse.Core.Rules.Policy (
     PrecededRule,
     Rule (AllowIfOlderThan),
  )

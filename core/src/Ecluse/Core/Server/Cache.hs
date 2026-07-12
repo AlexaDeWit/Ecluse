@@ -48,7 +48,7 @@ document edited in place, and the two must describe the same fetch.
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules
-('Ecluse.Core.Rules.Types.AllowIfOlderThan') and the separately-synced advisory
+('Ecluse.Core.Rules.Policy.AllowIfOlderThan') and the separately-synced advisory
 tier stay correct; only each upstream's fetch and parse is memoised. The TTL is
 short, and brief staleness is benign: a brand-new publish need not appear instantly
 (see @docs\/architecture\/web-layer.md@ → "Metadata cache").

@@ -67,7 +67,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
-import Ecluse.Core.Rules.Types (Decision (Undecidable))
+import Ecluse.Core.Rules.Decision (Decision (Undecidable))
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
@@ -310,7 +310,7 @@ data VersionVerdict = VersionVerdict
 
 {- | An extensible bag of audit fields folded into a denial line's JSON at emit
 time. It lives here, at the audit boundary, deliberately __not__ on the pure
-'Ecluse.Core.Rules.Types.Decision': the rule engine carries no logging concern,
+'Ecluse.Core.Rules.Decision.Decision': the rule engine carries no logging concern,
 and new audit data (a CVE id, an EPSS score) is added at this layer without
 threading a field through the decision path.
 -}
@@ -325,7 +325,7 @@ instance Monoid Metadata where
 
 {- | Everything one denial audit line records: typed and stable. The advisory
 'DbEtag' is the database active when the request was admitted (carried on the
-'Ecluse.Core.Rules.Types.EvalContext'); it is named as active at emit, never
+'Ecluse.Core.Rules.Decision.EvalContext'); it is named as active at emit, never
 claimed as the database the decision was evaluated against, since a shadow-swap
 may land mid-request.
 -}
@@ -365,7 +365,7 @@ cveMetadata message = case cveIdsInReason message of
 {- | Emit one audit log line per denied version, __denials only__ (an admit logs
 nothing). Companion to 'recordDenials', which counts the same denials as metrics.
 The 'DbEtag' is the advisory database active at emit (from the request's
-'Ecluse.Core.Rules.Types.EvalContext'), so the line answers "which database was
+'Ecluse.Core.Rules.Decision.EvalContext'), so the line answers "which database was
 live when this verdict was logged", not "which database produced it".
 -}
 logDenials :: (KatipContext m) => PackageName -> Maybe DbEtag -> [VersionVerdict] -> m ()

@@ -27,9 +27,11 @@ import Ecluse.Core.Package (
     mkPackageName,
  )
 import Ecluse.Core.Package.Filter (FilterPlan (..))
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted),
     EvalContext (EvalContext),
+ )
+import Ecluse.Core.Rules.Policy (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )

@@ -44,7 +44,7 @@ import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
 import Ecluse.Config.Rule
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
-import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Rules.Policy (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
 {- HLINT ignore defaultPolicy "Avoid restricted function" -}

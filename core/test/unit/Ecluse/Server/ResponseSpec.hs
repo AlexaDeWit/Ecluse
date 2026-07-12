@@ -20,9 +20,11 @@ import Ecluse.Core.Package (
     mkScope,
  )
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
+ )
+import Ecluse.Core.Rules.Policy (
     PrecededRule,
     Rule (AllowScope, DenyInstallTimeExecution),
  )

@@ -53,7 +53,7 @@ import Ecluse.Core.Package.Integrity (
     classifyArtifacts,
  )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Blocked, Undecidable),
     EvalContext (EvalContext),
     FailureAlignment (FailDeny),

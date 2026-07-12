@@ -30,7 +30,7 @@ import Ecluse.Bench.Corpus (
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (
+import Ecluse.Core.Rules.Decision (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
  )
 import Ecluse.Test.Rules (inertRuleDeps)

@@ -44,7 +44,7 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
+import Ecluse.Core.Rules.Decision (RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)

@@ -116,7 +116,7 @@ import Ecluse.Core.Registry.Metadata (
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
+import Ecluse.Core.Rules.Decision (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
@@ -386,7 +386,7 @@ the __unrestricted raw @Value@__ (the assembly takes only plan-surviving version
 objects from it, so restricting the raw document here would rebuild a many-version
 object only for the assembly to rebuild it again); a plan with no survivors yields
 no contribution and the per-version 'ServeDecision's, each excluded
-version's decision projected (a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' carrying
+version's decision projected (a fail-closed 'Ecluse.Core.Rules.Decision.Undecidable' carrying
 its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
 a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
 at all) or 'BelowIntegrityFloor' (a digest, but too weak) refusals and appended to those
@@ -427,7 +427,7 @@ gatePublic tracing metrics deps name ctx = \case
 {- Decide every version of a public packument against the rules engine, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
 through 'Ecluse.Core.Rules.evalRules', so a fail-closed rule that cannot be computed
-yields a 'Ecluse.Core.Rules.Types.Undecidable' decision. With only pure rules the
+yields a 'Ecluse.Core.Rules.Decision.Undecidable' decision. With only pure rules the
 per-version call short-circuits without launching any IO. -}
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
