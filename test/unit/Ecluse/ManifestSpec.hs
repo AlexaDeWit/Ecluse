@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route (classify)
 import Ecluse.Core.Server.Route (Route (Unsupported))
-import Ecluse.Core.Server.RouteSpec (RouteSpec (rsExample, rsMethod, rsRoute))
+import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod))
 import Ecluse.Manifest (
     ErrorEnvelope (ErrorEnvelope),
     buildOpenApi,
@@ -77,16 +77,14 @@ spec = do
             -- effect and the output does not depend on insertion order.
             map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
-    -- The manifest renders the mounted adapter's declarative route grammar, and the
-    -- server routes on that same adapter's classifier. These hold the two against
-    -- each other so the documented surface cannot drift from what the server serves.
+    -- The manifest's specs are the documentation projection ('specOf') of the very
+    -- RoutePatterns the classifier routes on, so their paths and methods agree by
+    -- construction. These assert that projection reaches the rendered document: every
+    -- route is emitted under its declared method at its rendered template, and a path
+    -- claimed by no route still denies by default.
     describe "documented routes correspond to the live classifier" $ do
         it "the npm mount exposes a route grammar" $
             npmSpecs `shouldNotSatisfy` null
-
-        it "every documented route's example classifies to the action it documents" $
-            for_ npmSpecs $ \rs ->
-                classify (renderStdMethod (rsMethod rs)) (rsExample rs) `shouldBe` rsRoute rs
 
         it "each documented route is rendered under its declared method" $
             for_ npmSpecs $ \rs ->

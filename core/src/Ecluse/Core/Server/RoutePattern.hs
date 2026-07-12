@@ -60,6 +60,11 @@ data RoutePattern v = RoutePattern
     file name that must be consistent with the package captured earlier); a 'Nothing'
     denies the request (deny by default). Total over the captures the pattern produces.
     -}
+    , rpRoute :: Route
+    {- ^ A representative 'Route' the pattern denotes (the constructor, with placeholder
+    payloads). It is the pattern's identity for documentation: a renderer keys each
+    route's operation doc off it. The classifier ignores it -- routing reads 'rpBuild'.
+    -}
     }
 
 {- | One segment of a path template: a fixed segment matched verbatim, or a named

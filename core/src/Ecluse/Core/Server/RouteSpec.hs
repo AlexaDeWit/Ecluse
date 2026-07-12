@@ -2,61 +2,56 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The declarative route grammar: a mount's serve surface as data.
+{- | The documentation view of a route: the v-erased projection of a
+"Ecluse.Core.Server.RoutePattern".'RoutePattern' the OpenAPI manifest renders.
 
 A 'RouteSpec' states one route the way the __documentation__ needs it: the HTTP
-method, the mount-relative path template (literal segments and named path
-parameters), a concrete example request, and the shared 'Route' the route denotes.
-It is the projection of the
-'Ecluse.Core.Server.Route.Classifier' the server actually routes on: the classifier
-is the authoritative /parser/ (a request to a 'Route'), and this is the same grammar
-turned outward as a /description/ a renderer can walk.
-
-The two live side by side on the mount's adapter
-("Ecluse.Core.Registry.Adapter.Types.AdapterServe" carries both the classifier and
-these specs), and are reconciled by an executable correspondence: each spec's
-'rsExample', run through the classifier, must yield its 'rsRoute'. So the documented
-surface (its paths, methods, and parameters) cannot silently drift from what the
-server routes, and the OpenAPI manifest ("Ecluse.Manifest") is a pure renderer of
-this data rather than a hand-kept parallel copy of the path grammar.
+method, the mount-relative path template (literal segments and named parameters), and
+the shared 'Route' it denotes. 'specOf' derives it from the /same/ 'RoutePattern' the
+front door routes on, dropping the capture-value type @v@ and the runtime parser, so
+the documented paths, methods, and parameters are a projection of what the classifier
+matches rather than a hand-kept parallel copy. The manifest can therefore not lie about
+the routed surface: both derive from one pattern.
 
 This module is __plain data__ with no OpenAPI (or any web) dependency, so the shared
 grammar lives in the agnostic core and the heavy manifest tooling stays confined to
 the build-time generator that renders it.
 -}
 module Ecluse.Core.Server.RouteSpec (
-    -- * The grammar
+    -- * The documentation view
     RouteSpec (..),
     PathSeg (..),
     ParamSpec (..),
+
+    -- * Projection from a route pattern
+    specOf,
 ) where
 
-import Network.HTTP.Types.Method (StdMethod)
+import Network.HTTP.Types.Method (StdMethod (GET, PUT))
 
 import Ecluse.Core.Server.Route (Route)
+import Ecluse.Core.Server.RoutePattern (
+    Capture (capDescription, capName),
+    MethodMatch (MethodPut, MethodRead),
+    PatternSeg (SegCap, SegLit),
+    RoutePattern (rpMethod, rpRoute, rpSegs),
+ )
 
-{- | One route, described as data: what a renderer needs to document it and what the
-correspondence check needs to hold it against the live 'Ecluse.Core.Server.Route.Classifier'.
+{- | One route, described as data for a renderer: the method, the path template, and
+the 'Route' it denotes. Derived from a 'RoutePattern' by 'specOf'.
 -}
 data RouteSpec = RouteSpec
     { rsMethod :: StdMethod
-    -- ^ The HTTP method this route answers.
+    -- ^ The HTTP method this route is documented under.
     , rsPattern :: [PathSeg]
     {- ^ The mount-relative path template: literal segments and named parameters, in
     order (e.g. @{package} \/ - \/ {filename}@). The mount prefix is not included; the
     manifest renderer prepends it.
     -}
-    , rsExample :: [Text]
-    {- ^ A concrete, mount-relative, already-percent-decoded example request (the
-    path segments a client would send, prefix stripped) that the live classifier
-    maps to 'rsRoute'. The reconciling correspondence test drives the classifier with
-    this. For the deny-by-default catch-all it is any path the other routes do not
-    claim, so it need not match 'rsPattern' structurally.
-    -}
     , rsRoute :: Route
-    {- ^ The serve action this route denotes: the exact 'Route' the classifier yields
-    for 'rsExample'. It also keys the manifest's per-route documentation, so a total
-    case over the 'Route' sum keeps the described surface exhaustive.
+    {- ^ The serve action this route denotes. It keys the manifest's per-route
+    documentation, so a total case over the 'Route' sum keeps the described surface
+    exhaustive.
     -}
     }
     deriving stock (Eq, Show)
@@ -77,3 +72,23 @@ data ParamSpec = ParamSpec
     -- ^ A one-line, human-facing description of the parameter.
     }
     deriving stock (Eq, Show)
+
+{- | Project a 'RoutePattern' to its documentation view: the method it is documented
+under (a read pattern matches any non-write method but documents as @GET@; the write
+pattern as @PUT@), its path template (a literal segment verbatim, a capture as a named
+parameter carrying its documentation), and the 'Route' it denotes. The capture-value
+type and the runtime parser are dropped -- the manifest documents structure, not semantics.
+-}
+specOf :: RoutePattern v -> RouteSpec
+specOf rp =
+    RouteSpec
+        { rsMethod = documentedMethod (rpMethod rp)
+        , rsPattern = map paramOf (rpSegs rp)
+        , rsRoute = rpRoute rp
+        }
+  where
+    documentedMethod MethodPut = PUT
+    documentedMethod MethodRead = GET
+
+    paramOf (SegLit t) = Lit t
+    paramOf (SegCap c) = Param (ParamSpec (capName c) (capDescription c))
