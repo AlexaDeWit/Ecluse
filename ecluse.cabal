@@ -160,6 +160,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Internal
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
+    Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
     Ecluse.Core.Supervision
     Ecluse.Core.Telemetry.Metrics
@@ -432,6 +433,7 @@ library ecluse-manifest
     , autodocodec                ^>=0.5
     , autodocodec-openapi3       ^>=0.3
     , http-media                 ^>=0.8
+    , http-types                 ^>=0.12
     , insert-ordered-containers  ^>=0.2
     , openapi3                   ^>=3.2
     , text                       ^>=2.1

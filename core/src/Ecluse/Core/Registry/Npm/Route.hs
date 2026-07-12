@@ -48,19 +48,29 @@ Mount dispatch / prefix-stripping and the liveness\/readiness routes are handled
 in the agnostic web layer (see @docs\/architecture\/web-layer.md@); 'classify'
 only ever sees the npm-native request, so it models exactly the 'Route's the
 proxy serves.
+
+The same grammar is exposed outward as data in 'npmRouteSpecs': the declarative
+'RouteSpec' projection the capability manifest renders. 'classify' is the
+authoritative parser and 'npmRouteSpecs' its description; each spec's example is
+held against 'classify' by a correspondence test, so the documented surface cannot
+drift from what the server routes.
 -}
 module Ecluse.Core.Registry.Npm.Route (
     -- * Classification
     classify,
+
+    -- * Declarative grammar
+    npmRouteSpecs,
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types.Method (methodPut)
+import Network.HTTP.Types.Method (StdMethod (GET, PUT), methodPut)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Lit, Param), RouteSpec (RouteSpec))
+import Ecluse.Core.Version (Version, mkVersion)
 
 {- | Classify an npm-native request (its method and path) into a shared 'Route'.
 
@@ -191,3 +201,77 @@ tarballRoute name file =
         Just version
             | not (T.null version) -> Tarball name (mkVersion Npm version) (Filename file)
         _ -> Unsupported
+
+{- | npm's route grammar as data: one 'RouteSpec' per served 'Route', the
+declarative projection of 'classify' the capability manifest renders.
+
+Built by 'routeSpecFor' over one representative value per 'Route' constructor, so
+the case is __total__: adding a 'Route' is a compile error here until it has a spec,
+just as it is in 'classify'. Each spec's 'Ecluse.Core.Server.RouteSpec.rsExample' is
+the request the correspondence test drives 'classify' with, asserting it yields the
+spec's 'Ecluse.Core.Server.RouteSpec.rsRoute' -- so the description and the parser
+cannot fall out of step.
+-}
+npmRouteSpecs :: NonEmpty RouteSpec
+npmRouteSpecs = fmap routeSpecFor representativeRoutes
+
+{- | One representative value per 'Route' constructor -- the iteration
+'npmRouteSpecs' folds over. The payloads are inert ('routeSpecFor' reads the
+constructor, not the payload); they reuse the example coordinates so the value read
+is the one the spec documents.
+-}
+representativeRoutes :: NonEmpty Route
+representativeRoutes =
+    Packument examplePackage
+        :| [ Tarball examplePackage exampleVersion exampleFilename
+           , Publish examplePackage
+           , Ping
+           , Search
+           , Unsupported
+           ]
+
+{- | Map an npm 'Route' to its declarative spec. __Total__ over the closed 'Route'
+sum: the method, the path template, an example request, and the exact 'Route' the
+example classifies to. The path grammar mirrors 'classify' (a packument @GET@ and a
+publish @PUT@ share @\/{package}@; a tarball is @\/{package}\/-\/{filename}@; the
+meta-routes are literal); the correspondence test is what forbids the two drifting.
+-}
+routeSpecFor :: Route -> RouteSpec
+routeSpecFor = \case
+    Packument{} ->
+        RouteSpec GET [Param packageParam] ["lodash"] (Packument examplePackage)
+    Tarball{} ->
+        RouteSpec
+            GET
+            [Param packageParam, Lit "-", Param filenameParam]
+            ["lodash", "-", "lodash-1.0.0.tgz"]
+            (Tarball examplePackage exampleVersion exampleFilename)
+    Publish{} ->
+        RouteSpec PUT [Param packageParam] ["lodash"] (Publish examplePackage)
+    Ping ->
+        RouteSpec GET [Lit "-", Lit "ping"] ["-", "ping"] Ping
+    Search ->
+        RouteSpec GET [Lit "-", Lit "v1", Lit "search"] ["-", "v1", "search"] Search
+    -- The deny-by-default catch-all documents @\/{unsupportedPath}@, but its example
+    -- is any path the routes above do not claim (here an unknown meta-route), which
+    -- is what actually classifies to 'Unsupported'.
+    Unsupported ->
+        RouteSpec GET [Param unsupportedParam] ["-", "whoami"] Unsupported
+
+examplePackage :: PackageName
+examplePackage = mkPackageName Npm Nothing "lodash"
+
+exampleVersion :: Version
+exampleVersion = mkVersion Npm "1.0.0"
+
+exampleFilename :: Filename
+exampleFilename = Filename "lodash-1.0.0.tgz"
+
+packageParam :: ParamSpec
+packageParam = ParamSpec "package" "The package name, URL-encoded; a scoped name is `@scope%2Fname`."
+
+filenameParam :: ParamSpec
+filenameParam = ParamSpec "filename" "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`."
+
+unsupportedParam :: ParamSpec
+unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

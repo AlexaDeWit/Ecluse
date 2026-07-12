@@ -52,6 +52,7 @@ npmAdapter =
         , adapterServe =
             AdapterServe
                 { serveClassifier = NpmRoute.classify
+                , serveRoutes = NpmRoute.npmRouteSpecs
                 , serveRenderer = npmRenderer
                 }
         , adapterMetadata =

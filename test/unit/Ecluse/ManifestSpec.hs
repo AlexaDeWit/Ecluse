@@ -15,6 +15,7 @@ import Data.OpenApi (
     Components (_componentsSchemas),
     OpenApi (_openApiComponents, _openApiInfo, _openApiPaths, _openApiServers),
     Operation (_operationResponses, _operationTags),
+    PathItem,
     Referenced (Inline),
     Response (_responseContent),
     Responses (_responsesResponses),
@@ -25,15 +26,23 @@ import Data.OpenApi (
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Network.HTTP.Types.Method (StdMethod (GET, PUT), renderStdMethod)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
+import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
+import Ecluse.Core.Registry.Npm.Route (classify)
+import Ecluse.Core.Server.Route (Route (Unsupported))
+import Ecluse.Core.Server.RouteSpec (RouteSpec (rsExample, rsMethod, rsRoute))
 import Ecluse.Manifest (
     ErrorEnvelope (ErrorEnvelope),
     buildOpenApi,
     canonicalManifestSource,
     errorEnvelopeSchemaName,
     renderManifest,
+    routePathKey,
     synthesizedPackumentSchemaName,
  )
 
@@ -68,19 +77,27 @@ spec = do
             -- effect and the output does not depend on insertion order.
             map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
-    describe "every Route constructor appears as an operation" $ do
-        it "Packument -> GET /npm/{package}" $
-            getOp "/npm/{package}" `shouldSatisfy` isJust
-        it "Tarball -> GET /npm/{package}/-/{filename}" $
-            getOp "/npm/{package}/-/{filename}" `shouldSatisfy` isJust
-        it "Publish -> PUT /npm/{package}" $
-            putOp "/npm/{package}" `shouldSatisfy` isJust
-        it "Ping -> GET /npm/-/ping" $
-            getOp "/npm/-/ping" `shouldSatisfy` isJust
-        it "Search -> GET /npm/-/v1/search" $
-            getOp "/npm/-/v1/search" `shouldSatisfy` isJust
-        it "Unsupported -> GET /npm/{unsupportedPath}" $
-            getOp "/npm/{unsupportedPath}" `shouldSatisfy` isJust
+    -- The manifest renders the mounted adapter's declarative route grammar, and the
+    -- server routes on that same adapter's classifier. These hold the two against
+    -- each other so the documented surface cannot drift from what the server serves.
+    describe "documented routes correspond to the live classifier" $ do
+        it "the npm mount exposes a route grammar" $
+            npmSpecs `shouldNotSatisfy` null
+
+        it "every documented route's example classifies to the action it documents" $
+            for_ npmSpecs $ \rs ->
+                classify (renderStdMethod (rsMethod rs)) (rsExample rs) `shouldBe` rsRoute rs
+
+        it "each documented route is rendered under its declared method" $
+            for_ npmSpecs $ \rs ->
+                (lookupPath rs >>= operationForMethod (rsMethod rs)) `shouldSatisfy` isJust
+
+        it "the manifest's path keys are exactly the rendered route templates" $
+            sort (InsOrd.keys (_openApiPaths doc))
+                `shouldBe` sort (ordNub (map renderedKey npmSpecs))
+
+        it "a path claimed by no documented route denies by default (Unsupported)" $
+            classify (renderStdMethod GET) ["not", "a", "known", "route"] `shouldBe` Unsupported
 
     describe "documented statuses and boundaries" $ do
         it "Search carries 501" $
@@ -108,8 +125,23 @@ spec = do
     getOp :: FilePath -> Maybe Operation
     getOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemGet
 
-    putOp :: FilePath -> Maybe Operation
-    putOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemPut
+    -- The npm mount's declarative route grammar, resolved through the same adapter
+    -- registry the composition root mounts and the manifest renders.
+    npmSpecs :: [RouteSpec]
+    npmSpecs = maybe [] (toList . serveRoutes . adapterServe) (adapterFor Npm)
+
+    -- A spec's manifest path key, rendered the way the manifest renders it.
+    renderedKey :: RouteSpec -> FilePath
+    renderedKey = toString . routePathKey (prefixFor Npm)
+
+    lookupPath :: RouteSpec -> Maybe PathItem
+    lookupPath rs = InsOrd.lookup (renderedKey rs) (_openApiPaths doc)
+
+    operationForMethod :: StdMethod -> PathItem -> Maybe Operation
+    operationForMethod = \case
+        GET -> _pathItemGet
+        PUT -> _pathItemPut
+        _ -> const Nothing
 
     statusCodes :: Operation -> [Int]
     statusCodes = sort . InsOrd.keys . _responsesResponses . _operationResponses

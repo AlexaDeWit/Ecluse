@@ -14,10 +14,15 @@ per ecosystem. It is __statically generated__ from a fixed canonical source and
 published as static content; it is __not served__, and there is no route or WAI
 wiring for it.
 
-The document is __assembled by hand__ (Écluse routes on a raw @wai@ 'Application',
-not Servant, so there is no route table to reflect): the operations are folded
-from the closed 'Route' sum over the configured mounts, and the owned response
-bodies carry code-first schemas. Three kinds of surface are distinguished:
+The document is __rendered from the mounted adapters' route grammar__: each
+configured ecosystem's 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' carries
+its serve surface as data ('Ecluse.Core.Registry.Adapter.Types.serveRoutes', a
+'RouteSpec' per served 'Route'), the same grammar the server's
+'Ecluse.Core.Server.Route.Classifier' routes on. This module walks those specs into
+OpenAPI paths and marries each to its owned documentation, so the described surface
+is a projection of how the server mounts routes, not a hand-kept parallel copy. The
+owned response bodies carry code-first schemas. Three kinds of surface are
+distinguished:
 
 * __Owned / synthesized__ bodies -- the error\/denial envelope ('ErrorEnvelope')
   and the merged-and-filtered packument ('synthesizedPackumentSchema') -- are
@@ -59,6 +64,7 @@ module Ecluse.Manifest (
     -- * Assembly and rendering
     buildOpenApi,
     renderManifest,
+    routePathKey,
 
     -- * Owned schemas
     ErrorEnvelope (..),
@@ -81,6 +87,7 @@ import Autodocodec (HasCodec (codec), object, requiredField, (.=))
 -- through the newtype. The 'ToSchema' deriving needs only the type constructor.
 import Autodocodec.DerivingVia (Autodocodec (Autodocodec))
 import Autodocodec.OpenAPI.DerivingVia (AutodocodecOpenApi)
+import Data.List (nubBy)
 import Data.OpenApi (
     AdditionalProperties (AdditionalPropertiesAllowed, AdditionalPropertiesSchema),
     Components (_componentsSchemas),
@@ -93,7 +100,17 @@ import Data.OpenApi (
     Operation (_operationDescription, _operationRequestBody, _operationResponses, _operationSummary, _operationTags),
     Param (_paramDescription, _paramIn, _paramName, _paramRequired, _paramSchema),
     ParamLocation (ParamPath),
-    PathItem (_pathItemGet, _pathItemParameters, _pathItemPut),
+    PathItem (
+        _pathItemDelete,
+        _pathItemGet,
+        _pathItemHead,
+        _pathItemOptions,
+        _pathItemParameters,
+        _pathItemPatch,
+        _pathItemPost,
+        _pathItemPut,
+        _pathItemTrace
+    ),
     Reference (Reference),
     Referenced (Inline, Ref),
     RequestBody (_requestBodyContent, _requestBodyDescription, _requestBodyRequired),
@@ -106,11 +123,17 @@ import Data.OpenApi (
     toSchema,
  )
 import Network.HTTP.Media (MediaType)
+import Network.HTTP.Types.Method (StdMethod (..))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
-import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Server.Route (Filename (Filename), Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
+import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
+import Ecluse.Core.Server.Route (Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
+import Ecluse.Core.Server.RouteSpec (
+    ParamSpec (psDescription, psName),
+    PathSeg (Lit, Param),
+    RouteSpec (rsMethod, rsPattern, rsRoute),
+ )
 
 {- | The explicit inputs the manifest is a pure function of: the server's
 externally-reachable base URL (the @servers@ entry artifact URLs resolve against)
@@ -150,7 +173,7 @@ buildOpenApi src =
     (mempty :: OpenApi)
         { _openApiInfo = manifestInfo
         , _openApiServers = [server]
-        , _openApiPaths = pathsFrom (concatMap ecosystemRoutes (toList (manifestEcosystems src)))
+        , _openApiPaths = pathsFrom (concatMap ecosystemRouteSpecs (toList (manifestEcosystems src)))
         , _openApiComponents = (mempty :: Components){_componentsSchemas = ownedSchemas}
         , _openApiTags = InsOrdSet.fromList (map ecosystemTag (toList (manifestEcosystems src)))
         }
@@ -187,91 +210,99 @@ ownedSchemas =
 ecosystemTag :: Ecosystem -> Tag
 ecosystemTag eco = Tag (ecosystemName eco) (Just (ecosystemName eco <> " registry protocol coverage")) Nothing
 
-{- | One entry in the fold: the path-template key and a 'PathItem' carrying just
-this route's operation (and any path parameters). Entries that share a path key
-are merged through 'PathItem''s 'Semigroup' in 'pathsFrom'.
+{- | The (path key, spec) entries an ecosystem contributes: its mounted adapter's
+declarative route grammar ('Ecluse.Core.Registry.Adapter.Types.serveRoutes'), each
+keyed by its rendered path template under the ecosystem's mount prefix. An ecosystem
+with no adapter contributes nothing (rather than documenting a route the server
+cannot serve), so adding a mount is what adds its routes to the manifest.
 -}
-data RouteEntry = RouteEntry
-    { rePath :: FilePath
-    , rePathItem :: PathItem
-    }
+ecosystemRouteSpecs :: Ecosystem -> [(FilePath, RouteSpec)]
+ecosystemRouteSpecs eco =
+    case adapterFor eco of
+        Nothing -> []
+        Just adapter ->
+            [ (toString (routePathKey (prefixFor eco) spec), spec)
+            | spec <- toList (serveRoutes (adapterServe adapter))
+            ]
 
-{- | Merge the route entries into the paths map, combining same-path entries
-(e.g. the packument @GET@ and the publish @PUT@ on @\/{pkg}@) through 'PathItem''s
-'Semigroup'.
+{- | Fold the (path key, spec) entries into the paths map. Specs that render to the
+same key (the packument @GET@ and the publish @PUT@ on @\/{package}@) merge: their
+operations combine through 'PathItem''s 'Semigroup', and the key's path parameters
+are the union of the contributing specs' parameters, de-duplicated by name so a
+shared parameter is documented once.
 -}
-pathsFrom :: [RouteEntry] -> InsOrd.InsOrdHashMap FilePath PathItem
-pathsFrom = foldl' insertEntry InsOrd.empty
+pathsFrom :: [(FilePath, RouteSpec)] -> InsOrd.InsOrdHashMap FilePath PathItem
+pathsFrom entries =
+    InsOrd.fromList
+        [ (key, item{_pathItemParameters = paramsFor key})
+        | (key, item) <- InsOrd.toList operations
+        ]
   where
-    insertEntry acc entry = InsOrd.insertWith (<>) (rePath entry) (rePathItem entry) acc
+    operations = foldl' addOperation InsOrd.empty entries
+    addOperation acc (key, spec) =
+        InsOrd.insertWith (<>) key (methodItem (rsMethod spec) (routeOperation (rsRoute spec))) acc
 
-{- | The route entries an ecosystem contributes. The 'Route' sum is the shared
-serve vocabulary, but the /path grammar/ for each route is ecosystem-specific, so
-this dispatches on the ecosystem and applies that ecosystem's grammar. Only @npm@
-has a served route grammar today; the others contribute nothing rather than
-documenting routes the server cannot yet serve.
--}
-ecosystemRoutes :: Ecosystem -> [RouteEntry]
-ecosystemRoutes = \case
-    Npm -> map npmRouteEntry npmRoutes
-    PyPI -> []
-    RubyGems -> []
+    parameters = foldl' addParams InsOrd.empty entries
+    -- Accumulate a key's parameters in first-seen order (@old <> new@) before the
+    -- by-name de-duplication in 'paramsFor'.
+    addParams acc (key, spec) = InsOrd.insertWith (flip (<>)) key (specParams spec) acc
+    paramsFor key =
+        map (Inline . toParam) (nubBy sameName (fromMaybe [] (InsOrd.lookup key parameters)))
+    sameName a b = psName a == psName b
 
-{- | One representative value per 'Route' constructor -- the iteration the fold
-runs over. The constructor payloads are inert (the manifest documents path
-/templates/, not concrete coordinates); 'npmRouteEntry' reads the constructor, not
-the payload.
+{- | The full path-template key for a route under a mount prefix, e.g.
+@\/npm\/{package}\/-\/{filename}@. A 'Lit' segment renders verbatim and a 'Param' as
+the OpenAPI @{name}@ template. Routes that share a key (the packument @GET@ and the
+publish @PUT@ on @\/{package}@) render to the same string, so they merge.
 -}
-npmRoutes :: [Route]
-npmRoutes =
-    [ Packument placeholderPackage
-    , Tarball placeholderPackage placeholderVersion placeholderFilename
-    , Publish placeholderPackage
-    , Ping
-    , Search
-    , Unsupported
-    ]
+routePathKey :: NonEmpty Text -> RouteSpec -> Text
+routePathKey prefix spec =
+    "/" <> T.intercalate "/" (toList prefix <> map renderSeg (rsPattern spec))
   where
-    placeholderPackage :: PackageName
-    placeholderPackage = mkPackageName Npm Nothing "package"
+    renderSeg = \case
+        Lit s -> s
+        Param p -> "{" <> psName p <> "}"
 
-    placeholderVersion :: Version
-    placeholderVersion = mkVersion Npm "1.0.0"
+-- | The path parameters a route's template carries, in template order.
+specParams :: RouteSpec -> [ParamSpec]
+specParams spec = [p | Param p <- rsPattern spec]
 
-    placeholderFilename :: Filename
-    placeholderFilename = Filename "package-1.0.0.tgz"
-
-{- | Map an npm 'Route' to its manifest entry. __Total__ over the closed 'Route'
-sum: adding a constructor without a manifest entry is a compile-time gap here, so
-the documented surface cannot silently fall behind what the server routes.
+{- | Place an operation on the 'PathItem' field its HTTP method names. Total over
+'StdMethod'; the final @CONNECT@ branch is genuinely unreachable (see below), so
+it is the sanctioned per-declaration @error@ escape hatch (STYLE.md section 10).
 -}
-npmRouteEntry :: Route -> RouteEntry
-npmRouteEntry = \case
-    -- The packument @GET@ carries the @{package}@ path parameter for the path it
-    -- shares with the publish @PUT@; the publish entry leaves it off so the merge
-    -- does not duplicate it.
-    Packument{} -> RouteEntry (npmPath "/{package}") (getItem [packageParam] packumentOperation)
-    Tarball{} -> RouteEntry (npmPath "/{package}/-/{filename}") (getItem [packageParam, filenameParam] tarballOperation)
-    Publish{} -> RouteEntry (npmPath "/{package}") (putItem [] publishOperation)
-    Ping -> RouteEntry (npmPath "/-/ping") (getItem [] pingOperation)
-    Search -> RouteEntry (npmPath "/-/v1/search") (getItem [] searchOperation)
-    Unsupported -> RouteEntry (npmPath "/{unsupportedPath}") (getItem [unsupportedParam] unsupportedOperation)
-  where
-    getItem params op = (mempty :: PathItem){_pathItemGet = Just op, _pathItemParameters = map Inline params}
-    putItem params op = (mempty :: PathItem){_pathItemPut = Just op, _pathItemParameters = map Inline params}
 
--- | An npm mount path, prefixed by the mount's derived path prefix (e.g. @\/npm@).
-npmPath :: Text -> FilePath
-npmPath suffix = toString ("/" <> T.intercalate "/" (toList (prefixFor Npm)) <> suffix)
+{- HLINT ignore methodItem "Avoid restricted function" -}
+methodItem :: StdMethod -> Operation -> PathItem
+methodItem method op = case method of
+    GET -> (mempty :: PathItem){_pathItemGet = Just op}
+    PUT -> (mempty :: PathItem){_pathItemPut = Just op}
+    POST -> (mempty :: PathItem){_pathItemPost = Just op}
+    DELETE -> (mempty :: PathItem){_pathItemDelete = Just op}
+    HEAD -> (mempty :: PathItem){_pathItemHead = Just op}
+    PATCH -> (mempty :: PathItem){_pathItemPatch = Just op}
+    OPTIONS -> (mempty :: PathItem){_pathItemOptions = Just op}
+    TRACE -> (mempty :: PathItem){_pathItemTrace = Just op}
+    -- CONNECT has no OpenAPI operation slot; no served route uses it.
+    CONNECT -> error "Ecluse.Manifest: OpenAPI has no CONNECT operation"
 
-packageParam :: Param
-packageParam = pathParam "package" "The package name, URL-encoded; a scoped name is `@scope%2Fname`."
+{- | The owned documentation for a route: its summary, description, request body,
+and response set. __Total__ over the closed 'Route' sum, so a route cannot be
+mounted without a documented operation here. The grammar (path, method, and path
+parameters) is not repeated: it comes from the route's 'RouteSpec'.
+-}
+routeOperation :: Route -> Operation
+routeOperation = \case
+    Packument{} -> packumentOperation
+    Tarball{} -> tarballOperation
+    Publish{} -> publishOperation
+    Ping -> pingOperation
+    Search -> searchOperation
+    Unsupported -> unsupportedOperation
 
-filenameParam :: Param
-filenameParam = pathParam "filename" "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`."
-
-unsupportedParam :: Param
-unsupportedParam = pathParam "unsupportedPath" "Any path under this mount matched by none of the routes above."
+-- | Render a route's 'ParamSpec' as an OpenAPI path parameter.
+toParam :: ParamSpec -> Param
+toParam p = pathParam (psName p) (psDescription p)
 
 pathParam :: Text -> Text -> Param
 pathParam name description =
