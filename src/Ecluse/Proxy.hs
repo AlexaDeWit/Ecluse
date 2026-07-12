@@ -118,8 +118,8 @@ import Ecluse.Core.Registry.Adapter (
     adapterEcosystem,
     adapterFor,
     adapterServe,
-    serveClassifier,
     serveRenderer,
+    serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -399,8 +399,8 @@ warpExceptionHook logEnv mRequest err =
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
 ecosystem has no registered adapter. The adapter registry
 ('Ecluse.Core.Registry.Adapter.adapterFor') answers which ecosystems this build
-supports; the resolved adapter's serve surface supplies the path grammar (the
-'Ecluse.Core.Server.Route.Classifier') and the denial renderer (the
+supports; the resolved adapter's serve surface supplies the router (the
+'Ecluse.Core.Server.Context.MountRouter') and the denial renderer (the
 'Ecluse.Core.Server.Response.MountRenderer'), and the path prefix is __derived__
 from the ecosystem ('prefixFor') rather than configured, so the ecosystem is the
 single thing that drives the binding (see
@@ -416,8 +416,8 @@ mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Mayb
 mountBindingFor eco packumentDeps publishDeps =
     adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps
 
-{- The mount projection of one adapter: the ecosystem's serve surface (its path
-grammar and its denial renderer) under its derived prefix, paired with the
+{- The mount projection of one adapter: the ecosystem's serve surface (its router
+and its denial renderer) under its derived prefix, paired with the
 packument-serve and first-party publish dependencies the composition root supplies
 ('Nothing' packument deps leave the packument route the recognised-but-unserved
 @501@ stub; 'Nothing' publish deps leave a @PUT \/{pkg}@ the @405@ opt-out -- no
@@ -427,7 +427,7 @@ mountOf :: RegistryAdapter -> Maybe PackumentDeps -> Maybe PublishDeps -> MountB
 mountOf adapter packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor (adapterEcosystem adapter)
-        , bindingClassifier = serveClassifier (adapterServe adapter)
+        , bindingRouter = serveRouter (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
         , bindingRenderer = serveRenderer (adapterServe adapter)

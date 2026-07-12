@@ -7,14 +7,20 @@
 This module re-exports the top-level handlers for packument merges (@GET \/{pkg}@),
 artifact relays (@GET \/{pkg}\/-\/{file}.tgz@), and first-party publishes (@PUT \/{pkg}@).
 
-== Ecosystem coupling
+== Ecosystem neutrality
 
-This is the __npm__ packument pipeline: it reaches for the npm registry
-client, projection, and structural filter directly, so it is the one
-serve-path module that depends on a concrete adapter. The coupling is
-expedient, not intended -- the agnostic handles that would let it dispatch through an
-adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) would
-let a second ecosystem reuse this orchestration unchanged.
+These handlers name no ecosystem. A registry's metadata client, its packument
+assembly, and its artifact-request formation reach them as __injected capabilities__
+on 'Ecluse.Core.Server.Context.PackumentDeps' ('pdNewMetadataClient', 'pdAssemble',
+'pdBuildArtifactRequestByFile', 'pdBuildArtifactRequestByUrl'), which the composition
+root projects from the mount's 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter'.
+The imports here reach only the __agnostic__ protocol boundary
+("Ecluse.Core.Registry", "Ecluse.Core.Registry.Metadata").
+
+So the orchestration is reusable across registries whose URL grammars have nothing in
+common: an ecosystem's router ("Ecluse.Core.Server.Context.MountRouter") maps its own
+routes onto whichever of these handlers apply, and names its own actions for the
+routes that have no counterpart here.
 -}
 module Ecluse.Core.Server.Pipeline (
     -- * The packument handler

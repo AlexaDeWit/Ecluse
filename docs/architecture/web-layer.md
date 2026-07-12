@@ -16,20 +16,45 @@ response handling hides the streaming control we depend on (see
 
 Routing sits in two layers. Mount dispatch (see [Multi-ecosystem mounts](#multi-ecosystem-mounts))
 matches the leading path segment to a mount and strips the prefix; what remains is an ecosystem-native
-path, classified by a pure function into a small route type:
+path, handed to that mount's **router**.
+
+### The route table belongs to the ecosystem
+
+A route is an ecosystem's own concern. npm's `/{pkg}/-/{file}.tgz` and RubyGems' whole-registry
+`/versions` have nothing in common but the fact that *something must be done about them*. So each
+ecosystem's adapter declares its routes as an ordered table of **route patterns** (literal segments,
+and named captures that carry their own parsers), and that one declaration is interpreted twice:
+
+- the **runtime** interpretation is the mount's `MountRouter`, which the server dispatches through;
+- the **manifest** interpretation is a `RouteSpec` per route, which the
+  [capability manifest](#capability-manifest) renders.
+
+Two readings of one table cannot drift apart, so the documented surface cannot lie about the routed
+one.
+
+What the web layer shares across ecosystems is not the routes but the **kind of action** a route can
+name:
 
 ```haskell
-data Route = Packument PackageName | Tarball PackageName Version Filename
-           | Publish PackageName | Ping | Search | Unsupported
+type MountRouter = Method -> [Text] -> RouteAction
 
-type Classifier = Method -> [Text] -> Route
+data RouteAction
+  = AnswerLocally (MountRenderer -> Response)                       -- pure, no upstream
+  | RunPipeline   (Request -> Respond -> Handler ResponseReceived)  -- the data plane
 ```
 
-Each ecosystem declares its grammar as an ordered table of **route patterns** (literal segments and
-named captures that carry their own parsers), and its `Classifier` is derived from that table by a
-generic engine. The *same* table is projected into the [capability manifest](#capability-manifest), so
-the documented paths and methods cannot drift from the routed ones. Keeping the classifier pure makes
-the routing table unit-testable with no server: feed it a method and segments, assert the `Route`.
+The data-plane handlers (`Ecluse.Core.Server.Pipeline`) are themselves ecosystem-neutral: a registry's
+metadata client, packument assembly, and artifact-request formation reach them as injected
+capabilities on `PackumentDeps`, never as imports. So an ecosystem routes its own URLs onto whichever
+shared handlers apply, and names its own actions for the routes that have no counterpart. **Each
+adapter's table is total over its own routes**, which means a branch for a route the ecosystem cannot
+receive is unrepresentable rather than merely discouraged.
+
+The web layer therefore holds no route knowledge at all. It asks the matched mount's router for an
+action and either responds with it or runs it under the [perimeter](#the-typed-request-perimeter).
+Adding an ecosystem adds a router and changes nothing in `Ecluse.Runtime.Server`.
+
+### npm's table
 
 Three npm-specific facts it encodes: `pathInfo` splits on `/` *before* percent-decoding, so an encoded
 scoped name (`/@scope%2Fpkg`) arrives as one segment while a bare scope arrives as two, and both
@@ -37,9 +62,15 @@ normalise to the same `PackageName`; reserved meta-routes (`/-/…`) are matched
 name is never a lone `-`; and a tarball's file name must parse for *its own* package, so a name
 addressing another package's artifact is refused rather than fabricated into a coordinate.
 
-Only `GET`, `HEAD`, and `PUT` are answered (`PUT /{pkg}` is the publish; a `HEAD` classifies like its
-`GET` and is served bodiless). Any other method, and anything unrecognised, is `Unsupported` → 404, so
+Only `GET`, `HEAD`, and `PUT` are answered (`PUT /{pkg}` is the publish). A `HEAD` is a **bodiless
+variation** of its `GET` rather than a distinct action, so npm's table classifies it identically and
+the router selects the head-mode handler; that is load-bearing on the artifact path, where running the
+`GET` handler and discarding the body would stream a whole artifact to nowhere (see
+[HEAD on artifacts](#head-on-artifacts)). Any other method, and anything unrecognised, is a `404`, so
 deny-by-default holds at the routing layer for methods as well as paths.
+
+Keeping the table pure makes it unit-testable with no server: feed it a method and segments, assert
+the route.
 
 ## Multi-ecosystem mounts
 
@@ -56,8 +87,9 @@ configured (npm → `/npm`, PyPI → `/pypi`), so a prefix can neither collide n
 registry is path-mounted; none sits at `/`, so adding an ecosystem later never changes an existing
 consumer's URLs. A mount binds, as one unit, the ecosystem's registered capability record
 (the `RegistryAdapter` in `Ecluse.Core.Registry.Adapter`, resolved by ecosystem once at
-boot): its serve surface (the path grammar and the error renderer, the client-facing
-denial/error surface, so the agnostic layer holds no ecosystem body shape; see
+boot): its serve surface (its [router](#the-route-table-belongs-to-the-ecosystem) and the
+error renderer, the client-facing denial/error surface, so the agnostic layer holds no
+ecosystem body shape; see
 [Error model](#error-model)), its four [registry roles](registry-model.md#registry-roles)
 over the [protocol boundary](registry-model.md#registry-abstraction), and an optional
 per-ecosystem [rule refinement](configuration.md#rule-policy) that merges over the shared
@@ -95,10 +127,10 @@ Everything else unrecognised stays `Unsupported` → `404`.
 
 Écluse publishes a capability manifest: an OpenAPI 3 document, generated at build time and published to
 the docs site (not served, no `GET /openapi.json` route). It is rendered from each mounted adapter's
-declarative route grammar (`serveRoutes`, a `RouteSpec` per served `Route`), the same grammar the
-`classify` router above routes on, across the configured [mounts](#multi-ecosystem-mounts). A
-correspondence test holds the documented paths and methods against that classifier, so the manifest
-cannot drift from what the server serves. The full rationale, schema strategy, and publish pipeline are
+declarative route table (`serveRoutes`, a `RouteSpec` per served route), the *same* table that
+ecosystem's [router](#the-route-table-belongs-to-the-ecosystem) dispatches on, across the configured
+[mounts](#multi-ecosystem-mounts). A correspondence test holds the documented paths and methods
+against the live routing, so the manifest cannot drift from what the server serves. The full rationale, schema strategy, and publish pipeline are
 the canonical [API Surface & Capability Manifest](api-surface.md).
 
 ## Control plane vs. data plane

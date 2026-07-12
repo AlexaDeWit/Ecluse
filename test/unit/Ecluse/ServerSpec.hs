@@ -33,13 +33,12 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Route qualified as Npm
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PublishDeps (..))
+import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), RouteAction (AnswerLocally))
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
-import Ecluse.Core.Server.Route (Classifier, Route (..))
+import Ecluse.Core.Server.Pipeline.Shared (jsonResponse, notFoundInMount)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
@@ -86,23 +85,23 @@ newTestEnv = do
     admission <- testServeAdmission
     newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
-{- | A test mount binding: the given prefix and classifier, npm's denial renderer,
-and no packument-serve dependencies (so a 'Packument' route is the recognised-but-
+{- | A test mount binding: the given prefix and router, npm's denial renderer,
+and no packument-serve dependencies (so a packument read is the recognised-but-
 unserved @501@ stub).
 -}
-mountAt :: NonEmpty Text -> Classifier -> MountBinding
-mountAt prefix classifier =
-    publishMountAt prefix classifier Nothing
+mountAt :: NonEmpty Text -> MountRouter -> MountBinding
+mountAt prefix router =
+    publishMountAt prefix router Nothing
 
 {- | A test mount binding like 'mountAt' but with the given (optional) first-party
 publish dependencies -- 'Nothing' leaves a @PUT \/{pkg}@ the @405@ opt-out, 'Just'
 enables the publish path (the scope guard and the relay).
 -}
-publishMountAt :: NonEmpty Text -> Classifier -> Maybe PublishDeps -> MountBinding
-publishMountAt prefix classifier publishDeps =
+publishMountAt :: NonEmpty Text -> MountRouter -> Maybe PublishDeps -> MountBinding
+publishMountAt prefix router publishDeps =
     MountBinding
         { bindingPrefix = prefix
-        , bindingClassifier = classifier
+        , bindingRouter = router
         , bindingPackumentDeps = Nothing
         , bindingPublishDeps = publishDeps
         , bindingRenderer = npmRenderer
@@ -110,10 +109,10 @@ publishMountAt prefix classifier publishDeps =
 
 {- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, so
 prefix-strip dispatch and the npm routing table can be asserted through the real
-classifier the composition root wires in.
+router the composition root wires in.
 -}
 npmMountApp :: IO Application
-npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) <$> newTestEnv
+npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) <$> newTestEnv
 
 {- | The 'application' under a single @\/npm@ mount with the first-party publish path
 __enabled__: a publish-scope allow-list of @\@acme@ and a publication target pointed at
@@ -145,25 +144,24 @@ basePublishDeps =
 -- | The 'application' under a single @\/npm@ mount carrying the given publish deps.
 publishAppWith :: PublishDeps -> IO Application
 publishAppWith deps =
-    application (mkServerConfig [publishMountAt ("npm" :| []) Npm.classify (Just deps)]) <$> newTestEnv
+    application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just deps)]) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount whose classifier is a __fake__
-grammar (not npm's), proving dispatch routes through the binding's classifier
-rather than any hardwired grammar. The fake recognises a single sentinel path and
-denies everything else, so a response that follows it can only have come from the
-injected function.
+{- | The 'application' under a single @\/npm@ mount whose router is a __fake__ (not
+npm's), proving dispatch follows the binding's router rather than any hardwired
+grammar. The fake recognises a single sentinel path and denies everything else, so a
+response that follows it can only have come from the injected function.
 -}
-fakeClassifierApp :: IO Application
-fakeClassifierApp = application (mkServerConfig [mountAt ("npm" :| []) fakeClassify]) <$> newTestEnv
+fakeRouterApp :: IO Application
+fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) <$> newTestEnv
   where
-    -- A deliberately non-npm grammar: @beep@ is the (locally answered) Ping route,
-    -- every other path is denied. npm's @is-odd@ would be a Packument; here it is
-    -- Unsupported, so the two grammars give observably different routes. The grammar
-    -- ignores the method (it recognises no write route), proving dispatch routes
-    -- through the injected method-aware classifier.
-    fakeClassify :: Classifier
-    fakeClassify _method ["beep"] = Ping
-    fakeClassify _method _ = Unsupported
+    -- A deliberately non-npm router: @beep@ is answered locally with @200 {}@, and
+    -- every other path is the deny-by-default @404@. npm's @is-odd@ would be a
+    -- packument read; under this router it is a miss, so the two give observably
+    -- different answers. It ignores the method (it names no write action), proving the
+    -- web layer follows the injected router rather than a baked-in npm grammar.
+    fakeRouter :: MountRouter
+    fakeRouter _method ["beep"] = AnswerLocally (const (jsonResponse status200 [] "{}"))
+    fakeRouter _method _ = AnswerLocally notFoundInMount
 
 {- | The 'application' with __no mounts__: every path but the control-plane health
 probes matches no mount and is the neutral @404@.
@@ -178,7 +176,7 @@ the front door's draining behaviour: the readiness flip and the going-away heade
 drainingApp :: IO Application
 drainingApp = do
     drain <- raisedDrain
-    application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]){scDrain = drain} <$> newTestEnv
+    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scDrain = drain} <$> newTestEnv
 
 -- | A live 'DrainSignal' raised into the draining state.
 raisedDrain :: IO DrainSignal
@@ -200,7 +198,7 @@ stalledWorkerApp = do
     -- A poll older than the staleness threshold: the loop has not advanced its
     -- heartbeat within the window, so liveness must read it as stalled.
     recordPoll (envWorkerHeartbeat env) (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
-    pure (application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) env)
+    pure (application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) env)
 
 {- | A header matcher that passes only when the response carries __no__
 @Connection@ header -- the not-draining expectation, the complement of the
@@ -395,21 +393,21 @@ spec = do
                 -- surface, distinct from the neutral plain-text 404 above.
                 get "/npm/is-odd/3.0.1" `shouldRespondWith` "{\"error\":\"not found\"}"{matchStatus = 404}
 
-    describe "dispatch -- injected classifier (the routing boundary)" $
-        -- Drive dispatch with a FAKE classifier (not npm's): the route a request
-        -- takes must follow the injected function, proving the web layer is not
-        -- hardwired to npm's grammar.
-        with fakeClassifierApp $ do
-            it "routes the fake classifier's recognised path (/npm/beep → Ping → 200 {})" $
+    describe "dispatch -- injected router (the routing boundary)" $
+        -- Drive dispatch with a FAKE router (not npm's): the action a request takes
+        -- must follow the injected function, proving the web layer is not hardwired to
+        -- npm's grammar.
+        with fakeRouterApp $ do
+            it "routes the fake router's recognised path (/npm/beep → answered locally → 200 {})" $
                 get "/npm/beep" `shouldRespondWith` "{}"{matchStatus = 200}
 
             it "denies a path npm would accept but the fake does not (/npm/is-odd → 404)" $
-                -- Under npm's grammar @is-odd@ is a Packument (501); under the injected
-                -- fake it is Unsupported (404). The 404 proves dispatch followed the
-                -- injected function, not a baked-in npm router.
+                -- Under npm's router @is-odd@ is a packument read (501 here, unwired);
+                -- under the injected fake it is a miss (404). The 404 proves dispatch
+                -- followed the injected function, not a baked-in npm router.
                 get "/npm/is-odd" `shouldRespondWith` 404
 
-            it "denies npm's ping meta-route (the fake's grammar does not recognise it)" $
+            it "denies npm's ping meta-route (the fake router does not recognise it)" $
                 get "/npm/-/ping" `shouldRespondWith` 404
 
     describe "no mounts -- neutral by default" $
@@ -451,7 +449,7 @@ spec = do
             defaultShutdownDrainTimeout `shouldBe` ShutdownDrainTimeout 30
 
         it "path-mounts a binding under its prefix (never the root)" $
-            bindingPrefix (mountAt ("npm" :| []) Npm.classify) `shouldBe` "npm" :| []
+            bindingPrefix (mountAt ("npm" :| []) npmRouter) `shouldBe` "npm" :| []
 
 -- | A typed stand-in for a relay implementation escaping its typed contract.
 newtype RelayContractEscape = RelayContractEscape Text

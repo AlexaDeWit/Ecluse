@@ -11,6 +11,7 @@ for integrity floor enforcement).
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
     recognisedButUnserved,
+    notFoundInMount,
     edgeTokenMatches,
     edgeUnauthorised,
     serveOverloaded,
@@ -26,7 +27,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status501, status503)
+import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status404, status501, status503)
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
@@ -45,6 +46,20 @@ hRetryAfter = "Retry-After"
 recognisedButUnserved :: MountRenderer -> Response
 recognisedButUnserved renderer =
     renderedResponse status501 [] (renderError renderer Nothing "this route is recognised but not yet served by this proxy")
+
+{- | The answer to a request no ecosystem route matched: a @404@ in the mount's own
+error surface.
+
+This is the routing layer's __deny by default__, mirroring the rules engine: the front
+door serves nothing it was not explicitly taught to. It is the one locally-answered
+response that is genuinely shared across ecosystems, because "I do not recognise this"
+is the only thing every ecosystem's router must be able to say. Distinct from the
+neutral @text\/plain@ @404@ __above__ the mounts, where there is no ecosystem to render
+one.
+-}
+notFoundInMount :: MountRenderer -> Response
+notFoundInMount renderer =
+    renderedResponse status404 [] (renderError renderer Nothing "not found")
 
 {- | The shared edge gate against a configured inbound token: with none configured the
 edge is open; with one configured the request's forwarded bearer must match it exactly.

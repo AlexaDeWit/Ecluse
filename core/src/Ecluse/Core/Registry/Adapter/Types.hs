@@ -54,9 +54,9 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (MountRenderer)
-import Ecluse.Core.Server.Route (Classifier)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -86,23 +86,29 @@ data RegistryAdapter = RegistryAdapter
     }
 
 {- | The ecosystem's web-facing serve surface: the one slice of the record that is
-about HTTP shape rather than registry protocol, typed against the agnostic route
-and response vocabulary ("Ecluse.Core.Server.Route", "Ecluse.Core.Server.Response")
+about HTTP shape rather than registry protocol, typed against the agnostic action
+and response vocabulary ("Ecluse.Core.Server.Context", "Ecluse.Core.Server.Response")
 because it is web-facing by definition (the registry-to-server import direction is
 deliberate here). Serve surfaces are where ecosystems diverge most, so this slice
 stands alone rather than sharing shape with the protocol slices.
+
+Both routing fields are __derived by the adapter from one declarative route table__
+(npm's is "Ecluse.Core.Registry.Npm.Route"), so the surface the server routes and the
+surface the manifest documents are two interpretations of a single declaration and
+cannot drift apart.
 -}
 data AdapterServe = AdapterServe
-    { serveClassifier :: Classifier
-    {- ^ The ecosystem's path grammar, mapping a mount-relative request to a shared
-    'Ecluse.Core.Server.Route.Route'. The authoritative parser the server routes on.
+    { serveRouter :: MountRouter
+    {- ^ The ecosystem's __whole routing decision__: which of its paths a
+    mount-relative request names, and what serving that amounts to (an
+    'Ecluse.Core.Server.Context.RouteAction'). The authoritative router the server
+    dispatches through. An unrecognised path yields the deny-by-default @404@.
     -}
     , serveRoutes :: NonEmpty RouteSpec
-    {- ^ The same grammar as data: the declarative 'RouteSpec' projection of
-    'serveClassifier', one per served 'Ecluse.Core.Server.Route.Route'. The capability
-    manifest ("Ecluse.Manifest") renders this rather than re-describing the path
-    grammar, and a correspondence test holds each spec's example against
-    'serveClassifier', so the documented surface cannot drift from what is routed.
+    {- ^ The same route table as data: the declarative 'RouteSpec' projection of the
+    patterns 'serveRouter' routes on, one per served route. The capability manifest
+    ("Ecluse.Manifest") renders this rather than re-describing the path grammar, so the
+    documented surface cannot drift from what is routed.
     -}
     , serveRenderer :: MountRenderer
     -- ^ The ecosystem body shape an in-mount denial or error renders through.

@@ -1,8 +1,8 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: pairing a matched mount with its classified remainder in
--- 'dispatchMount' ((mount,) . classifier); see STYLE.md §2.
+-- TupleSections: pairing a matched mount with its router's verdict on the remainder
+-- in 'matchMount' ((mount,) . router); see STYLE.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the
@@ -13,12 +13,12 @@ door is a raw 'Application' rather than a web framework -- matching on @pathInfo
 keeps the encoded-slash handling and the streaming control the proxy depends on
 (see @docs\/architecture\/web-layer.md@). Routing is two layers:
 
-* __Mount dispatch__ -- match a request's leading path segments to a configured
+* __Mount dispatch__: match a request's leading path segments to a configured
   'MountBinding', strip the prefix, and hand the remainder (an ecosystem-native
-  path) to that mount's 'Ecluse.Core.Server.Route.Classifier'. A binding carries a
-  mount's __complete__ ecosystem wiring -- its classifier, its packument-serve
-  dependencies, and its error 'Ecluse.Core.Server.Response.MountRenderer' -- so the web
-  layer is closed over the shared 'Route' set ("Ecluse.Core.Server.Route") and holds no
+  path) to that mount's 'Ecluse.Core.Server.Context.MountRouter'. A binding carries a
+  mount's __complete__ ecosystem wiring: its router, its packument-serve dependencies,
+  and its error 'Ecluse.Core.Server.Response.MountRenderer'. The web layer is closed
+  over the agnostic 'Ecluse.Core.Server.Context.RouteAction' vocabulary and holds no
   ecosystem's path grammar or body shape of its own. Every registry is
   __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
   never changes an existing consumer's URLs. A mount prefix is accepted with or
@@ -26,19 +26,22 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 
 Responses split into __two tiers__:
 
-* __Above the mounts -- neutral, server-owned.__ The orchestration health probes
+* __Above the mounts, neutral and server-owned.__ The orchestration health probes
   (@\/livez@, @\/readyz@) are answered at the top level, and a path matching __no__
-  configured mount is a generic @404 Not Found@ in @text\/plain@ -- there is no
+  configured mount is a generic @404 Not Found@ in @text\/plain@: there is no
   ecosystem to shape it.
 
-* __Within a matched mount -- the mount's renderer.__ The classified 'Route'
-  renders through that mount's 'Ecluse.Core.Server.Response.MountRenderer', in the
-  ecosystem's own error surface: @\/-\/ping@ is answered locally with @200 {}@,
-  @\/-\/v1\/search@ is @501@ (search is not an install path), an unrecognised
-  in-mount path is @404@ (deny by default), and the package\/artifact routes
-  ('Packument', 'Tarball') are recognised but, without serve dependencies wired,
-  return an explicit @501 Not Implemented@ rather than a fabricated success -- their
-  fetch → rules → serve pipeline lives outside this module.
+* __Within a matched mount.__ The mount's router
+  ('Ecluse.Core.Server.Context.MountRouter', supplied by its ecosystem adapter) says what
+  the request names, as an 'Ecluse.Core.Server.Context.RouteAction': either a pure
+  response the proxy answers itself (through that mount's
+  'Ecluse.Core.Server.Response.MountRenderer', in the ecosystem's own error surface), or
+  a data-plane handler to run.
+
+This module holds __no route knowledge of its own__. It does not name a route, a path
+grammar, or a status: it asks the matched mount's router for an action and either
+responds with it or runs it under the request perimeter. Adding an ecosystem adds a
+router and changes nothing here.
 
 Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
@@ -93,7 +96,7 @@ module Ecluse.Runtime.Server (
 
 import Data.List (dropWhileEnd)
 import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
-import Network.HTTP.Types (Method, Status, hContentType, methodHead, status404, status500, status501)
+import Network.HTTP.Types (Method, Status, hContentType, status500)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -104,13 +107,12 @@ import UnliftIO.Exception (catchAny, throwIO)
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     RequestCtx (RequestCtx),
+    RouteAction (AnswerLocally, RunPipeline),
     ServeRuntime (srMetrics),
     runHandler,
  )
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
-import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
 import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
-import Ecluse.Core.Server.Route (Route (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
@@ -133,7 +135,6 @@ import Ecluse.Runtime.Server.Middleware (
     defaultRequestSizeLimit,
     goingAwayMiddleware,
     jsonResponse,
-    pong,
     probeApplication,
     sizeLimitMiddleware,
     timeoutSeconds,
@@ -245,50 +246,33 @@ match routes the remainder through that mount's binding; no match is the neutral
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case matchMount (requestMethod request) (scMounts cfg) (pathInfo request) of
-        Just (binding, classified) -> serve env binding classified request respond
+        Just (binding, action) -> serve env binding action request respond
         Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
 
-{- Serve a classified route under its matched mount. Dispatch builds the
-per-request 'RequestCtx' once -- the request runtime ('serveRuntimeOf') paired with the
-matched 'MountBinding' -- and the effectful 'Packument' and 'Tarball' routes run in the
-'Handler' reader over it, so the handler reads the mount's serve dependencies and
-renderer from context rather than as threaded arguments (the deps-or-@501@ decision
-is the handler's). Every other route renders to a pure 'Response' through the
-mount's renderer.
+{- Carry out the action the matched mount's router named.
 
-A @HEAD@ on the 'Tarball' route is dispatched to 'headTarball', which gates the
-artifact identically to the @GET@ path but probes the upstream as a @HEAD@ and relays
-the headers with no body -- so a bodiless @HEAD@ can never open and pump the full
-artifact body (the reason @Autohead@ is deliberately not used; see 'serverMiddleware').
-A @HEAD@ on the 'Packument' route is likewise dispatched to 'headPackument', which runs
-the identical gating and merge as the @GET@ path and emits the same status and headers
-(the would-be body's @Content-Length@ and the own @ETag@) with no body -- the
-HTTP-correctness half of explicit-@HEAD@ handling (a packument body is assembled
-locally, so it carries no artifact-egress amplification).
-
-The 'Publish' route (a @PUT \/{pkg}@, recognised by the method-aware classifier) is
-dispatched to 'servePublish', the first-party publish relay: it enforces the
-anti-shadowing scope guard before any write and relays the publish to the publication
-target with the publisher's own forwarded credential, or @405@ when no publication
-target is configured (the opt-in is off).
+The route itself was decided by that router ('bindingRouter', which the mount's
+ecosystem adapter supplies); this function knows only the two kinds of action it can
+return. An 'AnswerLocally' action is a pure 'Response' through the mount's renderer. A
+'RunPipeline' action is discharged to 'IO' under the typed request perimeter, over the
+per-request 'RequestCtx' built once here (the request runtime 'serveRuntimeOf' paired
+with the matched 'MountBinding'), so the handler reads its mount's serve dependencies
+and renderer from context rather than as threaded arguments. The deps-or-stub decision
+is the handler's: a mount with no packument dependencies answers the
+recognised-but-unwired @501@, and one with no publication target answers a publish with
+@405@.
 -}
-serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-serve env binding classified request respond =
-    case classified of
-        Packument name
-            | isHead -> guardedServe (headPackument name request)
-            | otherwise -> guardedServe (servePackument name request)
-        Tarball name version filename
-            | isHead -> guardedServe (headTarball name version filename request)
-            | otherwise -> guardedServe (serveTarball name version filename request)
-        Publish name -> guardedServe (servePublish name request)
-        _ -> respond (renderRoute (bindingRenderer binding) classified)
+serve :: Env -> MountBinding -> RouteAction -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+serve env binding action request respond =
+    case action of
+        AnswerLocally toResponse -> respond (toResponse renderer)
+        -- The data-plane handler under the typed request perimeter: it is discharged
+        -- through 'run', and the perimeter's observation channel is the bounded
+        -- @ecluse.serve.perimeter.faults@ metric plus the audit log line.
+        RunPipeline handler -> perimeterGuard observeFault renderer respond (run . handler request)
   where
-    -- One effectful route under the typed request perimeter: the handler is
-    -- discharged through 'run', and the perimeter's observation channel is the
-    -- bounded @ecluse.serve.perimeter.faults@ metric plus the audit log line.
-    guardedServe handlerOn =
-        perimeterGuard observeFault (bindingRenderer binding) respond (run . handlerOn)
+    renderer :: MountRenderer
+    renderer = bindingRenderer binding
 
     observeFault fault = do
         mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
@@ -309,18 +293,15 @@ serve env binding classified request respond =
     -- (scribes) and the resolved trace-correlation @dd@ object as the initial context,
     -- so every serve-path line carries @dd@. The request runtime the handler reads is
     -- projected from 'Env' ('serveRuntimeOf').
-    run action = do
+    run handlerAction = do
         dd <- ddPayloadNow (envDdContext env)
-        runHandler (envLogEnv env) dd ctx action
+        runHandler (envLogEnv env) dd ctx handlerAction
 
     runtime :: ServeRuntime
     runtime = serveRuntimeOf env
 
     ctx :: RequestCtx
     ctx = RequestCtx runtime binding
-
-    isHead :: Bool
-    isHead = requestMethod request == methodHead
 
 {- | The typed request perimeter over one effectful route: run the handler with a
 commit-tracking respond, catching only __synchronous__ escapes (asynchronous
@@ -361,20 +342,22 @@ perimeterGuard observeFault renderer respond handlerOn = do
                 respond (renderedError renderer status500 "internal server error")
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
-with, paired with the remainder classified through that mount's classifier.
-'Nothing' when no mount's prefix matches -- the caller then answers the neutral
-@404@. A mount prefix is accepted with or without a trailing slash, so @\/npm\/pkg@
-and a bare @\/npm@ both match the @\/npm@ mount.
+with, paired with the action its ecosystem's router names for the remainder.
+'Nothing' when no mount's prefix matches, and the caller then answers the neutral
+@404@ (a path under no mount has no ecosystem to render it). A mount prefix is
+accepted with or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both
+match the @\/npm@ mount.
 -}
-matchMount :: Method -> [MountBinding] -> [Text] -> Maybe (MountBinding, Route)
+matchMount :: Method -> [MountBinding] -> [Text] -> Maybe (MountBinding, RouteAction)
 matchMount method mounts segments = asum (map match mounts)
   where
-    -- The binding whose prefix the path begins with, paired with the classified
-    -- remainder -- the method threaded so a 'Publish' (a @PUT@) is told apart from a
-    -- read over the same path. 'Nothing' for a non-matching prefix.
-    match :: MountBinding -> Maybe (MountBinding, Route)
+    -- The binding whose prefix the path begins with, paired with its router's verdict
+    -- on the remainder. The method is threaded through because it is part of the
+    -- mapping (npm tells a @PUT@ publish from a @GET@ read over the same path, and a
+    -- @HEAD@ from the @GET@ it varies). 'Nothing' for a non-matching prefix.
+    match :: MountBinding -> Maybe (MountBinding, RouteAction)
     match binding =
-        (binding,) . bindingClassifier binding method
+        (binding,) . bindingRouter binding method
             <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
 {- Strip a mount's prefix segments off the front of a request path. The root
@@ -396,27 +379,9 @@ stripPrefixSegments _ _ = Nothing
 dropTrailingSlashes :: [Text] -> [Text]
 dropTrailingSlashes = dropWhileEnd (== "")
 
-{- Render a non-effectful in-mount classified 'Route' to a pure response through
-the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
-@\/-\/v1\/search@ is a @501@ pointer; an unrecognised in-mount path is a @404@ --
-every error in the mount's own surface. The effectful 'Packument', 'Tarball', and
-'Publish' routes are dispatched to the 'Handler' by 'serve' before reaching here;
-their branches below are the defensive @501@ fallback should that routing ever change.
--}
-renderRoute :: MountRenderer -> Route -> Response
-renderRoute renderer = \case
-    Ping -> pong
-    Search -> renderedError renderer status501 "search is not supported by this proxy; use the public registry's website to discover packages"
-    Packument _ -> renderedError renderer status501 notYetServedMessage
-    Tarball{} -> renderedError renderer status501 notYetServedMessage
-    Publish _ -> renderedError renderer status501 notYetServedMessage
-    Unsupported -> renderedError renderer status404 "not found"
-  where
-    notYetServedMessage :: Text
-    notYetServedMessage = "this route is recognised but not yet served by this proxy"
-
 -- An in-mount error response: the status, with the body shaped by the mount's
--- renderer. A meta-route error carries no operator help message.
+-- renderer. The perimeter's neutral @500@ is the one such response the web layer still
+-- owns; every route's own body is shaped by its ecosystem's router.
 renderedError :: MountRenderer -> Status -> Text -> Response
 renderedError renderer status message =
     let RenderedBody contentType body = renderError renderer Nothing message

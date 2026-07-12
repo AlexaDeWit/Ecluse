@@ -36,6 +36,10 @@ module Ecluse.Core.Server.Context (
     -- * Publish-serve dependencies
     PublishDeps (..),
 
+    -- * The serve action, and the router an adapter supplies
+    RouteAction (..),
+    MountRouter,
+
     -- * Mount binding
     MountBinding (..),
 
@@ -53,6 +57,9 @@ import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Types (Method)
+import Network.Wai (Response, ResponseReceived)
+import Network.Wai qualified as Wai
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
@@ -70,7 +77,6 @@ import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
-import Ecluse.Core.Server.Route (Classifier)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -355,6 +361,58 @@ data PublishDeps = PublishDeps
     -}
     }
 
+{- | How one matched request is served: by the proxy itself, or through the data plane.
+
+This is the __whole__ of what the web layer knows about a request. A route is an
+ecosystem's own concern (npm's @\/{pkg}\/-\/{file}.tgz@ and RubyGems' @\/versions@ have
+nothing in common but the fact that something must be done about them), so the mapping
+from a request to an action is declared by the ecosystem's adapter, as its 'MountRouter'.
+What is shared is only the __kind__ of thing an action can be:
+
+* An 'AnswerLocally' action is a pure function of the mount's renderer, so the dispatcher
+  simply responds with it: no upstream round-trip, no effects.
+
+* A 'RunPipeline' action is a data-plane handler awaiting the request and the respond
+  continuation, so the dispatcher discharges it to 'IO' under the request perimeter (the
+  guard that answers an escaped fault with a neutral, mount-shaped @500@). Those handlers
+  ("Ecluse.Core.Server.Pipeline") are themselves __ecosystem-neutral__: a registry's
+  client, projection, and document assembly reach them as injected capabilities on
+  'PackumentDeps', never as imports. So two ecosystems whose URL grammars share nothing
+  can still route onto the same handler, and one with a route the other lacks simply
+  names a different action.
+
+Being a closed sum of exactly these two is what lets the front door serve a request
+without knowing what the request /is/.
+
+It lives here, beside 'MountBinding' and 'Handler', because the three are one
+mutually-recursive knot: a mount carries a router, the router names an action, and an
+action is a handler that reads the mount.
+-}
+data RouteAction
+    = -- | A pure response the proxy answers itself, shaped by the mount's renderer.
+      AnswerLocally (MountRenderer -> Response)
+    | {- | A data-plane handler, awaiting the request and the respond continuation. It
+      reads its mount's serve dependencies from the request context, and answers the
+      recognised-but-unwired stub itself when they are absent.
+      -}
+      RunPipeline (Wai.Request -> (Response -> IO ResponseReceived) -> Handler ResponseReceived)
+
+{- | An ecosystem's __whole routing decision__: what to do with a mount-relative request.
+
+The adapter supplies one ('Ecluse.Core.Registry.Adapter.Types.serveRouter'), derived from
+its own declarative route table, so the ecosystem owns both halves of the decision: which
+of its paths a request names, and what action that names. A path the ecosystem does not
+recognise yields its deny-by-default @404@
+('Ecluse.Core.Server.Pipeline.Shared.notFoundInMount').
+
+The 'Method' is part of the mapping because the same path names different actions by
+method (npm's @GET \/{pkg}@ reads, @PUT \/{pkg}@ publishes), and because a @HEAD@ is a
+__bodiless variation__ of its @GET@ rather than a distinct action, which the router
+resolves by selecting the head-mode handler. Segments arrive already mount-stripped and
+percent-decoded.
+-}
+type MountRouter = Method -> [Text] -> RouteAction
+
 {- | A mount: a path prefix bound to a registry, carrying that registry's
 __complete__ ecosystem wiring. Dispatch matches a request's leading path segments
 to 'bindingPrefix', strips them, and routes the remainder through the rest of the
@@ -370,8 +428,12 @@ to fall back to.
 data MountBinding = MountBinding
     { bindingPrefix :: NonEmpty Text
     -- ^ The leading path segments this mount is served under; never empty.
-    , bindingClassifier :: Classifier
-    -- ^ The ecosystem path grammar mapping this mount's native path to an 'Ecluse.Core.Server.Route.Route'.
+    , bindingRouter :: MountRouter
+    {- ^ The ecosystem's whole routing decision: what this mount's native path names,
+    and what serving it amounts to (an 'Ecluse.Core.Server.Dispatch.RouteAction'). The
+    adapter derives it from its own route table, so the web layer holds no ecosystem's
+    path grammar of its own.
+    -}
     , bindingPackumentDeps :: Maybe PackumentDeps
     {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
     packument route recognised-but-unserved (the @501@ stub).
