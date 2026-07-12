@@ -180,6 +180,26 @@ Inspect what is currently lingering with `docker ps --filter label=com.ecluse.te
 `bash scripts/test-containers.sh list` (which groups them by scope). The label writer is
 `Ecluse.Test.Containers`, kept in lock-step with the reaper's label spelling.
 
+**Every image the test tiers pull is fully digest-pinned (`name@sha256:...`); a mutable tag
+is never pulled.** Écluse is a supply-chain-security tool, so this is an invariant, not a
+convenience: a tag can be re-pointed to a poisoned image between one pull and the next, while
+a `@sha256:` digest is immutable and content-addressed, so the bytes are verified on every
+pull. The pins live at the harness sites that name each image (`test/e2e/.../Harness/Docker.hs`
+for the e2e data plane; `test/integration/.../Ministack.hs` and the telemetry specs for the
+integration tier), each with an adjacent comment recording the human-readable version the
+digest resolves from, so a reader (and Renovate) can still see what it is.
+
+Both tiers pull those pinned images (ministack, the OTLP collector, nginx, Verdaccio) from
+Docker Hub at run time. On the shared, unauthenticated GitHub-hosted runners that pool is
+heavily throttled, and an intermittent auth-token timeout on a single pull inside a suite's
+setup hook is enough to redden the whole gating job. To absorb that blip, the CI e2e and
+integration jobs warm those images into the local cache before the suite runs, via
+`scripts/docker-prepull.sh`, which pulls each reference with bounded exponential-backoff
+retries; the harness's own `docker run` / `docker build FROM` then reuse the cached image. It
+is best-effort (a still-failing pull only warns and lets the suite try again), and the
+references it is given mirror the harness digest pins verbatim, so it warms the exact image
+the suite will pull and adds no new trust surface.
+
 ## What gates, and what doesn't
 
 Two things about the split are easy to get backwards, so I'll state them plainly:

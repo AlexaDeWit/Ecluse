@@ -68,6 +68,20 @@ jobs:
       - name: Update package index
         run: nix develop .#ci --command task update
 
+      # Warm the pinned Docker Hub images the integration coverage tier builds FROM
+      # (ministack and the OTLP collector) into the local cache first, retrying a
+      # transient Docker Hub pull timeout with backoff. The same throttled Docker
+      # Hub IP pool that can wedge the e2e job reaches the integration tier through
+      # its testcontainers `docker build FROM` here, so it gets the same buffer.
+      # docker is a host binary (the data-root was relocated by "Set up toolchain");
+      # the refs mirror the pins in test/integration/Ecluse/Integration/Ministack.hs
+      # and the telemetry integration specs (the source of truth).
+      - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
+        run: >-
+          bash scripts/docker-prepull.sh
+          ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
+          otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
+
       - name: Cabal checks (build, coverage, doctest, cabal-check)
         run: nix develop .#ci --command task cabal-checks
 
@@ -196,6 +210,25 @@ jobs:
 
       - name: Update package index
         run: nix develop --command task update
+
+      # Warm the pinned Docker Hub images the e2e data plane pulls (ministack, the
+      # OTLP collector, nginx, Verdaccio) into the local cache first, retrying a
+      # transient Docker Hub auth/pull timeout with backoff. The unauthenticated
+      # runners share a throttled Docker Hub IP pool whose auth-token endpoint
+      # intermittently times out, and a single throttled pull inside the suite's
+      # setup hook cascades every case to pending and reddens this gating job. With
+      # the images pre-warmed, the harness's own `docker run` finds them cached.
+      # docker is a host binary here (no nix shell needed) and the data-root was
+      # relocated by "Set up toolchain" above. The refs mirror the pins in
+      # test/e2e/Ecluse/E2E/Harness/Docker.hs (the source of truth); digest pins are
+      # copied verbatim, so this adds no new trust surface.
+      - name: Pre-pull pinned e2e images (Docker Hub throttle resilience)
+        run: >-
+          bash scripts/docker-prepull.sh
+          ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
+          otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
+          verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
+          nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
       - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
         run: nix develop --command task test-e2e
