@@ -318,7 +318,8 @@ if none is retryable but an exclusion is a permanent inability (`WontResolve`); 
 (`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model and status mapping live in `Ecluse.Core.Server.Response`, which decides an
-error's status but holds no body shape of its own. Each mount supplies a `MountRenderer` that shapes
+error's status but holds no body shape of its own. The body shape is a separate concern in
+`Ecluse.Core.Server.Renderer`: each mount supplies a `MountRenderer` that shapes
 the error bytes in its ecosystem's surface (npm's `{"error": …}` object in
 `Ecluse.Core.Registry.Npm.Serve`), so rendering splits into two tiers: a request matching no mount is
 a neutral `404 Not Found` in `text/plain`, while every in-mount error renders through that mount's
@@ -364,8 +365,9 @@ hand-roll anything that encodes our domain or wire contract.
   reader over a per-request `RequestCtx` pairing `Env` with the matched mount's
   [`MountBinding`](#multi-ecosystem-mounts); shared mutable state lives as `TVar`s in `Env`, not a
   `StateT` layer.
-- **Hand-roll** the router (`classify`), the response/error helpers (`Ecluse.Core.Server.Response`;
-  each mount's error surface in its adapter, e.g. `Ecluse.Core.Registry.Npm.Serve`), a thin `katip`
+- **Hand-roll** the router (`classify`), the response status model (`Ecluse.Core.Server.Response`) and
+  error rendering (`Ecluse.Core.Server.Renderer`; each mount's error surface in its adapter, e.g.
+  `Ecluse.Core.Registry.Npm.Serve`), a thin `katip`
   logging middleware (so request logs join the same structured stream), and conditional-GET / ETag
   handling. For pass-through bodies (artifacts, including a private-upstream tarball) the client's
   validators are relayed upstream and `304`s passed back unchanged; for transformed bodies (every

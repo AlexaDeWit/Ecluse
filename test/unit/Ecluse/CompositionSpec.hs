@@ -41,7 +41,7 @@ import Ecluse.Core.Server.Context (
     PackumentDeps (..),
     PublishDeps (..),
  )
-import Ecluse.Core.Server.Response (appendHelp)
+import Ecluse.Core.Server.Renderer (appendHelp)
 import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Rules (inertRuleDeps)

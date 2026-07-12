@@ -31,13 +31,11 @@ import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, 
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Server.Renderer (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Server.Response (
-    MountRenderer,
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
-    RenderedBody (RenderedBody),
     ServeDecision (Reject),
-    renderError,
  )
 
 hRetryAfter :: HeaderName

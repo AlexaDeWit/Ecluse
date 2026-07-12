@@ -160,6 +160,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Publish
     Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
+    Ecluse.Core.Server.Renderer
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
     Ecluse.Core.Server.RoutePattern
@@ -574,6 +575,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec
+    Ecluse.Server.RendererSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec

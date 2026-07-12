@@ -10,7 +10,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
 import Ecluse.Core.Registry.Npm.Serve (npmDenialBody, npmRenderer)
-import Ecluse.Core.Server.Response (RenderedBody (..), mkHelpMessage, renderError)
+import Ecluse.Core.Server.Renderer (RenderedBody (..), mkHelpMessage, renderError)
 
 {- | Decode a denial body and read its @error@ string. 'Right' the string when the
 body is a JSON object carrying a string @error@; 'Left' (which fails the

@@ -148,8 +148,8 @@ import Ecluse.Core.Server.Pipeline.Origin (
     originManifest,
  )
 import Ecluse.Core.Server.Pipeline.Shared
+import Ecluse.Core.Server.Renderer (MountRenderer, renderError)
 import Ecluse.Core.Server.Response (
-    MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
@@ -158,7 +158,6 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve),
     packumentStatus,
     packumentStatusCode,
-    renderError,
     serveDecisionOf,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric

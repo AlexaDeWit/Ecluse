@@ -288,9 +288,9 @@ endpoint, authenticated out of band via `OTEL_EXPORTER_OTLP_HEADERS`.
 so an unreachable collector never blocks a request. An absent endpoint defaults to
 `http://localhost:4318` with one boot warning. `hs-opentelemetry 1.0.0.0` drops a failed
 OTLP export silently, so Écluse wraps both exporters to observe the result and route a
-failure through `katip` under a shared throttle: the first failure logged plainly, then a
-periodic heartbeat with the suppressed count. The wrappers only observe; export semantics
-are unchanged.
+failure through `katip` under a shared throttle (`Ecluse.Telemetry.ExportFailure`): the first
+failure logged plainly, then a periodic heartbeat with the suppressed count. The wrappers only
+observe; export semantics are unchanged.
 
 | Variable | Purpose |
 |---|---|

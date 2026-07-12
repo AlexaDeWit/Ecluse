@@ -402,7 +402,7 @@ ecosystem has no registered adapter. The adapter registry
 ('Ecluse.Core.Registry.Adapter.adapterFor') answers which ecosystems this build
 supports; the resolved adapter's serve surface supplies the router (the
 'Ecluse.Core.Server.Context.MountRouter') and the denial renderer (the
-'Ecluse.Core.Server.Response.MountRenderer'), and the path prefix is __derived__
+'Ecluse.Core.Server.Renderer.MountRenderer'), and the path prefix is __derived__
 from the ecosystem ('prefixFor') rather than configured, so the ecosystem is the
 single thing that drives the binding (see
 @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). The composition

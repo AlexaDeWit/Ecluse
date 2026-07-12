@@ -75,9 +75,11 @@ not here.
    resolved-IP recheck. (An operator whose private registry uses an internal CA extends
    the image with their own cert chain; the proxy does not pre-bake custom CA trust.)
 
-   An upstream-declared `dist.tarball` is normalised before it is dialled: an https target
-   is kept, a same-host legacy `http` target is upgraded to https, and `http` on any other
-   host is dropped as a graceful per-entry refusal. A legacy `http://` registry endpoint
+   An upstream-declared artifact URL (npm's `dist.tarball`) is normalised before it is
+   dialled: an https target is kept, a same-host legacy `http` target is upgraded to https,
+   and `http` on any other host is dropped as a graceful per-entry refusal. The enforcement
+   is ecosystem-generic and lives in one place, `Ecluse.Core.Registry.Egress`, so every
+   adapter's artifact URLs pass the same gate. A legacy `http://` registry endpoint
    is non-supported. Behind the host allowlist (invariant 2), a cheap literal
    internal-range block stays as a second gate on the `dist.tarball` host; the trusted
    private origin is exempt from it, since a private registry may live on an internal

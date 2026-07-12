@@ -42,7 +42,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
 import Ecluse.Core.Server.Pipeline.Shared (jsonResponse, notFoundInMount, renderedResponse)
-import Ecluse.Core.Server.Response (
+import Ecluse.Core.Server.Renderer (
     HelpMessage,
     MountRenderer (MountRenderer),
     RenderedBody (RenderedBody),

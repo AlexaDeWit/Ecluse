@@ -17,7 +17,7 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
   'MountBinding', strip the prefix, and hand the remainder (an ecosystem-native
   path) to that mount's 'Ecluse.Core.Server.Context.MountRouter'. A binding carries a
   mount's __complete__ ecosystem wiring: its router, its packument-serve dependencies,
-  and its error 'Ecluse.Core.Server.Response.MountRenderer'. The web layer is closed
+  and its error 'Ecluse.Core.Server.Renderer.MountRenderer'. The web layer is closed
   over the agnostic 'Ecluse.Core.Server.Context.RouteAction' vocabulary and holds no
   ecosystem's path grammar or body shape of its own. Every registry is
   __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
@@ -35,7 +35,7 @@ Responses split into __two tiers__:
   ('Ecluse.Core.Server.Context.MountRouter', supplied by its ecosystem adapter) says what
   the request names, as an 'Ecluse.Core.Server.Context.RouteAction': either a pure
   response the proxy answers itself (through that mount's
-  'Ecluse.Core.Server.Response.MountRenderer', in the ecosystem's own error surface), or
+  'Ecluse.Core.Server.Renderer.MountRenderer', in the ecosystem's own error surface), or
   a data-plane handler to run.
 
 This module holds __no route knowledge of its own__. It does not name a route, a path
@@ -112,7 +112,7 @@ import Ecluse.Core.Server.Context (
     runHandler,
  )
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
-import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
+import Ecluse.Core.Server.Renderer (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)

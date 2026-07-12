@@ -156,9 +156,9 @@ import Ecluse.Core.Server.Pipeline.Internal (
  )
 import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
+import Ecluse.Core.Server.Renderer (MountRenderer, renderError)
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    MountRenderer,
     RejectReason (Unavailable),
     Rejection (Rejection, rejectionMessage),
     RetryAfter (..),
@@ -166,7 +166,6 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve, WontResolve),
     artifactStatus,
     artifactStatusCode,
-    renderError,
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Route (Filename (Filename))

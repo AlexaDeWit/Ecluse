@@ -56,7 +56,7 @@ import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
-import Ecluse.Core.Server.Response (MountRenderer)
+import Ecluse.Core.Server.Renderer (MountRenderer)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)

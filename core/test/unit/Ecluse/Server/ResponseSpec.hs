@@ -37,11 +37,9 @@ import Ecluse.Core.Server.Response (
     RuleName (..),
     ServeDecision (..),
     Transience (..),
-    appendHelp,
     artifactStatus,
     artifactStatusCode,
     longestRetry,
-    mkHelpMessage,
     packumentStatus,
     packumentStatusCode,
     serveDecisionOf,
@@ -201,13 +199,6 @@ spec = do
             packumentStatusCode (PackumentUnavailable (Just (RetryAfter 30))) `shouldBe` 503
             packumentStatusCode PackumentBadGateway `shouldBe` 502
             packumentStatusCode PackumentServerError `shouldBe` 500
-
-    describe "HelpMessage -- trimmed at construction" $ do
-        it "appends the message trimmed of surrounding whitespace, one separating space" $
-            appendHelp (Just (mkHelpMessage "  Contact support.  ")) "denied"
-                `shouldBe` "denied Contact support."
-        it "an all-whitespace message collapses to blank and appends nothing" $
-            appendHelp (Just (mkHelpMessage " \t ")) "denied" `shouldBe` "denied"
 
     describe "serveDecisionOf -- a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do

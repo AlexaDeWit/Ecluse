@@ -41,10 +41,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Pipeline.Shared
 
-import Ecluse.Core.Server.Response (
-    MountRenderer,
-    renderError,
- )
+import Ecluse.Core.Server.Renderer (MountRenderer, renderError)
 
 servePublish ::
     PackageName ->

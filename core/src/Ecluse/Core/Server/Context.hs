@@ -76,7 +76,7 @@ import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
-import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
+import Ecluse.Core.Server.Renderer (HelpMessage, MountRenderer)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)

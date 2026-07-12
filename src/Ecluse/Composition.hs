@@ -77,7 +77,7 @@ import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
-import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
+import Ecluse.Core.Server.Renderer (HelpMessage, mkHelpMessage)
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
