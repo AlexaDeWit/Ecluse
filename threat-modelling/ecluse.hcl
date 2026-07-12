@@ -102,11 +102,11 @@ threatmodel "Ecluse" {
   mermaid "High Level" {
     content = <<-EOF
       graph TD;
-        A[npm client] -->|npm install| B[Écluse proxy];
-        B -->|fetch upstream| C[Public npm registry];
-        B -->|queue background mirror| D[Mirror worker];
-        D -->|download tarball| C;
-        D -->|get token| E[AWS IMDS + STS];
+        A["npm client"] -->|"npm install"| B["Écluse proxy"];
+        B -->|"fetch upstream"| C["Public npm registry"];
+        B -->|"queue background mirror"| D["Mirror worker"];
+        D -->|"download tarball"| C;
+        D -->|"get token"| E["AWS IMDS + STS"];
     EOF
   }
 }
