@@ -23,7 +23,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
@@ -106,11 +106,12 @@ data WorkerPolicy = WorkerPolicy
     ('Ecluse.Core.Server.Context.pdMinIntegrity'), re-applied at ingest through the
     shared admission gate.
     -}
-    , wpArtifactHostHonoured :: Text -> Bool
+    , wpArtifactHostHonoured :: Maybe HostPort -> Bool
     {- ^ The mount's own tarball-host gate
     ('Ecluse.Core.Server.Context.tarballHostHonoured', closed against the public
-    upstream host), re-checked on the job's fetch URL: the queue payload is a trust
-    boundary.
+    upstream authority), re-checked on the extracted @host:port@ of the job's fetch
+    URL ('Nothing', an unextractable authority, is refused): the queue payload is a
+    trust boundary.
     -}
     , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
     {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the

@@ -49,7 +49,8 @@ so the proxy can front a public registry that serves its artifacts from a separa
 or an off-convention path (a CDN\/files host, a signed URL). That location is gated, not
 trusted: it is fetched only when the tarball-host policy
 ('Ecluse.Core.Security.tarballHostAllowed', per @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@)
-admits its host (the default refuses a cross-host @dist.tarball@), and the untrusted
+admits its @host:port@ authority (the default refuses a cross-authority
+@dist.tarball@, a different host or a different port alike), and the untrusted
 egress is https-only with certificate validation. The public leg is anonymous: it
 gates __that one version__ against the rules (the same machinery the packument path
 gates the whole set with) and selects the artifact, and on an admit __streams the public
@@ -128,9 +129,9 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
-    hostAddress,
-    thgPrivateHost,
-    thgPublicHost,
+    hostPortAddress,
+    thgPrivateHostPort,
+    thgPublicHostPort,
  )
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
@@ -366,14 +367,14 @@ streamPrivateArtifact mode rt deps token validators name file respond =
     -- redirectCount = 0 (the credential-redirect invariant).
     privateRequest :: Maybe HTTP.Request
     privateRequest =
-        if tarballHostHonoured TrustedOrigin deps privateHost privateHost
+        if tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort
             then withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token name file)
             else Nothing
       where
-        -- The precomputed private host: the constructed URL is on the private base
-        -- host, so both the packument and the tarball host of the trusted gate are it
+        -- The precomputed private authority: the constructed URL is on the private
+        -- base, so both the packument and the tarball sides of the trusted gate are it
         -- (the check stays applied, trivially satisfied, without re-parsing the URL).
-        privateHost = thgPrivateHost (pdTarballHostGate deps)
+        privateHostPort = thgPrivateHostPort (pdTarballHostGate deps)
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -570,7 +571,7 @@ streamPublicArtifact mode rt renderer deps validators name version artifact obse
                     pure received
                 Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
   where
-    hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps)) (hostAddress (artUrl artifact))
+    hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
     publicRequest = withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact)
 
@@ -750,9 +751,10 @@ enqueueMirror rt deps name version artifact =
     enqueueFailureDetail fault = "mirror enqueue failed: " <> qfDetail fault
 
 {- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
-a cross-host @dist.tarball@ under the secure-default 'Ecluse.Core.Security.SameHostAsPackument',
-or a host off the upstream allowlist. A policy denial, not a serve outcome the rules
-produced -- the same @403@ surface a rule denial renders, with a fixed reason. -}
+a @dist.tarball@ on a different host or port than the packument origin under the
+secure-default 'Ecluse.Core.Security.SameHostAsPackument', or an authority off the
+upstream allowlist. A policy denial, not a serve outcome the rules produced -- the
+same @403@ surface a rule denial renders, with a fixed reason. -}
 crossHostRefused :: Response
 crossHostRefused =
     responseLBS (mkStatus 403 "Forbidden") [(hContentType, "application/json")] "{\"error\":\"the upstream artifact host is not permitted by the tarball-host policy\"}"

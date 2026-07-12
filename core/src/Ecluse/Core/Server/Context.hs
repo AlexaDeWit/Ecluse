@@ -64,7 +64,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
+import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
@@ -169,11 +169,11 @@ data PackumentDeps = PackumentDeps
     -}
     , pdTarballHostGate :: TarballHostGate
     {- ^ The mount-constant inputs to the per-request tarball-host gate
-    ('Ecluse.Core.Security.TarballHostGate'): the lowered upstream allowlist and the bare
-    private and public upstream hosts, extracted __once__ at the composition root from
-    the base URLs above. The hot artifact path reads these fields rather than rebuilding
-    the allowlist set and re-parsing the base URLs on every request (only the dynamic
-    public @dist.tarball@ host is parsed per request).
+    ('Ecluse.Core.Security.TarballHostGate'): the canonicalised @host:port@ allowlist
+    and the private and public upstream authorities, extracted __once__ at the
+    composition root from the base URLs above. The hot artifact path reads these fields
+    rather than rebuilding the allowlist set and re-parsing the base URLs on every
+    request (only the dynamic public @dist.tarball@ authority is parsed per request).
 
     __Invariant__: this is a cached projection of 'pdPrivateBaseUrl', 'pdPublicBaseUrl',
     and 'pdMirrorTarget'; whoever changes one of those after construction must re-derive
@@ -265,32 +265,34 @@ data PackumentDeps = PackumentDeps
     -}
     }
 
-{- | Whether an artifact's @dist.tarball@ host may be fetched, given the origin's
-trust, the mount's tarball-host policy, and the host that served the packument it
-came from. Connects the pure 'Ecluse.Core.Security.tarballHostAllowed' to a mount's
-configured policy fields: the tarball host must be on the upstream allowlist and --
-under the secure-default 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the
-packument host; the opt-in 'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that
-last clause to any allowlisted host.
+{- | Whether an artifact's @dist.tarball@ authority may be fetched, given the
+origin's trust, the mount's tarball-host policy, and the authority that served the
+packument it came from. Connects the pure
+'Ecluse.Core.Security.tarballHostAllowed' to a mount's configured policy fields:
+the tarball's @host:port@ pair must be on the upstream allowlist and -- under the
+secure-default 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the
+packument origin's pair; the opt-in 'Ecluse.Core.Security.AnyAllowlistedHost'
+relaxes that last clause to any allowlisted pair.
 
 The literal internal-range block is __origin-aware__: an
 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
 range set plus the operator-configured @additionalBlockedRanges@, while an
 'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is
 exempt, since a private registry may legitimately live on an internal address
-(security.md invariant 3). The allowlist and same-host clauses still gate the
+(security.md invariant 3). The allowlist and same-authority clauses still gate the
 trusted origin identically.
 
 This is the __one__ composition of the host gate over a mount's policy: the serve
 pipeline applies it before its public artifact fetch, and the composition root
-closes it (against the public upstream host) into the mirror worker's
+closes it (against the public upstream authority) into the mirror worker's
 re-evaluation bundle, so the ingest-time host check can never drift from the
-serve-time one. The @packumentHost@ and @artifactHost@ are bare hosts, __already
-extracted__: the mount-constant ones live in the precomputed 'pdTarballHostGate',
-so the hot path parses no base URL and rebuilds no allowlist per request; only the
-dynamic artifact host is parsed at the call site.
+serve-time one. Both authorities are __already extracted__ ('Nothing' meaning no
+dialable authority, which the gate refuses): the mount-constant ones live in the
+precomputed 'pdTarballHostGate', so the hot path parses no base URL and rebuilds
+no allowlist per request; only the dynamic artifact authority is parsed at the
+call site.
 -}
-tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
+tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
     tarballHostAllowed
         origin

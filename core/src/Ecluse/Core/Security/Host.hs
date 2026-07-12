@@ -10,24 +10,32 @@ locations__ (a packument's @dist.tarball@). This module provides the pure guard 
 that keeps the proxy from being steered by hostile input.
 
 __Where the proxy fetches:__ 'isAllowedUpstreamHost' restricts outbound fetches
-to the configured upstream hosts, and 'isBlockedTarget' rejects internal address
-ranges (cloud instance metadata, loopback, RFC1918) that the proxy's network
+to the configured upstream @host:port@ pairs, and 'isBlockedTarget' rejects internal
+address ranges (cloud instance metadata, loopback, RFC1918) that the proxy's network
 position can otherwise reach. Together they are the SSRF gate: a target must be
-both on the allowlist /and/ not an internal address.
+both on the allowlist /and/ not an internal address. The two compare different
+projections of a target on purpose: authorisation compares the full authority
+('HostPort', the host with its effective port, 443 when none is written), because
+the fetch dials the port too; the internal-range block classifies the bare host
+alone, because an address is internal regardless of port.
 -}
 module Ecluse.Core.Security.Host (
-    -- * Outbound host allowlist
-    LoweredHostSet,
-    lowerCaseHosts,
+    -- * Outbound host:port allowlist
+    HostPort (..),
+    AllowedHostPorts,
+    allowedHostPorts,
     isAllowedUpstreamHost,
+
+    -- * Authority extraction
+    hostAddress,
+    hostPortAddress,
+    splitHostPort,
 
     -- * Internal-range block
     isBlockedTarget,
     isBlockedIP,
     parseIpLiteral,
     parseBlockedRange,
-    hostAddress,
-    splitHostPort,
 
     -- * Tarball-host policy
     TarballHostPolicy (..),
@@ -52,49 +60,77 @@ import Data.IP (
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
-{- | A set of host strings normalised to lower case, the form the host guards
-('isAllowedUpstreamHost' and 'isBlockedTarget') compare against.
+{- | The authority an outbound fetch actually dials: a bare host together with its
+__effective__ port.
 
-The type is __opaque, and 'lowerCaseHosts' is its only constructor__: a value of
-this type therefore carries the proof that every host in it is already
-lower-cased, so the guards lower only the /incoming/ host and the case-insensitive
-match cannot be bypassed by an un-normalised configuration set.
+Registry egress is https-only ("Ecluse.Core.Security.Egress"), so a URL that writes
+no port dials 443; 'hostPortAddress' bakes that default in, and an explicit @:443@
+is therefore the same authority as no port at all. Carrying the port beside the
+host is what lets the egress gate authorise the pair the dial targets rather than
+the host alone: a @dist.tarball@ naming an allowlisted host on an attacker-chosen
+port must not inherit that host's authorisation.
 -}
-newtype LoweredHostSet = LoweredHostSet (Set Text)
+data HostPort = HostPort
+    { hpHost :: Text
+    -- ^ The bare host: no brackets, no port, lower-cased by 'hostPortAddress'.
+    , hpPort :: Word16
+    -- ^ The effective port: the explicit @:port@, or 443 when none is written.
+    }
+    deriving stock (Eq, Ord, Show)
+
+{- | The @host:port@ pairs the host guards authorise, each host normalised to its
+canonical key.
+
+The type is __opaque, and 'allowedHostPorts' is its only constructor__: a value of
+this type therefore carries the proof that every entry is already canonicalised, so
+'isAllowedUpstreamHost' canonicalises only the /incoming/ host and the match cannot
+be bypassed by an un-normalised configuration set. Each entry authorises exactly
+its own pair: an entry built from a URL with no explicit port authorises port 443
+alone ('hostPortAddress' bakes the default in), never the same host on any other
+port.
+-}
+newtype AllowedHostPorts = AllowedHostPorts (Set HostPort)
     deriving stock (Eq, Show)
 
-{- | Normalise a set of configured host strings to the canonical key form the host
-guards take, yielding a 'LoweredHostSet'.
+{- | Normalise a set of configured upstream authorities to the canonical key form
+the host guards take, yielding an 'AllowedHostPorts'.
 
 A plain DNS name is folded to lower case (hostnames are case-insensitive), so the
 guards match an incoming host against the configuration regardless of how either
-was spelled. An entry that parses as an __IP literal__ is additionally rendered to its
+was spelled. A host that parses as an __IP literal__ is additionally rendered to its
 single canonical literal (see 'canonicalHostKey'), so equivalent spellings of one
 address (compressed versus expanded IPv6, differing case) collapse to one key. An
 operator who opts in @0:0:0:0:0:0:0:1@ therefore matches a literal @::1@ rather than
-missing it on a textual difference.
+missing it on a textual difference. Ports are already numeric and pass through
+untouched.
 -}
-lowerCaseHosts :: Set Text -> LoweredHostSet
-lowerCaseHosts = LoweredHostSet . Set.map canonicalHostKey
+allowedHostPorts :: Set HostPort -> AllowedHostPorts
+allowedHostPorts = AllowedHostPorts . Set.map canonicalEntry
+  where
+    canonicalEntry (HostPort host port) = HostPort (canonicalHostKey host) port
 
-{- | Whether @host@ is one of the configured upstream hosts.
+{- | Whether @target@ dials one of the configured upstream authorities.
 
 The first guard on every outbound fetch: the proxy talks to its configured
 private\/public upstreams and mirror target, and __nothing else__ -- so a target
-host derived from a packument's @dist.tarball@ (or anywhere else) is fetched only
-if it appears in @allowed@. The match is exact on the bare host (no port, no
-scheme -- extract it with 'hostAddress' first) and __case-insensitive__, since
-DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
-of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
+derived from a packument's @dist.tarball@ (or anywhere else) is fetched only if its
+host __and effective port__ appear together in @allowed@. Matching the pair rather
+than the host alone is load-bearing: the fetch dials the full authority, so an
+allowlisted host on an attacker-chosen port (@registry.npmjs.org:9443@) is an
+unauthorised target, not a variant of an authorised one. The host match is exact
+and __case-insensitive__, since DNS hostnames are; ports compare numerically, and
+'hostPortAddress' already folded an absent port and a written @:443@ to the same
+value. An empty host is never allowed. This is the allowlist half of the SSRF
+gate; pair it with 'isBlockedTarget' for the internal-range half.
 
-The allowlist is a 'LoweredHostSet', so it is already normalised and only the
-incoming @host@ is folded here -- through the same 'canonicalHostKey' the set was
+The allowlist is an 'AllowedHostPorts', so it is already normalised and only the
+incoming host is folded here -- through the same 'canonicalHostKey' the set was
 built with, so an IP-literal entry matches regardless of how either side spells the
 address.
 -}
-isAllowedUpstreamHost :: LoweredHostSet -> Text -> Bool
-isAllowedUpstreamHost (LoweredHostSet allowed) host =
-    not (T.null host) && canonicalHostKey host `Set.member` allowed
+isAllowedUpstreamHost :: AllowedHostPorts -> HostPort -> Bool
+isAllowedUpstreamHost (AllowedHostPorts allowed) (HostPort host port) =
+    not (T.null host) && HostPort (canonicalHostKey host) port `Set.member` allowed
 
 {- | Whether @host@ is an internal address the proxy must not fetch.
 
@@ -213,14 +249,14 @@ ipAddrToIP = \case
     IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))
 
 {- The canonical comparison key for a host: a normalised string the host guards
-match a 'LoweredHostSet' on. A host that parses as an IP literal is rendered to the
-@iproute@ canonical literal through @IP@ 'show', so equivalent spellings of one
+match an 'AllowedHostPorts' entry on. A host that parses as an IP literal is rendered
+to the @iproute@ canonical literal through @IP@ 'show', so equivalent spellings of one
 address collapse to one key: compressed versus expanded IPv6
 (@::1@ is @0:0:0:0:0:0:0:1@), embedded IPv4, and hex case all canonicalise identically.
 Anything that is not a literal (a DNS name) is merely case-folded, since hostnames are
 case-insensitive.
 
-This is the single canonicaliser feeding the host allowlist: 'lowerCaseHosts' builds
+This is the single canonicaliser feeding the host allowlist: 'allowedHostPorts' builds
 the configured set with it, and 'isAllowedUpstreamHost' folds the queried host with
 it, so a configured entry matches a literal address whichever representation either
 uses. Pointing both sides at one @show@ is what guarantees they render identically;
@@ -269,24 +305,112 @@ data IpAddr
 
 {- | Extract the bare host from a URI or @host[:port]@ authority.
 
-A convenience for the SSRF gate: an outbound target is usually a full URL or an
-authority, but 'isAllowedUpstreamHost' and 'isBlockedTarget' compare the bare
-host. This strips a @scheme:\/\/@ prefix, any @userinfo\@@, any @:port@ suffix,
+A convenience for the checks that classify the host alone: 'isBlockedTarget'
+tests the bare literal (an address is internal regardless of port), and the
+same-host @http@-upgrade decision in "Ecluse.Core.Security.Egress" compares bare
+hosts. This strips a @scheme:\/\/@ prefix, any @userinfo\@@, any @:port@ suffix,
 and any @\/path@\/@?query@\/@#fragment@ tail, lower-casing the result. It is a
 pragmatic extractor for comparison, __not__ a full RFC 3986 parser; a value with
-no recognisable host yields the empty string, which both guards treat as
+no recognisable host yields the empty string, which the guards treat as
 not-allowed. IPv6 literals in brackets (@[::1]:443@) are returned without the
 brackets -- the bracket-aware @host[:port]@ split is 'splitHostPort', shared with
 the SQS endpoint parser so the two cannot drift on an authority edge case; a
 malformed authority (an opening bracket with no close) yields the empty string,
-the same fail-safe the guards apply to it.
+the same fail-safe the guards apply to it. The authorisation clauses compare the
+host __with__ its effective port instead: extract those with 'hostPortAddress'.
 -}
 hostAddress :: Text -> Text
-hostAddress raw =
+hostAddress raw = T.toLower (maybe "" fst (splitHostPort (authorityOf raw)))
+
+{- | Extract the host and the effective port a URI or @host[:port]@ authority
+dials, or 'Nothing' when no dialable authority can be recovered.
+
+The authorisation-comparison companion to 'hostAddress': the same pragmatic
+scheme\/userinfo\/path stripping, but the @:port@ suffix is __parsed rather than
+discarded__, so the egress gate compares the pair the fetch dials. A missing port
+defaults to 443 (registry egress is https-only), and an explicit @:443@ therefore
+yields the same 'HostPort' as no port at all. The port is strict: a canonical
+run of decimal digits, no leading zero, whose value fits @1..65535@. Anything else
+yields 'Nothing', which every authorisation clause treats as refused:
+
+* a non-numeric, signed, out-of-range, or leading-zero port ('parsePort');
+* a __written-but-empty__ port (@host:@ or @[::1]:@): http-client refuses any URL
+  that writes a colon with no port digits, so the gate refuses it too rather than
+  authorise an authority that can never be dialled. The two spellings are treated
+  identically here even though 'splitHostPort' collapses the unbracketed @host:@
+  into an empty remainder (recognised by the authority's trailing colon) while it
+  carries the bracketed @[::1]:@ through as a @":"@ remainder;
+* junk after a bracketed IPv6 literal, or an unbracketed IPv6 literal (whose colons
+  leave no unambiguous host\/port split, so it is refused whole rather than mangled
+  into a truncated host).
+
+>>> hostPortAddress "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
+Just (HostPort {hpHost = "registry.npmjs.org", hpPort = 443})
+
+>>> hostPortAddress "https://registry.npmjs.org:9443/thing"
+Just (HostPort {hpHost = "registry.npmjs.org", hpPort = 9443})
+
+>>> hostPortAddress "https://[2606:4700::1111]:8443/thing"
+Just (HostPort {hpHost = "2606:4700::1111", hpPort = 8443})
+-}
+hostPortAddress :: Text -> Maybe HostPort
+hostPortAddress raw = do
+    let authority = authorityOf raw
+    (host, rest) <- splitHostPort authority
+    guard (not (T.null host))
+    port <- effectivePort authority rest
+    pure (HostPort (T.toLower host) port)
+
+{- The effective port an authority dials, given the raw @rest@ 'splitHostPort' left
+after the host: the parsed digits of an explicit @":port"@, 443 for a genuinely
+portless authority, or 'Nothing' when the authority is undialable. Three ways it is
+undialable, all fail closed:
+
+\* a @rest@ that is non-empty but is not a @":port"@ is junk after a bracketed IPv6
+  literal (@[::1]x@ leaves @rest == "x"@), so the whole authority is refused;
+\* a written-but-empty port is malformed, since http-client refuses a URL that
+  writes a colon with no digits: the bracketed @[::1]:@ arrives as @rest == ":"@ so
+  'parsePort' on the empty tail refuses it, while the unbracketed @host:@ is
+  collapsed by 'splitHostPort' into an empty @rest@, recognised here by the
+  authority's own trailing colon;
+\* an out-of-grammar port digit sequence is refused by 'parsePort'.
+
+A genuinely portless authority has an empty @rest@ and no trailing colon.
+-}
+effectivePort :: Text -> Text -> Maybe Word16
+effectivePort authority rest = case T.stripPrefix ":" rest of
+    Just written -> parsePort written
+    Nothing
+        | not (T.null rest) -> Nothing
+        | ":" `T.isSuffixOf` authority -> Nothing
+        | otherwise -> Just 443
+
+{- A dialled port under the strict, __canonical__ spelling the gate accepts: a
+non-empty run of decimal digits, with __no leading zero__, whose value fits
+1..65535. One spelling per port: a leading-zero form (@0443@, @080@) is refused so a
+crafted spelling cannot alias a canonical port, alongside the signed, out-of-range,
+and non-numeric rejections. Strictness is load-bearing: an unparseable port must
+yield no authority at all, never fall back to the default, or a crafted suffix would
+alias the default-port authority. The digit check keeps 'readMaybe' from accepting
+signs or whitespace.
+-}
+parsePort :: Text -> Maybe Word16
+parsePort t = do
+    guard (isDecimal t && T.take 1 t /= "0")
+    n <- readMaybe (toString t) :: Maybe Integer
+    guard (n >= 1 && n <= 65535)
+    pure (fromInteger n)
+
+{- The authority component of a URI or bare @host[:port]@ value: the text after the
+scheme separator, truncated at the first path\/query\/fragment delimiter, with any
+userinfo dropped. Shared by 'hostAddress' and 'hostPortAddress' so the two
+extractions cannot drift on an authority edge case.
+-}
+authorityOf :: Text -> Text
+authorityOf raw =
     let afterScheme = afterFirst "://" raw
         authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-        afterUserinfo = afterLast "@" authority
-     in T.toLower (maybe "" fst (splitHostPort afterUserinfo))
+     in afterLast "@" authority
   where
     -- The text after @needle@'s __first__ occurrence, or all of @hay@ if absent.
     -- The scheme separator is matched at its first occurrence so the extracted
@@ -504,15 +628,16 @@ the packument's own source, and the safe reading of the allowlist is "same sourc
 told otherwise".
 -}
 data TarballHostPolicy
-    = {- | The secure default: a tarball is fetched only from the __same__ host
-      that served the packument; a @dist.tarball@ on any other host is refused,
-      even one otherwise on the allowlist.
+    = {- | The secure default: a tarball is fetched only from the __same__ authority
+      (host and port) that served the packument; a @dist.tarball@ on any other host,
+      or on the same host at a different port, is refused, even one otherwise on
+      the allowlist.
       -}
       SameHostAsPackument
-    | {- | The opt-in: a tarball may be fetched from __any allowlisted__ host (for a
-      registry that legitimately serves artifacts from a separate CDN\/files host).
-      This widens the fetch surface to the whole allowlist; it never escapes it or
-      the internal-range block.
+    | {- | The opt-in: a tarball may be fetched from __any allowlisted__ @host:port@
+      pair (for a registry that legitimately serves artifacts from a separate
+      CDN\/files host). This widens the fetch surface to the whole allowlist; it
+      never escapes it or the internal-range block.
       -}
       AnyAllowlistedHost
     deriving stock (Eq, Show)
@@ -525,8 +650,8 @@ The distinction governs the __literal internal-range block__ alone (the cheap pu
 defence-in-depth on the host gate). The trusted private origin is deliberately exempt
 from it: a private registry may legitimately live on an internal address, and only an
 untrusted target can be steered there. It never relaxes the host allowlist or the
-same-host clause, which gate both origins identically, so a trusted origin's
-@dist.tarball@ is still constrained to its own allowlisted host.
+same-authority clause, which gate both origins identically, so a trusted origin's
+@dist.tarball@ is still constrained to its own allowlisted @host:port@ pair.
 -}
 data Origin
     = -- | The operator-configured private upstream: exempt from the literal internal-range block.
@@ -535,104 +660,125 @@ data Origin
       UntrustedOrigin
     deriving stock (Eq, Show)
 
-{- | Whether a @dist.tarball@ host may be fetched, given the origin's trust, the
-policy, the host that served the packument, and the configured guards.
+{- | Whether a @dist.tarball@ authority may be fetched, given the origin's trust,
+the policy, the authority that served the packument, and the configured guards.
 
 This is the policy half of the @dist.tarball@ defence; it never replaces the host
 allowlist or the literal internal-range block but composes /on top/ of them, so the
 answer is the conjunction of three independent checks and over-blocking is the
 fail-safe:
 
-* the @tarballHost@ must be on the host allowlist (@allowed@), as every outbound
-  target is: a @dist.tarball@ host off the allowlist is refused regardless of
+* the target must be on the @host:port@ allowlist (@allowed@), as every outbound
+  target is: a @dist.tarball@ authority off the allowlist is refused regardless of
   policy;
-* it must not be an internal-address literal (the fixed range set plus the
+* its host must not be an internal-address literal (the fixed range set plus the
   operator-configured @additionalBlockedRanges@), the cheap pure defence-in-depth,
   but a 'TrustedOrigin' is __exempt__ from this clause (see 'Origin'); and
 * under 'SameHostAsPackument' (the secure default) it must additionally __equal__
-  the @packumentHost@ (the host that served the metadata), so a tarball on a
-  /different/ host is refused even when that host is allowlisted. Under
-  'AnyAllowlistedHost' that last clause is relaxed, leaving only the allowlist and
-  (origin-aware) internal-range checks.
+  the packument origin's authority, host and port both, so a tarball on a
+  /different/ host, or on the same host at a different port, is refused even when
+  that pair is allowlisted. Under 'AnyAllowlistedHost' that last clause is relaxed,
+  leaving only the allowlist and (origin-aware) internal-range checks -- the port
+  dimension stays closed there too, since the allowlist authorises pairs.
 
-The allowlist and same-host clauses gate __both__ origins identically; only the
+The allowlist and same-authority clauses gate __both__ origins identically; only the
 internal-range clause is origin-aware, so a 'TrustedOrigin' is never let past its own
-allowlisted host or onto a /different/ host than its metadata under the default.
+allowlisted authority or onto a /different/ one than its metadata under the default.
 
 Hosts are compared by their canonical key (case-folded, and for an IP-literal the
-single canonical literal; see 'canonicalHostKey'), as the host guards are. An
-empty @tarballHost@ is never allowed (the allowlist already refuses it). The
-@packumentHost@ is the bare host the metadata was fetched from (extract it with
-'hostAddress'); only its equality to @tarballHost@ matters, so it need not itself
+single canonical literal; see 'canonicalHostKey'), as the host guards are; ports
+compare numerically, with no written port meaning 443 ('hostPortAddress'). Either
+side arriving as 'Nothing' -- a URL from which no dialable authority could be
+extracted -- refuses the fetch: an authority the gate cannot compare is an
+authority it never authorises. The packument side is the authority the metadata
+was fetched from; only its equality to the target matters, so it need not itself
 be re-validated here: it was already gated when the packument was fetched.
 -}
 tarballHostAllowed ::
     Origin ->
     TarballHostPolicy ->
-    -- | The host allowlist (the same one every outbound fetch is gated by).
-    LoweredHostSet ->
+    -- | The @host:port@ allowlist (the same one every outbound fetch is gated by).
+    AllowedHostPorts ->
     {- | The operator-configured ranges extending the fixed internal-range block
     (untrusted origin).
     -}
     [IPRange] ->
-    -- | The bare host that served the packument.
-    Text ->
-    -- | The bare host of the candidate @dist.tarball@.
-    Text ->
+    -- | The authority that served the packument, when one could be extracted.
+    Maybe HostPort ->
+    -- | The authority of the candidate @dist.tarball@, when one could be extracted.
+    Maybe HostPort ->
     Bool
-tarballHostAllowed origin policy allowed additionalBlockedRanges packumentHost tarballHost =
-    isAllowedUpstreamHost allowed tarballHost
-        && internalRangeOk
-        && case policy of
-            SameHostAsPackument -> canonicalHostKey tarballHost == canonicalHostKey packumentHost
-            AnyAllowlistedHost -> True
+tarballHostAllowed origin policy allowed additionalBlockedRanges packumentOrigin tarballTarget =
+    case (packumentOrigin, tarballTarget) of
+        (Just packument, Just target) ->
+            isAllowedUpstreamHost allowed target
+                && internalRangeOk target
+                && case policy of
+                    SameHostAsPackument -> sameAuthority target packument
+                    AnyAllowlistedHost -> True
+        -- No comparable authority on either side authorises nothing (fail closed).
+        _ -> False
   where
     -- The literal internal-range block is origin-aware: the trusted private origin is
     -- exempt, the untrusted origin is gated against the fixed set plus the operator's
-    -- additional ranges.
-    internalRangeOk :: Bool
-    internalRangeOk = case origin of
+    -- additional ranges. It classifies the bare host: an address is internal
+    -- regardless of the port it is dialled on.
+    internalRangeOk :: HostPort -> Bool
+    internalRangeOk target = case origin of
         TrustedOrigin -> True
-        UntrustedOrigin -> not (isBlockedTarget additionalBlockedRanges tarballHost)
+        UntrustedOrigin -> not (isBlockedTarget additionalBlockedRanges (hpHost target))
+
+-- Whether two authorities are one dial target: equal canonical host keys and equal
+-- effective ports.
+sameAuthority :: HostPort -> HostPort -> Bool
+sameAuthority (HostPort host port) (HostPort host' port') =
+    canonicalHostKey host == canonicalHostKey host' && port == port'
 
 {- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate, extracted
 __once__ from a mount's three configured upstream URLs so the serve path parses no URL
 and builds no host set per request.
 
 The serve-path tarball gate is on the hot artifact path (every private hit and every
-public leg runs it), yet its allowlist and the private\/public upstream hosts never
-change after boot -- they are fixed by the mount's configuration. Recovering them from
-the base URLs on each request rebuilt a 'LoweredHostSet' and re-ran 'hostAddress' several
-times per artifact; precomputing them here into a 'TarballHostGate' collapses that to a
-few field reads. The only genuinely per-request host is the dynamic public
-@dist.tarball@, still parsed at the call site.
+public leg runs it), yet its allowlist and the private\/public upstream authorities
+never change after boot -- they are fixed by the mount's configuration. Recovering them
+from the base URLs on each request rebuilt an 'AllowedHostPorts' and re-parsed the base
+authorities several times per artifact; precomputing them here into a 'TarballHostGate'
+collapses that to a few field reads. The only genuinely per-request authority is the
+dynamic public @dist.tarball@, still parsed at the call site.
 -}
 data TarballHostGate = TarballHostGate
-    { thgAllowlist :: LoweredHostSet
-    {- ^ The lowered allowlist of the mount's configured upstream hosts (public, private,
-    and mirror target) -- the same set every outbound fetch is gated against
-    (security.md invariant 2).
+    { thgAllowlist :: AllowedHostPorts
+    {- ^ The canonicalised @host:port@ allowlist of the mount's configured upstreams
+    (public, private, and mirror target) -- the same set every outbound fetch is gated
+    against (security.md invariant 2). An upstream URL that writes no port contributes
+    its host at 443.
     -}
-    , thgPrivateHost :: Text
-    -- ^ The bare host of the private upstream, extracted once.
-    , thgPublicHost :: Text
-    -- ^ The bare host of the public upstream, extracted once.
+    , thgPrivateHostPort :: Maybe HostPort
+    {- ^ The private upstream's authority, extracted once; 'Nothing' when the configured
+    URL yields no dialable authority, which authorises nothing (fail closed).
+    -}
+    , thgPublicHostPort :: Maybe HostPort
+    -- ^ The public upstream's authority, extracted once; same fail-closed reading.
     }
     deriving stock (Eq, Show)
 
 {- | Build the 'TarballHostGate' from a mount's private, public, and mirror-target
-upstream URLs: the allowlist is the lowered set of their bare hosts, and the private and
-public hosts are each extracted once with 'hostAddress'. Called once per mount at the
-composition root (and by test fixtures); the result is carried on the serve
-dependencies so the per-request gate reads fields rather than re-parsing URLs.
+upstream URLs: the allowlist is the canonicalised set of their @host:port@ pairs, and
+the private and public authorities are each extracted once with 'hostPortAddress'.
+Called once per mount at the composition root (and by test fixtures); the result is
+carried on the serve dependencies so the per-request gate reads fields rather than
+re-parsing URLs. A URL from which no authority extracts contributes no allowlist entry
+and leaves its reference authority 'Nothing', so a misconfigured upstream authorises
+nothing rather than something unintended.
 -}
 tarballHostGate :: Text -> Text -> Text -> TarballHostGate
 tarballHostGate privateUrl publicUrl mirrorUrl =
     TarballHostGate
-        { thgAllowlist = lowerCaseHosts (Set.fromList [privateHost, publicHost, hostAddress mirrorUrl])
-        , thgPrivateHost = privateHost
-        , thgPublicHost = publicHost
+        { thgAllowlist =
+            allowedHostPorts (Set.fromList (catMaybes [privateHostPort, publicHostPort, hostPortAddress mirrorUrl]))
+        , thgPrivateHostPort = privateHostPort
+        , thgPublicHostPort = publicHostPort
         }
   where
-    privateHost = hostAddress privateUrl
-    publicHost = hostAddress publicUrl
+    privateHostPort = hostPortAddress privateUrl
+    publicHostPort = hostPortAddress publicUrl

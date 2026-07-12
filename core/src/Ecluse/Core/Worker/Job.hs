@@ -38,7 +38,7 @@ import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPac
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
-import Ecluse.Core.Security (hostAddress)
+import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
@@ -246,7 +246,7 @@ reevaluatePolicy job = do
         Nothing ->
             pure (ReevalDrop ("no rule policy is configured for the " <> ecosystemName ecosystem <> " ecosystem; refusing to mirror " <> renderJob job))
         Just policy
-            | not (wpArtifactHostHonoured policy (hostAddress (registryUrlText (jobArtifactUrl job)))) ->
+            | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) ->
                 pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> registryUrlText (jobArtifactUrl job) <> "); refusing to fetch or mirror it"))
             | otherwise -> do
                 evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))

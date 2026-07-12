@@ -16,32 +16,43 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Security (
-    LoweredHostSet,
+    AllowedHostPorts,
+    HostPort (HostPort, hpHost),
     Origin (TrustedOrigin, UntrustedOrigin),
     TarballHostPolicy (..),
+    allowedHostPorts,
     hostAddress,
+    hostPortAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
     isDecimal,
-    lowerCaseHosts,
     parseBlockedRange,
     parseIpLiteral,
     splitHostPort,
     tarballHostAllowed,
  )
 
-{- | The raw configured upstream hosts (lower-/mixed-case on purpose), before
+{- | The raw configured upstream authorities (lower-/mixed-case on purpose), before
 normalisation. Kept unwrapped so a case can extend it (e.g. the SSRF gate's
-allowlisted-internal case) before lowering it through 'lowerCaseHosts'.
+allowlisted-internal case) before normalising it through 'allowedHostPorts'. Every
+entry is portless, so each authorises its host on 443 alone.
 -}
-upstreamHosts :: Set.Set Text
-upstreamHosts = Set.fromList ["registry.npmjs.org", "Private.Internal.Example.com"]
+upstreamHosts :: Set.Set HostPort
+upstreamHosts = Set.fromList [hp "registry.npmjs.org", hp "Private.Internal.Example.com"]
 
-{- | The configured upstreams, normalised through 'lowerCaseHosts' -- the only way
-to obtain the 'LoweredHostSet' the host guards take.
+{- | The configured upstreams, normalised through 'allowedHostPorts' -- the only way
+to obtain the 'AllowedHostPorts' the host guards take.
 -}
-upstreams :: LoweredHostSet
-upstreams = lowerCaseHosts upstreamHosts
+upstreams :: AllowedHostPorts
+upstreams = allowedHostPorts upstreamHosts
+
+-- | An authority on the https default port: what a URL with no written port dials.
+hp :: Text -> HostPort
+hp host = HostPort host 443
+
+-- | An authority on an explicit port.
+hpAt :: Text -> Word16 -> HostPort
+hpAt = HostPort
 
 spec :: Spec
 spec = do
@@ -49,10 +60,11 @@ spec = do
     internalRangeSpec
     classificationCorpusSpec
     hostAddressSpec
+    hostPortAddressSpec
     splitHostPortSpec
     ssrfGateSpec
     tarballHostPolicySpec
-    lowerCaseHostsSpec
+    allowedHostPortsSpec
     propertiesSpec
     parseBlockedRangeSpec
     isDecimalSpec
@@ -77,20 +89,40 @@ isDecimalSpec = describe "isDecimal" $ do
 
 hostAllowlistSpec :: Spec
 hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
-    it "accepts a configured upstream host" $
-        isAllowedUpstreamHost upstreams "registry.npmjs.org" `shouldBe` True
+    it "accepts a configured upstream host on the default port" $
+        isAllowedUpstreamHost upstreams (hp "registry.npmjs.org") `shouldBe` True
     it "rejects an attacker-chosen host not on the allowlist" $
-        isAllowedUpstreamHost upstreams "evil.example.com" `shouldBe` False
+        isAllowedUpstreamHost upstreams (hp "evil.example.com") `shouldBe` False
     it "rejects a look-alike subdomain of an allowed host" $
         -- An allowlist is exact: a host that merely *ends with* an allowed name
         -- (registry.npmjs.org.evil.com) must not slip through.
-        isAllowedUpstreamHost upstreams "registry.npmjs.org.evil.com" `shouldBe` False
+        isAllowedUpstreamHost upstreams (hp "registry.npmjs.org.evil.com") `shouldBe` False
     it "matches case-insensitively (DNS is case-insensitive)" $
-        isAllowedUpstreamHost upstreams "Registry.NPMJS.org" `shouldBe` True
+        isAllowedUpstreamHost upstreams (hp "Registry.NPMJS.org") `shouldBe` True
     it "rejects the empty host" $
-        isAllowedUpstreamHost upstreams "" `shouldBe` False
+        isAllowedUpstreamHost upstreams (HostPort "" 443) `shouldBe` False
     it "rejects every host when the allowlist is empty" $
-        isAllowedUpstreamHost (lowerCaseHosts Set.empty) "registry.npmjs.org" `shouldBe` False
+        isAllowedUpstreamHost (allowedHostPorts Set.empty) (hp "registry.npmjs.org") `shouldBe` False
+
+    describe "the port dimension" $ do
+        it "rejects an allowlisted host on a nonstandard port when the entry carries no port" $
+            -- The membership half of the #779 vector: an entry without a port
+            -- authorises 443 alone, so an allowlisted host at an attacker-chosen
+            -- port never inherits the host's authorisation.
+            isAllowedUpstreamHost upstreams (hpAt "registry.npmjs.org" 9443) `shouldBe` False
+        it "authorises exactly the pair an explicit host:port entry names" $ do
+            let allowed = allowedHostPorts (Set.singleton (hpAt "quay.internal.example.com" 9443))
+            isAllowedUpstreamHost allowed (hpAt "quay.internal.example.com" 9443) `shouldBe` True
+            -- A nonstandard-port entry is not a host-wide grant: the same host on
+            -- the default port needs its own entry.
+            isAllowedUpstreamHost allowed (hp "quay.internal.example.com") `shouldBe` False
+        it "treats an explicit 443 entry as the same authority as a portless target" $
+            isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hpAt "registry.npmjs.org" 443))) (hp "registry.npmjs.org")
+                `shouldBe` True
+        it "matches an IP-literal entry across spellings at the same port" $
+            -- canonicalHostKey collapses IPv6 spellings; the port rides along untouched.
+            isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hpAt "0:0:0:0:0:0:0:1" 8443))) (hpAt "::1" 8443)
+                `shouldBe` True
 
 internalRangeSpec :: Spec
 internalRangeSpec = describe "isBlockedTarget" $ do
@@ -480,10 +512,86 @@ hostAddressSpec = describe "hostAddress" $ do
     it "drops a path on a schemeless bare host" $
         hostAddress "registry.npmjs.org/thing" `shouldBe` "registry.npmjs.org"
     it "composes with the SSRF guards to catch a metadata URL" $
-        -- The realistic call shape: extract, then test both guards.
-        let h = hostAddress "http://169.254.169.254/latest/meta-data/"
-         in (isBlockedTarget [] h, isAllowedUpstreamHost upstreams h)
-                `shouldBe` (True, False)
+        -- The realistic call shape: each guard tests its own projection of the
+        -- URL, the bare host for the internal block and the host:port authority
+        -- for the allowlist.
+        let url = "http://169.254.169.254/latest/meta-data/"
+         in (isBlockedTarget [] (hostAddress url), isAllowedUpstreamHost upstreams <$> hostPortAddress url)
+                `shouldBe` (True, Just False)
+
+{- | The authorisation-side extraction: the same authority stripping as
+'hostAddress' with the effective port parsed rather than discarded. The default
+443, the strict port grammar, and the IPv6 bracket discipline are each pinned
+because each is load-bearing for the gate: a lenient port fallback or a mangled
+colon split would alias an attacker-chosen authority onto an authorised one.
+-}
+hostPortAddressSpec :: Spec
+hostPortAddressSpec = describe "hostPortAddress" $ do
+    it "extracts the host and an explicit port from a full URL" $
+        hostPortAddress "https://registry.npmjs.org:9443/thing/-/thing-1.0.0.tgz"
+            `shouldBe` Just (hpAt "registry.npmjs.org" 9443)
+    it "defaults a portless URL to 443 (egress is https-only)" $
+        hostPortAddress "https://registry.npmjs.org/thing" `shouldBe` Just (hp "registry.npmjs.org")
+    it "reads an explicit :443 as the same authority as no port" $
+        hostPortAddress "https://registry.npmjs.org:443/x"
+            `shouldBe` hostPortAddress "https://registry.npmjs.org/x"
+    it "extracts a bare host[:port] authority" $
+        hostPortAddress "registry.npmjs.org:8443" `shouldBe` Just (hpAt "registry.npmjs.org" 8443)
+    it "lower-cases the host" $
+        hostPortAddress "https://Registry.NPMJS.org:8443/x" `shouldBe` Just (hpAt "registry.npmjs.org" 8443)
+    it "strips userinfo (a credential-stuffing trick)" $
+        hostPortAddress "https://registry.npmjs.org@evil.com:8443/path" `shouldBe` Just (hpAt "evil.com" 8443)
+    it "gates on the scheme authority, not a later :// in the path or query" $
+        hostPortAddress "https://169.254.169.254/x?u=https://registry.npmjs.org:9443"
+            `shouldBe` Just (hp "169.254.169.254")
+    it "accepts the port range edges" $ do
+        hostPortAddress "https://registry.npmjs.org:1/" `shouldBe` Just (hpAt "registry.npmjs.org" 1)
+        hostPortAddress "https://registry.npmjs.org:65535/" `shouldBe` Just (hpAt "registry.npmjs.org" 65535)
+
+    describe "IPv6 literals" $ do
+        it "splits a bracketed literal with a port on the closing bracket" $
+            hostPortAddress "https://[2606:4700::1111]:8443/x" `shouldBe` Just (hpAt "2606:4700::1111" 8443)
+        it "defaults a bracketed literal without a port to 443" $
+            hostPortAddress "https://[2606:4700::1111]/x" `shouldBe` Just (hp "2606:4700::1111")
+        it "refuses an unbracketed literal whole rather than mangling it at a colon" $
+            -- "2606:4700::1111" has no unambiguous host/port split; truncating it to
+            -- a host "2606" would gate on an authority nothing dials.
+            hostPortAddress "2606:4700::1111" `shouldBe` Nothing
+        it "refuses an opening bracket with no close (malformed authority)" $
+            hostPortAddress "https://[::1" `shouldBe` Nothing
+        it "refuses junk between the closing bracket and the port" $
+            hostPortAddress "https://[::1]x/" `shouldBe` Nothing
+        it "refuses a bracketed literal with a written-but-empty port (fail closed)" $
+            -- The bracketed analogue of "host:" -- http-client refuses a URL that
+            -- writes a colon with no digits, so the gate refuses it too.
+            hostPortAddress "https://[::1]:/x" `shouldBe` Nothing
+
+    describe "strict port parsing (fail closed, never fall back to the default)" $ do
+        it "refuses a non-numeric port" $
+            hostPortAddress "https://registry.npmjs.org:9x9/" `shouldBe` Nothing
+        it "refuses port 0" $
+            hostPortAddress "https://registry.npmjs.org:0/" `shouldBe` Nothing
+        it "refuses a port past 65535" $
+            hostPortAddress "https://registry.npmjs.org:65536/" `shouldBe` Nothing
+        it "refuses a signed port" $
+            hostPortAddress "https://registry.npmjs.org:-443/" `shouldBe` Nothing
+        it "refuses a trailing colon with no port digits (fail closed)" $
+            -- A written-but-empty port is malformed, never the default: "host:" and
+            -- "[::1]:" are both undialable, so the gate refuses both rather than
+            -- folding "host:" to 443.
+            hostPortAddress "https://registry.npmjs.org:/x" `shouldBe` Nothing
+        it "refuses a leading-zero port so each port has one canonical spelling" $ do
+            -- 0443 reads as 443 and 080 as 80 under a lenient decimal parse, aliasing
+            -- a canonical port under a second spelling; the gate accepts one spelling.
+            hostPortAddress "https://registry.npmjs.org:0443/" `shouldBe` Nothing
+            hostPortAddress "https://registry.npmjs.org:080/" `shouldBe` Nothing
+        it "accepts the canonical spelling of those ports" $ do
+            hostPortAddress "https://registry.npmjs.org:443/" `shouldBe` Just (hp "registry.npmjs.org")
+            hostPortAddress "https://registry.npmjs.org:80/" `shouldBe` Just (hpAt "registry.npmjs.org" 80)
+
+    it "yields Nothing for a value with no host" $ do
+        hostPortAddress "" `shouldBe` Nothing
+        hostPortAddress ":8443" `shouldBe` Nothing
 
 -- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS
 -- endpoint parser. These assert host/port extraction only -- the split is purely
@@ -525,15 +633,18 @@ neither half can be silently weakened.
 ssrfGateSpec :: Spec
 ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
     let noOptIn = []
-        passesGate h = isAllowedUpstreamHost upstreams h && not (isBlockedTarget noOptIn h)
+        -- The allowlist authorises the host:port pair; the internal-range block
+        -- classifies the bare host (an address is internal regardless of port).
+        passesGate authority =
+            isAllowedUpstreamHost upstreams authority && not (isBlockedTarget noOptIn (hpHost authority))
 
     it "admits a configured public upstream" $
-        passesGate "registry.npmjs.org" `shouldBe` True
+        passesGate (hp "registry.npmjs.org") `shouldBe` True
     it "vetoes an allowlisted host that is an internal literal (block beats allowlist)" $
         -- Even if an operator allowlists an internal address, the internal-range
         -- block still rejects it: the guarantee is the conjunction, not either half.
-        let allowed = lowerCaseHosts (Set.insert "169.254.169.254" upstreamHosts)
-         in ( isAllowedUpstreamHost allowed "169.254.169.254"
+        let allowed = allowedHostPorts (Set.insert (hp "169.254.169.254") upstreamHosts)
+         in ( isAllowedUpstreamHost allowed (hp "169.254.169.254")
                 && not (isBlockedTarget noOptIn "169.254.169.254")
             )
                 `shouldBe` False
@@ -541,111 +652,163 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
         -- '::ffff:a9fe:a9fe' is 169.254.169.254 in IPv4-mapped form. The internal
         -- block now decodes the embedded IPv4 address and catches it directly, so
         -- the gate refuses it even if someone were to allowlist this literal form.
-        passesGate "::ffff:a9fe:a9fe" `shouldBe` False
-    it "refuses a metadata host extracted from a URL" $
-        passesGate (hostAddress "http://169.254.169.254/latest/meta-data/") `shouldBe` False
+        passesGate (hp "::ffff:a9fe:a9fe") `shouldBe` False
+    it "refuses a metadata authority extracted from a URL" $
+        (passesGate <$> hostPortAddress "http://169.254.169.254/latest/meta-data/")
+            `shouldBe` Just False
 
 {- | The @dist.tarball@ host policy: under the secure default a tarball is fetched
-only from the same host that served the packument; the opt-in relaxes that to any
-allowlisted host. Neither ever escapes the allowlist; the internal-range block is
-__origin-aware__ -- the untrusted origin is gated by it (subject to the per-host
-opt-in), the trusted private origin exempt from it (mirroring the connection layer's
-unguarded manager, security.md invariant 3). The deny paths are exercised hardest,
-since under-blocking on the untrusted origin is a vulnerability.
+only from the same authority (host and port) that served the packument; the opt-in
+relaxes that to any allowlisted @host:port@ pair. Neither ever escapes the
+allowlist; the internal-range block is __origin-aware__ -- the untrusted origin is
+gated by it (subject to the per-host opt-in), the trusted private origin exempt
+from it (mirroring the connection layer's unguarded manager, security.md
+invariant 3). The deny paths are exercised hardest, since under-blocking on the
+untrusted origin is a vulnerability.
 -}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
     let noOptIn = []
         -- Two allowlisted upstreams: the packument source and a separate CDN.
-        allow = lowerCaseHosts (Set.fromList ["registry.npmjs.org", "cdn.npmjs.org"])
+        allow = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hp "cdn.npmjs.org"])
         -- The untrusted public origin: the internal-range block applies (the existing
         -- policy/allowlist/internal-range coverage is over this origin).
-        same policy = tarballHostAllowed UntrustedOrigin policy allow noOptIn
-        -- A short alias: packument host fixed to the npm registry.
-        decide policy = same policy "registry.npmjs.org"
+        same policy packument target = tarballHostAllowed UntrustedOrigin policy allow noOptIn (Just packument) (Just target)
+        -- A short alias: packument origin fixed to the npm registry on 443.
+        decide policy = same policy (hp "registry.npmjs.org")
 
     describe "SameHostAsPackument (the secure default)" $ do
-        it "admits a tarball on the same host that served the packument" $
-            decide SameHostAsPackument "registry.npmjs.org" `shouldBe` True
+        it "admits a tarball on the same authority that served the packument" $
+            decide SameHostAsPackument (hp "registry.npmjs.org") `shouldBe` True
         it "refuses a tarball on a different host, even one on the allowlist" $
             -- The crux of the default: an allowlisted-but-different CDN is refused.
-            decide SameHostAsPackument "cdn.npmjs.org" `shouldBe` False
+            decide SameHostAsPackument (hp "cdn.npmjs.org") `shouldBe` False
         it "refuses a tarball on a host not on the allowlist" $
-            decide SameHostAsPackument "evil.example.com" `shouldBe` False
+            decide SameHostAsPackument (hp "evil.example.com") `shouldBe` False
         it "matches the same-host clause case-insensitively (DNS is)" $
-            decide SameHostAsPackument "Registry.NPMJS.org" `shouldBe` True
+            decide SameHostAsPackument (hp "Registry.NPMJS.org") `shouldBe` True
         it "refuses an empty tarball host" $
-            decide SameHostAsPackument "" `shouldBe` False
+            decide SameHostAsPackument (HostPort "" 443) `shouldBe` False
         it "refuses a look-alike suffix of the packument host" $
             -- registry.npmjs.org.evil.com is neither allowlisted nor equal.
-            decide SameHostAsPackument "registry.npmjs.org.evil.com" `shouldBe` False
+            decide SameHostAsPackument (hp "registry.npmjs.org.evil.com") `shouldBe` False
 
     describe "AnyAllowlistedHost (the opt-in)" $ do
         it "admits a tarball on a different but allowlisted host" $
-            decide AnyAllowlistedHost "cdn.npmjs.org" `shouldBe` True
-        it "still admits a tarball on the same host" $
-            decide AnyAllowlistedHost "registry.npmjs.org" `shouldBe` True
+            decide AnyAllowlistedHost (hp "cdn.npmjs.org") `shouldBe` True
+        it "still admits a tarball on the same authority" $
+            decide AnyAllowlistedHost (hp "registry.npmjs.org") `shouldBe` True
         it "still refuses a tarball on a host not on the allowlist" $
-            -- The opt-in relaxes which allowlisted host, never the allowlist itself.
-            decide AnyAllowlistedHost "evil.example.com" `shouldBe` False
+            -- The opt-in relaxes which allowlisted pair, never the allowlist itself.
+            decide AnyAllowlistedHost (hp "evil.example.com") `shouldBe` False
+
+    describe "the port dimension (the gate authorises host and port as a pair)" $ do
+        it "refuses a nonstandard-port dist.tarball under the default when the entry carries no port" $
+            -- The #779 vector: dist.tarball = https://registry.npmjs.org:9443/...
+            -- after a packument from https://registry.npmjs.org. The :9443 must
+            -- reach both the allowlist and the same-authority clause, not be
+            -- discarded before them.
+            decide SameHostAsPackument (hpAt "registry.npmjs.org" 9443) `shouldBe` False
+        it "refuses a nonstandard-port dist.tarball under the opt-in too" $
+            same AnyAllowlistedHost (hp "registry.npmjs.org") (hpAt "cdn.npmjs.org" 9443) `shouldBe` False
+        it "refuses a port mismatch between packument origin and tarball even with both pairs allowlisted" $
+            -- Same host, both pairs allowlisted: the same-authority clause still
+            -- refuses, because the origin dialled 443 and the tarball names 9443.
+            let bothPorts = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hpAt "registry.npmjs.org" 9443])
+             in tarballHostAllowed UntrustedOrigin SameHostAsPackument bothPorts noOptIn (Just (hp "registry.npmjs.org")) (Just (hpAt "registry.npmjs.org" 9443))
+                    `shouldBe` False
+        it "admits a nonstandard-port tarball when the origin and the entry both name that pair" $
+            -- An operator whose upstream lives on a nonstandard port states the
+            -- pair explicitly; the origin dialled it and the entry authorises it.
+            let at9443 = allowedHostPorts (Set.singleton (hpAt "registry.internal.example.com" 9443))
+             in tarballHostAllowed UntrustedOrigin SameHostAsPackument at9443 noOptIn (Just (hpAt "registry.internal.example.com" 9443)) (Just (hpAt "registry.internal.example.com" 9443))
+                    `shouldBe` True
+        it "admits a cross-host tarball under the opt-in only at its allowlisted pair" $ do
+            let withCdnPort = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hpAt "cdn.npmjs.org" 8443])
+                cdnAt port = tarballHostAllowed UntrustedOrigin AnyAllowlistedHost withCdnPort noOptIn (Just (hp "registry.npmjs.org")) (Just (hpAt "cdn.npmjs.org" port))
+            cdnAt 8443 `shouldBe` True
+            cdnAt 9443 `shouldBe` False
+        it "refuses an unextractable tarball authority (fail closed)" $
+            tarballHostAllowed UntrustedOrigin SameHostAsPackument allow noOptIn (Just (hp "registry.npmjs.org")) Nothing
+                `shouldBe` False
+        it "refuses an unextractable packument origin (fail closed)" $
+            tarballHostAllowed UntrustedOrigin SameHostAsPackument allow noOptIn Nothing (Just (hp "registry.npmjs.org"))
+                `shouldBe` False
 
     describe "the internal-range block beats either policy (untrusted origin)" $ do
-        it "refuses an internal literal even when it equals the packument host" $
+        it "refuses an internal literal even when it equals the packument authority" $
             -- An operator could (mis)configure an internal upstream host; the
             -- internal block still vetoes a tarball pointed at it under the
             -- default. The allowlist must carry the literal for this to even reach
             -- the block clause.
-            let allowInternal = lowerCaseHosts (Set.singleton "169.254.169.254")
-             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn "169.254.169.254" "169.254.169.254"
+            let allowInternal = allowedHostPorts (Set.singleton (hp "169.254.169.254"))
+             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "169.254.169.254")) (Just (hp "169.254.169.254"))
                     `shouldBe` False
         it "refuses an allowlisted internal literal under the opt-in too" $
-            let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
-             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal noOptIn "registry.npmjs.org" "10.0.0.5"
+            let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
+             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal noOptIn (Just (hp "registry.npmjs.org")) (Just (hp "10.0.0.5"))
+                    `shouldBe` False
+        it "refuses an internal literal regardless of its port (the block classifies the host alone)" $
+            -- The port never launders an internal address: 10.0.0.5:8443 is as
+            -- internal as 10.0.0.5.
+            let allowInternal = allowedHostPorts (Set.singleton (hpAt "10.0.0.5" 8443))
+             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hpAt "10.0.0.5" 8443)) (Just (hpAt "10.0.0.5" 8443))
                     `shouldBe` False
         it "still blocks a host matched only by an operator-configured additional range" $
-            let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
-             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal ["10.0.0.5/32"] "registry.npmjs.org" "10.0.0.5"
+            let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
+             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal ["10.0.0.5/32"] (Just (hp "registry.npmjs.org")) (Just (hp "10.0.0.5"))
                     `shouldBe` False
 
     describe "the trusted private origin is exempt from the internal-range block" $ do
         -- The trusted origin mirrors the connection layer's unguarded manager
         -- (security.md invariant 3): a private registry may legitimately live on an
         -- internal address, so its same-host dist.tarball is admitted with no opt-in --
-        -- where the untrusted origin would be refused. The allowlist and same-host
-        -- clauses still gate it, so the exemption never widens past its own host.
-        let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
-        it "admits a same-host internal-literal tarball with no opt-in (where untrusted is refused)" $ do
-            tarballHostAllowed TrustedOrigin SameHostAsPackument allowInternal noOptIn "10.0.0.5" "10.0.0.5"
+        -- where the untrusted origin would be refused. The allowlist and same-authority
+        -- clauses still gate it, so the exemption never widens past its own pair.
+        let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
+        it "admits a same-authority internal-literal tarball with no opt-in (where untrusted is refused)" $ do
+            tarballHostAllowed TrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                 `shouldBe` True
             -- The same inputs on the untrusted origin are refused by the internal block.
-            tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn "10.0.0.5" "10.0.0.5"
+            tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                 `shouldBe` False
         it "still refuses a trusted tarball off the host allowlist (allowlist not relaxed)" $
             -- The exemption is the internal-range clause only; an off-allowlist host is
             -- still refused, so the trusted origin cannot be steered onto an arbitrary host.
-            tarballHostAllowed TrustedOrigin AnyAllowlistedHost allowInternal noOptIn "10.0.0.5" "192.168.0.9"
+            tarballHostAllowed TrustedOrigin AnyAllowlistedHost allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "192.168.0.9"))
                 `shouldBe` False
         it "still refuses a cross-host trusted tarball under the secure default (same-host not relaxed)" $
             -- Two allowlisted internal hosts; under SameHostAsPackument the trusted
-            -- origin's tarball must still equal its packument host, so a different
+            -- origin's tarball must still equal its packument authority, so a different
             -- (allowlisted, internal) host is refused.
-            let bothAllowed = lowerCaseHosts (Set.fromList ["10.0.0.5", "10.0.0.6"])
-             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed noOptIn "10.0.0.5" "10.0.0.6"
+            let bothAllowed = allowedHostPorts (Set.fromList [hp "10.0.0.5", hp "10.0.0.6"])
+             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.6"))
+                    `shouldBe` False
+        it "still refuses a trusted port mismatch under the secure default (the pair must match)" $
+            -- The trusted exemption never opens the port dimension: a trusted
+            -- upstream's tarball on another port of its own host is refused.
+            let bothPorts = allowedHostPorts (Set.fromList [hp "10.0.0.5", hpAt "10.0.0.5" 8443])
+             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothPorts noOptIn (Just (hp "10.0.0.5")) (Just (hpAt "10.0.0.5" 8443))
                     `shouldBe` False
 
-lowerCaseHostsSpec :: Spec
-lowerCaseHostsSpec = describe "lowerCaseHosts" $ do
+allowedHostPortsSpec :: Spec
+allowedHostPortsSpec = describe "allowedHostPorts" $ do
     it "folds configured-host case so a mixed-case entry matches a lowercase query" $
-        -- 'lowerCaseHosts' is the only constructor of the 'LoweredHostSet' the
+        -- 'allowedHostPorts' is the only constructor of the 'AllowedHostPorts' the
         -- guard takes, so this proves the guard relies on it for normalisation: a
         -- host configured in mixed case is matched by its lowercase form.
-        isAllowedUpstreamHost (lowerCaseHosts (Set.singleton "Registry.NPMjs.ORG")) "registry.npmjs.org"
+        isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hp "Registry.NPMjs.ORG"))) (hp "registry.npmjs.org")
             `shouldBe` True
-    it "normalises distinct casings of one host to the same lowered set" $
-        -- Two spellings that differ only in case fold to equal 'LoweredHostSet'
+    it "normalises distinct casings of one host to the same allowlist" $
+        -- Two spellings that differ only in case fold to equal 'AllowedHostPorts'
         -- values, so the normalisation is genuinely case-collapsing.
-        lowerCaseHosts (Set.fromList ["EXAMPLE.com", "example.COM"])
-            `shouldBe` lowerCaseHosts (Set.singleton "example.com")
+        allowedHostPorts (Set.fromList [hp "EXAMPLE.com", hp "example.COM"])
+            `shouldBe` allowedHostPorts (Set.singleton (hp "example.com"))
+    it "keeps the same host on distinct ports as distinct entries" $
+        -- Normalisation collapses spellings, never ports: each pair authorises
+        -- itself alone.
+        allowedHostPorts (Set.fromList [hp "example.com", hpAt "example.com" 8443])
+            `shouldNotBe` allowedHostPorts (Set.singleton (hp "example.com"))
 
 -- The "public host matched by an additional range" arm is rare: it needs a public IP
 -- literal whose own /32 is folded into the additional ranges, which lands in only ~5%

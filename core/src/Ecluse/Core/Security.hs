@@ -11,8 +11,8 @@ returns. This module is the pure guard layer that keeps those steps from being
 steered or exhausted by hostile input. It defends three boundaries:
 
 * __Where the proxy fetches.__ 'isAllowedUpstreamHost' restricts outbound fetches
-  to the configured upstream hosts, and 'isBlockedTarget' rejects internal address
-  ranges (cloud instance metadata, loopback, RFC1918) that the proxy's network
+  to the configured upstream @host:port@ pairs, and 'isBlockedTarget' rejects internal
+  address ranges (cloud instance metadata, loopback, RFC1918) that the proxy's network
   position can otherwise reach. Together they are the SSRF gate: a target must be
   both on the allowlist /and/ not an internal address.
 

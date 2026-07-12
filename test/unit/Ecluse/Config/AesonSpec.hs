@@ -193,6 +193,31 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "not-a-range")] Nothing
             `shouldSatisfy` decodeErrorMentions "invalid CIDR range"
 
+    describe "registry URL entries (the egress gate authorises each entry's host:port pair)" $ do
+        it "accepts an upstream URL with an explicit port" $
+            case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+        it "accepts an upstream URL with a bracketed IPv6 host and a port" $
+            case loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+        it "rejects an upstream URL with a non-numeric port, naming the value (fails closed at boot)" $
+            -- The gate refuses every fetch from an authority it cannot extract, so
+            -- the misconfiguration surfaces at load, never as a mount that
+            -- silently serves nothing.
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:9x9/npm")] Nothing
+                `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+        it "rejects an upstream URL with an out-of-range port" $
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:65536/npm")] Nothing
+                `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+        it "rejects an upstream URL with port 0" $
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:0/npm")] Nothing
+                `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+        it "rejects a mirror-target URL with a garbage port through the document layer" $
+            loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
+                `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+
 singleMountDoc :: ByteString
 singleMountDoc =
     "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\
@@ -209,6 +234,14 @@ mountDocForEcosystem eco =
             <> eco
             <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
                \\"mirrorTarget\":\"https://c\",\"credentialProvider\":\"static\"}}}"
+
+mountDocWithMirrorTarget :: Text -> ByteString
+mountDocWithMirrorTarget target =
+    encodeUtf8 $
+        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
+        \\"mirrorTarget\":\""
+            <> target
+            <> "\",\"credentialProvider\":\"static\"}}}"
 
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
