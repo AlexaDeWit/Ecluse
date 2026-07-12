@@ -171,7 +171,6 @@ data MountRegistries = MountRegistries
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
     , mtCredential :: CredentialBackend
-    , mtQueue :: QueueBackend
     }
     deriving stock (Eq, Show)
 
