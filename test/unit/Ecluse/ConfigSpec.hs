@@ -9,21 +9,18 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Config (Config, RulePolicy (..), loadConfig, mountCollisionWarnings, renderConfigError, validateDefaultConfig)
+import Ecluse.Config (Config, RulePolicy (..), defaultPolicy, loadConfig, mountCollisionWarnings, renderConfigError)
 
 spec :: Spec
 spec = do
     describe "the embedded default configuration" $ do
-        it "is a valid, self-contained backbone (decodes, parses into AppConfig, resolves its policy)" $
-            validateDefaultConfig `shouldSatisfy` isRight
+        it "loads as a valid, self-contained backbone with no operator overlay" $
+            loadConfig [] Nothing `shouldSatisfy` isRight
 
         it "ships exactly the expected baseline rules under their default names" $
-            case validateDefaultConfig of
-                Right (_, RulePolicy rules) ->
+            case defaultPolicy of
+                RulePolicy rules ->
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
-                Left errs ->
-                    expectationFailure
-                        ("the default configuration did not validate: " <> show (map renderConfigError errs))
 
     describe "mountCollisionWarnings" $ do
         it "is silent when every registry endpoint is distinct" $ do

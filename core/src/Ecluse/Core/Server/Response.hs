@@ -66,7 +66,6 @@ module Ecluse.Core.Server.Response (
     -- * Denial rendering
     HelpMessage,
     mkHelpMessage,
-    unHelpMessage,
     appendHelp,
     RenderedBody (..),
     MountRenderer (..),
@@ -376,10 +375,6 @@ newtype HelpMessage = HelpMessage Text
 -- | Build a 'HelpMessage', trimming surrounding whitespace.
 mkHelpMessage :: Text -> HelpMessage
 mkHelpMessage = HelpMessage . T.strip
-
--- | The trimmed help-message text.
-unHelpMessage :: HelpMessage -> Text
-unHelpMessage (HelpMessage t) = t
 
 {- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a
 single space; a blank or absent help message contributes nothing.

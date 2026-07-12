@@ -133,7 +133,6 @@ module Ecluse.Core.Server.Cache (
     resolveMetadata,
     resolveMetadataWith,
     cachedMetadata,
-    cacheSize,
 
     -- * Single-version resolution
     resolveVersion,
@@ -166,7 +165,6 @@ import Ecluse.Core.Server.Cache.Store (
     lookupStore,
     newSingleFlight,
     resolveSingleFlight,
-    storeSize,
  )
 import Ecluse.Core.Telemetry.Record (
     MetricsPort,
@@ -518,7 +516,3 @@ cached result (a version determined absent is a cached @'Just' 'Nothing'@).
 -}
 cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
 cachedVersion cache source name version = lookupStore (mcVersion cache) (versionKey source name version)
-
--- | The number of full-packument entries currently held (including any not-yet-purged expired).
-cacheSize :: MetadataCache -> IO Int
-cacheSize cache = storeSize (mcFull cache)

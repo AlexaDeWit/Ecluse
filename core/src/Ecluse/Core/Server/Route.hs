@@ -22,10 +22,10 @@ classifier maps, and a write earns its own 'Route' rather than being inferred at
 dispatch.
 
 The model is __deny by default__, mirroring the rules engine ("Ecluse.Core.Rules"):
-the agnostic default 'denyAll' classifies every path as 'Unsupported' (a @404@ at
-the edge), so a deployment that wires no ecosystem router serves nothing rather
-than guessing. An ecosystem adapter supplies a 'Classifier' that recognises its
-own paths and falls back to 'Unsupported' for the rest.
+any path a mount's 'Classifier' does not recognise is 'Unsupported' (a @404@ at the
+edge), so the front door serves nothing it was not explicitly taught to. An
+ecosystem adapter supplies a 'Classifier' that recognises its own paths and falls
+back to 'Unsupported' for the rest.
 
 'Route' is a small sum so the whole routing table is unit-testable with __no
 server__: feed a 'Classifier' some segments, assert the 'Route'.
@@ -37,7 +37,6 @@ module Ecluse.Core.Server.Route (
 
     -- * Classification
     Classifier,
-    denyAll,
 
     -- * Component safety
     isSafeComponent,
@@ -120,15 +119,6 @@ chooses the classifier per matched mount (see "Ecluse.Server"), so the same shap
 carries either a single ecosystem or a mount-keyed selection.
 -}
 type Classifier = Method -> [Text] -> Route
-
-{- | The agnostic default classifier: every request is 'Unsupported'.
-
-This is the deny-by-default base a deployment runs with until a composition root
-wires an ecosystem's classifier in, so an unwired server serves nothing rather
-than guessing a grammar. It deliberately knows no path conventions of its own.
--}
-denyAll :: Classifier
-denyAll _method _segments = Unsupported
 
 {- | Whether a single decoded path component is __safe to interpolate__ into a
 downstream upstream URL -- the deny-by-default gate a classifier applies to every

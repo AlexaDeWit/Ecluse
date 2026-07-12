@@ -44,7 +44,7 @@ import Ecluse.Core.Server.Context (
     PackumentDeps (..),
     PublishDeps (..),
  )
-import Ecluse.Core.Server.Response (unHelpMessage)
+import Ecluse.Core.Server.Response (appendHelp)
 
 {- | Tests for the composition root's boot-time wiring. They exercise the two
 promises of the slice: a valid configuration produces served mount bindings with
@@ -156,7 +156,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> do
                     fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
-                    fmap unHelpMessage (pdHelp deps) `shouldBe` Just "ask #platform"
+                    fmap (\help -> appendHelp (Just help) "denied") (pdHelp deps)
+                        `shouldBe` Just "denied ask #platform"
                     served <- pdNow deps
                     served `shouldBe` fixedNow
                 Nothing -> expectationFailure "expected packument deps wired"

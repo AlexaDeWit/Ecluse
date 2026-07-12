@@ -34,7 +34,6 @@ module Ecluse.Core.Credential.Refresh.Internal (
     refreshDueAt,
     onMintSuccess,
     onMintFailure,
-    admitMint,
     releaseSingleFlight,
 ) where
 
@@ -372,17 +371,12 @@ releaseSingleFlight :: TVar CacheState -> IO ()
 releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
-{- | The circuit-breaker admission gate, shared by the background and synchronous
-mint paths: defer the decision to 'Ecluse.Core.Breaker.admit' and commit the breaker
-state it returns. An open breaker fast-fails the mint without touching the network;
-see 'Ecluse.Core.Breaker.admit' for the admission policy.
--}
-admitMint :: TVar CacheState -> UTCTime -> STM Bool
-admitMint stateVar now = (\(permitted, _, _) -> permitted) <$> admitMintTxn stateVar now
-
-{- The admission gate's transaction, exposing the breaker transition it commits (the
-old and new states) so 'gatedMint' can report a half-open recovery probe. 'admitMint'
-is the admission-only view used directly in tests. -}
+{- The circuit-breaker admission gate, shared by the background and synchronous mint
+paths and run through 'gatedMint': defer the decision to 'Ecluse.Core.Breaker.admit',
+commit the breaker state it returns, and expose the breaker transition (the old and new
+states) so 'gatedMint' can report a half-open recovery probe. An open breaker fast-fails
+the mint without touching the network; see 'Ecluse.Core.Breaker.admit' for the admission
+policy. -}
 admitMintTxn :: TVar CacheState -> UTCTime -> STM (Bool, Breaker, Breaker)
 admitMintTxn stateVar now = do
     st <- readTVar stateVar

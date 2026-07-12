@@ -16,10 +16,11 @@ Three details of the wire protocol are load-bearing and handled here:
   wire as @\@scope%2Fname@: the scope separator is percent-encoded but the
   leading @\@@ is not. 'metadataRequest' builds this from an
   __already-parsed__ 'PackageName', never from raw client path segments.
-* __Streaming and buffering.__ 'artifactRequest' marks its request
-  __non-decompressing__ ('decompress' returns 'False'): a tarball is opaque
-  binary that must reach the client byte-for-byte, so the @.tgz@ is never
-  gunzipped in flight (and its @dist.integrity@ stays valid).
+* __Streaming and buffering.__ The artifact builders ('artifactRequestByFile',
+  'artifactRequestByUrl') mark their request __non-decompressing__ ('decompress'
+  returns 'False'): a tarball is opaque binary that must reach the client
+  byte-for-byte, so the @.tgz@ is never gunzipped in flight (and its
+  @dist.integrity@ stays valid).
 -}
 module Ecluse.Core.Registry.Npm.Request (
     -- * Content negotiation
@@ -32,7 +33,6 @@ module Ecluse.Core.Registry.Npm.Request (
 
     -- * Request building
     metadataRequest,
-    artifactRequest,
     artifactRequestByFile,
     artifactRequestByUrl,
     artifactFileUrl,
@@ -55,7 +55,6 @@ import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScop
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Server.Route (encodeComponent)
 import Ecluse.Core.Text (joinUrlPath)
-import Ecluse.Core.Version (Version, renderVersion)
 
 {- | Which of npm's two metadata documents to request, selected by the @Accept@
 header (see 'metadataAccept').
@@ -134,50 +133,18 @@ metadataRequest baseUrl token form validators name = do
                     : requestHeaders base
             }
 
-{- | Build the artifact @GET@ request for one version's tarball.
-
-The request is marked __non-decompressing__ ('decompress' returns 'False') so the
-@.tgz@ bytes are streamed through verbatim: a tarball is opaque binary and must
-reach the client byte-for-byte for its @dist.integrity@ to verify. The artifact
-URL is the registry-served tarball location, derived like 'metadataRequest' but
-addressing the version's artifact path. Exposed so the web layer can bracket it
-for bounded-memory streaming (see the module header).
-
-Fails with a 'UrlFormationError' only when the URL cannot be formed.
--}
-artifactRequest ::
-    Text ->
-    Maybe Secret ->
-    PackageName ->
-    Version ->
-    Either UrlFormationError Request
-artifactRequest baseUrl token name version = do
-    url <- artifactUrl baseUrl name version
-    base <- parseRequestEither url
-    pure
-        . withToken token
-        $ base
-            { -- A tarball must never be gunzipped in flight: it is opaque binary
-              -- whose integrity the client verifies, so stream the raw bytes. We
-              -- deliberately advertise no @Accept-Encoding@ here: a @.tgz@ is
-              -- already-compressed application data, and requesting a transport
-              -- encoding we then refuse to decode ('decompress' is 'False') would
-              -- risk a doubly-gzipped body that fails its @dist.integrity@.
-              decompress = const False
-            }
-
 {- | Build the artifact @GET@ request addressing a tarball by its __preserved
 on-the-wire filename__, at @{baseUrl}/{encoded-pkg}/-/{filename}@.
 
 The serve path fetches an artifact by the exact filename the client requested:
 the authoritative name for the bytes: rather than reconstructing it from
-@(package, version)@ as 'artifactRequest' does, so a registry whose tarball naming
-differs from the proxy's own convention still resolves. The @filename@ is taken
-verbatim (the classifier has already passed it through the component-safety gate),
-and the package segment is the same scope-percent-encoded path 'artifactRequest'
-uses. The request is marked __non-decompressing__ for the same reason: a @.tgz@ is
-opaque binary streamed byte-for-byte so its @dist.integrity@ verifies. Exposed so
-the web layer can bracket it for bounded-memory streaming.
+@(package, version)@, so a registry whose tarball naming differs from the proxy's
+own convention still resolves. The @filename@ is taken verbatim (the classifier
+has already passed it through the component-safety gate), and the package segment
+is the same scope-percent-encoded path 'metadataRequest' builds. The request is
+marked __non-decompressing__: a @.tgz@ is opaque binary streamed byte-for-byte so
+its @dist.integrity@ verifies. Exposed so the web layer can bracket it for
+bounded-memory streaming.
 
 Fails with a 'UrlFormationError' only when the URL cannot be formed.
 -}
@@ -193,7 +160,12 @@ artifactRequestByFile baseUrl token name filename = do
     pure
         . withToken token
         $ base
-            { -- A tarball must never be gunzipped in flight (see 'artifactRequest').
+            { -- A tarball must never be gunzipped in flight: it is opaque binary
+              -- whose integrity the client verifies, so stream the raw bytes. We
+              -- deliberately advertise no @Accept-Encoding@ here: a @.tgz@ is
+              -- already-compressed application data, and requesting a transport
+              -- encoding we then refuse to decode ('decompress' is 'False') would
+              -- risk a doubly-gzipped body that fails its @dist.integrity@.
               decompress = const False
             }
 
@@ -208,9 +180,9 @@ cannot rebuild. Honouring the preserved location is what lets Écluse front thos
 registries; the URL it fetches is the same one the served packument's
 @dist.integrity@ is paired with, so the bytes still verify.
 
-The request is marked __non-decompressing__ for the same reason as 'artifactRequest':
-a @.tgz@ is opaque binary streamed byte-for-byte. Fails with a 'UrlFormationError'
-only when the @url@ cannot be parsed into a request.
+The request is marked __non-decompressing__ for the same reason as
+'artifactRequestByFile': a @.tgz@ is opaque binary streamed byte-for-byte. Fails
+with a 'UrlFormationError' only when the @url@ cannot be parsed into a request.
 -}
 artifactRequestByUrl ::
     Text ->
@@ -222,7 +194,7 @@ artifactRequestByUrl _baseUrl token url = do
     pure
         . withToken token
         $ base
-            { -- A tarball must never be gunzipped in flight (see 'artifactRequest').
+            { -- A tarball must never be gunzipped in flight (see 'artifactRequestByFile').
               decompress = const False
             }
 
@@ -232,15 +204,6 @@ the scoped-name separator percent-encoded (@\@scope/name@ -> @\@scope%2Fname@).
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name =
     joinPath baseUrl (encodePackagePath name)
-
-{- The artifact (tarball) URL for one version:
-@{baseUrl}/{encoded-name}/-/{tarball-file}@. npm serves a version's tarball
-under the package's @/-/@ path; the filename is @{base}-{version}.tgz@ (scope
-dropped from the file segment, as npm names it).
--}
-artifactUrl :: Text -> PackageName -> Version -> Either UrlFormationError Text
-artifactUrl baseUrl name version =
-    joinPath baseUrl (encodePackagePath name <> "/-/" <> tarballFile name version)
 
 {- | The artifact (tarball) URL addressing a __preserved filename__:
 @{baseUrl}/{encoded-name}/-/{encoded-filename}@. The filename is the exact
@@ -281,14 +244,6 @@ encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
-
-{- The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
-The base name and version are percent-encoded as components around the structural
-@'-'@ and @.tgz@ this builder writes, so a reserved byte in either cannot reach
-the upstream URL raw. -}
-tarballFile :: PackageName -> Version -> Text
-tarballFile name version =
-    encodeComponent (unscopedName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
 
 {- Finalize an npm data-plane request: __disable redirect following__ ('redirectCount'
 = 0) on __every__ request, and attach a bearer token when one is injected.

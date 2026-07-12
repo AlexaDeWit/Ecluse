@@ -24,8 +24,6 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
     parseMinIntegrity,
     parseMinTrustedIntegrity,
-    renderMinIntegrity,
-    renderMinTrustedIntegrity,
     unMinIntegrity,
     unMinTrustedIntegrity,
  )
@@ -138,15 +136,6 @@ spec = do
             parseMinIntegrity "md5" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             parseMinIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
 
-        it "round-trips render and parse for every floor-eligible algorithm" $ do
-            sha384Floor <- expectRight (mkMinIntegrity SHA384)
-            sha512Floor <- expectRight (mkMinIntegrity SHA512)
-            blake2bFloor <- expectRight (mkMinIntegrity Blake2b)
-            parseMinIntegrity (renderMinIntegrity defaultMinIntegrity) `shouldBe` Right defaultMinIntegrity
-            parseMinIntegrity (renderMinIntegrity sha384Floor) `shouldBe` Right sha384Floor
-            parseMinIntegrity (renderMinIntegrity sha512Floor) `shouldBe` Right sha512Floor
-            parseMinIntegrity (renderMinIntegrity blake2bFloor) `shouldBe` Right blake2bFloor
-
     describe "mkMinTrustedIntegrity / parseMinTrustedIntegrity (the loosenable trusted floor)" $ do
         it "defaults to SHA-256, the same secure default as the public floor" $
             unMinTrustedIntegrity defaultMinTrustedIntegrity `shouldBe` SHA256
@@ -170,12 +159,6 @@ spec = do
 
         it "rejects an unknown algorithm name" $
             parseMinTrustedIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
-
-        it "round-trips render and parse" $ do
-            sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
-            parseMinTrustedIntegrity (renderMinTrustedIntegrity defaultMinTrustedIntegrity)
-                `shouldBe` Right defaultMinTrustedIntegrity
-            parseMinTrustedIntegrity (renderMinTrustedIntegrity sha1Floor) `shouldBe` Right sha1Floor
 
     describe "meetsFloor / classifyArtifacts over the trusted floor (one ranking backs both floors)" $ do
         it "a loosened (SHA-1) trusted floor admits SHA-1 but not MD5" $ do

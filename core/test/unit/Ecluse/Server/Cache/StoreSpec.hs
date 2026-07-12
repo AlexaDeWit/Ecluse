@@ -12,11 +12,11 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Server.Cache.Store (
+    CacheOccupancy (..),
     SingleFlight,
     lookupStore,
     newSingleFlight,
     resolveSingleFlight,
-    storeSize,
  )
 
 -- | The typed failure the fetches in these cases report through the store's channel.
@@ -69,6 +69,15 @@ surfaced as 'UnexpectedFault' (the typed-failure cases call 'resolve' directly).
 -}
 resolveOk :: SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOk sf key fetch = either (throwIO . UnexpectedFault) pure =<< resolve sf key (Right <$> fetch)
+
+{- | As 'resolveOk', but recording each leader insert's post-insert 'CacheOccupancy', so a
+test observes the store's held-entry count and resident bytes through the same callback the
+app wires to its occupancy gauges rather than polling the store directly.
+-}
+resolveOkRecording :: IORef (Maybe CacheOccupancy) -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
+resolveOkRecording seen sf key fetch =
+    either (throwIO . UnexpectedFault) pure
+        =<< resolveSingleFlight (pure ()) (const pass) (writeIORef seen . Just) sf key (Right <$> fetch)
 
 -- | A counting fetch: bumps the call counter, then yields the given value.
 countingFetch :: IORef Int -> Text -> IO Text
@@ -242,11 +251,12 @@ spec = do
                     n `shouldBe` 2 -- the cancelled fetch and the recovering re-lead, no caching of the failure
     describe "the entry-count bound" $ do
         it "never exceeds the configured maximum entry count" $ do
+            seen <- newIORef Nothing
             sf <- newStore 60 4 (1000 * flatWeight)
             for_ [1 .. 20 :: Int] $ \i ->
-                resolveOk sf (show i) (pure "raw")
-            n <- storeSize sf
-            n `shouldSatisfy` (<= 4)
+                resolveOkRecording seen sf (show i) (pure "raw")
+            occ <- readIORef seen
+            fmap occEntries occ `shouldSatisfy` maybe False (<= 4)
 
         it "keeps serving fresh resolutions even under eviction pressure" $ do
             sf <- newStore 60 2 (1000 * flatWeight)
@@ -260,12 +270,13 @@ spec = do
             -- byte budget is the binding bound): resolving many distinct keys must not
             -- let the resident estimate exceed it.
             let held = 3
+            seen <- newIORef Nothing
             sf <- newStore 60 1000 (held * flatWeight + flatWeight `div` 2)
             for_ [1 .. 20 :: Int] $ \i ->
-                resolveOk sf (show i) (pure "raw")
-            n <- storeSize sf
-            (n * flatWeight) `shouldSatisfy` (<= held * flatWeight + flatWeight `div` 2)
-            n `shouldSatisfy` (<= held)
+                resolveOkRecording seen sf (show i) (pure "raw")
+            occ <- readIORef seen
+            fmap occBytes occ `shouldSatisfy` maybe False (<= held * flatWeight + flatWeight `div` 2)
+            fmap occEntries occ `shouldSatisfy` maybe False (<= held)
 
         it "retains a repeatedly-accessed entry while evicting the one-shot tail" $ do
             -- The hot head survives pressure: a budget that holds a few entries, a hot

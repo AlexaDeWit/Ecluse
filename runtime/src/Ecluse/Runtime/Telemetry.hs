@@ -51,7 +51,6 @@ module Ecluse.Runtime.Telemetry (
     -- * Master switch
     TelemetrySwitch (..),
     parseTelemetrySwitch,
-    renderTelemetrySwitch,
 
     -- * The telemetry handle
     Telemetry (..),
@@ -102,7 +101,7 @@ import Ecluse.Runtime.Telemetry.Resolve (
     observeExportResult,
  )
 
-import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | The @ECLUSE_TELEMETRY@ master switch: telemetry is opt-in, so 'TelemetryOff' is
 the default and the FOSS posture. A sum type rather than a 'Bool' so each case
@@ -143,10 +142,6 @@ Left "unknown telemetry switch \"maybe\" (expected one of: on, off)"
 -}
 parseTelemetrySwitch :: Text -> Either Text TelemetrySwitch
 parseTelemetrySwitch = parseWire
-
--- | The wire name of a 'TelemetrySwitch' (the inverse of 'parseTelemetrySwitch').
-renderTelemetrySwitch :: TelemetrySwitch -> Text
-renderTelemetrySwitch = renderWire
 
 {- | The telemetry handle held in the composition root: either the off-by-default
 no-op or the enabled providers. Spans and metric instruments are derived from the

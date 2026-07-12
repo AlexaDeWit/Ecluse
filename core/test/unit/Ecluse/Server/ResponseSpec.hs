@@ -36,6 +36,7 @@ import Ecluse.Core.Server.Response (
     RuleName (..),
     ServeDecision (..),
     Transience (..),
+    appendHelp,
     artifactStatus,
     artifactStatusCode,
     longestRetry,
@@ -43,7 +44,6 @@ import Ecluse.Core.Server.Response (
     packumentStatus,
     packumentStatusCode,
     serveDecisionOf,
-    unHelpMessage,
  )
 import Ecluse.Core.Version (mkVersion)
 
@@ -201,11 +201,11 @@ spec = do
             packumentStatusCode PackumentServerError `shouldBe` 500
 
     describe "HelpMessage -- trimmed at construction" $ do
-        it "stores the message trimmed of surrounding whitespace" $
-            unHelpMessage (mkHelpMessage "  Contact support.  ")
-                `shouldBe` "Contact support."
-        it "collapses an all-whitespace message to empty" $
-            unHelpMessage (mkHelpMessage " \t ") `shouldBe` ""
+        it "appends the message trimmed of surrounding whitespace, one separating space" $
+            appendHelp (Just (mkHelpMessage "  Contact support.  ")) "denied"
+                `shouldBe` "denied Contact support."
+        it "an all-whitespace message collapses to blank and appends nothing" $
+            appendHelp (Just (mkHelpMessage " \t ")) "denied" `shouldBe` "denied"
 
     describe "serveDecisionOf -- a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do

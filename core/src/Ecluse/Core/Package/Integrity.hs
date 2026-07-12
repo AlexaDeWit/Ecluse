@@ -69,7 +69,6 @@ module Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     parseMinIntegrity,
     unMinIntegrity,
-    renderMinIntegrity,
 
     -- ** The trusted-integrity floor (loosenable below SHA-256)
     MinTrustedIntegrity,
@@ -77,7 +76,6 @@ module Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
     parseMinTrustedIntegrity,
     unMinTrustedIntegrity,
-    renderMinTrustedIntegrity,
 
     -- * Version admissibility
     VersionIntegrity (..),
@@ -201,10 +199,6 @@ parseMinIntegrity raw = parseHashAlg raw >>= mkMinIntegrity
 unMinIntegrity :: MinIntegrity -> HashAlg
 unMinIntegrity (MinIntegrity alg) = alg
 
--- | Render a 'MinIntegrity' as its lower-case algorithm name (round-trips 'parseMinIntegrity').
-renderMinIntegrity :: MinIntegrity -> Text
-renderMinIntegrity = renderHashAlg . unMinIntegrity
-
 instance IntegrityFloor MinIntegrity where
     floorAlgorithm = unMinIntegrity
 
@@ -245,10 +239,6 @@ parseMinTrustedIntegrity raw = parseHashAlg raw >>= mkMinTrustedIntegrity
 -- | The trusted floor algorithm.
 unMinTrustedIntegrity :: MinTrustedIntegrity -> HashAlg
 unMinTrustedIntegrity (MinTrustedIntegrity alg) = alg
-
--- | Render a 'MinTrustedIntegrity' as its lower-case algorithm name (round-trips 'parseMinTrustedIntegrity').
-renderMinTrustedIntegrity :: MinTrustedIntegrity -> Text
-renderMinTrustedIntegrity = renderHashAlg . unMinTrustedIntegrity
 
 instance IntegrityFloor MinTrustedIntegrity where
     floorAlgorithm = unMinTrustedIntegrity
