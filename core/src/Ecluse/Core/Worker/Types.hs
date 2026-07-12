@@ -12,16 +12,18 @@ module Ecluse.Core.Worker.Types (
 
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, Request)
 import UnliftIO (MonadUnliftIO)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (RegistryClient)
+import Ecluse.Core.Registry (RegistryClient, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Rules (PreparedRule)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
@@ -75,16 +77,18 @@ data WorkerRuntime = WorkerRuntime
 
 {- | The per-ecosystem re-evaluation bundle the worker re-runs current policy through
 before it mirrors a job: a resolver that fetches and projects the single version's
-metadata, the prepared rule set, the integrity floor, the tarball-host gate, and the
-wall-clock the age rules read.
+metadata, the prepared rule set, the integrity floor, the tarball-host gate, the
+artifact request formation, and the wall-clock the age rules read.
 
 The resolver is the __shared__ single-version fetch-and-project
 ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
 wired by the composition root); the rules are the __same__ prepared rules the serve
-path gates with; and the floor and host gate are the mount's __own__ configured
-policy values -- so the worker's ingest decision and the serve-time decision run one
-codepath ('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any
-per-source breaker state is shared, never forked.
+path gates with; the floor and host gate are the mount's __own__ configured policy
+values; and the request formation is the mount ecosystem's own
+('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl') -- so the worker's ingest
+decision and the serve-time decision run one codepath
+('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any per-source
+breaker state is shared, never forked.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
@@ -107,6 +111,14 @@ data WorkerPolicy = WorkerPolicy
     ('Ecluse.Core.Server.Context.tarballHostHonoured', closed against the public
     upstream host), re-checked on the job's fetch URL: the queue payload is a trust
     boundary.
+    -}
+    , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the
+    mount ecosystem's own request formation
+    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'), so a job's bytes are
+    fetched with the same request formation the serve path streams with. Riding this
+    bundle means a job whose ecosystem has none never reaches a fetch: it is
+    fail-closed with the rest of the bundle.
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive

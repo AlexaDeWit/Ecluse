@@ -9,9 +9,10 @@ packument and project it into the domain manifest, reporting every failure as a 
 npm satisfies both serve-path needs from the /same/ full-packument endpoint: the
 publish-age rules require the packument's @time@ map, which npm exposes only in the
 full form, so even the single-version need fetches the full bytes. This module owns the
-npm side of both serve-path operations -- the fetch and the projection -- while the cache,
-metrics, and single-version cache topology are wired around them by the serve layer
-("Ecluse.Core.Server.Metadata"), which is where the cross-cutting caching policy belongs:
+npm side of both serve-path operations -- the fetch and the projection -- and the
+constructor ('newNpmMetadataClient') that leads them into the serve layer's agnostic
+caching, metrics, and failure-log policy ("Ecluse.Core.Server.Metadata"), which is
+where the cross-cutting caching policy belongs:
 
   * 'fetchNpmManifest' \/ 'projectNpmManifest' back the full-manifest operation. The
     projection is the sequence the serve path has always applied to a fetched packument --
@@ -29,6 +30,9 @@ metrics, and single-version cache topology are wired around them by the serve la
     projection -- the optimization the stable boundary was always meant to admit.
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
+    -- * Per-request read handle
+    newNpmMetadataClient,
+
     -- * npm full-manifest fetch
     fetchNpmManifest,
 
@@ -46,6 +50,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
+    InvalidEntry,
     PackageDetails,
     PackageInfo,
     PackageName,
@@ -57,6 +62,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    MetadataClient,
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
     digestOf,
  )
@@ -89,8 +95,29 @@ import Ecluse.Core.Security (
     maxNestingDepth,
     maxVersionCount,
  )
+import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+
+{- | Build a per-request read handle for the npm protocol over one origin's fetch
+configuration: the npm full-manifest and single-version fetches as the raw primitives, with
+the serve-path caching, metrics, and the failure and dropped-entry logs wired by
+'Ecluse.Core.Server.Metadata.newMetadataClient'.
+-}
+newNpmMetadataClient ::
+    TracingPort ->
+    MetricsPort ->
+    Metric.Upstream ->
+    ManifestCaching ->
+    (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
+    NpmClientConfig ->
+    MetadataClient
+newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
+    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
 
 {- | Fetch a package's full packument and project it into a 'Manifest' (typed view,
 raw document, and the wire bytes' 'ContentDigest'), or the typed 'MetadataError' for

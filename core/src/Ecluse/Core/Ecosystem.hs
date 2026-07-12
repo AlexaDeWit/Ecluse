@@ -7,8 +7,8 @@
 'Ecosystem' is the shared vocabulary the rest of the system dispatches on: the
 package vocabulary ("Ecluse.Core.Package") records it in a @PackageName@, the version
 engine ("Ecluse.Core.Version") selects a per-ecosystem parser by it, the registry
-adapters (later) are chosen by it, and configuration both __keys a mount__ by it
-and __derives that mount's path prefix__ from it ('prefixFor').
+adapters ("Ecluse.Core.Registry.Adapter") are chosen by it, and configuration both
+__keys a mount__ by it and __derives that mount's path prefix__ from it ('prefixFor').
 
 It lives in its own small module on purpose. It is a stable shared type imported
 by several areas, and keeping it here breaks what would otherwise be an import
@@ -61,7 +61,8 @@ parseEcosystem = \case
 
 {- | The path prefix a mount serves under, __derived__ from its ecosystem (npm →
 @\/npm@, PyPI → @\/pypi@) and never operator-configured, so a prefix can neither
-collide nor be mistyped (see @docs\/architecture\/hosting.md@ → "Mounts"). A
+collide nor be mistyped (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
+mounts"). A
 'NonEmpty' list of path segments: every registry is path-mounted, so a root mount
 is unrepresentable.
 

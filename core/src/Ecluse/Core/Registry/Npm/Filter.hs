@@ -32,8 +32,8 @@ here; the decision logic does not (it is reused by every ecosystem). See
 'rewriteTarballUrls' rewrites each version's @dist.tarball@ to
 @{mount-base}\/{pkg}\/-\/{file}@, so a client resolving metadata /through/ the
 proxy also downloads the bytes through it rather than going straight to upstream
-and bypassing the gate (see @docs\/architecture\/hosting.md@ → "The load-bearing
-requirement: URL rewriting"). Keeping artifacts same-host also keeps npm's auth
+and bypassing the gate (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
+mounts", whose URL rewriting is load-bearing). Keeping artifacts same-host also keeps npm's auth
 flowing, which a separate artifact host would silently drop. The mount's
 externally-visible base URL is __supplied by the caller__; this
 transform performs no IO. It is __idempotent__: re-deriving @{pkg}@ and @{file}@ from

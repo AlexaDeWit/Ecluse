@@ -105,7 +105,7 @@ pod from rotation.
 The drain flip is the load-balancer signal of a graceful rollover: while the
 'DrainSignal' is raised, readiness fails so an upstream LB or service mesh stops
 routing __new__ traffic here, while in-flight requests finish (see
-@docs\/architecture\/hosting.md@ → "Graceful rollover").
+@docs\/architecture\/web-layer.md@ → "Graceful shutdown").
 
 The additional check is the composition root's startup gate (@scCheckReady@):
 a one-way flip (today, the advisory database's first sync), so it cannot flap

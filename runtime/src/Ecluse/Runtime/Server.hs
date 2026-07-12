@@ -22,7 +22,7 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
   ecosystem's path grammar or body shape of its own. Every registry is
   __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
   never changes an existing consumer's URLs. A mount prefix is accepted with or
-  without a trailing slash (see @docs\/architecture\/hosting.md@ → "Dispatch").
+  without a trailing slash (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts").
 
 Responses split into __two tiers__:
 
@@ -433,7 +433,7 @@ drain: while the 'ServerConfig''s 'DrainSignal' is raised it stamps @Connection:
 close@ on every response so an HTTP\/1.1 keep-alive pool (a client's, or a service
 mesh's connection pool) does not reuse a socket on an instance that is shutting down
 -- the cause of the 503-on-rollover this guards against (see
-@docs\/architecture\/hosting.md@ → "Graceful rollover").
+@docs\/architecture\/web-layer.md@ → "Graceful shutdown").
 
 Two @wai-extra@ middlewares are deliberately __not__ used. @Autohead@ answers a
 HEAD by running the GET handler and discarding the body, which on a tarball route

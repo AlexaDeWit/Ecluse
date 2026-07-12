@@ -43,12 +43,14 @@ https://registry.internal.example.com/pypi   → PyPI mount
 There is exactly one mount per ecosystem, and its path prefix is derived from the ecosystem, not
 configured (npm → `/npm`, PyPI → `/pypi`), so a prefix can neither collide nor be mistyped. Every
 registry is path-mounted; none sits at `/`, so adding an ecosystem later never changes an existing
-consumer's URLs. A mount binds, as one unit, the ecosystem's registry adapter (its
-[`RegistryClient`](registry-model.md#registry-abstraction)), its four
-[registry roles](registry-model.md#registry-roles), its error renderer (the client-facing
+consumer's URLs. A mount binds, as one unit, the ecosystem's registered capability record
+(the `RegistryAdapter` in `Ecluse.Core.Registry.Adapter`, resolved by ecosystem once at
+boot): its serve surface (the path grammar and the error renderer, the client-facing
 denial/error surface, so the agnostic layer holds no ecosystem body shape; see
-[Error model](#error-model)), and an optional per-ecosystem
-[rule refinement](configuration.md#rule-policy) that merges over the shared policy. The single-npm
+[Error model](#error-model)), its four [registry roles](registry-model.md#registry-roles)
+over the [`RegistryClient`](registry-model.md#registry-abstraction) handle, and an optional
+per-ecosystem [rule refinement](configuration.md#rule-policy) that merges over the shared
+policy. The single-npm
 setup is the degenerate case, still under its own derived prefix.
 
 **URL rewriting is load-bearing.** Registry responses embed absolute artifact locations (npm's

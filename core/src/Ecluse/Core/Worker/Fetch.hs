@@ -9,15 +9,18 @@ module Ecluse.Core.Worker.Fetch (
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
+import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
 
 {- Fetch the artifact bytes from the public upstream at the job's authoritative
 URL into memory. The URL arrives as the job's validated 'RegistryUrl' witness, so
-the https guarantee is the argument type, not trust in the caller.
+the https guarantee is the argument type, not trust in the caller. The request
+builder is the job ecosystem's own formation, passed in from the re-evaluation
+bundle that admitted the job ('Ecluse.Core.Worker.Types.wpBuildArtifactRequest').
 Publishing is __publish-by-document__: the npm @PUT \/{pkg}@ carries
 the tarball base64-encoded under @_attachments@, so the whole artifact must be in
 hand to verify it and assemble the document. This path is therefore
@@ -26,10 +29,16 @@ is capped (see 'workerArtifactLimits'), so an upstream returning an unbounded bo
 is refused fail-closed rather than exhausting memory. A network failure is returned
 as a transient reason ('Retried' at the call site), not thrown, so a flaky upstream
 redelivers rather than killing the iteration. -}
-fetchArtifactBytes :: RegistryUrl -> WorkerM (Either Text ByteString)
-fetchArtifactBytes url = do
+fetchArtifactBytes ::
+    (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) ->
+    RegistryUrl ->
+    WorkerM (Either Text ByteString)
+fetchArtifactBytes buildRequest url = do
     manager <- asks wrManager
-    case artifactRequestByUrl "" Nothing (registryUrlText url) of
+    -- The job's URL is authoritative and absolute (no base to resolve against)
+    -- and the public artifact fetch is anonymous, so the builder gets an empty
+    -- base and no token (the by-URL builder's documented contract).
+    case buildRequest workerArtifactLimits manager "" Nothing (registryUrlText url) of
         Left urlErr -> pure (Left ("unformable artifact URL: " <> show urlErr))
         Right request ->
             try (liftIO (boundedFetch manager request)) <&> \case

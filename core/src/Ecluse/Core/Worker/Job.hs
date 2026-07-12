@@ -181,13 +181,14 @@ processJob receipt job = katipAddNamespace "job" $ do
         Retried reason -> JobSpanOutcome "retried" (Just reason)
 
 -- The terminal decision of re-evaluating current policy for a job, before any artifact
--- fetch: admit (mirror it, carrying the re-admitted artifact's descriptor: the
+-- fetch: admit (mirror it, carrying the admitting ecosystem's bundle -- whose request
+-- formation the fetch rides -- and the re-admitted artifact's descriptor: the
 -- floor-checked digest set the tamper gate verifies against, and the filename and
 -- declared size the publish document is assembled from), drop (a current deny or a
 -- withdrawn version, acked and never published), or retry (metadata unobtainable, or a
 -- rule uncomputable, left for redelivery).
 data ReevalOutcome
-    = ReevalAdmit MirrorArtifact
+    = ReevalAdmit WorkerPolicy MirrorArtifact
     | ReevalDrop Text
     | ReevalRetry Text
 
@@ -204,7 +205,7 @@ reevaluateThenMirror receipt job =
             pure Succeeded
         False ->
             reevaluatePolicy job >>= \case
-                ReevalAdmit admitted -> mirrorArtifact receipt job admitted
+                ReevalAdmit policy admitted -> mirrorArtifact policy receipt job admitted
                 ReevalDrop reason -> pure (Dropped reason)
                 ReevalRetry reason -> pure (Retried reason)
 
@@ -267,20 +268,21 @@ reevaluatePolicy job = do
                                     (jobArtifactFilename job)
                                     details
                                 )
-                        pure (outcomeOfAdmission job admission)
+                        pure (outcomeOfAdmission policy job admission)
   where
     ecosystem = pkgEcosystem (jobPackage job)
 
 -- The worker's projection of the shared 'ArtifactAdmission' (the serve gate renders
--- the same verdicts as HTTP statuses): an admit mirrors, carrying the admission gate's
--- own floor-checked digest set forward as the tamper gate's verification set; every
--- deliberate refusal drops (never frozen into the rule-exempt mirror store); an
--- undecidable verdict retries, so a transient advisory-source outage neither drops a
--- serviceable job nor publishes it unvetted. Total over 'ArtifactAdmission', so a new
--- admission outcome cannot be silently ignored here while the serve path handles it.
-outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
-outcomeOfAdmission job = \case
-    AdmissionAdmit artifact digests -> ReevalAdmit (readmittedDescriptor artifact digests)
+-- the same verdicts as HTTP statuses): an admit mirrors, carrying the admitting
+-- ecosystem's bundle and the admission gate's own floor-checked digest set forward
+-- as the tamper gate's verification set; every deliberate refusal drops (never
+-- frozen into the rule-exempt mirror store); an undecidable verdict retries, so a
+-- transient advisory-source outage neither drops a serviceable job nor publishes it
+-- unvetted. Total over 'ArtifactAdmission', so a new admission outcome cannot be
+-- silently ignored here while the serve path handles it.
+outcomeOfAdmission :: WorkerPolicy -> MirrorJob -> ArtifactAdmission -> ReevalOutcome
+outcomeOfAdmission policy job = \case
+    AdmissionAdmit artifact digests -> ReevalAdmit policy (readmittedDescriptor artifact digests)
     AdmissionDenied (Blocked ruleName reason) ->
         ReevalDrop ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
@@ -311,16 +313,18 @@ readmittedDescriptor artifact digests =
         , maSize = artSize artifact
         }
 
--- Fetch the artifact bytes, verify them against the re-admitted artifact's digests
--- (the floor-checked, current-metadata set; the queue payload carries no digest at
--- all), and (only on a match) publish to the mirror target. Reached only on a
--- current policy admit. The integrity gate is the security crux: a tampered or corrupt
--- artifact must never reach the private upstream, which is served without the rules,
--- so a mismatch fails the job with no publish and alarms.
-mirrorArtifact :: ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
-mirrorArtifact receipt job admitted = do
+-- Fetch the artifact bytes (through the admitting ecosystem's own request formation),
+-- verify them against the re-admitted artifact's digests (the floor-checked,
+-- current-metadata set; the queue payload carries no digest at all), and (only on a
+-- match) publish to the mirror target. Reached only on a current policy admit, so
+-- the bundle carrying the formation always exists here. The integrity gate is the
+-- security crux: a tampered or corrupt artifact must never reach the private
+-- upstream, which is served without the rules, so a mismatch fails the job with no
+-- publish and alarms.
+mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
+mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
-    fetched <- fetchArtifactBytes (jobArtifactUrl job)
+    fetched <- fetchArtifactBytes (wpBuildArtifactRequest policy) (jobArtifactUrl job)
     case fetched of
         Left reason -> pure (Retried reason)
         Right bytes ->

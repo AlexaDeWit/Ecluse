@@ -23,7 +23,7 @@ module Ecluse.Core.Server.Fault (
 
 import Ecluse.Core.Fault (boundedDetail)
 import Ecluse.Core.Registry (RegistryUnconfigured)
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded)
+import Ecluse.Core.Registry.Fault (ResponseBoundExceeded)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, RenderFault, UnclassifiedFault))
 import Ecluse.Core.Text (displayExceptionT)
 

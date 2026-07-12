@@ -266,10 +266,11 @@ gathers existing handles and wraps the instrument and telemetry handles in their
 ports -- so the core loop reads its backends through the core interface without depending
 on this application 'Env' (the analogue of 'serveRuntimeOf' for the serve path).
 
-The per-ecosystem re-evaluation bundles are passed in rather than read from the 'Env': they
-are derived from the served mounts (the same prepared rules and public origin the serve path
-gates with), which the composition root resolves alongside the handles, so the worker re-runs
-current policy against a job before mirroring it through one codepath with the serve gate.
+The per-ecosystem re-evaluation bundles are passed in rather than read from the 'Env':
+they are derived from the served mounts (the same prepared rules, artifact request
+formation, and public origin the serve path gates with), which the composition root
+resolves alongside the handles, so the worker re-runs current policy against a job
+before mirroring it through one codepath with the serve gate.
 -}
 workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =

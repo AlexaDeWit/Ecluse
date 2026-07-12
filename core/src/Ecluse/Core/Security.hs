@@ -26,8 +26,8 @@ The functions are pure and total; the streamed-body guard ('boundedRead') is
 polymorphic over the producing monad so the streaming data plane can run it in
 'IO' while tests drive it purely. They are __primitives__: the fetch and serve
 layers compose them at the boundary (see @docs\/architecture\/registry-model.md@
-→ "Registry Abstraction", @docs\/architecture\/web-layer.md@, and
-@docs\/architecture\/hosting.md@ → "URL rewriting"). Path-component safety is
+→ "Registry Abstraction" and @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
+mounts"). Path-component safety is
 shared with the router's "Ecluse.Core.Server.Route" ('isSafeComponent'); the threat
 model these guards answer is recorded there too.
 -}

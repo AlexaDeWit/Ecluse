@@ -55,7 +55,9 @@ The library's vocabulary, roughly from the pure core outward:
 * __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Core.Rules.Types".
 * __Protocol boundary__: "Ecluse.Core.Registry" (the registry-protocol handle),
-  "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
+  "Ecluse.Core.Registry.Adapter" (the ecosystem adapter registry this composition
+  root projects each mount's, publish target's, and worker's ecosystem wiring
+  from), "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
   "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
@@ -112,21 +114,29 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
     RegistryUnconfigured (RegistryUnconfigured),
  )
+import Ecluse.Core.Registry.Adapter (
+    RegistryAdapter,
+    adapterEcosystem,
+    adapterFor,
+    adapterPublish,
+    adapterServe,
+    publishNewClient,
+    serveClassifier,
+    serveRenderer,
+ )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmPublishClient)
-import Ecluse.Core.Registry.Npm.Route qualified as Npm
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Security (Origin (UntrustedOrigin), defaultLimits, thgPublicHost)
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Security (Origin (UntrustedOrigin), thgPublicHost)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdBuildArtifactRequestByUrl, pdLimits, pdMinIntegrity, pdNewMetadataClient, pdNow, pdPublicBaseUrl, pdRules, pdTarballHostGate, tarballHostHonoured)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -368,17 +378,19 @@ and exit cleanly), while a fault thrown by either side still propagates ('race_'
 re-raises it) so a genuine failure fails the process up rather than being swallowed.
 -}
 runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
-runServices serverConfig policies env = race_ (runServer serverConfig env) (runWorker policies env)
+runServices serverConfig policies env =
+    race_ (runServer serverConfig env) (runWorker policies env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.
 
-This is the npm-aware composition site: 'mountBindingFor' mounts npm -- its path
-grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
-("Ecluse.Core.Registry.Npm.Serve") -- into the otherwise ecosystem-neutral web layer
-('Ecluse.Runtime.Server.runServer'), so the agnostic server stays closed over the shared
-'Ecluse.Core.Server.Route.Route' set and only this one place names an ecosystem.
-Splitting the server into its own binary later reuses this same entry.
+The mount wiring behind the served bindings comes from the ecosystem adapter
+registry: 'mountBindingFor' resolves each configured ecosystem through
+'Ecluse.Core.Registry.Adapter.adapterFor' and projects the resolved adapter's serve
+surface into the otherwise ecosystem-neutral web layer
+('Ecluse.Runtime.Server.runServer'), so the agnostic server stays closed over the
+shared 'Ecluse.Core.Server.Route.Route' set. Splitting the server into its own
+binary later reuses this same entry.
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp cfg (Server.tracedApplication cfg env)
@@ -408,50 +420,53 @@ routing and the unwired-mount surface; a real launch derives its bindings from
 configuration in 'run'.
 -}
 npmServerConfig :: ServerConfig
-npmServerConfig = mkServerConfig [npmMount Nothing Nothing]
+npmServerConfig = mkServerConfig [mountOf npmAdapter Nothing Nothing]
 
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
-ecosystem has no adapter wired. The ecosystem selects its path grammar (the
-'Ecluse.Core.Server.Route.Classifier') and its denial renderer (the
-'Ecluse.Core.Server.Response.MountRenderer'), and its path prefix is __derived__
-from it ('prefixFor') rather than configured, so the ecosystem is the single thing
-that drives the binding (see @docs\/architecture\/hosting.md@ → "Mounts"). The
-composition root supplies the packument-serve dependencies once the per-mount
-registry set is resolved; 'Nothing' for them leaves the packument route the
+ecosystem has no registered adapter. The adapter registry
+('Ecluse.Core.Registry.Adapter.adapterFor') answers which ecosystems this build
+supports; the resolved adapter's serve surface supplies the path grammar (the
+'Ecluse.Core.Server.Route.Classifier') and the denial renderer (the
+'Ecluse.Core.Server.Response.MountRenderer'), and the path prefix is __derived__
+from the ecosystem ('prefixFor') rather than configured, so the ecosystem is the
+single thing that drives the binding (see
+@docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). The composition
+root supplies the packument-serve dependencies once the per-mount registry set is
+resolved; 'Nothing' for them leaves the packument route the
 recognised-but-unserved @501@ stub.
 
-npm is the only ecosystem with an adapter; the others have no registry client or
-renderer, so they resolve to 'Nothing', a loud miss at the call site rather than a
-silently half-wired mount.
+An ecosystem with no registered adapter resolves to 'Nothing': a loud miss at the
+call site rather than a silently half-wired mount.
 -}
 mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
-mountBindingFor eco packumentDeps publishDeps = case eco of
-    Npm -> Just (npmMount packumentDeps publishDeps)
-    _ -> Nothing
+mountBindingFor eco packumentDeps publishDeps =
+    adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps
 
-{- The npm mount: npm's complete wiring under its derived @\/npm@ prefix -- its path
-grammar and its denial renderer -- taking the packument-serve and first-party publish
-dependencies the composition root supplies ('Nothing' packument deps leave the
-packument route the recognised-but-unserved @501@ stub; 'Nothing' publish deps leave a
-@PUT \/{pkg}@ the @405@ opt-out -- no publication target).
+{- The mount projection of one adapter: the ecosystem's serve surface (its path
+grammar and its denial renderer) under its derived prefix, paired with the
+packument-serve and first-party publish dependencies the composition root supplies
+('Nothing' packument deps leave the packument route the recognised-but-unserved
+@501@ stub; 'Nothing' publish deps leave a @PUT \/{pkg}@ the @405@ opt-out -- no
+publication target).
 -}
-npmMount :: Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
-npmMount packumentDeps publishDeps =
+mountOf :: RegistryAdapter -> Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
+mountOf adapter packumentDeps publishDeps =
     MountBinding
-        { bindingPrefix = prefixFor Npm
-        , bindingClassifier = Npm.classify
+        { bindingPrefix = prefixFor (adapterEcosystem adapter)
+        , bindingClassifier = serveClassifier (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
-        , bindingRenderer = npmRenderer
+        , bindingRenderer = serveRenderer (adapterServe adapter)
         }
 
 {- | Run the supervised mirror worker over the composition-root 'Env' and the
-per-ecosystem re-evaluation bundles: the consume → re-evaluate → fetch → verify → publish →
+per-ecosystem re-evaluation bundles: the
+consume → re-evaluate → fetch → verify → publish →
 ack loop against the queue, the publish-side registry client, and the credential handle, in
 the worker monad ('Ecluse.Core.Worker.WorkerM') over the worker runtime
-('Ecluse.Runtime.Env.workerRuntimeOf'). The bundles carry the same prepared rules and public origin
-the serve path gates with, so the worker re-runs current policy against a job before
-mirroring it.
+('Ecluse.Runtime.Env.workerRuntimeOf'). The bundles carry the same prepared rules,
+artifact request formation, and public origin the serve path gates with, so the worker
+re-runs current policy against a job before mirroring it.
 
 This is the composition-root __hoist point__: it resolves the request-independent @dd@
 correlation object (the service identity; no span is active at the worker entry) and
@@ -505,9 +520,9 @@ workerPoliciesFor env bindings =
 {- Build one mount's worker re-evaluation bundle from its packument-serve dependencies:
 the single-version resolver over the guarded public origin through the shared metadata
 cache (the same fetch-and-project the serve path runs), the mount's prepared rules, its
-configured integrity floor, its tarball-host gate, and its injected clock -- every
-decision input taken from the mount's __own__ 'PackumentDeps', so the ingest decision
-cannot diverge from the serve decision. The metadata client is built through the same
+configured integrity floor, its tarball-host gate, its ecosystem's artifact request
+formation, and its injected clock -- every decision input taken from the mount's __own__
+'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The metadata client is built through the same
 injected constructor the serve path uses ('pdNewMetadataClient', over the same shared
 manager 'srPublicManager' is wired to), anonymous (no client credential reaches the
 public origin), inheriting the resolved-IP SSRF recheck. Its own failure and
@@ -524,6 +539,10 @@ workerPolicyFor env deps =
             -- artifact fetch, closed against the public upstream host (the reference
             -- host the public leg gates dist.tarball hosts by).
             tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps))
+        , -- The mount's own request formation (the adapter's artifact capability,
+          -- projected onto these deps at the composition root), so a job's bytes
+          -- are fetched exactly as the serve path would fetch them.
+          wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
         , wpNow = pdNow deps
         }
   where
@@ -545,26 +564,23 @@ workerPolicyFor env deps =
 {- Build the worker's publish-side registry client from the resolved per-ecosystem
 publish targets, over the given (trusted) manager.
 
-The publish client speaks the registry protocol; the only ecosystem with an adapter
-is npm, so a target is wired into an npm client pointed at the mirror-target
-endpoint. The credential is minted fresh per publish through the provider's
-'currentToken'. When no mount is configured there is nothing to publish, so
-the slot holds the refusing 'unconfiguredRegistry' placeholder, whose effectful
-fields fail loudly if ever called. -}
+The client is constructed through the target ecosystem's registered adapter,
+pointed at the mirror-target endpoint, with the credential minted fresh per publish
+through the provider's 'currentToken'. When no target resolves to an adapter there
+is nothing to publish, so the slot holds the refusing 'unconfiguredRegistry'
+placeholder, whose effectful fields fail loudly if ever called. -}
 resolvePublishClient :: Manager -> [PublishTarget] -> IO RegistryClient
 resolvePublishClient manager targets =
-    case find ((== Npm) . ptEcosystem) targets of
+    case asum (map targetAdapter targets) of
         Nothing -> pure unconfiguredRegistry
-        Just target -> do
+        Just (target, adapter) -> do
             let mintToken = Just . authSecret <$> currentToken (ptCredentials target)
-            newNpmPublishClient
-                NpmClientConfig
-                    { npmBaseUrl = ptMirrorUrl target
-                    , npmManager = manager
-                    , npmToken = Nothing
-                    , npmLimits = defaultLimits
-                    }
-                mintToken
+            publishNewClient (adapterPublish adapter) manager (ptMirrorUrl target) mintToken
+
+-- Pair a publish target with its ecosystem's registered adapter, or 'Nothing' for
+-- a target whose ecosystem has none registered.
+targetAdapter :: PublishTarget -> Maybe (PublishTarget, RegistryAdapter)
+targetAdapter target = (,) target <$> adapterFor (ptEcosystem target)
 
 {- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
 with no backend wired in: a composition-root misconfiguration. A distinct typed

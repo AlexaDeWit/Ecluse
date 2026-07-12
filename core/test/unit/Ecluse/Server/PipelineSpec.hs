@@ -34,6 +34,7 @@ import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue.Memory (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -51,7 +52,6 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (ServeRuntime, srMetrics),
     runHandler,
  )
-import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)

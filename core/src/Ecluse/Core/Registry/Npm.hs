@@ -49,9 +49,6 @@ module Ecluse.Core.Registry.Npm (
 
     -- * First-party publish relay
     relayPublishDocument,
-
-    -- * Response-bound breach
-    ResponseBoundExceeded (..),
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -229,24 +226,12 @@ fetchMetadataFormBounded config form validators name =
                     Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
                     Right (Right response) -> Right response
 
-{- | The thrown form of a response-bound breach: a body that crossed the
-'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its 'LimitError'. The bounded
-read itself reports the breach as a __value__ ('readBoundedBody' returns an
-'Either'); this exception is what the deliberately-throwing consumers re-raise at their
-own boundary -- the publish relay ('readRelayResponse') and the worker's bounded
-artifact fetch ("Ecluse.Core.Worker.Fetch") -- so a @tryAny@ caller sees a typed
-breach rather than a truncated body.
--}
-newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
-    deriving stock (Eq, Show)
-
-instance Exception ResponseBoundExceeded
-
 {- Read a response body chunk-by-chunk through 'boundedRead' against the budget,
 returning the whole body as a 'RegistryResponse' when within the cap, or the 'LimitError'
 as a __value__ when the body crosses 'Ecluse.Core.Security.maxBodyBytes' (never a
-truncated body). Returning the breach lets the serve read path thread it as a value; the
-throwing callers re-raise it as a 'ResponseBoundExceeded' at their own boundary. -}
+truncated body). Returning the breach lets the serve read path thread it as a value; a
+consumer behind an exception-shaped boundary wraps it in the agnostic
+'Ecluse.Core.Registry.Fault.ResponseBoundExceeded' there. -}
 readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
 readBoundedBody limits bodyReader =
     fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)

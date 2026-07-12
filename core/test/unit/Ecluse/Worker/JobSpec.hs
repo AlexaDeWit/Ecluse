@@ -6,9 +6,12 @@ module Ecluse.Worker.JobSpec (spec) where
 
 import Data.Aeson (Value, eitherDecodeStrict')
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (try)
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
@@ -28,7 +31,8 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (Succeeded),
+    JobOutcome (Retried, Succeeded),
+    WorkerPolicy (wpBuildArtifactRequest),
     processBatch,
     processJob,
  )
@@ -215,6 +219,33 @@ spec = do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "fetches through the request formation keyed by the job's own ecosystem" $
+            -- The policies map also carries a PyPI bundle whose request formation
+            -- refuses outright: the npm job must ride its own ecosystem's builder,
+            -- so the decoy entry is never consulted and the publish succeeds.
+            withUpstream $ \url -> do
+                let refusing = (npmPolicy presentResolver [admitRule]){wpBuildArtifactRequest = \_ _ _ _ _ -> Left EmptyBaseUrl}
+                    policies = Map.insert PyPI refusing (npmPolicies presentResolver [admitRule])
+                withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "retries when the job ecosystem's own request formation refuses the URL, without publishing" $
+            -- The npm bundle's builder is swapped for one that cannot form a request:
+            -- the refusal the fetch surfaces is that bundle's (there is no other
+            -- builder to fall back to), and the job is left for redelivery.
+            withRuntimePolicies (withArtifactRequest (\_ _ _ _ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob receipt job)
+                case outcome of
+                    Retried reason -> reason `shouldSatisfy` T.isInfixOf "unformable artifact URL"
+                    other -> expectationFailure ("expected a Retried outcome from the refused request formation, got " <> show other)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 

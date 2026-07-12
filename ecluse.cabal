@@ -120,8 +120,12 @@ library ecluse-core
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
+    Ecluse.Core.Registry.Adapter
+    Ecluse.Core.Registry.Adapter.Types
+    Ecluse.Core.Registry.Fault
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
+    Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
@@ -521,6 +525,7 @@ test-suite ecluse-core-unit
     Ecluse.Queue.MemorySpec
     Ecluse.Queue.Support
     Ecluse.QueueSpec
+    Ecluse.Registry.AdapterSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec
