@@ -135,6 +135,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
+    Ecluse.Core.Registry.Publish
     Ecluse.Core.Registry.Pypi.Wire
     Ecluse.Core.Registry.Rubygems.Wire
     Ecluse.Core.Rules
@@ -538,6 +539,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
+    Ecluse.Registry.PublishSpec
     Ecluse.Registry.Pypi.WireSpec
     Ecluse.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec

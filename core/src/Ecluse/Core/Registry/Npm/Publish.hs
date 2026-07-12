@@ -2,14 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm registry publish-document assembly and request shaping.
+{- | The npm mirror-write protocol: publish-document assembly, request shaping,
+and the codec that carries them into the shared publish transport.
 
-This module provides the pure data assembly for an npm publish request: forming
-the JSON document from verified bytes and shaping the @PUT@ request. The actual
-side-effecting relay and publish operations live in the top-level
-"Ecluse.Core.Registry.Npm" client.
+Everything here is pure. 'npmPublishCodec' is npm's
+'Ecluse.Core.Registry.Publish.PublishCodec': the composition root marries it to
+the shared transport ('Ecluse.Core.Registry.Publish.newMirrorPublish'), which
+executes what this module forms. The first-party publish relay (a different
+concern: a client's own document forwarded verbatim) lives in
+"Ecluse.Core.Registry.Npm".
 -}
 module Ecluse.Core.Registry.Npm.Publish (
+    npmPublishCodec,
     publishRequest,
     npmPublishDocument,
 ) where
@@ -19,15 +23,67 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.List.NonEmpty qualified as NE
 
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (PackageName, renderPackageName)
-import Ecluse.Core.Registry (UrlFormationError)
-import Ecluse.Core.Registry.Npm.Request (packageUrl, parseRequestEither, withToken)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName, renderPackageName)
+import Ecluse.Core.Registry (
+    MirrorArtifact (maFilename, maHashes),
+    PublishError (PublishError),
+    PublishFault (PublishRejected),
+    UrlFormationError,
+ )
+import Ecluse.Core.Registry.Npm.Project qualified as Project
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, noValidators, packageUrl, parseRequestEither, withToken)
+import Ecluse.Core.Registry.Publish (PublishCodec (..))
 import Ecluse.Core.Version (Version, renderVersion)
+
+{- | npm's mirror-write protocol codec: the presence probe reads the abbreviated
+packument and projects its version list; the publish assembles the
+packument-fragment @PUT@ ('npmPublishDocument' under 'publishRequest'), with the
+@dist@ digests picked from the re-admitted artifact's verified set; and a @409@
+answer is idempotent success (versions are immutable, so an already-present
+version is the write's goal already met).
+-}
+npmPublishCodec :: PublishCodec
+npmPublishCodec =
+    PublishCodec
+        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl token Abbreviated noValidators
+        , pcParseVersionList = Project.parseVersionList
+        , pcPublishRequest = \targetUrl token name version artifact bytes ->
+            publishRequest
+                targetUrl
+                token
+                name
+                (npmPublishDocument name version (maFilename artifact) (sriOf artifact) (sha1Of artifact) bytes)
+        , pcPublishOutcome = classifyPublish
+        }
+
+{- Map a publish response status onto success or a 'PublishFault'. A 2xx or a
+@409@ (already present, immutable) is success; anything else is a retryable
+'PublishRejected' naming the status the job saw.
+-}
+classifyPublish :: Int -> Either PublishFault ()
+classifyPublish code
+    | code >= 200 && code < 300 = Right ()
+    | code == 409 = Right () -- version already present; immutable, so success-equivalent
+    | otherwise =
+        Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
+
+-- Pick the SRI (@dist.integrity@) string from the admitted digests, if present.
+sriOf :: MirrorArtifact -> Maybe Text
+sriOf = firstHashValue SRI
+
+-- Pick the SHA-1 shasum from the admitted digests, if present.
+sha1Of :: MirrorArtifact -> Maybe Text
+sha1Of = firstHashValue SHA1
+
+firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
+firstHashValue alg artifact =
+    fmap hashValue (find ((== alg) . hashAlg) (NE.toList (maHashes artifact)))
 
 {- | Build the publish @PUT /{pkg}@ request: the body is the npm publish
 document (a packument carrying the version manifest and the base64 tarball under
