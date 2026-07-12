@@ -19,10 +19,10 @@ dispatcher carries a route classifier per mount; this module is npm's, wired in 
 the composition root.
 
 A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the match:
-a @PUT@ over a bare-package path is a 'Publish', while every read method (@GET@,
-@HEAD@, …) over the same path is a 'Packument'. The read grammar below is otherwise
-method-independent -- a @HEAD@ classifies like its @GET@, the dispatcher answering it
-bodiless.
+a @PUT@ over a bare-package path is a 'Publish', while a __read__ (@GET@, or its
+bodiless @HEAD@) over the same path is a 'Packument'. Those three are the only methods
+the front door answers; any other (@POST@, @DELETE@, …) matches no route and denies, so
+a @DELETE@ over a package path is a @404@ rather than being served a packument.
 
 The model is __deny by default__: anything not explicitly recognised is
 'Unsupported' (a @404@ at the edge). Three npm-specific facts shape the matching,
@@ -74,7 +74,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
 import Ecluse.Core.Server.RoutePattern (
-    Capture (Capture, capConsume),
+    Capture (Capture),
     MethodMatch (MethodPut, MethodRead),
     PatternSeg (SegCap, SegLit),
     RoutePattern (RoutePattern),
@@ -103,18 +103,16 @@ in the named functions the captures and builders reference ('takePackage' for a
 package unit, 'tarballRoute' for the artifact coordinate).
 
 Ordering follows npm's conventions (see the module header): the reserved meta-routes
-(@\/-\/ping@, @\/-\/v1\/search@) are literal and tried first, and the read package
-capture 'capPackageRead' refuses a bare leading @"-"@ (the meta prefix, never a
-read package), so an unrecognised @\/-\/…@ read denies rather than being read as a
-package. The publish capture 'capPackage' does not refuse it, matching the front
-door's existing asymmetry (the write path never treated a leading @"-"@ as a meta-route).
+(@\/-\/ping@, @\/-\/v1\/search@) are literal and tried first, and the package capture
+refuses a bare leading @"-"@ (the meta prefix is never a package name, on any method),
+so an unrecognised @\/-\/…@ path denies rather than being read as a package.
 -}
 npmPatterns :: [RoutePattern NpmCap]
 npmPatterns =
     [ RoutePattern MethodRead [SegLit "-", SegLit "ping"] (buildConst Ping) Ping
     , RoutePattern MethodRead [SegLit "-", SegLit "v1", SegLit "search"] (buildConst Search) Search
-    , RoutePattern MethodRead [SegCap capPackageRead, SegLit "-", SegCap capFilename] buildTarball tarballRepr
-    , RoutePattern MethodRead [SegCap capPackageRead] buildPackument (Packument examplePackage)
+    , RoutePattern MethodRead [SegCap capPackage, SegLit "-", SegCap capFilename] buildTarball tarballRepr
+    , RoutePattern MethodRead [SegCap capPackage] buildPackument (Packument examplePackage)
     , RoutePattern MethodPut [SegCap capPackage] buildPublish (Publish examplePackage)
     ]
   where
@@ -153,29 +151,22 @@ buildTarball = \case
     [NpmPackage name, NpmFilename file] -> Just (tarballRoute name file)
     _ -> Nothing
 
-{- | The package capture as the __publish__ path reads it: one npm package unit, both
-scoped wire encodings handled by 'takePackage' (which may consume one or two segments).
-Accepts any component 'takePackage' accepts, including a lone @"-"@ (a package literally
-named @"-"@), matching @classifyPublish@'s prior behaviour.
+{- | The package capture: one npm package unit, both scoped wire encodings handled by
+'takePackage' (which may consume one or two segments).
+
+A bare leading @"-"@ is refused __on every method__: @\/-\/…@ is the reserved
+meta-route prefix, and a lone @"-"@ is never a package name. Every other
+component-safety rejection is 'takePackage''s.
 -}
 capPackage :: Capture NpmCap
 capPackage =
     Capture
         "package"
         "The package name, URL-encoded; a scoped name is `@scope%2Fname`."
-        (fmap (first NpmPackage) . takePackage)
-
-{- | The package capture as the __read__ paths (packument, tarball) read it: as
-'capPackage', but a bare leading @"-"@ segment is refused, since a read of @\/-\/…@ is
-a reserved meta-route, never a package (a real npm package name never is a lone @"-"@).
--}
-capPackageRead :: Capture NpmCap
-capPackageRead =
-    capPackage
-        { capConsume = \case
+        ( \case
             "-" : _ -> Nothing
-            segs -> capConsume capPackage segs
-        }
+            segs -> fmap (first NpmPackage) (takePackage segs)
+        )
 
 {- | The artifact-file capture: one segment, accepted only when it is a safe component
 ('isSafeComponent'); the coordinate parse (the @.tgz@ basename and the version) is

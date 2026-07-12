@@ -4,11 +4,20 @@
 -- TupleSections: the frozen reference classifier copies 'takeScoped''s (,rest) form.
 {-# LANGUAGE TupleSections #-}
 
-{- | The pattern-derived npm classifier is held against a __frozen reference__: an
-exact copy of the hand-written classifier as it stood before the derivation. The
-equivalence property drives both with generated requests and asserts they agree, so
-the move to 'Ecluse.Core.Server.RoutePattern' is proven behaviour-preserving on the
-security-critical routing path.
+{- | The pattern-derived npm classifier is held against an __independent reference__: a
+hand-written implementation of the same grammar, structured the way the classifier was
+before it was derived from 'Ecluse.Core.Registry.Npm.Route.npmPatterns'. The equivalence
+property drives both with generated requests and asserts they agree, so the pattern
+engine is differential-tested against a second implementation on the security-critical
+routing path.
+
+The reference encodes the __corrected__ grammar, and both corrections are also asserted
+directly below:
+
+* a lone @"-"@ is never a package name, on __any__ method (it is the reserved meta-route
+  prefix), so a @PUT \/-@ denies rather than publishing a package called @"-"@; and
+* only @GET@, @HEAD@, and @PUT@ are answered, so a @DELETE@ or @POST@ over a package path
+  denies rather than being served a packument.
 -}
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
@@ -29,7 +38,7 @@ import Ecluse.Core.Version (mkVersion)
 
 spec :: Spec
 spec = do
-    describe "classify is derived from npmPatterns (equivalence to the frozen reference)" $ do
+    describe "classify is derived from npmPatterns (differential against an independent reference)" $ do
         modifyMaxSuccess (const 5000) $
             it "agrees with the reference classifier over generated requests" $
                 hedgehog $ do
@@ -53,12 +62,24 @@ spec = do
             classify methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Unsupported
         it "PUT /{package} is a publish" $
             classify methodPut ["lodash"] `shouldBe` Publish (mkPackageName Npm Nothing "lodash")
-        it "the publish path treats a lone \"-\" as a package (the read/write asymmetry)" $
-            classify methodPut ["-"] `shouldBe` Publish (mkPackageName Npm Nothing "-")
         it "an unknown meta-route denies" $
             classify methodGet ["-", "bogus"] `shouldBe` Unsupported
         it "a HEAD reads like a GET" $
             classify methodHead ["lodash"] `shouldBe` Packument (mkPackageName Npm Nothing "lodash")
+
+        -- A lone "-" is the reserved meta-route prefix, never a package name. The read
+        -- path always denied it; the publish path used to take it as a package called
+        -- "-" (a name npm cannot even hold). Both deny now.
+        it "a lone \"-\" is never a package, on any method" $ do
+            classify methodPut ["-"] `shouldBe` Unsupported
+            classify methodGet ["-"] `shouldBe` Unsupported
+
+        -- Only GET, HEAD, and PUT are answered. A read used to mean "any method that is
+        -- not a PUT", so a DELETE over a package path was served a packument; it denies now.
+        it "a method the front door does not answer denies" $ do
+            classify methodDelete ["lodash"] `shouldBe` Unsupported
+            classify methodPost ["lodash"] `shouldBe` Unsupported
+            classify methodDelete ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Unsupported
 
 -- Generators -----------------------------------------------------------------
 
@@ -98,23 +119,28 @@ genSegment =
         , Gen.text (Range.linear 0 8) (Gen.element ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', '1', '2', '3', '4'])
         ]
 
--- The frozen reference classifier --------------------------------------------
+-- The independent reference classifier ----------------------------------------
 --
--- An exact copy of the hand-written npm classifier as it stood before it was derived
--- from 'npmPatterns'. It shares no code with the implementation under test, so the
--- equivalence property is a genuine cross-check of the pattern engine, not a tautology.
--- Scaffolding for the derivation; safe to retire once confidence is banked.
+-- A hand-written implementation of the npm grammar, structured the way the classifier
+-- was before it was derived from 'npmPatterns'. It shares no code with the
+-- implementation under test, so the equivalence property is a genuine differential
+-- check of the pattern engine, not a tautology. It encodes the CORRECTED grammar: only
+-- GET, HEAD, and PUT are answered, and a lone "-" is never a package.
 
 referenceClassify :: Method -> [Text] -> Route
 referenceClassify method segments
     | method == methodPut = refPublish segments
-    | otherwise = refRead segments
+    | method == methodGet || method == methodHead = refRead segments
+    -- Any other method matches no route: deny by default.
+    | otherwise = Unsupported
 
 refRead :: [Text] -> Route
 refRead ("-" : meta) = refMeta meta
 refRead segments = refPackage segments
 
 refPublish :: [Text] -> Route
+-- A lone "-" is the reserved meta-route prefix, never a package name.
+refPublish ("-" : _) = Unsupported
 refPublish segments = case refTakePackage segments of
     Just (name, []) -> Publish name
     _ -> Unsupported

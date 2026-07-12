@@ -41,7 +41,7 @@ module Ecluse.Core.Server.RoutePattern (
     classifyWith,
 ) where
 
-import Network.HTTP.Types.Method (Method, methodPut)
+import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
 
 import Ecluse.Core.Server.Route (Classifier, Route (Unsupported))
 
@@ -89,22 +89,30 @@ data Capture v = Capture
     -- ^ Consume the leading segments this capture claims, yielding its value and the tail.
     }
 
-{- | The method condition on a route. 'MethodRead' matches every method that is not a
-write, mirroring the front door's existing rule (a @PUT@ is the one client write; a
-@HEAD@, @GET@, and any other method read). Kept as a small closed vocabulary rather
-than a bare predicate so a renderer can still name the documented method.
+{- | The method condition on a route: the __read__ methods (@GET@ and @HEAD@ -- a @HEAD@
+classifies like its @GET@, the dispatcher answering it bodiless), or the one client
+__write__ (@PUT@, the publish).
+
+Any other method matches no pattern and therefore denies (deny by default): the front
+door answers only the methods it was taught, so a @DELETE@ or @POST@ over a package path
+is a @404@ rather than being read as a packument. This also keeps the documented method
+honest -- the manifest says @GET@ for a read, and only a @GET@ (or its bodiless @HEAD@)
+is served.
+
+Kept as a small closed vocabulary rather than a bare predicate so a renderer can still
+name the documented method.
 -}
 data MethodMatch
     = -- | The write method (@PUT@): the publish request.
       MethodPut
-    | -- | Any non-write method: the read grammar.
+    | -- | The read methods (@GET@ and @HEAD@).
       MethodRead
     deriving stock (Eq, Show)
 
 -- | Whether a request method satisfies a pattern's 'MethodMatch'.
 methodMatches :: MethodMatch -> Method -> Bool
 methodMatches MethodPut m = m == methodPut
-methodMatches MethodRead m = m /= methodPut
+methodMatches MethodRead m = m == methodGet || m == methodHead
 
 {- | Classify a request against an ordered pattern list: the first pattern whose
 method and segments match builds the 'Route'; if none matches, the request is

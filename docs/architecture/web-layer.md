@@ -19,16 +19,27 @@ matches the leading path segment to a mount and strips the prefix; what remains 
 path, classified by a pure function into a small route type:
 
 ```haskell
-data Route = Packument PackageName | Tarball PackageName Text | Ping | Search | Unsupported
+data Route = Packument PackageName | Tarball PackageName Version Filename
+           | Publish PackageName | Ping | Search | Unsupported
 
-classify :: [Text] -> Route
+type Classifier = Method -> [Text] -> Route
 ```
 
-Keeping `classify` pure makes the routing table unit-testable with no server: feed it `pathInfo`,
-assert the `Route`. Two npm-specific facts it encodes: `pathInfo` splits on `/` *before*
-percent-decoding, so an encoded scoped name (`/@scope%2Fpkg`) arrives as a single segment; and
-reserved meta-routes (`/-/…`) are matched first, since a real package name can never begin with `-`.
-Anything unrecognised is `Unsupported` → 404, so deny-by-default holds at the routing layer.
+Each ecosystem declares its grammar as an ordered table of **route patterns** (literal segments and
+named captures that carry their own parsers), and its `Classifier` is derived from that table by a
+generic engine. The *same* table is projected into the [capability manifest](#capability-manifest), so
+the documented paths and methods cannot drift from the routed ones. Keeping the classifier pure makes
+the routing table unit-testable with no server: feed it a method and segments, assert the `Route`.
+
+Three npm-specific facts it encodes: `pathInfo` splits on `/` *before* percent-decoding, so an encoded
+scoped name (`/@scope%2Fpkg`) arrives as one segment while a bare scope arrives as two, and both
+normalise to the same `PackageName`; reserved meta-routes (`/-/…`) are matched first, since a package
+name is never a lone `-`; and a tarball's file name must parse for *its own* package, so a name
+addressing another package's artifact is refused rather than fabricated into a coordinate.
+
+Only `GET`, `HEAD`, and `PUT` are answered (`PUT /{pkg}` is the publish; a `HEAD` classifies like its
+`GET` and is served bodiless). Any other method, and anything unrecognised, is `Unsupported` → 404, so
+deny-by-default holds at the routing layer for methods as well as paths.
 
 ## Multi-ecosystem mounts
 
