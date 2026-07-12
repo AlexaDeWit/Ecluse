@@ -74,7 +74,7 @@ spec = do
 
                     -- Run exportToS3 with Katip context
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dummyDb)
+                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dummyDb)
 
                     -- Verify upload
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))

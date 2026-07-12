@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {- | The S3 upload adapter for the compiled OSV artifact.
 
@@ -20,28 +21,58 @@ module Ecluse.Runtime.Pilot.Export (
 
 import Conduit (MonadResource)
 import Control.Monad.Catch (MonadThrow)
-import Katip (KatipContext, Severity (..), logFM, ls)
+import GHC.Clock (getMonotonicTime)
+import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
+import System.Directory (getFileSize)
 import System.FilePath (takeFileName)
+import UnliftIO (MonadUnliftIO)
+import UnliftIO.Exception (bracket, withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import OpenTelemetry.Context qualified as Ctx
+import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
 {- | Upload a compiled OSV artifact to the given S3 bucket, dialling an optional
 custom endpoint (the pre-parsed @(secure, host, port)@ resolved from configuration).
+
+The @PutObject@ runs inside an @ecluse.pilot.osv.upload@ client span (inert when
+telemetry is off) carrying the bucket, object key, and byte count. A failed upload is
+logged at the call site and marks the span errored before it propagates to the export
+loop's supervisor, which otherwise sees only an opaque restart.
 -}
-exportToS3 :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe (Bool, Text, Int) -> Text -> FilePath -> m ()
-exportToS3 mEndpoint bucketName dbPath = do
-    logFM InfoS (ls ("Uploading " <> toText dbPath <> " to S3 bucket " <> bucketName))
+exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe (Bool, Text, Int) -> Text -> FilePath -> m ()
+exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
+    let keyText = toText (takeFileName dbPath)
+        mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
+    size <- liftIO $ getFileSize dbPath
 
-    env <- liftIO $ buildS3Env mEndpoint
-    let key = S3.ObjectKey (toText (takeFileName dbPath))
+    bracket
+        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.upload" defaultSpanArguments{kind = Client}) mTracer)
+        (mapM_ (`endSpan` Nothing))
+        $ \mSpan -> do
+            forM_ mSpan $ \sp -> do
+                addAttribute sp "ecluse.osv.bucket" bucketName
+                addAttribute sp "ecluse.osv.object_key" keyText
+                addAttribute sp "ecluse.osv.bytes" (show size :: Text)
+            katipAddContext (sl "bucket" bucketName <> sl "object_key" keyText <> sl "bytes" size) $
+                logFM InfoS (ls ("Uploading " <> toText dbPath <> " to S3 bucket " <> bucketName))
 
-    body <- liftIO $ AWS.chunkedFile 1048576 dbPath
-    let req = S3.newPutObject (S3.BucketName bucketName) key body
+            env <- liftIO $ buildS3Env mEndpoint
+            body <- liftIO $ AWS.chunkedFile 1048576 dbPath
+            let req = S3.newPutObject (S3.BucketName bucketName) (S3.ObjectKey keyText) body
 
-    void $ AWS.send env req
+            start <- liftIO getMonotonicTime
+            withException
+                (void $ AWS.send env req)
+                ( \(e :: SomeException) -> do
+                    forM_ mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show e))
+                    logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show e))
+                )
+            elapsed <- liftIO getMonotonicTime
 
-    logFM InfoS "S3 upload complete"
+            katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" (elapsed - start)) $
+                logFM InfoS "S3 upload complete"
 
 {- | Build an @amazonka@ env for S3, applying an optional custom endpoint override
 (the pre-parsed @(secure, host, port)@). Shared by the Pilot export producer and the
