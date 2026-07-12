@@ -218,7 +218,7 @@ renderInvalidKind = \case
 truncatedValue :: Value -> Text
 truncatedValue v =
     let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
-     in if T.length rendered > maxRenderedValueChars
+     in if T.compareLength rendered maxRenderedValueChars == GT
             then T.take maxRenderedValueChars rendered <> "…"
             else rendered
 

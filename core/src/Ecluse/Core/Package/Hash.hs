@@ -41,6 +41,8 @@ import Crypto.Hash (Blake2b_512, Digest, MD5, SHA1, SHA256, SHA384, SHA512, dige
 import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase)
 import Data.Text qualified as T
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 
 {- | A hash algorithm an integrity digest is computed with.
 
@@ -62,7 +64,12 @@ data HashAlg
       digest body from 'hashValue'.
       -}
       SRI
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+-- Enumerate every HashAlg from the type itself, so a new algorithm is covered without a
+-- hand-maintained list. Derived from Generic, not a partial Enum/Bounded pair; the
+-- cross-module floor-vs-compute invariant test relies on this being exhaustive.
+instance Universe HashAlg where universe = universeGeneric
 
 instance Ord HashAlg where
     compare a b = compare (hashAlgRank a) (hashAlgRank b)

@@ -301,7 +301,7 @@ logSqsDrop logEnv reason messageId =
     payload =
         moduleField "Ecluse.Runtime.Queue.Sqs"
             <> sl "reason" (dropReasonLabel reason)
-            <> foldMap (sl "messageId") messageId
+            <> maybe mempty (sl "messageId") messageId
     message = "dropped an unusable SQS message: " <> dropReasonLabel reason
 
 -- The operator-facing phrase for each drop reason.

@@ -73,8 +73,13 @@ resolveTarballUrl upstreamHost url
     | "https://" `T.isPrefixOf` lowered = mkRegistryUrl url
     | "http://" `T.isPrefixOf` lowered =
         if hostAddress url == upstreamHost
-            then mkRegistryUrl ("https://" <> T.drop (T.length ("http://" :: Text)) url)
+            then mkRegistryUrl ("https://" <> T.drop httpSchemeChars url)
             else Left ("dist.tarball is http on a host other than the upstream registry: " <> url)
     | otherwise = Left ("dist.tarball is not an https URL: " <> url)
   where
     lowered = T.toLower url
+    -- The character length of the "http://" scheme prefix being re-schemed to https.
+    -- It is a fixed literal count, so it is written directly rather than via an O(n)
+    -- 'T.length' on the constant; dropping it from the original 'url' (not 'lowered')
+    -- rewrites only the scheme and preserves the rest of the URL verbatim.
+    httpSchemeChars = 7 :: Int

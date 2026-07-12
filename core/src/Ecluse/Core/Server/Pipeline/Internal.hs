@@ -345,7 +345,7 @@ denialAuditPayload da =
         <> sl "version" (daVersion da)
         <> maybe mempty (sl "rule") (daRule da)
         <> sl "reason_class" (show (daReasonClass da) :: Text)
-        <> foldMap (\(DbEtag e) -> sl "active_advisory_db_etag" e) (daAdvisoryEtag da)
+        <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) (daAdvisoryEtag da)
         <> metadataPayload (daExtra da)
   where
     metadataPayload (Metadata m) = Map.foldrWithKey (\k v acc -> sl k v <> acc) mempty m

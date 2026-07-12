@@ -1,35 +1,50 @@
-# Stan configuration for Écluse. The `stan` CI job runs Stan at this floor and FAILS
-# on any finding (a visible red signal), but it is NOT a CI-gate dependency, so it
-# never blocks a merge. `make stan` reproduces it; `make stan-all` shows the full set,
-# including the Style findings this floor drops.
+# Stan configuration for Écluse. The `stan` job runs Stan at this floor and FAILS on any
+# finding above it (a visible red signal), but it is NOT a CI-gate dependency, so it never
+# blocks a merge. `task stan` reproduces it and prints "clean at the configured floor" when
+# nothing remains; `task stan-all` shows the full set, including the Style findings this floor
+# drops.
 #
-# Beyond whole-inspection EXCLUDEs, this file carries a small, explicit `ignore` list of
-# individual findings — each an accepted, recorded decision pinned to its source line for
-# review, never a silent blanket suppression. Real findings are meant to fail the job and
-# be triaged (fixed at source, or ignored only by such an explicit decision).
+# The floor drops the Style severity (cosmetic opinions we have not adopted) and, by explicit
+# whole-inspection EXCLUDE, three inspections whose findings here are correct by construction
+# (see below). Everything else stays ARMED: the Performance severity, and the safety signal of
+# partial functions (#Partial) and the anti-pattern / potential-bug findings (#AntiPattern,
+# #PotentialBug). A finding in an armed inspection is meant to fail the job and be triaged:
+# fixed at source, or accepted only by an explicit `ignore` decision pinned to its source line
+# below.
 #
-# Floor: drop the Style severity (cosmetic opinions we have not adopted). Performance is
-# ARMED: STAN-0206 ("non-strict fields") is green since we adopted StrictData, and the
-# STAN-0208 ("slow Text length") findings were rewritten at source (length-free
-# comparisons / T.span / T.null). What stays armed across the whole tree is the safety
-# signal: partial functions (#Partial) and potential bugs (#Infinite, Foldable footguns;
-# #PotentialBug), plus the Performance severity.
+# Armed and clean at source (no findings; listed so a regression is recognised, not re-triaged):
+#   * #Partial STAN-0010 / STAN-0011 / STAN-0012 (partial succ / pred / toEnum): the sum types
+#     that need a total enumeration derive Data.Universe's Generic `universe` rather than a
+#     partial Enum / Bounded pair, so no derived `toEnum` exists to crash on an out-of-range Int.
+#   * STAN-0207 (Foldable methods on (,) / Maybe / Either): written with the monomorphic
+#     eliminators (`maybe`, `either`, `maybeToList`) instead.
+#   * STAN-0208 (slow O(n) Text length): written length-free (`T.compareLength`, a fixed-count
+#     `T.drop`) instead of `T.length`.
 #
-# STAN-0213 (wildcard `_` on sum types) is excluded by explicit decision: reviewed, its
-# findings here are correct deny-by-default catch-alls on lists / Maybe / aeson Value,
-# and enforcing "no `_` on sum types" is totality-maximalism we deliberately don't adopt.
+# Whole-inspection EXCLUDEs (a finding here is correct, and the flagged operation is the point):
+#   * STAN-0213: a wildcard `_` on a sum type. Ours are deliberate deny-by-default catch-alls on
+#     lists, Maybe, and aeson Value; "no `_` on sum types" is totality-maximalism we do not adopt.
+#   * STAN-0103 (`length` diverges on an infinite list) and STAN-0101 (`reverse` diverges on an
+#     infinite list): this codebase carries no infinite / codata lists, so every `length` and
+#     `reverse` here is on finite-by-construction data (a parsed IPv6 address, a bounded cache
+#     key set, an accumulator being reversed). These are whole-inspection EXCLUDEs rather than
+#     per-finding `ignore` pins because a content-hash-and-line pin ROTS when a module moves, and
+#     that rot has produced a phantom miscount before; a whole-inspection exclude has no rot
+#     vector, mirroring the STAN-0213 exclude. The cost is that the #Infinite-on-list signal goes
+#     dark, which is low value where no infinite list is held.
 check =
   [ { type = "Exclude", severity = "Style", scope = "all" }
   , { type = "Exclude", id = "STAN-0213", scope = "all" }
+  , { type = "Exclude", id = "STAN-0103", scope = "all" }
+  , { type = "Exclude", id = "STAN-0101", scope = "all" }
   ]
 
-# `length` on lists finite by construction (STAN-0103 diverges only on infinite lists);
-# each id pinned to its source for review.
+# STAN-0212 (unsafe functions) stays ARMED, so it still catches a real `unsafePerformIO` or
+# `unsafeCoerce`. The only accepted findings are the two compile-time `embedFile` splices of the
+# committed default config: a Template Haskell embed of an in-repo asset, safe by construction.
+# These two pins are accepted as rot-prone but stable (the config embed rarely moves), the trade
+# for keeping the inspection armed rather than excluding it wholesale.
 [[ignore]]
-  id = "OBS-STAN-0103-pTUbUb-441:27"  # Security.hs:441 `length hd` — head half of a parsed IPv6 address (<= 8 groups)
+  id = "OBS-STAN-0212-ZUcJjk-55:25"   # Config.hs:55 `$(embedFile "config/default.yaml")` in defaultPolicy
 [[ignore]]
-  id = "OBS-STAN-0103-pTUbUb-441:39"  # Security.hs:441 `length tl` — tail half of that same address
-[[ignore]]
-  id = "OBS-STAN-0103-pTUbUb-481:22"  # Security.hs:481 `length gs == 8` — gs is the fixed 8-group IPv6 split; this IS the well-formedness check
-[[ignore]]
-  id = "OBS-STAN-0103-O2rrhR-384:19"  # Cache.hs:384 `length ks` — the metadata cache's current key set, bounded by its max-entries cap
+  id = "OBS-STAN-0212-ZUcJjk-104:39"  # Config.hs:104 `$(embedFile "config/default.yaml")` in parseDefaultAst

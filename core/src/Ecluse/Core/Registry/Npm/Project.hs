@@ -551,7 +551,7 @@ projectArtifact version dist =
     -- 'Hash' per component ('mkSriHashes'), so the strongest-digest selection at
     -- the admission floor and the worker's tamper gate rank and verify each
     -- component exactly -- never a joined string read two different ways.
-    sriHashes = maybe [] (foldMap toList . rightToMaybe . mkSriHashes) (distIntegrity dist)
+    sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
 {- The artifact filename for a tarball: the path segment after the URL's last
