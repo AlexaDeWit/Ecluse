@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
 {- | The shared __URL-path vocabulary__ of the front door: an artifact's on-the-wire
 name, and the component-safety gate every ecosystem's router applies.
 
