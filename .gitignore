@@ -20,8 +20,7 @@ http_cache.sqlite
 /sbom.cdx.json
 /sbom.spdx.json
 .hie/
-dist-weeder/
-dist-stan/
+dist-analysis/
 dist-docs/
 dist-bench-prof/
 /ecluse-bench.prof

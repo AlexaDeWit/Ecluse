@@ -332,17 +332,21 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # dist-weeder is deliberately NOT cached: the builddir is rebuilt from
-      # scratch each run. weeder scans every .hie under dist-weeder, and cabal
-      # cannot delete the artifacts of removed source files, so any restored
-      # builddir risks feeding weeder orphaned .hie for modules that no longer
-      # exist. That is a false red, or a false green now that weeder gates
-      # (the same staleness measured on stan: 132 observations against a true
-      # floor of 35, 140 modules scanned where the tree had 122). The
-      # dependency closure still comes warm from the cabal-store cache, so a
-      # cold builddir is only the first-party packages, a few minutes. Do not
-      # reintroduce a dist-weeder cache without a per-run orphan-.hie prune:
+      # dist-analysis (the shared -fwrite-ide-info builddir that `task weeder` builds
+      # via analysis-build) is deliberately NOT cached: it is rebuilt from scratch
+      # each run. weeder scans every .hie under it, and cabal cannot delete the
+      # artifacts of removed source files, so any restored builddir risks feeding
+      # weeder orphaned .hie for modules that no longer exist. That is a false red,
+      # or a false green now that weeder gates (the same staleness measured on stan:
+      # 132 observations against a true floor of 35, 140 modules scanned where the
+      # tree had 122). The dependency closure still comes warm from the cabal-store
+      # cache, so a cold builddir is only the first-party packages, a few minutes. Do
+      # not reintroduce a dist-analysis cache without a per-run orphan-.hie prune:
       # keying on the source tree alone does not clean a restored builddir.
+      #
+      # This job and the stan job below run on separate runners, so each still pays
+      # for its own build. Sharing the builddir buys nothing here; it is `task check`
+      # locally, where the two run in one checkout, that it saves a build (#826).
       - name: Update package index
         run: nix develop .#weeder --command task update
 
@@ -372,8 +376,8 @@ jobs:
     # so a finding blocks the merge. Stan analyses GHC HIE files for partial functions +
     # potential bugs that Semgrep (no Haskell) and hlint (no type info) can't see, scoped
     # by .stan.toml to a Warning floor. Runs as its own parallel job (a heavy
-    # -fwrite-ide-info build into dist-stan, like weeder), not folded into static-checks.
-    # Warm deps (restored from main) keep it cheap.
+    # -fwrite-ide-info build into dist-analysis, like weeder), not folded into
+    # static-checks. Warm deps (restored from main) keep it cheap.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -387,14 +391,13 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # dist-stan is deliberately NOT cached, exactly like dist-weeder above:
-      # stan scans every .hie under the builddir, cabal cannot delete the
-      # artifacts of removed source files, and a restored builddir would hand
-      # stan orphaned .hie for modules that no longer exist (the staleness that
-      # once reported 132 observations against a true floor of 35). The
-      # dependency closure comes warm from the cabal-store cache, so a fresh
-      # builddir is only the first-party packages. See the weeder job's comment
-      # for the full rationale.
+      # dist-analysis is deliberately NOT cached here either, for the reason spelled
+      # out on the weeder job above: stan scans every .hie under the builddir, cabal
+      # cannot delete the artifacts of removed source files, and a restored builddir
+      # would hand stan orphaned .hie for modules that no longer exist (the staleness
+      # that once reported 132 observations against a true floor of 35). The
+      # dependency closure comes warm from the cabal-store cache, so a fresh builddir
+      # is only the first-party packages.
       - name: Update package index
         run: nix develop .#stan --command task update
 
