@@ -105,6 +105,14 @@ docs/     architecture and design documents
   guessing. Start the HLS MCP bridge with the worktree root before semantic requests.
 - Create agent worktrees with `task new-worktree BRANCH=<branch>` so the local HLS index warms in
   isolation. Keep cold HLS concurrency to two or three worktrees.
+- Retire a worktree with **`task rm-worktree BRANCH=<branch>`**, not a bare `git worktree remove`.
+  Creation warms a roughly 1 GB HLS index *outside* the checkout (under the hie-bios cache), and
+  only `rm-worktree` reclaims both halves; removing the checkout alone strands the gigabyte. The
+  branch is kept, so retiring a worktree never discards work. If worktrees have already been
+  removed by hand, **`task worktree-clean`** sweeps up after them: it reaps the stranded caches and
+  prunes stale registrations. It is scoped to caches this repository positively owns, so it is safe
+  to run while other worktrees are building and it never touches another project's cache. Add
+  `-- --dry-run` to preview.
 
 ## CI, security, and repository gates
 

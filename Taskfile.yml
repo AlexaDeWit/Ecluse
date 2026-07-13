@@ -253,6 +253,18 @@ tasks:
     cmds:
       - bash scripts/new-worktree.sh "{{.BRANCH}}" "{{.BASE}}" "{{.DIR}}"
 
+  rm-worktree:
+    desc: Retire BRANCH's agent worktree and reap its HLS cache (the branch is kept; FORCE=1 to discard local changes)
+    requires:
+      vars: [BRANCH]
+    cmds:
+      - bash scripts/rm-worktree.sh "{{.BRANCH}}" "{{.DIR}}"
+
+  worktree-clean:
+    desc: Reap HLS caches stranded by deleted worktrees and prune stale registrations (safe while other worktrees build; --dry-run to preview)
+    cmds:
+      - bash scripts/reap-hls-caches.sh {{.CLI_ARGS}}
+
   format:
     desc: Reformat Haskell sources in place
     cmds:
