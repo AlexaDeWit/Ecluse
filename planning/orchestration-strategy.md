@@ -125,6 +125,14 @@ DB; and with 2-3 worktrees in flight, **stagger** the creations so parallel cold
 typechecks don't thrash the CPU. After a post-merge rebase, re-run `task build` to
 re-warm incrementally.
 
+**Retire each worktree with `task rm-worktree BRANCH=<branch>`.** That warm index is
+roughly 1 GB, and cabal keeps it *outside* the checkout, under the hie-bios cache. A bare
+`git worktree remove` reclaims the checkout and leaves the gigabyte, so a few dozen
+retired slices quietly consume tens of gigabytes: exactly the disk the live worktrees need
+in order to build. `rm-worktree` removes both halves and keeps the branch, so retiring a
+slice is a disk decision and never discards work. For worktrees already removed by hand,
+`task worktree-clean` sweeps up the stranded caches and prunes stale registrations.
+
 **Carry the architect's full acceptance criteria into the brief; a brief is not a
 summary.** An implementer never sees the alignment conversation that shaped a slice, so the
 brief is its only window into it. When requirements were settled through a back-and-forth with
