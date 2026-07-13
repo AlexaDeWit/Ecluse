@@ -181,7 +181,7 @@
         # `.hlint.yaml` config files. The configs must be in scope so the flake checks
         # apply the repo's own formatting / lint rules (e.g. `import-export-style:
         # diff-friendly`) rather than the tools' built-in defaults — otherwise they
-        # silently diverge from the `make format` / `make lint` path on, e.g., import
+        # silently diverge from the `task format-check` / `task lint` path on, e.g., import
         # ordering. NB the two tools discover their config differently: fourmolu walks
         # up from each input file (so `fourmolu.yaml` under `hsSrc` is found
         # automatically), but hlint reads `.hlint.yaml` only from the working
@@ -190,7 +190,7 @@
         hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" "fourmolu.yaml" ".hlint.yaml" ];
 
         # The npm version-ordering oracle (`node-semver`) for the differential
-        # smoke suite and `make gen-version-fixtures`. nixpkgs 26.05 removed the
+        # smoke suite and `task gen-version-fixtures`. nixpkgs 26.05 removed the
         # node2nix-generated `nodePackages` set; the blessed replacement is to
         # build node_modules from a committed lockfile. `importNpmLock` reads the
         # integrity hashes already in test/oracles/package-lock.json (no separate
@@ -214,19 +214,23 @@
           AWS_EC2_METADATA_DISABLED = "true";
         };
 
-        # Everything CI drives through `make`, across every gate job — this is the
-        # `.#ci` shell. Kept deliberately lean: it omits the IDE tooling (HLS,
-        # ghcid, hoogle, cabal-plan) and release tooling, which is the heaviest,
-        # flakiest part of the closure to substitute. That shrinks the Nix store
-        # each CI job realizes and caches. See CONTRIBUTING.md → "Continuous
-        # Integration".
+        # ---- Tool groups -----------------------------------------------------
+        # The lists below group tools by the concern each one serves, so a tool's
+        # reason for being in the closure is documented beside it. They are
+        # documentation, not a partition: every group here is in BOTH shells, via
+        # `ciShellInputs`. `ideInputs` is the sole exception, and the only thing
+        # that distinguishes `default` from `ci`.
+        #
+        # The base group: the toolchain every CI job needs. `go-task` lives here
+        # and here only, because it is how every job is driven, so every shell
+        # already gets it through this list.
         ciInputs = [
           pkgs.bashInteractive
           hpkgs.ghc
           hpkgs.cabal-install
           hpkgs.fourmolu
           hpkgs.hlint
-          # Run the >>> examples in Haddock comments as tests (`make doctest`),
+          # Run the >>> examples in Haddock comments as tests (`task doctest`),
           # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
           # set as the compiler it stands in for. See HADDOCK.md → "Examples that
           # run".
@@ -238,7 +242,7 @@
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
-          # and `make gen-version-fixtures`: node-semver (npm, built via
+          # and `task gen-version-fixtures`: node-semver (npm, built via
           # oracleNodeModules and put on NODE_PATH above), Python packaging
           # (PyPI), and Ruby Gem::Version (built into ruby).
           pkgs.nodejs
@@ -248,12 +252,12 @@
         ];
 
         # Site rendering: pandoc turns the repo's Markdown into the published site
-        # pages (`make site`). Only the Pages publish uses it, so it rides in the
-        # default (human) shell below but is kept out of the lean CI set.
-        docsInputs = [ pkgs.pandoc pkgs.go-task ];
+        # pages (`task site`). Both the Pages publish and the PR-tier `site-stub`
+        # gate run it, so it is part of the CI closure.
+        docsInputs = [ pkgs.pandoc ];
 
         # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
-        # by hash and copied into the published site (see Makefile `site`) so diagrams
+        # by hash and copied into the published site (see `task site`) so diagrams
         # render with no external CDN dependency. Bump the version and hash together.
         mermaidJs = pkgs.fetchurl {
           url = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
@@ -262,9 +266,9 @@
 
         # Vendored Redoc bundle for the capability-manifest page: the self-contained
         # standalone UMD build, pinned by hash and copied into the published site (see
-        # Makefile `site`) so the OpenAPI manifest renders client-side — no Node in the
-        # `.#docs` shell, no external CDN dependency. Mirrors `mermaidJs`; bump the
-        # version and hash together. See docs/architecture/api-surface.md →
+        # `task site`) so the OpenAPI manifest renders client-side, with no external
+        # CDN dependency and no Node needed to render it. Mirrors `mermaidJs`; bump
+        # the version and hash together. See docs/architecture/api-surface.md →
         # "How it's built and published".
         redocJs = pkgs.fetchurl {
           url = "https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js";
@@ -291,22 +295,21 @@
         ];
 
         # Release tooling: skopeo pushes the Nix-built image to a registry (no
-        # Docker daemon needed) via `make docker-push`, and sbomnix generates the
-        # Nix-native SBOM (`make sbom`) — more accurate than scanning a distroless
-        # image, whose static Haskell deps a scanner can't see. The provenance and
-        # SBOM attestations themselves are produced in CI by the GitHub
-        # attest-actions (immutable OCI referrers); see CONTRIBUTING.md →
+        # Docker daemon needed) via `task docker-push`, and sbomnix generates the
+        # Nix-native SBOM (`task sbom`), which is more accurate than scanning a
+        # distroless image, whose static Haskell deps a scanner cannot see. The
+        # provenance and SBOM attestations themselves are produced in CI by the
+        # GitHub attest-actions (immutable OCI referrers); see CONTRIBUTING.md →
         # "Supply-chain attestations".
         releaseInputs = [
           pkgs.skopeo
           pkgs.sbomnix
-          pkgs.go-task
         ];
 
-        # Vulnerability scanning. grype is the authority (`make scan`): it scans
+        # Vulnerability scanning. grype is the authority (`task scan`): it scans
         # the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…) against
         # its maintained DB and gives severity-rated, low-noise findings. vulnix
-        # is a secondary, Nix-native cross-check (`make scan-vulnix`): more
+        # is a secondary, Nix-native cross-check (`task scan-vulnix`): more
         # comprehensive and patch-aware but un-graded, so not the authority. On
         # the 26.05 base it comes straight from the pinned set (the older base's
         # vulnix was broken against NVD's feeds, forcing a second input — no
@@ -326,10 +329,9 @@
           # repo-wide REUSE regime) and lives in the dev shell only, never on
           # the product path. See STYLE.md, "Licence headers".
           pkgs.reuse
-          pkgs.go-task
         ];
 
-        # GitHub Actions linting (`make lint-workflows`): actionlint for
+        # GitHub Actions linting (`task lint-workflows`): actionlint for
         # correctness (shellcheck over `run:` blocks, expression/context checks)
         # and zizmor for security (template injection, credential persistence,
         # excessive permissions, dangerous triggers). Mechanizes the
@@ -340,10 +342,21 @@
         workflowLintInputs = [
           pkgs.actionlint
           pkgs.zizmor
-          # shellcheck for `make lint-scripts` (scripts/*.sh). actionlint already runs
+          # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already runs
           # shellcheck on workflow `run:` blocks; this lints the committed scripts too.
           pkgs.shellcheck
-          pkgs.go-task
+        ];
+
+        # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
+        # through their own jobs, and both are in `task check`.
+        analysisInputs = [ hpkgs.weeder hpkgs.stan ];
+
+        # Benchmarking and profiling: `task bench`, `task bench-load`, and the
+        # cost-centre flame graph from `task bench-profile`.
+        benchInputs = [
+          pkgs.haskellPackages.ghc-prof-flamegraph
+          pkgs.flamegraph
+          pkgs.oha
         ];
 
         # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. agent
@@ -384,6 +397,17 @@
           hpkgs.haskell-language-server
           agent-lsp
         ];
+
+        # Every tool any CI job drives through `task`, in ONE closure. Bundling
+        # them means build-test realizes the whole thing and writes a single,
+        # comprehensive GitHub Actions cache entry, so every downstream job gets a
+        # 100% cache hit rather than substituting its own tools from
+        # cache.nixos.org on each run. Every gate job therefore enters `.#ci`; do
+        # not add a job-specific shell without a closure that genuinely differs,
+        # because a second closure means a second cache entry to warm and evict.
+        ciShellInputs =
+          ciInputs ++ docsInputs ++ releaseInputs ++ scanInputs
+          ++ workflowLintInputs ++ analysisInputs ++ benchInputs;
       in {
         packages = {
           default = ecluse;
@@ -404,7 +428,7 @@
           # for a supply-chain tool). `tag = null` derives a unique content-hash
           # tag for local use; releases retag at push time because the target
           # repo enforces immutable tags (see CONTRIBUTING.md "Releases").
-          # Push via `make docker-push`; provenance + SBOM attestations are
+          # Push via `task docker-push`; provenance + SBOM attestations are
           # attached in CI by release.yml (the GitHub attest-actions).
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "ecluse";
@@ -433,13 +457,18 @@
         };
 
         checks = {
-          # Pure, gating test tiers. Each builds the package and runs ONE unit
-          # suite (testTarget), so these hermetic checks never execute the Docker-
-          # or network-dependent suites. All three are required by the gate (`make
-          # nix-check` runs them; CI's static-checks job runs them via `nix build
-          # .#checks.x86_64-linux.unit-core .#checks.x86_64-linux.unit-app
-          # .#checks.x86_64-linux.unit-runtime`).
-          # Both build the whole package (including the loopback integration suite),
+          # Pure test tiers. Each builds the package and runs ONE unit suite
+          # (testTarget), so these hermetic checks never execute the Docker- or
+          # network-dependent suites.
+          #
+          # NOT on the CI gate. Nothing in CI runs `nix flake check`, and the only
+          # check any workflow builds directly is `docs` below. These three are the
+          # hermetic, clean-tree counterpart to `task test` (which is what actually
+          # gates, via the build-test job) and run on demand through `task
+          # nix-check`. Keep that in mind before treating a green CI run as
+          # evidence that they still build.
+          #
+          # All three build the whole package (including the loopback integration suite),
           # so they enable dev-http-egress, the flag the integration suites' loopback
           # constructor needs to compile. The release `ecluse` (ecluseRaw / dontCheck)
           # never enables it, so the shipped artifact still carries no plaintext-egress
@@ -468,7 +497,7 @@
           # so without this the check runs from the build sandbox with hlint's
           # built-in hints and skips the repo's security restrictions — the banned
           # `error` / `undefined` / partial functions. `hsSrc` carries `.hlint.yaml`,
-          # so running from there enforces the same rules `make lint` does.
+          # so running from there enforces the same rules `task lint` does.
           lint = pkgs.runCommand "hlint-check"
             { nativeBuildInputs = [ hpkgs.hlint ]; } ''
             cd ${hsSrc}
@@ -477,7 +506,7 @@
           '';
 
           # Validate the package description hermetically, mirroring
-          # `make cabal-check`: fail on any Warning:/Error: line (the package is
+          # `task cabal-check`: fail on any Warning:/Error: line (the package is
           # kept warning-free). `cabal check` does no build and needs no package
           # index or network, so it runs in the sandbox — but it DOES verify that
           # referenced files exist (license-file: LICENSE, the extra-source-files
@@ -502,50 +531,36 @@
           # Build the library Haddock via the Nix Haskell builder. The dependency
         # closure comes prebuilt from the pinned haskell set (with their .haddock
         # interfaces), so ONLY ecluse compiles + haddocks — whereas `cabal haddock`
-        # (make docs-check) rebuilds the whole ~188-package closure every CI run,
+        # (`task docs-check`) rebuilds the whole ~188-package closure every CI run,
         # because it wants a documentation variant of the deps that build-test's
         # `cabal build` store lacks. doHaddock forces the Haddock pass (broken doc
         # comments fail the build); dontCheck skips the test suites.
         docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
       };
 
-      devShells = rec {
-        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder + stan.
-        default = pkgs.mkShell (shellEnv // {
-          name = "ecluse";
-          buildInputs =
-            ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
-            ++ docsInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha hpkgs.weeder hpkgs.stan ];
-          # Paths to the pinned vendored bundles; `make site` copies them into
+      devShells = {
+        # The shell every CI job enters. See `ciShellInputs` for why it is one
+        # closure rather than a per-job set.
+        ci = pkgs.mkShell (shellEnv // {
+          name = "ecluse-ci";
+          buildInputs = ciShellInputs;
+          # Paths to the pinned vendored bundles; `task site` copies them into
           # _site/vendor (Mermaid for the rendered docs, Redoc for the manifest page).
           MERMAID_JS = "${mermaidJs}";
           REDOC_JS = "${redocJs}";
         });
 
-        # Unified shell for CI: contains all tools needed by all gating and
-        # informational jobs. By bundling them here, the build-test job realizes
-        # the entire closure and writes a single, comprehensive entry to the
-        # GitHub Actions cache. This ensures every downstream job gets a 100%
-        # cache hit and doesn't need to download missing tools (like weeder or stan)
-        # from cache.nixos.org on every run, dramatically speeding up CI.
-        ci = pkgs.mkShell (shellEnv // {
-          name = "ecluse-ci";
-          buildInputs =
-            ciInputs ++ docsInputs ++ scanInputs ++ workflowLintInputs
-            ++ releaseInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha hpkgs.weeder hpkgs.stan ];
+        # The shell for humans: everything CI has, plus the interactive tooling CI
+        # never needs. That difference is the ONLY one, and it is deliberately a
+        # strict superset: a human can reproduce any gate job locally, but the IDE
+        # closure (HLS alone is ~8 GB, the heaviest and flakiest part to
+        # substitute) stays out of what CI realizes and caches.
+        default = pkgs.mkShell (shellEnv // {
+          name = "ecluse";
+          buildInputs = ciShellInputs ++ ideInputs;
           MERMAID_JS = "${mermaidJs}";
           REDOC_JS = "${redocJs}";
         });
-
-        # The specific shells are now just aliases to the unified CI shell to
-        # maximize cache hits across GHA jobs without requiring workflow churn.
-        docs = ci;
-        scan = ci;
-        workflow-lint = ci;
-        weeder = ci;
-        stan = ci;
-        release = ci;
-        bench = ci;
 
         # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
         # built by CI (the gate runs no `nix flake check`) and not part of the

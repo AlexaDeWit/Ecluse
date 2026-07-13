@@ -12,7 +12,7 @@ vars:
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
   PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
-  NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#bench" --command{{end}}'
+  NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 
 tasks:
   default:

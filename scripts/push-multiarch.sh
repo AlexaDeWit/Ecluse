@@ -13,7 +13,7 @@
 # those layouts and copies it to the registry. No podman, no sudo.
 #
 # Run by release.yml after the matrix build; needs skopeo, regctl, jq (the
-# `.#release` shell) and an active Docker Hub login (release.yml's
+# `.#ci` shell) and an active Docker Hub login (release.yml's
 # docker/login-action writes ~/.docker/config.json, which both skopeo and regctl
 # read). See docs/architecture/release-supply-chain.md → "Multi-architecture image".
 #

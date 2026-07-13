@@ -184,8 +184,9 @@ jobs:
     # registry — unlike smoke) and has been reliably green, so it GATES: a `gate`
     # dependency, run on every PR and nightly. If its weight starts to hurt PR latency
     # or it turns flaky, the levers are nightly-only cadence or a larger runner before
-    # dropping it from the gate. Uses the full dev shell (not `.#ci`) because the harness
-    # needs the npm CLI on PATH. The shared "Set up toolchain" action frees the small root
+    # dropping it from the gate. Every binary the harness shells out to comes from
+    # `.#ci` (npm, tar, openssl) or the host (docker), so it enters the same shell as
+    # every other gate job. The shared "Set up toolchain" action frees the small root
     # partition and moves the Nix store + Docker data-root onto the ephemeral /mnt volume
     # (now shared by every toolchain job, so the benchmark jobs get the same headroom),
     # since the image build + `docker load` can exhaust root. See
@@ -202,14 +203,15 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # Never write the shared Nix-store cache: this job realizes the FULL dev
-          # shell (a superset of the gating `.#ci` closure) and runs on the nightly
-          # main schedule, so saving here would bloat and race the canonical entry
-          # that build-test owns. Restore-only. See setup-toolchain's caching policy.
+          # Restore the shared Nix-store cache but never write it. This job realizes
+          # the same `.#ci` closure build-test does, so it restores a 100% hit; but
+          # build-test is the single writer, and this job also runs on the nightly
+          # main schedule, so saving here would race it for the one
+          # nix-<os>-<flakehash> entry. See setup-toolchain's caching policy.
           save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop --command task update
+        run: nix develop .#ci --command task update
 
       # Warm the pinned Docker Hub images the e2e data plane pulls (ministack, the
       # OTLP collector, nginx, Verdaccio) into the local cache first, retrying a
@@ -231,7 +233,7 @@ jobs:
           nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
       - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
-        run: nix develop --command task test-e2e
+        run: nix develop .#ci --command task test-e2e
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
@@ -260,7 +262,7 @@ jobs:
       - name: Static checks
         env:
           GH_TOKEN: ${{ github.token }}
-        run: nix develop --command task static-checks
+        run: nix develop .#ci --command task static-checks
 
       - name: Upload Semgrep SARIF to code scanning
         # Surface findings in the Security tab, so the dashboard reflects
@@ -348,12 +350,12 @@ jobs:
       # for its own build. Sharing the builddir buys nothing here; it is `task check`
       # locally, where the two run in one checkout, that it saves a build (#826).
       - name: Update package index
-        run: nix develop .#weeder --command task update
+        run: nix develop .#ci --command task update
 
       - name: weeder (fails on findings)
         run: |
           set -eo pipefail
-          nix develop .#weeder --command task weeder 2>&1 | tee weeder.out
+          nix develop .#ci --command task weeder 2>&1 | tee weeder.out
 
       - name: Render weeder findings to the run summary
         if: always()
@@ -399,12 +401,12 @@ jobs:
       # dependency closure comes warm from the cabal-store cache, so a fresh builddir
       # is only the first-party packages.
       - name: Update package index
-        run: nix develop .#stan --command task update
+        run: nix develop .#ci --command task update
 
       - name: stan (fails on findings)
         run: |
           set -eo pipefail
-          nix develop .#stan --command task stan 2>&1 | tee stan.out
+          nix develop .#ci --command task stan 2>&1 | tee stan.out
 
       - name: Render stan findings to the run summary
         if: always()
