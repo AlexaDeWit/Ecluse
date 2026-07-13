@@ -102,7 +102,8 @@ algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved ar
 serves); an unrecognised or malformed prefix yields 'Nothing', so it asserts no
 algorithm and clears no floor (the fail-closed reading).
 
->>> import Ecluse.Core.Package (mkHash, HashAlg (SHA1, SRI))
+>>> import Ecluse.Core.Package (mkHash)
+>>> import Ecluse.Core.Package.Hash (HashAlg (SHA1, SRI))
 >>> assertedAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
 Right (Just SHA512)
 

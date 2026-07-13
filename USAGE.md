@@ -191,6 +191,8 @@ rationale behind each setting are in
 | `ECLUSE_QUEUE_MEMORY_MAX_DEPTH` | No | `50000` | `memory` only. Cap on in-process queue depth. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
 | `AWS_REGION` | Depends | AWS backends only | Region for SQS and CodeArtifact. |
 | `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No |  | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
+| `AWS_ACCESS_KEY_ID` | Depends | Local emulator / overrides only | The access key used to sign AWS requests when an endpoint override is active. |
+| `AWS_SECRET_ACCESS_KEY` | Depends | Local emulator / overrides only | The secret key used to sign AWS requests when an endpoint override is active. |
 | `ECLUSE_GOOGLE_PROJECT` | Depends | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
 | `ECLUSE_AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
 | `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |

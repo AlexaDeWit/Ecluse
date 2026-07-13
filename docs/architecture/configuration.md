@@ -162,7 +162,7 @@ enforcing one re-executes the binary once, in place (same PID; a supervisor sees
 uninterrupted process), loop-guarded by an internal marker. An operator's own `GHCRTS` is never
 fought: an explicit `-M` there is adopted, and a divergence surviving the re-launch is logged as
 a warning, never an abort. See the [Operator Manual](../../USAGE.md#operating-écluse) for the
-arithmetic.
+arithmetic details of `ECLUSE_CORES` and `ECLUSE_MAX_HEAP_BYTES`.
 
 The resolution is role-agnostic: cores and the heap ceiling derive from the container's limits,
 which bind the proxy, Pilot, and Dredger alike. Workload-shaped memory modelling is not
@@ -181,7 +181,7 @@ below the floor is refused (`403`) and filtered from the served listing.
 is hard-floored at SHA-256: a value below it or an unknown name is a configuration error
 rejected at load, never silently clamped, and there is no escape-hatch to accept a sub-SHA-256
 digest from a public upstream. See the [Operator Manual](../../USAGE.md#environment-variables)
-for supported algorithms.
+for supported algorithms (via `ECLUSE_MIN_PUBLIC_INTEGRITY` and `ECLUSE_MIN_TRUSTED_INTEGRITY`).
 
 ### Trusted integrity floor
 
@@ -193,7 +193,7 @@ on the artifact path falls through to the public origin). Unlike the public floo
 loosenable below SHA-256 for a legacy private mirror, where trust in the operator's vetted source
 substitutes for cryptographic strength; this is the only way Écluse serves a sub-SHA-256 digest,
 and only on the trusted private origin. An unknown algorithm name is still rejected at load. See
-the [Operator Manual](../../USAGE.md#environment-variables) for supported values.
+the [Operator Manual](../../USAGE.md#environment-variables) for supported values (via `ECLUSE_MIN_TRUSTED_INTEGRITY`).
 
 ### Cross-upstream divergence policy
 
@@ -209,7 +209,7 @@ contested version: `warn` (the default) serves the trusted copy and relies on th
 pinned to that exact version fails to resolve it rather than receive a contested copy. Fail-closed
 trades availability for strictness and drops any `dist-tag` (including `latest`) that pointed at the
 withheld version; run `warn` first and watch the counter to learn your benign-divergence rate before
-enabling it. See the [Operator Manual](../../USAGE.md#environment-variables).
+enabling it. See the [Operator Manual](../../USAGE.md#environment-variables) (via `ECLUSE_DIVERGENCE_POLICY`).
 
 ### Rule policy
 
