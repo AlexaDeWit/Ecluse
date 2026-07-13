@@ -2,57 +2,57 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The documentation view of a route: the v-erased projection of a
-"Ecluse.Core.Server.RoutePattern".'RoutePattern' the OpenAPI manifest renders.
+{- | The __documented__ view of a route: everything a capability manifest needs to
+describe it, as plain data.
 
-A 'RouteSpec' states one route the way the __documentation__ needs it: the HTTP
-method, the mount-relative path template (literal segments and named parameters), and
-the shared 'Route' it denotes. 'specOf' derives it from the /same/ 'RoutePattern' the
-front door routes on, dropping the capture-value type @v@ and the runtime parser, so
-the documented paths, methods, and parameters are a projection of what the classifier
-matches rather than a hand-kept parallel copy. The manifest can therefore not lie about
-the routed surface: both derive from one pattern.
+A 'RouteSpec' is the erased projection of a "Ecluse.Core.Server.Route".'Route' ('specOf'):
+its name, its method, its path template, and its documentation. The capture-value
+type, the builder, and the action are all dropped, so this type is monomorphic and every
+ecosystem's routes describe themselves through it, whatever their own captures.
 
-This module is __plain data__ with no OpenAPI (or any web) dependency, so the shared
-grammar lives in the agnostic core and the heavy manifest tooling stays confined to
-the build-time generator that renders it.
+The manifest interprets these specs into an OpenAPI document, and that is the __only__
+thing it does with them: it holds no per-route knowledge of its own, so it has nothing to
+drift with. The specs are projections of the very records the router runs, so the
+documented surface cannot lie about the routed one.
 -}
 module Ecluse.Core.Server.RouteSpec (
-    -- * The documentation view
+    -- * The documented view
     RouteSpec (..),
     PathSeg (..),
     ParamSpec (..),
 
-    -- * Projection from a route pattern
+    -- * Projection from a route
     specOf,
 ) where
 
 import Network.HTTP.Types.Method (StdMethod (GET, PUT))
 
-import Ecluse.Core.Server.Route (Route)
-import Ecluse.Core.Server.RoutePattern (
+import Ecluse.Core.Server.Route (
     Capture (capDescription, capName),
     MethodMatch (MethodPut, MethodRead),
     PatternSeg (SegCap, SegLit),
-    RoutePattern (rpMethod, rpRoute, rpSegs),
+    Route (routeDoc, routeMethod, routeName, routeSegs),
+    RouteName,
  )
+import Ecluse.Core.Server.RouteDoc (RouteDoc)
 
-{- | One route, described as data for a renderer: the method, the path template, and
-the 'Route' it denotes. Derived from a 'RoutePattern' by 'specOf'.
+{- | One route, described as data for a renderer: what it is called, the method it answers,
+its path template, and what it does. Derived from a 'Route' by 'specOf'.
 -}
 data RouteSpec = RouteSpec
-    { rsMethod :: StdMethod
+    { rsName :: RouteName
+    {- ^ The route's name within its ecosystem. The manifest qualifies it by ecosystem to
+    form OpenAPI's @operationId@.
+    -}
+    , rsMethod :: StdMethod
     -- ^ The HTTP method this route is documented under.
     , rsPattern :: [PathSeg]
-    {- ^ The mount-relative path template: literal segments and named parameters, in
-    order (e.g. @{package} \/ - \/ {filename}@). The mount prefix is not included; the
-    manifest renderer prepends it.
+    {- ^ The mount-relative path template: literal segments and named parameters, in order
+    (e.g. @{package} \/ - \/ {filename}@). The mount prefix is not included; the manifest
+    renderer prepends it.
     -}
-    , rsRoute :: Route
-    {- ^ The serve action this route denotes. It keys the manifest's per-route
-    documentation, so a total case over the 'Route' sum keeps the described surface
-    exhaustive.
-    -}
+    , rsDoc :: RouteDoc
+    -- ^ What this route does, and what it answers with.
     }
     deriving stock (Eq, Show)
 
@@ -73,18 +73,22 @@ data ParamSpec = ParamSpec
     }
     deriving stock (Eq, Show)
 
-{- | Project a 'RoutePattern' to its documentation view: the method it is documented
-under (a read pattern matches any non-write method but documents as @GET@; the write
-pattern as @PUT@), its path template (a literal segment verbatim, a capture as a named
-parameter carrying its documentation), and the 'Route' it denotes. The capture-value
-type and the runtime parser are dropped -- the manifest documents structure, not semantics.
+{- | Project a 'Route' to its documented view: the method it is documented under (a read
+route documents as @GET@, its bodiless @HEAD@ being a variation rather than a route of its
+own; a write route as @PUT@), its path template (a literal segment verbatim, a capture as a
+named parameter carrying its description), and its name and documentation, carried
+across unchanged.
+
+The capture-value type, the builder, and the action are dropped: the manifest documents
+structure, not semantics.
 -}
-specOf :: RoutePattern v -> RouteSpec
-specOf rp =
+specOf :: Route v -> RouteSpec
+specOf route =
     RouteSpec
-        { rsMethod = documentedMethod (rpMethod rp)
-        , rsPattern = map paramOf (rpSegs rp)
-        , rsRoute = rpRoute rp
+        { rsName = routeName route
+        , rsMethod = documentedMethod (routeMethod route)
+        , rsPattern = map paramOf (routeSegs route)
+        , rsDoc = routeDoc route
         }
   where
     documentedMethod MethodPut = PUT

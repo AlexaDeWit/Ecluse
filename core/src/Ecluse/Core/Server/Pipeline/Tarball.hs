@@ -147,6 +147,7 @@ import Ecluse.Core.Server.Context (
     ctxRuntime,
     tarballHostHonoured,
  )
+import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     evalTier,
@@ -169,7 +170,6 @@ import Ecluse.Core.Server.Response (
     renderError,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)

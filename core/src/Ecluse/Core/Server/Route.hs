@@ -2,203 +2,180 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared serve-action vocabulary of the front door, and the agnostic
-default router.
+{- | A route: one record saying everything there is to say about one URL the proxy
+serves.
 
-A 'Route' is one classified request -- everything the proxy is willing to serve,
-named independently of any ecosystem's URL grammar. The /actions/ are common
-across registries (fetch a packument, stream a tarball, publish a first-party
-package, answer a liveness probe, deny a search); only the
-__(method, URL)→action__ mapping is ecosystem-specific. That mapping is a
-'Classifier', injected at the composition root, so this module stays free of any
-one ecosystem's path conventions while the dispatcher routes through whatever
-classifier its mount carries.
+A 'Route' carries its method condition, its path template (literal segments and named
+captures that parse themselves), what to /do/ when it matches, and its documentation.
+An ecosystem's routing table is then simply __a list of these values__
+("Ecluse.Core.Registry.Npm.Route" is npm's), and 'routerOf' folds that list into the
+mount's router: first match wins, no match is the deny-by-default @404@.
 
-The classifier is __method-aware__ because the same path can name different
-actions by HTTP method: @GET \/{pkg}@ reads a packument, @PUT \/{pkg}@ publishes
-one. A read and a write are genuinely distinct serve actions (not a rendering
-variation the way a @HEAD@ is a bodiless @GET@), so the method is part of what the
-classifier maps, and a write earns its own 'Route' rather than being inferred at
-dispatch.
+There is no route /sum/. A classified-route type would have to be matched again to decide
+what to do about it, and again to document it, and each of those matches is somewhere the
+three can fall out of step. Here the pattern, the action, and the documentation are the
+same value, so they cannot disagree, and the manifest renders 'Ecluse.Core.Server.RouteSpec'
+projections of the very records the router runs.
 
-The model is __deny by default__, mirroring the rules engine ("Ecluse.Core.Rules"):
-any path a mount's 'Classifier' does not recognise is 'Unsupported' (a @404@ at the
-edge), so the front door serves nothing it was not explicitly taught to. An
-ecosystem adapter supplies a 'Classifier' that recognises its own paths and falls
-back to 'Unsupported' for the rest.
+== What stays a named function
 
-'Route' is a small sum so the whole routing table is unit-testable with __no
-server__: feed a 'Classifier' some segments, assert the 'Route'.
+The engine owns the __structure__: literal matching, capture arity, ordering, exact
+consumption. It does not infer an ecosystem's __semantics__. A 'Capture' carries its own
+segment parser and a 'Route' its own builder, so the security-critical leaf logic (the
+component-safety gate, an ecosystem's scoped-name decoding, a version parse, the
+cross-capture path-confusion check) stays in named, reviewed, separately-tested functions
+that the record references, rather than being regenerated from a generic template.
 -}
 module Ecluse.Core.Server.Route (
-    -- * Routes
+    -- * A route
     Route (..),
-    Filename (..),
+    RouteName (..),
+    PatternSeg (..),
+    Capture (..),
+    MethodMatch (..),
 
-    -- * Classification
-    Classifier,
-
-    -- * Component safety
-    isSafeComponent,
-    encodeComponent,
+    -- * Routing a request
+    routerOf,
+    matchRoute,
 ) where
 
-import Data.ByteString qualified as BS
-import Data.ByteString.Internal (w2c)
-import Data.Char (intToDigit, isControl, toUpper)
-import Data.Text qualified as T
-import Network.HTTP.Types.Method (Method)
+import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
 
-import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Server.Context (MountRouter, RouteAction (AnswerLocally))
+import Ecluse.Core.Server.Pipeline.Shared (notFoundInMount)
+import Ecluse.Core.Server.RouteDoc (RouteDoc)
 
-{- | A classified request. Everything the front door is willing to serve is one
-of these; an unrecognised path is 'Unsupported' (deny by default).
+{- | One route, whole: how it matches, what it does, and what it means.
 
-The constructors are the proxy's /actions/, shared across ecosystems -- the
-artifact a 'Tarball' streams and the metadata a 'Packument' merges are the same
-serve behaviour whether the upstream is npm, PyPI, or another registry. Only the
-mapping from a request path to one of these (a 'Classifier') is
-ecosystem-specific.
+Generic over the ecosystem's capture-value type @v@, which is the only thing about a
+route that is not shared (npm's captures yield a parsed package or an artifact name;
+another registry's would yield its own).
 -}
-data Route
-    = -- | A package-metadata request -- the /packument/.
-      Packument PackageName
-    | {- | An artifact request, as a __parsed coordinate__: the package, the
-      'Version' the classifier read out of the artifact name, and the 'Filename'
-      itself. The 'Version' is the coordinate the rules gate on; the 'Filename' is
-      the artifact's on-the-wire name, __preserved verbatim__ -- it, not a name
-      rebuilt from @(package, version)@, is authoritative for fetching the bytes.
-      -}
-      Tarball PackageName Version Filename
-    | {- | A first-party __publish__ request -- @PUT \/{pkg}@. The one client-driven
-      /write/ action: the publisher's own publish document (the version manifest plus
-      the base64 tarball) is relayed to the configured /publication target/ after the
-      anti-shadowing scope guard, with the publisher's own forwarded credential (see
-      @docs\/architecture\/registry-model.md@ → "Publishing first-party packages"). The
-      'PackageName' is the route's authoritative identity -- the scope guard and the
-      upstream write path both key on it, never on the document's self-reported name.
-      The version lives inside the relayed document, so the route carries none.
-      -}
-      Publish PackageName
-    | -- | A registry liveness probe, answered locally.
-      Ping
-    | -- | Package search (unsupported).
-      Search
-    | {- | Anything unrecognised. Renders as a @404@ -- deny by default at the
-      routing layer.
-      -}
-      Unsupported
+data Route v = Route
+    { routeName :: RouteName
+    {- ^ This route's name, unique within its ecosystem (@"packument"@). It is the handle
+    a test asserts on when it checks /which/ route a request took, and the manifest
+    qualifies it by ecosystem to form OpenAPI's @operationId@ (which must be unique across
+    the whole document, so only the manifest, which sees every mount at once, can
+    guarantee it).
+    -}
+    , routeMethod :: MethodMatch
+    -- ^ The method condition a request must satisfy to match.
+    , routeSegs :: [PatternSeg v]
+    -- ^ The mount-relative path template: literal segments and named captures, in order.
+    , routeBuild :: Method -> [v] -> Maybe RouteAction
+    {- ^ What serving this route amounts to, given the request method and the captured
+    values (one per 'SegCap', in template order).
+
+    'Nothing' __denies__: the route does not claim this request after all, and matching
+    falls through to the next route (and, failing all of them, to the @404@). That is
+    where a __cross-capture__ check lives, e.g. an artifact file name that must parse for
+    the package captured earlier: a name addressing some other package's artifact is
+    refused rather than fabricated into a coordinate.
+
+    The 'Method' is passed because a @HEAD@ is a __bodiless variation__ of its @GET@
+    rather than a distinct route: it matches the same pattern, and the builder selects the
+    head-mode handler.
+    -}
+    , routeDoc :: RouteDoc
+    {- ^ What this route does, and every status it answers with. Carried here, so a route
+    cannot be added without documenting it, and the manifest can render the same records
+    the router runs.
+    -}
+    }
+
+{- | A route's name within its ecosystem (@"packument"@, @"tarball"@). Not qualified: the
+route already lives in its ecosystem's table, and the manifest adds the namespace when it
+needs a globally unique identifier.
+-}
+newtype RouteName = RouteName {unRouteName :: Text}
+    deriving stock (Eq, Ord, Show)
+
+{- | One segment of a path template: a fixed segment matched verbatim, or a named capture
+that consumes one or more leading segments and yields a value.
+-}
+data PatternSeg v
+    = SegLit Text
+    | SegCap (Capture v)
+
+{- | A named path capture: how it parses (the security-critical leaf) and how it
+documents. 'capConsume' may consume __more than one__ segment (an ecosystem whose
+identifier spans a decoded @\'\/\'@ needs this) and returns the unconsumed tail, so
+captures thread left to right; 'Nothing' fails the match, and the request falls through to
+the next route or to the deny-by-default catch-all.
+-}
+data Capture v = Capture
+    { capName :: Text
+    -- ^ The capture name, as it appears in the template (@{package}@).
+    , capDescription :: Text
+    -- ^ A one-line, human-facing description for the documentation.
+    , capConsume :: [Text] -> Maybe (v, [Text])
+    -- ^ Consume the leading segments this capture claims, yielding its value and the tail.
+    }
+
+{- | The method condition on a route: the __read__ methods (@GET@ and @HEAD@), or the one
+client __write__ (@PUT@).
+
+Any other method matches no route and therefore denies (deny by default): the front door
+answers only the methods it was taught, so a @DELETE@ or @POST@ over a package path is a
+@404@ rather than being read as a package request. This also keeps the documented method
+honest: the manifest says @GET@ for a read, and only a @GET@ (or its bodiless @HEAD@) is
+served.
+
+Kept as a small closed vocabulary rather than a bare predicate so the manifest can still
+name the documented method.
+-}
+data MethodMatch
+    = -- | The write method (@PUT@).
+      MethodPut
+    | -- | The read methods (@GET@ and @HEAD@).
+      MethodRead
     deriving stock (Eq, Show)
 
-{- | An artifact's on-the-wire file name, the agnostic artifact-name type a
-'Tarball' route carries.
+-- | Whether a request method satisfies a route's 'MethodMatch'.
+methodMatches :: MethodMatch -> Method -> Bool
+methodMatches MethodPut m = m == methodPut
+methodMatches MethodRead m = m == methodGet || m == methodHead
 
-It is held as a distinct type, not a bare 'Text', because it is __authoritative
-for fetching the bytes__: the proxy fetches an artifact at the upstream path built
-from this exact name, never one reconstructed from @(package, version)@, so that a
-registry whose artifact naming differs from the proxy's own convention still
-resolves. The name is preserved verbatim as received; the classifier that produces
-it has already applied the component-safety gate ('isSafeComponent'), so the value
-is safe to interpolate into a downstream URL.
+{- | Fold an ecosystem's route table into its mount's router: the first route that claims
+the request decides what is done with it, and a request no route claims is the
+deny-by-default @404@ in the mount's own error surface.
+
+Deny-by-default is __structural__ here: 'routerOf' has no other way to answer. There is no
+catch-all branch to forget.
 -}
-newtype Filename = Filename Text
-    deriving stock (Eq, Show)
+routerOf :: [Route v] -> MountRouter
+routerOf routes method segments =
+    maybe (AnswerLocally notFoundInMount) snd (matchRoute routes method segments)
 
-{- | The mapping from an ecosystem-native request to a 'Route'.
+{- | The route that claims a request, and the action it names: the first whose method
+condition holds, whose segments are consumed __exactly__, and whose builder accepts the
+captures. 'Nothing' when none does.
 
-A classifier sees the request's HTTP 'Method' and the already-mount-stripped,
-percent-decoded path segments and returns the serve action. The method is part of
-the mapping because the same path names different actions by method (@GET \/{pkg}@
-reads, @PUT \/{pkg}@ publishes); a @HEAD@, by contrast, classifies like its @GET@
-(it is a bodiless variation the dispatcher handles, not a distinct action). Each
-ecosystem adapter contributes its own classifier -- recognising its
-(method, path) grammar and denying everything else -- so the agnostic dispatcher
-stays closed while every mount routes through its ecosystem's template. Dispatch
-chooses the classifier per matched mount (see "Ecluse.Server"), so the same shape
-carries either a single ecosystem or a mount-keyed selection.
+Exported beside 'routerOf' because it is what makes a routing table testable with no
+server: feed it a method and segments and assert /which/ route won (by its 'routeName'), or
+that none did. The action itself is a closure and is exercised through the serve path.
 -}
-type Classifier = Method -> [Text] -> Route
-
-{- | Whether a single decoded path component is __safe to interpolate__ into a
-downstream upstream URL -- the deny-by-default gate a classifier applies to every
-component it accepts (a scope, base name, or tarball filename).
-
-The path is percent-decoded before it reaches us, so a single segment can carry a
-@\'\/\'@, a @\'\\\\\'@, a control character, or be @"."@\/@".."@; any of these
-enables path traversal or request smuggling once the name reaches the upstream
-URL. A component is UNSAFE iff it is empty, is exactly @"."@ or @".."@, or
-contains a @\'\/\'@, a @\'\\\\\'@, or any 'isControl' character. Everything else
-is accepted: this is a security boundary, __not__ an ecosystem-policy validator,
-so ordinary names with interior dots (@lodash.merge@, @is.odd@), hyphens,
-underscores, digits, or uppercase all pass.
-
-It lives in the agnostic layer because the threat -- interpolating a hostile
-segment into an upstream URL -- is ecosystem-independent; both an ecosystem's path
-classifier and the defence-in-depth check in "Ecluse.Core.Security" share this one
-rule.
-
-This gate is __structural__: it stops a component that would change the upstream
-URL's /shape/ (a traversal, an embedded separator, a control character). It does
-__not__ stop a component that carries other URL-reserved bytes -- a @\'%\'@,
-@\'?\'@, @\'#\'@, @\'\;\'@, or a space -- which an accepted name can still hold
-(notably a once-decoded segment carrying a literal @%2e%2e%2f@). Those are
-neutralised not by widening this denylist but by percent-encoding every accepted
-component with 'encodeComponent' when the upstream URL is built, so the safety of
-an interpolated component rests on encode-on-build, not on this gate alone.
--}
-isSafeComponent :: Text -> Bool
-isSafeComponent c =
-    not (T.null c)
-        && c /= "."
-        && c /= ".."
-        && T.all safeChar c
+matchRoute :: [Route v] -> Method -> [Text] -> Maybe (Route v, RouteAction)
+matchRoute routes method segments =
+    listToMaybe (mapMaybe claim routes)
   where
-    safeChar ch = ch /= '/' && ch /= '\\' && not (isControl ch)
+    claim route
+        | methodMatches (routeMethod route) method = do
+            captures <- consumeSegs (routeSegs route) segments
+            action <- routeBuild route method captures
+            pure (route, action)
+        | otherwise = Nothing
 
-{- | Percent-encode a single decoded path component for __safe interpolation__
-into an upstream URL -- the encode-on-build partner of 'isSafeComponent'.
-
-A component is the content between a URL's structural delimiters (a scope, base
-name, or filename), never the delimiters themselves, so this encodes
-conservatively: it keeps only the RFC 3986 __unreserved__ set
-(@A-Z@, @a-z@, @0-9@, and @\'-\'@, @\'.\'@, @\'_\'@, @\'~\'@) verbatim and
-percent-encodes __every other byte__ of the component's UTF-8 encoding as
-@%XX@ (upper-case hex). A caller composing a path therefore writes the structural
-@\'\/\'@, scope @%2F@, @\'\@\'@ sigil, and the like itself, around encoded
-components -- so a @\'%\'@, @\'\/\'@, @\'?\'@, @\'#\'@, @\'\;\'@, space, or control
-byte inside a component cannot alter the URL's shape, inject a query or fragment,
-or -- the once-decoded @%2e%2e%2f@ case -- survive as a live escape a
-decode-and-normalise upstream could resolve to traversal.
-
-Encoding is per-byte over the UTF-8 form, so a multi-byte character is encoded one
-@%XX@ per byte (@\'é\'@ → @%C3%A9@). It does __not__ encode an already-percent-encoded
-escape idempotently -- a literal @\'%\'@ is always re-encoded to @%25@ -- which is the
-point: the component is decoded content, so any @\'%\'@ in it is a literal to be
-escaped, not a structural escape to preserve.
--}
-encodeComponent :: Text -> Text
-encodeComponent = T.concat . map encodeByte . BS.unpack . encodeUtf8
-  where
-    encodeByte :: Word8 -> Text
-    encodeByte b
-        | isUnreserved b = T.singleton (chr8 b)
-        | otherwise = T.pack ['%', hexDigit (b `div` 16), hexDigit (b `mod` 16)]
-
-    -- RFC 3986 §2.3 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
-    isUnreserved :: Word8 -> Bool
-    isUnreserved b =
-        (b >= 0x41 && b <= 0x5A) -- A-Z
-            || (b >= 0x61 && b <= 0x7A) -- a-z
-            || (b >= 0x30 && b <= 0x39) -- 0-9
-            || b == 0x2D -- '-'
-            || b == 0x2E -- '.'
-            || b == 0x5F -- '_'
-            || b == 0x7E -- '~'
-
-    -- An unreserved byte is ASCII, so its 'Char' is its code point.
-    chr8 :: Word8 -> Char
-    chr8 = w2c
-
-    hexDigit :: Word8 -> Char
-    hexDigit = toUpper . intToDigit . fromIntegral
+{- Run a route's segments against a request's segments, collecting one value per capture
+in template order. Requires __exact__ consumption: a leftover request segment, or a
+template segment with nothing to match, fails. A 'SegCap' may consume more than one segment
+(its 'capConsume' decides) and threads the remainder to the rest of the template. -}
+consumeSegs :: [PatternSeg v] -> [Text] -> Maybe [v]
+consumeSegs [] [] = Just []
+consumeSegs (SegLit l : ps) (s : ss)
+    | l == s = consumeSegs ps ss
+consumeSegs (SegCap c : ps) ss = do
+    (v, rest) <- capConsume c ss
+    (v :) <$> consumeSegs ps rest
+consumeSegs _ _ = Nothing

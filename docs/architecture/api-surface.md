@@ -28,20 +28,31 @@ how each route is handled:
 Re-specifying npm's full packument or registry protocol is out of scope: that is npm's
 contract, and clients hardcode it.
 
-## Source of truth: the `Route` enumeration × mounts
+## Source of truth: the route table × mounts
 
-The manifest is derived, not hand-written. Each ecosystem mount's adapter carries its serve
-surface as data: `serveRoutes`, one declarative `RouteSpec` per served
-[`Route`](web-layer.md#raw-wai-not-a-web-framework) (its method, path template, path
-parameters, and the `Route` it denotes), the same grammar the mount's `classify` router routes
-on. The manifest renders those specs across the configured
-[mounts](web-layer.md#multi-ecosystem-mounts) and marries each to its owned documentation, so
-the documented paths and methods are a projection of how the server mounts routes, not a
-parallel copy: one grammar drives dispatch and the manifest alike, and adding PyPI is adding a
-mount, not describing a protocol. A correspondence test holds each spec's example against the
-live classifier, so the description and the parser cannot fall out of step. In the rendered
-docs, tags are ecosystems: Redoc groups operations by mount, so the document reads as "one
-server, these protocols".
+The manifest is derived, not hand-written, and it holds **no per-route knowledge of its own**.
+
+Each ecosystem's adapter declares its routes as a list of records
+([above](web-layer.md#the-route-table-belongs-to-the-ecosystem)). One record carries a route's
+path template, what serving it *does*, **and its documentation**: its summary, its status set,
+and the shape of each body. The manifest walks the same records the router runs
+(`serveRoutes`, their erased `RouteSpec` projection) and renders whatever it is handed.
+
+There is nothing here to keep in step with the routes, so there is nothing to drift. A route
+cannot be declared without its documentation, because the record will not construct without it.
+That is a stronger guarantee than a total map over a route sum, which stays exhaustive only for
+as long as someone keeps it so.
+
+The documentation types in the core are deliberately **OpenAPI-free** (`RouteDoc`, and a closed
+`BodyDoc` vocabulary of the body shapes Écluse emits). Naming the body a route carries is a core
+concern; knowing what a JSON Schema is is not, and the `openapi3` dependency tree must never
+reach the running proxy. So the core says *which* body, and this generator's interpreter maps
+that to a schema, total over `BodyDoc` in the other direction: a new body shape cannot go
+unrendered. Adding PyPI is adding a mount, not describing a protocol.
+
+In the rendered docs, tags are ecosystems: Redoc groups operations by mount, so the document
+reads as "one server, these protocols". A route's `operationId` is its ecosystem-local name
+qualified by its mount (`npm.packument`), which is where global uniqueness is guaranteed.
 
 ## The synthesised-packument schema = the trust boundary
 
@@ -82,13 +93,13 @@ proof that the filtered document is coherent.
 ## Contract drift controls
 
 The manifest is generated directly from the code, so it moves only when the code moves, a
-change a reviewer sees in the diff. Its paths are rendered from each mount's `serveRoutes`
-grammar ([above](#source-of-truth-the-route-enumeration--mounts)) and its per-route
-documentation is a total map over the closed `Route` sum, so a new route cannot be mounted
-without a documented operation; its owned schemas are the `autodocodec` codecs that also back
-the `aeson` instances, so documented schema and wire format cannot diverge. The manifest's unit
-tests (`ManifestSpec`) hold this together: the render stays well-formed, and the documented
-paths and methods are checked against the live classifier.
+change a reviewer sees in the diff. Its paths *and* its per-route documentation are both
+projections of the route records the router runs
+([above](#source-of-truth-the-route-table--mounts)), so a route cannot be mounted without a
+documented operation: the record will not construct without one. Its owned schemas are the
+`autodocodec` codecs that also back the `aeson` instances, so documented schema and wire format
+cannot diverge. The manifest's unit tests (`ManifestSpec`) hold this together: the render stays
+well-formed, and the documented paths and methods are checked against the live routing.
 
 > The synthesised packument is the schema exception. It is an *open* schema
 > (`additionalProperties: true`), so "drift" there means "did we drop a field we promised to
@@ -96,9 +107,9 @@ paths and methods are checked against the live classifier.
 > [Packument merge](registry-model.md#packument-merge-across-upstreams)), not a schema
 > validator.
 
-The route grammar has a live guard: a correspondence test holds each mounted route's example
-against the classifier and the manifest's rendered paths against the same specs, so a change to
-a path template or a route's method fails unless the manifest moves with it. Two gaps remain.
+The route table has a live guard: the manifest's rendered paths are held against the same route
+records the router runs, so a change to a path template or a route's method fails unless the
+manifest moves with it. Two gaps remain.
 The documented status codes and response-body shapes are not held against the running server
 (the serve handlers choose status imperatively, with no shared enumeration), so those stay
 documentation the manifest owns rather than a checked correspondence. And nothing yet answers

@@ -47,7 +47,8 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,

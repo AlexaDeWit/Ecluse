@@ -15,10 +15,11 @@ module Ecluse.Core.RouteBench (
     benchmarks,
 ) where
 
+import Data.Text qualified as T
 import Network.HTTP.Types.Method (Method, methodGet, methodPut)
 
-import Ecluse.Core.Registry.Npm.Route (classify)
-import Ecluse.Core.Server.Route (Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
+import Ecluse.Core.Registry.Npm.Route (npmRoutes)
+import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf)
 
 -- | The classifier bench over a mixed batch of realistic requests.
@@ -26,7 +27,7 @@ benchmarks :: Benchmark
 benchmarks =
     env (pure requests) $ \reqs ->
         bgroup
-            "route.classify"
+            "route.match"
             [ bench "mixed npm requests" (whnf classifyDepth reqs)
             ]
 
@@ -49,16 +50,14 @@ requests = concat (replicate 1000 sample)
         , (methodPut, ["express", "-", "express-4.18.2.tgz"]) -- a PUT to a non-publish path
         ]
 
--- | Classify every request, summing a per-route code so each result is forced.
+{- | Route every request, summing the length of the matched route's identifier so each
+result is forced (an unmatched request contributes nothing). The route's action is a
+closure, so its identifier is what the benchmark forces the match down to.
+-}
 classifyDepth :: [(Method, [Text])] -> Int
-classifyDepth = foldl' (\acc (method, segments) -> acc + routeCode (classify method segments)) 0
+classifyDepth = foldl' (\acc (method, segments) -> acc + matchDepth method segments) 0
+  where
+    matchDepth method segments =
+        maybe 0 (nameLength . routeName . fst) (matchRoute npmRoutes method segments)
 
--- | A distinct code per route shape, forcing the classifier's result to a constructor.
-routeCode :: Route -> Int
-routeCode = \case
-    Packument{} -> 1
-    Tarball{} -> 2
-    Ping -> 3
-    Search -> 4
-    Publish{} -> 5
-    Unsupported -> 6
+    nameLength (RouteName n) = T.length n

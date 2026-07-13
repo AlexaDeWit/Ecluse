@@ -21,19 +21,36 @@ path, handed to that mount's **router**.
 ### The route table belongs to the ecosystem
 
 A route is an ecosystem's own concern. npm's `/{pkg}/-/{file}.tgz` and RubyGems' whole-registry
-`/versions` have nothing in common but the fact that *something must be done about them*. So each
-ecosystem's adapter declares its routes as an ordered table of **route patterns** (literal segments,
-and named captures that carry their own parsers), and that one declaration is interpreted twice:
+`/versions` have nothing in common but the fact that *something must be done about them*.
 
-- the **runtime** interpretation is the mount's `MountRouter`, which the server dispatches through;
-- the **manifest** interpretation is a `RouteSpec` per route, which the
-  [capability manifest](#capability-manifest) renders.
+So a **route is one record**, and an ecosystem's routing table is simply a list of them:
 
-Two readings of one table cannot drift apart, so the documented surface cannot lie about the routed
-one.
+```haskell
+data Route v = Route
+  { routeName   :: RouteName                          -- "packument"
+  , routeMethod :: MethodMatch                        -- reads, or the one write
+  , routeSegs   :: [PatternSeg v]                     -- literals + captures that parse themselves
+  , routeBuild  :: Method -> [v] -> Maybe RouteAction -- what to DO; Nothing denies
+  , routeDoc    :: RouteDoc                           -- summary, statuses, body shapes
+  }
 
-What the web layer shares across ecosystems is not the routes but the **kind of action** a route can
-name:
+npmRoutes :: [Route NpmCap]      -- npm's table, in matching order
+npmRouter  = routerOf npmRoutes  -- first match wins; no match is the 404
+```
+
+The record holds the pattern, the action, **and** the documentation, so the three cannot disagree.
+There is no classified-route *sum*: a route type would have to be matched again to decide what to do
+about it, and again to document it, and each of those matches is a place they can fall out of step.
+`routerOf` folds the list into the mount's router and the [manifest](#capability-manifest) renders
+the erased projection of the same records, so the documented surface cannot lie about the routed one.
+
+**Deny by default is structural.** `routerOf` has no other way to answer: a request no route claims
+is the `404`. There is no catch-all branch to forget. A builder returning `Nothing` is how a route
+*refuses* a request it pattern-matched (an artifact name that parses for a different package is a
+path-confusion attempt, so the route does not claim it and the request falls through to the `404`
+rather than being fabricated into a coordinate).
+
+What the web layer shares across ecosystems is not the routes but the **kind of action** one can name:
 
 ```haskell
 type MountRouter = Method -> [Text] -> RouteAction
@@ -46,13 +63,11 @@ data RouteAction
 The data-plane handlers (`Ecluse.Core.Server.Pipeline`) are themselves ecosystem-neutral: a registry's
 metadata client, packument assembly, and artifact-request formation reach them as injected
 capabilities on `PackumentDeps`, never as imports. So an ecosystem routes its own URLs onto whichever
-shared handlers apply, and names its own actions for the routes that have no counterpart. **Each
-adapter's table is total over its own routes**, which means a branch for a route the ecosystem cannot
-receive is unrepresentable rather than merely discouraged.
+shared handlers apply, and names its own actions for the routes that have no counterpart.
 
 The web layer therefore holds no route knowledge at all. It asks the matched mount's router for an
 action and either responds with it or runs it under the [perimeter](#the-typed-request-perimeter).
-Adding an ecosystem adds a router and changes nothing in `Ecluse.Runtime.Server`.
+Adding an ecosystem adds a table and changes nothing in `Ecluse.Runtime.Server`.
 
 ### npm's table
 
@@ -69,8 +84,11 @@ the router selects the head-mode handler; that is load-bearing on the artifact p
 [HEAD on artifacts](#head-on-artifacts)). Any other method, and anything unrecognised, is a `404`, so
 deny-by-default holds at the routing layer for methods as well as paths.
 
-Keeping the table pure makes it unit-testable with no server: feed it a method and segments, assert
-the route.
+Keeping the table pure makes it unit-testable with no server: feed `matchRoute` a method and
+segments and assert *which* route claimed it (by name), or that none did. The leaf parsers
+(`takePackage`, `tarballRoute`) are named functions the records reference, so the scoped-name
+decoding and the artifact coordinate are asserted directly rather than through the router. Both are
+held against an independent hand-written reference by a differential property.
 
 ## Multi-ecosystem mounts
 
@@ -127,10 +145,10 @@ Everything else unrecognised stays `Unsupported` → `404`.
 
 Écluse publishes a capability manifest: an OpenAPI 3 document, generated at build time and published to
 the docs site (not served, no `GET /openapi.json` route). It is rendered from each mounted adapter's
-declarative route table (`serveRoutes`, a `RouteSpec` per served route), the *same* table that
-ecosystem's [router](#the-route-table-belongs-to-the-ecosystem) dispatches on, across the configured
-[mounts](#multi-ecosystem-mounts). A correspondence test holds the documented paths and methods
-against the live routing, so the manifest cannot drift from what the server serves. The full rationale, schema strategy, and publish pipeline are
+declarative route table (`serveRoutes`, the erased `RouteSpec` projection of the *same* records that
+ecosystem's [router](#the-route-table-belongs-to-the-ecosystem) dispatches on), across the configured
+[mounts](#multi-ecosystem-mounts). Each record carries its own documentation, so the manifest holds
+no per-route knowledge and has nothing to drift with. The full rationale, schema strategy, and publish pipeline are
 the canonical [API Surface & Capability Manifest](api-surface.md).
 
 ## Control plane vs. data plane

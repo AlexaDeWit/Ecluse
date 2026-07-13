@@ -2,43 +2,30 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Server.RouteSpec (spec) where
+module Ecluse.Server.PathSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Server.Route (Filename (Filename), Route (..), encodeComponent, isSafeComponent)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Server.Path (Filename (Filename), encodeComponent, isSafeComponent)
 
--- | An unscoped package identity, for building 'Tarball' routes in the assertions.
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
+{- | The shared URL-path vocabulary: the artifact-name type, and the
+ecosystem-independent component-safety gate.
 
--- | A version, for the parsed coordinate a 'Tarball' route carries.
-npmVersion :: Text -> Version
-npmVersion = mkVersion Npm
-
-{- | The agnostic routing layer: the shared 'Route' set and the ecosystem-independent
-component-safety gate.
-
-No ecosystem path grammar lives here -- that is each adapter's classifier (e.g.
-"Ecluse.Core.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
-'Route' vocabulary and 'isSafeComponent', the shared traversal gate.
+No ecosystem's routes live here -- each declares its own table (npm's is
+"Ecluse.Core.Registry.Npm.Route"). What every registry shares is the /threat/: a decoded
+path component interpolated into an upstream URL. These specs pin that boundary.
 -}
 spec :: Spec
 spec = do
-    describe "Filename -- the agnostic artifact-name type" $ do
-        -- The verbatim on-the-wire name a 'Tarball' route carries is held as a
-        -- distinct type (not a bare 'Text') because it is authoritative for fetching
-        -- the bytes; its equality is by the wrapped name, so two routes naming the
-        -- same artifact compare equal and two different files do not.
-        it "distinguishes two artifact routes by their preserved filename" $
-            Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
-                `shouldBe` Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
-        it "treats two routes with different preserved filenames as unequal" $
-            Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
-                `shouldNotBe` Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.2.tgz")
+    describe "Filename -- the artifact name an artifact route carries" $ do
+        -- The verbatim on-the-wire name is held as a distinct type (not a bare 'Text')
+        -- because it is authoritative for fetching the bytes; its equality is by the
+        -- wrapped name, so two routes naming the same artifact compare equal and two
+        -- different files do not.
+        it "compares equal for the same preserved file name" $
+            Filename "is-odd-3.0.1.tgz" `shouldBe` Filename "is-odd-3.0.1.tgz"
+        it "compares unequal for different preserved file names" $
+            Filename "is-odd-3.0.1.tgz" `shouldNotBe` Filename "is-odd-3.0.2.tgz"
 
     describe "isSafeComponent -- the shared traversal gate" $ do
         it "accepts an ordinary name" $
