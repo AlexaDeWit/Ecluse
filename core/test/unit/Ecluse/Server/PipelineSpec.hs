@@ -34,8 +34,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route qualified as Npm
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
@@ -220,7 +219,7 @@ mountWith :: Maybe PackumentDeps -> MountBinding
 mountWith deps =
     MountBinding
         { bindingPrefix = "npm" :| []
-        , bindingClassifier = Npm.classify
+        , bindingRouter = npmRouter
         , bindingPackumentDeps = deps
         , bindingPublishDeps = Nothing
         , bindingRenderer = npmRenderer
