@@ -1,9 +1,5 @@
 version: '3'
 
-env:
-  TASK_CONCURRENCY:
-    sh: if [ "${CI:-false}" = "true" ]; then echo 0; else cores=$(nproc 2>/dev/null || echo 4); if [ "$cores" -le 2 ]; then echo 1; else echo $((cores - 2)); fi; fi
-
 vars:
   IMAGE: docker.io/alexadewit/ecluse
   DOCS_BUILDDIR: dist-newstyle
@@ -12,7 +8,7 @@ vars:
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
   PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
-  NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#bench" --command{{end}}'
+  NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 
 tasks:
   default:
@@ -618,7 +614,7 @@ tasks:
       - nix build
 
   nix-check:
-    desc: Run the hermetic flake checks
+    desc: Evaluate every flake output and build the hermetic Haddock check
     cmds:
       - nix flake check
 

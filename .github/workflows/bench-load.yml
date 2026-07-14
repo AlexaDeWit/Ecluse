@@ -76,12 +76,12 @@ jobs:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
           # Restore the shared Nix store but never write it: build-test on main is the
-          # single writer, and this job realizes the `.#bench` closure, so saving here
+          # single writer, and this job realizes the `.#ci` closure, so saving here
           # would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop .#bench --command task update
+        run: nix develop .#ci --command task update
 
       # Run the load tests. The harness renders its per-scenario tables to the run
       # summary itself (via $GITHUB_STEP_SUMMARY); `tee` also captures them as this run's
@@ -95,7 +95,7 @@ jobs:
           # neatly occupy the remaining 3 cores without self-contention. The driver
           # propagates this count to the scenario child processes via GHCRTS (argv RTS
           # flags do not survive the per-scenario re-exec).
-          nix develop .#bench --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
+          nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # This run's results, downloadable from the run page. A convenience for a human
       # comparing by hand — there is no cross-run baseline store. Uploaded even on a

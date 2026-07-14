@@ -89,7 +89,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Build image
-        run: nix develop .#release --command task docker-build
+        run: nix develop .#ci --command task docker-build
 
       # Dereference the ./result symlink (it points into /nix/store) so the
       # uploaded artifact carries the archive's bytes, not a dangling link.
@@ -101,7 +101,7 @@ jobs:
       # Per-platform SBOM: .#ecluse-bin is THIS arch's binary, so its closure (and
       # thus the SBOM) is arch-specific. Attested to the platform digest below.
       - name: Generate SBOM
-        run: nix develop .#release --command task sbom
+        run: nix develop .#ci --command task sbom
 
       - name: Upload image archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -181,7 +181,7 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          nix develop .#release --command \
+          nix develop .#ci --command \
             bash scripts/push-multiarch.sh "$IMAGE" "$TAG" \
               artifacts/image-amd64/image-amd64.tar \
               artifacts/image-arm64/image-arm64.tar >> "$GITHUB_OUTPUT"

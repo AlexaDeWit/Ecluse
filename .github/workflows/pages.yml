@@ -110,15 +110,15 @@ jobs:
             dist-docs-${{ runner.os }}-
 
       - name: Update package index
-        run: nix develop .#docs --command task update
+        run: nix develop .#ci --command task update
 
       # Assembles the Pages site into ./_site: the home page at the root and the
-      # library Haddock under /api (with .nojekyll at the root). Runs in the lean
-      # `.#docs` shell (Haskell toolchain + pandoc only), not the heavy default human
-      # shell the job used to enter. DOCS_BUILDDIR routes the doc-variant build into
-      # the separately-cached tree restored above.
+      # library Haddock under /api (with .nojekyll at the root). Runs in the `.#ci`
+      # shell every other job enters (it carries pandoc, plus MERMAID_JS/REDOC_JS for
+      # the vendored bundles), not the heavier human shell. DOCS_BUILDDIR routes the
+      # doc-variant build into the separately-cached tree restored above.
       - name: Build the Pages site into ./_site
-        run: nix develop .#docs --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
+        run: nix develop .#ci --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
 
       # Cache writes: main only, single writer (Pages). Right after the build that
       # produced them and before the deploy steps, so the expensive doc-variant

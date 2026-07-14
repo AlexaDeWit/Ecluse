@@ -46,12 +46,12 @@ jobs:
           # Restore the warm cabal store (this job compiles the benchmark).
           cabal-cache: "true"
           # Restore the shared Nix store but never write it: build-test on main is the
-          # single writer, and this dispatch job realizes the `.#bench` closure, so
+          # single writer, and this dispatch job realizes the `.#ci` closure, so
           # saving here would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop .#bench --command task update
+        run: nix develop .#ci --command task update
 
       # Run the benches, teeing the console output (progress lines, the generator
       # tests, the complexity assertions) for the report's raw-output section, and
@@ -61,7 +61,7 @@ jobs:
       - name: Run benchmarks
         run: |
           set -eo pipefail
-          nix develop .#bench --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
+          nix develop .#ci --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
 
       # Render the CSV as the structured Markdown report. The renderer writes to
       # stdout and appends to $GITHUB_STEP_SUMMARY itself (as the load and acceptance
@@ -70,7 +70,7 @@ jobs:
       # CSV renders as an explicit note, never a second failure.
       - name: Render results to the run summary
         if: always()
-        run: nix develop .#bench --command task bench-report
+        run: nix develop .#ci --command task bench-report
 
       # This run's results, downloadable from the run page (the CSV + the console
       # table). A convenience for a human comparing by hand — there is no cross-run

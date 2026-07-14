@@ -72,7 +72,7 @@ proof that the filtered document is coherent.
   render a static Redoc page, staging it with `openapi.json` into `./_site` for GitHub Pages,
   published by `pages.yml` on push to `main`. The spec is derived build data, regenerated at publish
   time, not committed. The Redoc bundle is vendored and hash-pinned (the `mermaidJs` `fetchurl`
-  pattern), so the `.#docs` shell needs no Node and the site has no external runtime dependency.
+  pattern), so the CI shell needs no Node and the site has no external runtime dependency.
   Output is deterministic (pinned key ordering, fixed base URLs), so a regeneration is a reviewable
   diff.
 - Confidence without a fuzzer: external contract fuzzers (Schemathesis, Dredd / Prism) are

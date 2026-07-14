@@ -43,11 +43,17 @@ inputs:
   nix-gc-max-store-size:
     description: >-
       Cap the Nix store is trimmed to before saving (cache-nix-action
-      gc-max-store-size-linux). Default "5G" — fits the `.#ci` dev-shell closure.
-      A job whose closure is larger raises it so the closure survives the trim and
-      actually persists; the `docs` job sets "7G" for the ~6.55 GB doc closure
-      (measured). Mind the 10 GB Actions-cache quota when raising it.
-    default: "5G"
+      gc-max-store-size-linux). A closure larger than the cap is trimmed away before
+      saving and never fully persists, so the cap must EXCEED the closure the job
+      realizes. Default "10G": the `.#ci` dev-shell closure measures 9.41 GB. The
+      `docs` job overrides to "7G" for its ~6.55 GB doc closure.
+
+      This cap is on the UNCOMPRESSED Nix store; the 10 GB Actions-cache quota is on
+      the COMPRESSED entry, and the two are not the same number. The store compresses
+      roughly 5x (a 5G-trimmed store saved a ~1.05 GB entry), so sizing the cap to the
+      real closure costs far less quota than the raw figure suggests. Do not read the
+      cap as a quota budget.
+    default: "10G"
 
 runs:
   using: composite
