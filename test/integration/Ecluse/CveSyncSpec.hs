@@ -236,7 +236,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
             MountBinding
                 { bindingPrefix = "npm" :| []
                 , bindingRouter = npmRouter
-                , bindingPackumentDeps = Just deps
+                , bindingPackumentDeps = deps
                 , bindingPublishDeps = Nothing
                 , bindingRenderer = npmRenderer
                 }

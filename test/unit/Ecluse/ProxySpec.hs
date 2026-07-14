@@ -20,6 +20,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 newTestManager :: IO Manager
@@ -35,12 +36,12 @@ newTestEnv = do
     admission <- testServeAdmission
     newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
-{- | The composed npm front door: a single npm mount with no packument-serve or
-publish dependencies, assembled through the public binding resolver exactly as
-the composition root would ('mountBindingFor' over npm).
+{- | The composed npm front door: a single npm mount with __inert__ packument-serve
+dependencies (every upstream a closed port) and no publish target, assembled through the
+public binding resolver exactly as the composition root would ('mountBindingFor' over npm).
 -}
 npmApp :: IO Application
-npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))) <$> newTestEnv
+npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
 
 spec :: Spec
 spec = do
@@ -49,8 +50,12 @@ spec = do
             it "mounts npm at /npm (answers /npm/-/ping locally with 200 {})" $
                 get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
 
-            it "recognises an npm packument route under the mount (501; serve deps unwired)" $
-                get "/npm/is-odd" `shouldRespondWith` 501
+            it "routes an npm packument under the mount into the data plane (503; upstreams closed)" $
+                -- The route is recognised AND reaches the pipeline: with both upstreams
+                -- bound to a closed port, no version survives and the most recoverable
+                -- cause is transient, so the serve path answers 503. A 404 here would mean
+                -- the mount's router never claimed the path at all.
+                get "/npm/is-odd" `shouldRespondWith` 503
 
             it "does NOT mount npm at the root -- /-/ping there is the neutral 404" $
                 get "/-/ping" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
@@ -60,8 +65,8 @@ spec = do
 
     describe "mountBindingFor -- ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
-            (bindingPrefix <$> mountBindingFor Npm Nothing Nothing) `shouldBe` Just ("npm" :| [])
+            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing) `shouldBe` Just ("npm" :| [])
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $ do
-            (bindingPrefix <$> mountBindingFor PyPI Nothing Nothing) `shouldBe` Nothing
-            (bindingPrefix <$> mountBindingFor RubyGems Nothing Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing

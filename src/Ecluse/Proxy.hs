@@ -406,24 +406,22 @@ from the ecosystem ('prefixFor') rather than configured, so the ecosystem is the
 single thing that drives the binding (see
 @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). The composition
 root supplies the packument-serve dependencies once the per-mount registry set is
-resolved; 'Nothing' for them leaves the packument route the
-recognised-but-unserved @501@ stub.
+resolved.
 
 An ecosystem with no registered adapter resolves to 'Nothing': a loud miss at the
 call site rather than a silently half-wired mount.
 -}
-mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 mountBindingFor eco packumentDeps publishDeps =
     adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps
 
 {- The mount projection of one adapter: the ecosystem's serve surface (its router
 and its denial renderer) under its derived prefix, paired with the
 packument-serve and first-party publish dependencies the composition root supplies
-('Nothing' packument deps leave the packument route the recognised-but-unserved
-@501@ stub; 'Nothing' publish deps leave a @PUT \/{pkg}@ the @405@ opt-out -- no
-publication target).
+('Nothing' publish deps leave a @PUT \/{pkg}@ the @405@ opt-out: no publication
+target).
 -}
-mountOf :: RegistryAdapter -> Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
+mountOf :: RegistryAdapter -> PackumentDeps -> Maybe PublishDeps -> MountBinding
 mountOf adapter packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor (adapterEcosystem adapter)

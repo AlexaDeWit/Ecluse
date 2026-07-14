@@ -704,7 +704,7 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just (consistentGate (tweakDeps baseDeps))
+                            , bindingPackumentDeps = consistentGate (tweakDeps baseDeps)
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
@@ -757,7 +757,7 @@ withProxyEffectful effectful privateUp publicUp k = do
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just effectfulDeps
+                            , bindingPackumentDeps = effectfulDeps
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }

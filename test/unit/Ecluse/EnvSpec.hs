@@ -21,6 +21,7 @@ import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | A manager built from 'defaultManagerSettings' (no TLS, no connection opened
@@ -52,11 +53,11 @@ newTestCache :: IO MetadataCache
 newTestCache = newMetadataCache testCacheConfig
 
 {- | The npm front door the split-ready server test drives: a single npm mount with
-no packument-serve or publish dependencies, assembled through the public binding
-resolver exactly as the composition root would ('mountBindingFor' over npm).
+inert packument-serve dependencies and no publish target, assembled through the public
+binding resolver exactly as the composition root would ('mountBindingFor' over npm).
 -}
 npmTestConfig :: ServerConfig
-npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
 {- | Assemble an 'Env' from the doubles above, a no-network manager, a metadata
 cache, and a scribe-free 'LogEnv'.

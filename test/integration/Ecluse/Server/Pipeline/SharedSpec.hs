@@ -266,7 +266,7 @@ captureBreachLog privateBody = do
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just (withLimits tightLimits baseDeps)
+                            , bindingPackumentDeps = withLimits tightLimits baseDeps
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }

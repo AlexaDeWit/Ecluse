@@ -76,7 +76,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
             deps <- depsFor port
-            resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+            resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -95,7 +95,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                             { pdPrivateBaseUrl = privateUrl
                             , pdTarballHostGate = tarballHostGate privateUrl (pdPublicBaseUrl baseDeps) (pdMirrorTarget baseDeps)
                             }
-                resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+                resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
                 divergences >>= (`shouldBe` 1)
 
@@ -104,15 +104,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- mkRuntime metricsPort
         -- 'depsFor 1' points both origins at a closed port, so each fetch is refused.
         deps <- depsFor 1
-        resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+        resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
-
-    it "renders 501 for a packument route whose mount has no serve dependencies wired" $ do
-        (metricsPort, _decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
-        resp <- captureServe rt (mountWith Nothing) (servePackument leftpad defaultRequest)
-        statusCode (responseStatus resp) `shouldBe` 501
 
     it "serves a gated tarball and records an admit, driving the metrics and tracing ports" $
         testWithApplication (pure upstreamApp) $ \port -> do
@@ -122,7 +116,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             resp <-
                 captureServe
                     rt
-                    (mountWith (Just deps))
+                    (mountWith deps)
                     (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
@@ -135,7 +129,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
-        held <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+        held <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith deps) (servePackument leftpad defaultRequest))
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -146,9 +140,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmissionTuned 1 0 0
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor port
-            saturated <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+            saturated <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith deps) (servePackument leftpad defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
-            admitted <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+            admitted <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
 
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
@@ -160,7 +154,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             withServeAdmission (srMetrics rt) admission $
                 captureServe
                     rt
-                    (mountWith (Just deps))
+                    (mountWith deps)
                     (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
@@ -177,7 +171,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 withServeAdmission (srMetrics rt) admission $
                     captureServe
                         rt
-                        (mountWith (Just privateDeps))
+                        (mountWith privateDeps)
                         (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
@@ -216,7 +210,7 @@ leftpad :: PackageName
 leftpad = mkPackageName Npm Nothing "leftpad"
 
 -- | An npm mount over the given serve dependencies (or 'Nothing' for the unwired stub).
-mountWith :: Maybe PackumentDeps -> MountBinding
+mountWith :: PackumentDeps -> MountBinding
 mountWith deps =
     MountBinding
         { bindingPrefix = "npm" :| []

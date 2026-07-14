@@ -76,8 +76,8 @@ workerPoliciesFor env bindings targets =
         [ (eco, workerPolicyFor env deps publish)
         | binding <- bindings
         , let prefixHead :| _ = bindingPrefix binding
+        , let deps = bindingPackumentDeps binding
         , Just eco <- [parseEcosystem prefixHead]
-        , Just deps <- [bindingPackumentDeps binding]
         , Just publish <- [mirrorPublishFor env targetsByEcosystem eco]
         ]
   where

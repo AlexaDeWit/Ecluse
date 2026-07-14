@@ -434,9 +434,11 @@ data MountBinding = MountBinding
     adapter derives it from its own route table, so the web layer holds no ecosystem's
     path grammar of its own.
     -}
-    , bindingPackumentDeps :: Maybe PackumentDeps
-    {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
-    packument route recognised-but-unserved (the @501@ stub).
+    , bindingPackumentDeps :: PackumentDeps
+    {- ^ The packument-serve dependencies. Not optional: a mount exists only for an
+    ecosystem with a registered adapter, and the composition root builds these from that
+    adapter, so a bound mount always serves packuments and artifacts. Only /publish/ is a
+    genuine opt-in ('bindingPublishDeps').
     -}
     , bindingPublishDeps :: Maybe PublishDeps
     {- ^ The first-party publish dependencies, when a publication target is

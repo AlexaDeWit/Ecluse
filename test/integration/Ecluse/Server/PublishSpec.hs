@@ -40,6 +40,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | An in-process publication-target double: it records the @Authorization@ header
@@ -119,7 +120,7 @@ proxyWith publishDeps = do
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingRouter = npmRouter
-                    , bindingPackumentDeps = Nothing
+                    , bindingPackumentDeps = inertPackumentDeps
                     , bindingPublishDeps = publishDeps
                     , bindingRenderer = npmRenderer
                     }

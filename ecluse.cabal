@@ -477,6 +477,7 @@ library ecluse-test-support
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Mount
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version

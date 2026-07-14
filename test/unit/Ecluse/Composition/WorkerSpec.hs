@@ -43,7 +43,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         -- injected clock rides through likewise.
         (env, bindings, targets) <- composedFixtures
         deps <- case bindings of
-            [binding] -> maybe (fail "expected packument deps on the served mount") pure (bindingPackumentDeps binding)
+            [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
         case Map.lookup Npm (workerPoliciesFor env bindings targets) of
             Nothing -> expectationFailure "expected an npm bundle"
@@ -51,13 +51,6 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
                 wpMinIntegrity policy `shouldBe` pdMinIntegrity deps
                 now <- wpNow policy
                 now `shouldBe` fixedNow
-
-    it "contributes no bundle for a mount left at the recognised-but-unserved stub" $ do
-        -- No 'PackumentDeps' means no re-evaluation inputs to ride: the mount
-        -- contributes nothing, and a job for it is fail-closed at the worker.
-        (env, _, targets) <- composedFixtures
-        let stub = maybeToList (mountBindingFor Npm Nothing Nothing)
-        Map.keys (workerPoliciesFor env stub targets) `shouldBe` []
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
         -- The bundle is whole or absent: without a publish target there is no

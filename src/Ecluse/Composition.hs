@@ -94,7 +94,7 @@ It is 'IO' only because 'composeBindings' 'prepare's each mount's rules (allocat
 per-rule engine state once at boot).
 -}
 planMounts ::
-    (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
+    (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
@@ -105,11 +105,11 @@ planMounts = composeBindings
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
 resolve to an initialised provider, and its ecosystem must resolve to an adapter
-(through the injected resolver, fed real 'PackumentDeps' so the packument route is
-served rather than the @501@ stub). Errors aggregate across every mount.
+(through the injected resolver, which the mount's 'PackumentDeps' are built from).
+Errors aggregate across every mount.
 -}
 composeBindings ::
-    (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
+    (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
@@ -152,17 +152,24 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
     credential reference and the adapter are checked even when one already failed,
     so a mount missing both reports both in one run rather than one at a time. The
     packument-serve dependencies are projected from the mount ecosystem's registered
-    adapter ('adapterFor'), so a mount whose ecosystem has none carries no deps and
-    resolves to the missing-adapter error; the resolved publish dependencies (shared
+    adapter ('adapterFor'), so a mount whose ecosystem has none is the missing-adapter
+    error rather than a half-wired mount; the resolved publish dependencies (shared
     across mounts) are passed to the resolver so the binding carries the first-party
     publish wiring. -}
     bindingFor :: Maybe PublishDeps -> Mount -> MountConfig -> IO (Either [BootError] MountBinding)
-    bindingFor pubDeps mount mcfg = do
-        deps <- traverse (\adapter -> packumentDepsFor adapter mount mcfg) (adapterFor (mountEcosystem mount))
-        pure $ case (credentialError providers mount, resolveAdapter (mountEcosystem mount) deps pubDeps) of
-            (Nothing, Just binding) -> Right binding
-            (mCredErr, mBinding) ->
-                Left (maybeToList mCredErr <> [MissingAdapter (mountEcosystem mount) | isNothing mBinding])
+    bindingFor pubDeps mount mcfg =
+        case adapterFor eco of
+            -- No adapter for this ecosystem: there is nothing to build deps from, and no
+            -- mount to bind. A loud boot error, never a half-wired mount.
+            Nothing -> pure (Left (maybeToList (credentialError providers mount) <> [MissingAdapter eco]))
+            Just adapter -> do
+                deps <- packumentDepsFor adapter mount mcfg
+                pure $ case (credentialError providers mount, resolveAdapter eco deps pubDeps) of
+                    (Nothing, Just binding) -> Right binding
+                    (mCredErr, mBinding) ->
+                        Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
+      where
+        eco = mountEcosystem mount
 
     {- Build a mount's 'PackumentDeps' from its ecosystem's registered adapter, its
     registries, resolved rules, the inbound edge token, the injected clock, and the
