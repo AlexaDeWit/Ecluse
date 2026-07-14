@@ -11,7 +11,9 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  # `self` is unused (nothing here needs the flake's own source tree), but Nix
+  # always passes it, so absorb it with `...` rather than binding it.
+  outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -173,21 +175,6 @@
         # build drags that whole closure in and bloats the image to ~500 MB; this
         # keeps only the binary + its system C deps for the container image.
         ecluseBin = hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
-
-        # Sources for the format/lint checks: the .hs files plus the cabal files
-        # (so fourmolu can read default-language / default-extensions (GHC2021 →
-        # ImportQualifiedPost) and parse postpositive `qualified` imports — without
-        # the cabal in scope its parser rejects them), AND the `fourmolu.yaml` /
-        # `.hlint.yaml` config files. The configs must be in scope so the flake checks
-        # apply the repo's own formatting / lint rules (e.g. `import-export-style:
-        # diff-friendly`) rather than the tools' built-in defaults — otherwise they
-        # silently diverge from the `task format-check` / `task lint` path on, e.g., import
-        # ordering. NB the two tools discover their config differently: fourmolu walks
-        # up from each input file (so `fourmolu.yaml` under `hsSrc` is found
-        # automatically), but hlint reads `.hlint.yaml` only from the working
-        # directory — so the `lint` check below `cd`s into `hsSrc` first, otherwise it
-        # would silently fall back to hlint's defaults and skip the repo's bans.
-        hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" "fourmolu.yaml" ".hlint.yaml" ];
 
         # The npm version-ordering oracle (`node-semver`) for the differential
         # smoke suite and `task gen-version-fixtures`. nixpkgs 26.05 removed the
@@ -456,87 +443,21 @@
           };
         };
 
-        checks = {
-          # Pure test tiers. Each builds the package and runs ONE unit suite
-          # (testTarget), so these hermetic checks never execute the Docker- or
-          # network-dependent suites.
-          #
-          # NOT on the CI gate. Nothing in CI runs `nix flake check`, and the only
-          # check any workflow builds directly is `docs` below. These three are the
-          # hermetic, clean-tree counterpart to `task test` (which is what actually
-          # gates, via the build-test job) and run on demand through `task
-          # nix-check`. Keep that in mind before treating a green CI run as
-          # evidence that they still build.
-          #
-          # All three build the whole package (including the loopback integration suite),
-          # so they enable dev-http-egress, the flag the integration suites' loopback
-          # constructor needs to compile. The release `ecluse` (ecluseRaw / dontCheck)
-          # never enables it, so the shipped artifact still carries no plaintext-egress
-          # constructor.
-          unit-core = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
-            doCheck = true;
-            testTarget = "ecluse-core-unit";
-          })) "dev-http-egress";
-          unit-app = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
-            doCheck = true;
-            testTarget = "ecluse-unit";
-          })) "dev-http-egress";
-          unit-runtime = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
-            doCheck = true;
-            testTarget = "ecluse-runtime-unit";
-          })) "dev-http-egress";
-
-          format = pkgs.runCommand "fourmolu-check"
-            { nativeBuildInputs = [ hpkgs.fourmolu ]; } ''
-            fourmolu --mode check $(find ${hsSrc} -name '*.hs')
-            touch $out
-          '';
-
-          # `cd` into the source root first: hlint discovers `.hlint.yaml` only from
-          # its working directory (unlike fourmolu, which walks up from each input),
-          # so without this the check runs from the build sandbox with hlint's
-          # built-in hints and skips the repo's security restrictions — the banned
-          # `error` / `undefined` / partial functions. `hsSrc` carries `.hlint.yaml`,
-          # so running from there enforces the same rules `task lint` does.
-          lint = pkgs.runCommand "hlint-check"
-            { nativeBuildInputs = [ hpkgs.hlint ]; } ''
-            cd ${hsSrc}
-            hlint $(find . -name '*.hs')
-            touch $out
-          '';
-
-          # Validate the package description hermetically, mirroring
-          # `task cabal-check`: fail on any Warning:/Error: line (the package is
-          # kept warning-free). `cabal check` does no build and needs no package
-          # index or network, so it runs in the sandbox — but it DOES verify that
-          # referenced files exist (license-file: LICENSE, the extra-source-files
-          # fixture globs), so it needs the COMPLETE package source. That is `self`
-          # (the git-tracked tree — LICENSE and fixtures included, dist-newstyle and
-          # other untracked cruft excluded), NOT the .hs/.cabal subset that hsSrc
-          # filters to for format/lint. (It therefore re-runs whenever any tracked
-          # file changes, but cabal check is sub-second.) Sources are copied into a
-          # writable dir (the store path is read-only); HOME → $TMPDIR for config.
-          cabal-check = pkgs.runCommand "cabal-check"
-            { nativeBuildInputs = [ hpkgs.cabal-install ]; } ''
-            cp -r ${self}/. ./pkg && cd ./pkg
-            export HOME="$TMPDIR"
-            report="$(cabal check 2>&1)" || true
-            printf '%s\n' "$report"
-            case "$report" in
-              *Warning:* | *Error:*) echo "cabal check reported issues (above)" >&2; exit 1 ;;
-            esac
-            touch $out
-          '';
-
-          # Build the library Haddock via the Nix Haskell builder. The dependency
-        # closure comes prebuilt from the pinned haskell set (with their .haddock
-        # interfaces), so ONLY ecluse compiles + haddocks — whereas `cabal haddock`
-        # (`task docs-check`) rebuilds the whole ~188-package closure every CI run,
-        # because it wants a documentation variant of the deps that build-test's
-        # `cabal build` store lacks. doHaddock forces the Haddock pass (broken doc
-        # comments fail the build); dontCheck skips the test suites.
-        docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
-      };
+        # The one flake check, and the only one CI builds
+        # (`nix build .#checks.x86_64-linux.docs`, the `docs` job).
+        #
+        # It is here rather than in the Taskfile because Nix can do something cabal
+        # cannot: the dependency closure comes prebuilt from the pinned Haskell set
+        # WITH its .haddock interfaces, so only ecluse compiles and haddocks. The
+        # cabal path (`task docs-check`) instead rebuilds the whole ~188-package
+        # closure on every CI run, because `cabal haddock` wants a documentation
+        # variant of the deps that build-test's `cabal build` store does not have.
+        # That asymmetry is the bar a check must clear to earn a Nix implementation:
+        # a check that merely re-runs a tool the dev shell already pins belongs in
+        # the Taskfile, where it runs incrementally and is what actually gates.
+        # doHaddock forces the Haddock pass, so a broken doc comment fails the
+        # build; dontCheck skips the test suites.
+        checks.docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
 
       devShells = {
         # The shell every CI job enters. See `ciShellInputs` for why it is one

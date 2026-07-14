@@ -1,9 +1,5 @@
 version: '3'
 
-env:
-  TASK_CONCURRENCY:
-    sh: if [ "${CI:-false}" = "true" ]; then echo 0; else cores=$(nproc 2>/dev/null || echo 4); if [ "$cores" -le 2 ]; then echo 1; else echo $((cores - 2)); fi; fi
-
 vars:
   IMAGE: docker.io/alexadewit/ecluse
   DOCS_BUILDDIR: dist-newstyle
@@ -606,7 +602,7 @@ tasks:
       - nix build
 
   nix-check:
-    desc: Run the hermetic flake checks
+    desc: Evaluate every flake output and build the hermetic Haddock check
     cmds:
       - nix flake check
 

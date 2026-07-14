@@ -51,14 +51,22 @@ Nix outputs:
 | Task | Command |
 |------|---------|
 | Build the `ecluse` binary | `task nix-build` (`nix build`) → `./result/bin/ecluse` |
-| Run the hermetic checks | `task nix-check` (`nix flake check`) |
+| Evaluate the flake and build the Haddock check | `task nix-check` (`nix flake check`) |
 
-`nix flake check` builds the package and runs the pure tier: the `ecluse-unit` suite
-(`checks.unit`), `fourmolu --mode check` (`checks.format`), `hlint` (`checks.lint`), `cabal check`
-(`checks.cabal-check`), and the library Haddock (`checks.docs`). Three things are excluded (they
-can't run in a hermetic sandbox): `ecluse-integration` (needs Docker), `ecluse-smoke` (live
-network), and Semgrep (`--config auto` fetches rules over the network). Those stay dev-shell / CI
-steps.
+`nix flake check` evaluates every flake output and builds the one check, `checks.docs`: the
+library Haddock, so a broken doc comment fails. That check earns its place in the flake because
+Nix takes the dependency closure prebuilt *with* its `.haddock` interfaces, so only `ecluse`
+compiles and haddocks; `cabal haddock` instead rebuilds the whole ~188-package closure. It is
+also the check the CI `docs` job builds directly.
+
+The tests, formatting, and linting are **not** flake checks. They run through `task` (`task
+test`, `task format-check`, `task lint`, `task cabal-check`), which is what actually gates in CI,
+and which runs them incrementally against the cabal build rather than rebuilding the package
+from scratch. Reimplementing them as flake checks buys no extra assurance, since the dev shell
+already pins the same tool versions, so the Taskfile is the single definition.
+
+Three things could not be flake checks even in principle: `ecluse-integration` (needs Docker),
+`ecluse-smoke` (live network), and Semgrep (`--config auto` fetches rules over the network).
 
 > **Flakes only see git-tracked files.** `git add` new sources before `nix build` /
 > `nix flake check`, or they're invisible to the build, and a build that references them
