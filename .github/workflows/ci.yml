@@ -176,14 +176,7 @@ jobs:
   e2e:
     name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
-    # A 60-minute SANITY bound, not a budget: the suite runs in ~15 minutes with a warm
-    # Nix store. The old 30-minute cap left only ~15 minutes of headroom, and a single
-    # cold dependency closure ate all of it: a run whose caches all reported hits still
-    # rebuilt the hs-opentelemetry tree from source, spent 24 minutes in Nix, and was
-    # killed before the suite executed a single test. Compiling upstream Haskell
-    # dependencies is not a signal about the change under test, so it should not fail a
-    # gate. Warming that closure so the cold path cannot happen is the real fix (#836);
-    # this only stops a cache miss from reading as a red gate.
+    # Sanity bound, not a budget: ~15 min warm, but a cold Nix closure adds half an hour (#836).
     timeout-minutes: 60
     # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
     # docker network and drives it with the real npm CLI (S53). Catches composition-root
