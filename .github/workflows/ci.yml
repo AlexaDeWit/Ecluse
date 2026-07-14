@@ -292,13 +292,17 @@ jobs:
     #
     # DEDICATED Nix-store cache. The shared "nix" entry build-test writes holds the
     # `.#ci` shell closure, which lacks the dependency `-doc` outputs `checks.docs`
-    # links against — so on the shared, restore-only store this job rebuilt that whole
-    # doc closure every run (~6.7 min). It owns a separate "nix-docs" entry instead:
-    # the full doc-closure build is ~6.55 GB (measured), so the trim cap is raised to
-    # 7 G (the default 5 G would trim the closure away before saving, and it would
-    # never persist). This job is the single writer of that key (save on main only),
-    # so there is no race with build-test's "nix" entry. Warm runs then rebuild only
-    # ecluse + ecluse-core. The cache-cleanup sweep keeps one epoch per nix- prefix.
+    # links against, so on that store this job rebuilds the whole doc closure every
+    # run (~6.7 min). It owns a separate "nix-docs" entry instead, sized to its own
+    # ~6.55 GB doc closure, and is the single writer of that key (save on main only),
+    # so it never races build-test for the shared "nix" entry. Warm runs then rebuild
+    # only ecluse + ecluse-core. The cache-cleanup sweep keeps one epoch per nix-
+    # prefix.
+    #
+    # The `with:` block below is load-bearing, not decoration: #576 (a CSS change)
+    # dropped it and left this comment orphaned, so from 2026-07-01 the job silently
+    # took the defaults, rebuilt the doc closure every run, and raced build-test for
+    # the shared key. Do not remove it without removing this comment too.
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -307,6 +311,11 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
+        with:
+          # Own the doc-closure cache (deps + their `-doc` outputs); single writer,
+          # save on main. Bigger than the `.#ci` shell, so raise the trim cap.
+          nix-cache-prefix: nix-docs
+          nix-gc-max-store-size: 7G
 
       - name: Build library Haddock (checks.docs flake check)
         run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs
