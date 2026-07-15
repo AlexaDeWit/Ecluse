@@ -46,11 +46,12 @@ or the output would churn on per-deployment values.
 
 The owned error envelope is a code-first type: one @autodocodec@ codec backs both
 its @aeson@ instances and its OpenAPI schema, so the /documented/ schema is derived
-rather than hand-maintained. The codec backs the documented schema only -- the
-denial body the server renders is shaped separately in
-"Ecluse.Core.Registry.Npm.Serve", and the two are expected to agree on the
-@{"error": …}@ shape (a behavioural correspondence, not one this codec enforces).
-The synthesized packument is a further exception: it is an /open/ schema (unlisted
+rather than hand-maintained. The denial body the server emits is shaped separately
+in "Ecluse.Core.Registry.Npm.Serve" (the doc-generation tree stays out of the proxy),
+but the two are held together: the emitted body and this schema share the one JSON key
+('Ecluse.Core.Registry.Npm.Serve.npmErrorKey'), and a correspondence test
+("Ecluse.ManifestSpec") holds an emitted body against this schema, so a drift fails the
+suite rather than shipping. The synthesized packument is a further exception: it is an /open/ schema (unlisted
 fields relayed unchanged from upstream), which has no clean codec representation, so
 it carries a hand-written partial schema. npm's /inbound/ wire decoding stays
 lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") -- @autodocodec@ is for
@@ -127,6 +128,7 @@ import Network.HTTP.Types.Method (StdMethod (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
+import Ecluse.Core.Registry.Npm.Serve (npmErrorKey)
 import Ecluse.Core.Server.Route (RouteName, unRouteName)
 import Ecluse.Core.Server.RouteDoc (
     BodyDoc (ArtifactBody, EmptyObjectBody, ErrorEnvelopeBody, NoBody, PackumentBody, PublishDocumentBody),
@@ -390,11 +392,12 @@ string carrying the human-facing reason. One @autodocodec@ codec backs both this
 type's @aeson@ instances and its OpenAPI schema, so the /documented/ schema is
 code-first.
 
-This type backs the manifest's documented schema only. The denial body the server
-actually emits is shaped independently by each mount's renderer (npm's
-@{"error": …}@ object lives in "Ecluse.Core.Registry.Npm.Serve"); that the rendered
-body matches this documented shape is a behavioural correspondence, not an invariant
-this codec enforces.
+This is the documented schema of npm's denial body. The body the server emits is
+'Ecluse.Core.Registry.Npm.Serve.NpmError', which carries its reason under the same
+'Ecluse.Core.Registry.Npm.Serve.npmErrorKey' this codec documents. The doc-generation
+tree stays out of the running proxy, so the emitted body (a core @aeson@ encoding) and
+this documented schema are separate definitions bound by that shared key and a
+correspondence test in "Ecluse.ManifestSpec", not a single codec.
 -}
 newtype ErrorEnvelope = ErrorEnvelope
     { errorEnvelopeError :: Text
@@ -408,7 +411,7 @@ instance HasCodec ErrorEnvelope where
     codec =
         object "ErrorEnvelope" $
             ErrorEnvelope
-                <$> requiredField "error" "The human-facing reason the request was refused." .= errorEnvelopeError
+                <$> requiredField npmErrorKey "The human-facing reason the request was refused." .= errorEnvelopeError
 
 -- | The @components.schemas@ name the error envelope is registered under.
 errorEnvelopeSchemaName :: Text

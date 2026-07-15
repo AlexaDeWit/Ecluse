@@ -34,6 +34,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route (npmRoutes)
+import Ecluse.Core.Registry.Npm.Serve (npmDenialBody)
 import Ecluse.Core.Server.Route (matchRoute)
 import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod))
 import Ecluse.Manifest (
@@ -112,12 +113,22 @@ spec = do
         it "operations are tagged by ecosystem (npm)" $
             (InsOrdSet.member "npm" . _operationTags <$> getOp "/npm/{package}") `shouldBe` Just True
 
-    describe "owned autodocodec codecs round-trip (hedgehog)" $
+    describe "owned autodocodec codecs round-trip (hedgehog)" $ do
         it "ErrorEnvelope encodes and decodes back to itself" $
             hedgehog $ do
                 msg <- forAll (Gen.text (Range.linear 0 64) Gen.unicode)
                 let value = ErrorEnvelope msg
                 eitherDecodeJSONViaCodec (encodeJSONViaCodec value) === Right value
+
+        -- The correspondence that closes the body half of #817: the npm mount's serve
+        -- path renders the wire denial ('npmDenialBody'); this codec is that body's
+        -- documented schema. Decoding an emitted body through the codec proves the
+        -- running server's body conforms to what the manifest advertises, so the two
+        -- definitions (a core aeson encoding, this autodocodec schema) cannot drift.
+        it "the npm mount's emitted denial body decodes as the documented ErrorEnvelope" $
+            hedgehog $ do
+                msg <- forAll (Gen.text (Range.linear 0 64) Gen.unicode)
+                eitherDecodeJSONViaCodec (npmDenialBody Nothing msg) === Right (ErrorEnvelope msg)
   where
     doc :: OpenApi
     doc = buildOpenApi canonicalManifestSource
