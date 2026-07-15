@@ -62,6 +62,7 @@ import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinn
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | The integration tier for tracing: drive a request through an in-process Écluse
@@ -151,7 +152,7 @@ pointSdkAt endpoint = do
 publish dependencies) assembled through the public binding resolver, the same shape
 the composition root derives from configuration. -}
 npmTestConfig :: ServerConfig
-npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm Nothing Nothing))
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
 {- A minimal composition root for the traced front door: the route under test
 (@\/{marker}@) matches no mount and is the neutral @404@, so the registry, credential,

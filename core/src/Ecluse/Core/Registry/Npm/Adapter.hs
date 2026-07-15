@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 
 {- | npm's capability record. The artifact builders ignore the response-bound and
 manager parameters (npm request formation needs neither), and the publish slice
@@ -51,7 +51,7 @@ npmAdapter =
         { adapterEcosystem = Npm
         , adapterServe =
             AdapterServe
-                { serveRouter = npmRouter
+                { serveRouter = NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
                 , serveRenderer = npmRenderer
                 }

@@ -30,7 +30,8 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
@@ -39,6 +40,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | An in-process publication-target double: it records the @Authorization@ header
@@ -118,7 +120,7 @@ proxyWith publishDeps = do
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingRouter = npmRouter
-                    , bindingPackumentDeps = Nothing
+                    , bindingPackumentDeps = inertPackumentDeps
                     , bindingPublishDeps = publishDeps
                     , bindingRenderer = npmRenderer
                     }

@@ -104,18 +104,17 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
             Right [binding] -> do
                 bindingPrefix binding `shouldBe` ("npm" :| [])
-                case bindingPackumentDeps binding of
-                    Nothing -> expectationFailure "expected packument deps wired, got the 501 stub"
-                    Just deps -> do
-                        pdPrivateBaseUrl deps `shouldBe` "https://private.example.test"
-                        pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
-                        -- With no ECLUSE_PUBLIC_URL the mount base falls back to the
-                        -- derived relative prefix (the npm CLI cannot consume this;
-                        -- the absolute form below is what a real client needs).
-                        pdMountBaseUrl deps `shouldBe` "/npm"
-                        -- The mirror-target endpoint is wired from the mount's config,
-                        -- for the demand-driven mirror job's publish destination.
-                        pdMirrorTarget deps `shouldBe` "https://mirror.example.test"
+                do
+                    let deps = bindingPackumentDeps binding
+                    pdPrivateBaseUrl deps `shouldBe` "https://private.example.test"
+                    pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
+                    -- With no ECLUSE_PUBLIC_URL the mount base falls back to the
+                    -- derived relative prefix (the npm CLI cannot consume this;
+                    -- the absolute form below is what a real client needs).
+                    pdMountBaseUrl deps `shouldBe` "/npm"
+                    -- The mirror-target endpoint is wired from the mount's config,
+                    -- for the demand-driven mirror job's publish destination.
+                    pdMirrorTarget deps `shouldBe` "https://mirror.example.test"
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
 
     it "rewrites the tarball base to an absolute URL under ECLUSE_PUBLIC_URL" $ do
@@ -123,27 +122,27 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- npm client can fetch, instead of the npm-incompatible relative path.
         _ <- expectEnv (("ECLUSE_PUBLIC_URL", "https://proxy.example.test") : staticEnvVars)
         planFrom (("ECLUSE_PUBLIC_URL", "https://proxy.example.test") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "drops a trailing slash on ECLUSE_PUBLIC_URL so the base joins with one separator" $ do
         _ <- expectEnv (("ECLUSE_PUBLIC_URL", "https://proxy.example.test/") : staticEnvVars)
         planFrom (("ECLUSE_PUBLIC_URL", "https://proxy.example.test/") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "carries the resolved rule policy onto the binding's packument deps" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
+            Right [binding] -> do
                 -- 'PreparedRule' has no 'Show' (it carries an evaluator), so assert on
                 -- the count rather than the rules themselves.
-                Just deps -> null (pdRules deps) `shouldBe` False
-                Nothing -> expectationFailure "expected packument deps wired"
+                let deps = bindingPackumentDeps binding
+                null (pdRules deps) `shouldBe` False
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
@@ -154,14 +153,13 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         providers <- expectProviders env
         config <- expectConfig (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> do
-                    fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
-                    fmap (\help -> appendHelp (Just help) "denied") (pdHelp deps)
-                        `shouldBe` Just "denied ask #platform"
-                    served <- pdNow deps
-                    served `shouldBe` fixedNow
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
+                fmap (\help -> appendHelp (Just help) "denied") (pdHelp deps)
+                    `shouldBe` Just "denied ask #platform"
+                served <- pdNow deps
+                served `shouldBe` fixedNow
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the tarball-host policy to same-host (secure default)" $ do
@@ -169,25 +167,25 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- reading of the allowlist is threaded onto every mount's deps.
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdTarballHostPolicy deps `shouldBe` SameHostAsPackument
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdTarballHostPolicy deps `shouldBe` SameHostAsPackument
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "relaxes the tarball-host policy when the operator opts in" $ do
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "true") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "true") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdTarballHostPolicy deps `shouldBe` AnyAllowlistedHost
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdTarballHostPolicy deps `shouldBe` AnyAllowlistedHost
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults additionalBlockedRanges to empty onto every mount's deps" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdAdditionalBlockedRanges deps `shouldBe` []
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdAdditionalBlockedRanges deps `shouldBe` []
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads the operator's global additionalBlockedRanges onto every mount's deps" $ do
@@ -196,9 +194,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         let testEnvVars = ("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24") : staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdAdditionalBlockedRanges deps `shouldBe` ["203.0.113.0/24"]
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdAdditionalBlockedRanges deps `shouldBe` ["203.0.113.0/24"]
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the response-bound budget to the secure defaults" $ do
@@ -206,9 +204,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- secure-default body/version/nesting ceilings (security.md invariant 4).
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdLimits deps `shouldBe` defaultLimits
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdLimits deps `shouldBe` defaultLimits
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads the operator's response-bound overrides onto the deps" $ do
@@ -221,12 +219,11 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     : staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> do
-                    maxBodyBytes (pdLimits deps) `shouldBe` 2048
-                    maxVersionCount (pdLimits deps) `shouldBe` 10
-                    maxNestingDepth (pdLimits deps) `shouldBe` 16
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                maxBodyBytes (pdLimits deps) `shouldBe` 2048
+                maxVersionCount (pdLimits deps) `shouldBe` 10
+                maxNestingDepth (pdLimits deps) `shouldBe` 16
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the public-integrity floor to SHA-256 onto the deps" $ do
@@ -234,26 +231,26 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- SHA-256 floor the public admission gate enforces.
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMinIntegrity deps `shouldBe` defaultMinIntegrity
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMinIntegrity deps `shouldBe` defaultMinIntegrity
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads a raised public-integrity floor onto the deps" $ do
         sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
         _ <- expectEnv (("ECLUSE_MIN_PUBLIC_INTEGRITY", "sha512") : staticEnvVars)
         planFrom (("ECLUSE_MIN_PUBLIC_INTEGRITY", "sha512") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMinIntegrity deps `shouldBe` sha512Floor
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMinIntegrity deps `shouldBe` sha512Floor
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the trusted-integrity floor to SHA-256 onto the deps" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMinTrustedIntegrity deps `shouldBe` defaultMinTrustedIntegrity
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMinTrustedIntegrity deps `shouldBe` defaultMinTrustedIntegrity
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads a loosened trusted-integrity floor (sha1) onto the deps" $ do
@@ -263,9 +260,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         _ <- expectEnv (("ECLUSE_MIN_TRUSTED_INTEGRITY", "sha1") : staticEnvVars)
         planFrom (("ECLUSE_MIN_TRUSTED_INTEGRITY", "sha1") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdMinTrustedIntegrity deps `shouldBe` sha1Floor
-                Nothing -> expectationFailure "expected packument deps wired"
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMinTrustedIntegrity deps `shouldBe` sha1Floor
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do

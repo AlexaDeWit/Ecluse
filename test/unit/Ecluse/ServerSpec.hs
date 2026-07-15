@@ -33,7 +33,8 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), RouteAction (AnswerLocally))
@@ -60,6 +61,7 @@ import Ecluse.Runtime.Server (
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
@@ -85,9 +87,10 @@ newTestEnv = do
     admission <- testServeAdmission
     newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
-{- | A test mount binding: the given prefix and router, npm's denial renderer,
-and no packument-serve dependencies (so a packument read is the recognised-but-
-unserved @501@ stub).
+{- | A test mount binding: the given prefix and router, npm's denial renderer, and
+__inert__ packument-serve dependencies (every upstream a closed port). A bound mount always
+carries them, so these specs supply the fixture and simply do not drive the data plane: they
+exercise routing, the meta-routes, the prefix strip, and the publish path.
 -}
 mountAt :: NonEmpty Text -> MountRouter -> MountBinding
 mountAt prefix router =
@@ -102,7 +105,7 @@ publishMountAt prefix router publishDeps =
     MountBinding
         { bindingPrefix = prefix
         , bindingRouter = router
-        , bindingPackumentDeps = Nothing
+        , bindingPackumentDeps = inertPackumentDeps
         , bindingPublishDeps = publishDeps
         , bindingRenderer = npmRenderer
         }
@@ -294,12 +297,6 @@ spec = do
 
     describe "dispatch -- /npm mount (prefix strip + npm grammar)" $
         with npmMountApp $ do
-            it "recognises a packument route but does not yet serve it (501, not a fake 200)" $
-                get "/npm/is-odd" `shouldRespondWith` 501
-
-            it "recognises a tarball route but does not yet serve it (501)" $
-                get "/npm/is-odd/-/is-odd-3.0.1.tgz" `shouldRespondWith` 501
-
             it "accepts the bare mount prefix with a trailing slash (empty path → 404)" $
                 get "/npm/" `shouldRespondWith` 404
 
@@ -402,9 +399,9 @@ spec = do
                 get "/npm/beep" `shouldRespondWith` "{}"{matchStatus = 200}
 
             it "denies a path npm would accept but the fake does not (/npm/is-odd → 404)" $
-                -- Under npm's router @is-odd@ is a packument read (501 here, unwired);
-                -- under the injected fake it is a miss (404). The 404 proves dispatch
-                -- followed the injected function, not a baked-in npm router.
+                -- Under npm's router @is-odd@ is a packument read; under the injected fake
+                -- it is a miss (404). The 404 proves dispatch followed the injected
+                -- function, not a baked-in npm router.
                 get "/npm/is-odd" `shouldRespondWith` 404
 
             it "denies npm's ping meta-route (the fake router does not recognise it)" $

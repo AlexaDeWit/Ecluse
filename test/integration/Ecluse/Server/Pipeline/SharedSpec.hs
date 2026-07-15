@@ -19,7 +19,8 @@ import UnliftIO.Exception (impureThrow, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
@@ -265,7 +266,7 @@ captureBreachLog privateBody = do
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just (withLimits tightLimits baseDeps)
+                            , bindingPackumentDeps = withLimits tightLimits baseDeps
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }

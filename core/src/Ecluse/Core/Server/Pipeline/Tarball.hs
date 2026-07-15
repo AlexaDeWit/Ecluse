@@ -147,6 +147,7 @@ import Ecluse.Core.Server.Context (
     ctxRuntime,
     tarballHostHonoured,
  )
+import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     evalTier,
@@ -169,7 +170,6 @@ import Ecluse.Core.Server.Response (
     renderError,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
@@ -253,8 +253,8 @@ data ArtifactServe
       -- enqueuing nothing (no bytes are served, so there is nothing to mirror).
       ServeHead
 
--- The dispatch shared by 'serveTarball' and 'headTarball': resolve the mount's
--- dependencies (or the recognised-but-unserved @501@ stub) and serve in the given mode.
+-- The dispatch shared by 'serveTarball' and 'headTarball': read the mount's
+-- dependencies and serve in the given mode.
 tarballWith ::
     ArtifactServe ->
     PackageName ->
@@ -265,9 +265,8 @@ tarballWith ::
     Handler ResponseReceived
 tarballWith mode name version filename request respond = do
     renderer <- asks (bindingRenderer . ctxMount)
-    asks (bindingPackumentDeps . ctxMount) >>= \case
-        Nothing -> liftIO (respond (recognisedButUnserved renderer))
-        Just deps -> serveTarballWithDeps mode renderer deps name version filename request respond
+    deps <- asks (bindingPackumentDeps . ctxMount)
+    serveTarballWithDeps mode renderer deps name version filename request respond
 
 -- Serve a tarball once the mount's dependencies are known: edge auth, then the
 -- private-hit / public-miss fetches the module header describes. The request runtime

@@ -47,7 +47,8 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
@@ -703,7 +704,7 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just (consistentGate (tweakDeps baseDeps))
+                            , bindingPackumentDeps = consistentGate (tweakDeps baseDeps)
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
@@ -756,7 +757,7 @@ withProxyEffectful effectful privateUp publicUp k = do
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = Just effectfulDeps
+                            , bindingPackumentDeps = effectfulDeps
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }

@@ -37,7 +37,8 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
@@ -232,7 +233,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
         MountBinding
             { bindingPrefix = "npm" :| []
             , bindingRouter = npmRouter
-            , bindingPackumentDeps = Just deps
+            , bindingPackumentDeps = deps
             , bindingPublishDeps = Nothing
             , bindingRenderer = npmRenderer
             }

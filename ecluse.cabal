@@ -158,9 +158,10 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Publish
     Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
+    Ecluse.Core.Server.Path
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
-    Ecluse.Core.Server.RoutePattern
+    Ecluse.Core.Server.RouteDoc
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
     Ecluse.Core.Supervision
@@ -476,6 +477,7 @@ library ecluse-test-support
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Mount
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version
@@ -570,7 +572,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
-    Ecluse.Server.RouteSpec
+    Ecluse.Server.PathSpec
     Ecluse.Server.StreamSpec
     Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec

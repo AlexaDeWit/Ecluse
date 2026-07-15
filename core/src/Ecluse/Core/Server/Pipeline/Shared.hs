@@ -10,7 +10,6 @@ HTTP response rendering functions, and declares shared serve rejection values (e
 for integrity floor enforcement).
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
-    recognisedButUnserved,
     notFoundInMount,
     edgeTokenMatches,
     edgeUnauthorised,
@@ -27,7 +26,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status404, status501, status503)
+import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status404, status503)
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
@@ -42,10 +41,6 @@ import Ecluse.Core.Server.Response (
 
 hRetryAfter :: HeaderName
 hRetryAfter = "Retry-After"
-
-recognisedButUnserved :: MountRenderer -> Response
-recognisedButUnserved renderer =
-    renderedResponse status501 [] (renderError renderer Nothing "this route is recognised but not yet served by this proxy")
 
 {- | The answer to a request no ecosystem route matched: a @404@ in the mount's own
 error surface.

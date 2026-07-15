@@ -33,8 +33,8 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
-import Ecluse.Core.Registry.Npm.Route (classify)
-import Ecluse.Core.Server.Route (Route (Unsupported))
+import Ecluse.Core.Registry.Npm.Route (npmRoutes)
+import Ecluse.Core.Server.Route (matchRoute)
 import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod))
 import Ecluse.Manifest (
     ErrorEnvelope (ErrorEnvelope),
@@ -94,8 +94,10 @@ spec = do
             sort (InsOrd.keys (_openApiPaths doc))
                 `shouldBe` sort (ordNub (map renderedKey npmSpecs))
 
-        it "a path claimed by no documented route denies by default (Unsupported)" $
-            classify (renderStdMethod GET) ["not", "a", "known", "route"] `shouldBe` Unsupported
+        it "a path claimed by no documented route denies by default" $
+            -- The catch-all the manifest documents is real: no route in the table claims
+            -- this path, so the router answers it with the deny-by-default 404.
+            isJust (matchRoute npmRoutes (renderStdMethod GET) ["not", "a", "known", "route"]) `shouldBe` False
 
     describe "documented statuses and boundaries" $ do
         it "Search carries 501" $

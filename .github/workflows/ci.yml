@@ -176,7 +176,8 @@ jobs:
   e2e:
     name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Sanity bound, not a budget: ~15 min warm, but a cold Nix closure adds half an hour (#836).
+    timeout-minutes: 60
     # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
     # docker network and drives it with the real npm CLI (S53). Catches composition-root
     # and cross-component regressions nothing else does. It is heavy (a Nix image build,

@@ -91,13 +91,12 @@ import Data.List (nubBy)
 import Data.OpenApi (
     AdditionalProperties (AdditionalPropertiesAllowed, AdditionalPropertiesSchema),
     Components (_componentsSchemas),
-    HttpStatusCode,
     Info (_infoDescription, _infoTitle, _infoVersion),
     MediaTypeObject (_mediaTypeObjectSchema),
     NamedSchema (NamedSchema),
     OpenApi (_openApiComponents, _openApiInfo, _openApiPaths, _openApiServers, _openApiTags),
     OpenApiType (OpenApiObject, OpenApiString),
-    Operation (_operationDescription, _operationRequestBody, _operationResponses, _operationSummary, _operationTags),
+    Operation (_operationDescription, _operationOperationId, _operationRequestBody, _operationResponses, _operationSummary, _operationTags),
     Param (_paramDescription, _paramIn, _paramName, _paramRequired, _paramSchema),
     ParamLocation (ParamPath),
     PathItem (
@@ -128,11 +127,17 @@ import Network.HTTP.Types.Method (StdMethod (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
-import Ecluse.Core.Server.Route (Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
+import Ecluse.Core.Server.Route (RouteName, unRouteName)
+import Ecluse.Core.Server.RouteDoc (
+    BodyDoc (ArtifactBody, EmptyObjectBody, ErrorEnvelopeBody, NoBody, PackumentBody, PublishDocumentBody),
+    RequestDoc (reqBody, reqDescription, reqRequired),
+    ResponseDoc (respBody, respDescription, respStatus),
+    RouteDoc (rdDescription, rdRequest, rdResponses, rdSummary),
+ )
 import Ecluse.Core.Server.RouteSpec (
     ParamSpec (psDescription, psName),
     PathSeg (Lit, Param),
-    RouteSpec (rsMethod, rsPattern, rsRoute),
+    RouteSpec (rsDoc, rsMethod, rsName, rsPattern),
  )
 
 {- | The explicit inputs the manifest is a pure function of: the server's
@@ -216,12 +221,12 @@ keyed by its rendered path template under the ecosystem's mount prefix. An ecosy
 with no adapter contributes nothing (rather than documenting a route the server
 cannot serve), so adding a mount is what adds its routes to the manifest.
 -}
-ecosystemRouteSpecs :: Ecosystem -> [(FilePath, RouteSpec)]
+ecosystemRouteSpecs :: Ecosystem -> [(Ecosystem, FilePath, RouteSpec)]
 ecosystemRouteSpecs eco =
     case adapterFor eco of
         Nothing -> []
         Just adapter ->
-            [ (toString (routePathKey (prefixFor eco) spec), spec)
+            [ (eco, toString (routePathKey (prefixFor eco) spec), spec)
             | spec <- toList (serveRoutes (adapterServe adapter))
             ]
 
@@ -231,7 +236,7 @@ operations combine through 'PathItem''s 'Semigroup', and the key's path paramete
 are the union of the contributing specs' parameters, de-duplicated by name so a
 shared parameter is documented once.
 -}
-pathsFrom :: [(FilePath, RouteSpec)] -> InsOrd.InsOrdHashMap FilePath PathItem
+pathsFrom :: [(Ecosystem, FilePath, RouteSpec)] -> InsOrd.InsOrdHashMap FilePath PathItem
 pathsFrom entries =
     InsOrd.fromList
         [ (key, item{_pathItemParameters = paramsFor key})
@@ -239,13 +244,13 @@ pathsFrom entries =
         ]
   where
     operations = foldl' addOperation InsOrd.empty entries
-    addOperation acc (key, spec) =
-        InsOrd.insertWith (<>) key (methodItem (rsMethod spec) (routeOperation (rsRoute spec))) acc
+    addOperation acc (eco, key, spec) =
+        InsOrd.insertWith (<>) key (methodItem (rsMethod spec) (operationFrom eco (rsName spec) (rsDoc spec))) acc
 
     parameters = foldl' addParams InsOrd.empty entries
     -- Accumulate a key's parameters in first-seen order (@old <> new@) before the
     -- by-name de-duplication in 'paramsFor'.
-    addParams acc (key, spec) = InsOrd.insertWith (flip (<>)) key (specParams spec) acc
+    addParams acc (_eco, key, spec) = InsOrd.insertWith (flip (<>)) key (specParams spec) acc
     paramsFor key =
         map (Inline . toParam) (nubBy sameName (fromMaybe [] (InsOrd.lookup key parameters)))
     sameName a b = psName a == psName b
@@ -286,19 +291,73 @@ methodItem method op = case method of
     -- CONNECT has no OpenAPI operation slot; no served route uses it.
     CONNECT -> error "Ecluse.Manifest: OpenAPI has no CONNECT operation"
 
-{- | The owned documentation for a route: its summary, description, request body,
-and response set. __Total__ over the closed 'Route' sum, so a route cannot be
-mounted without a documented operation here. The grammar (path, method, and path
-parameters) is not repeated: it comes from the route's 'RouteSpec'.
+{- | Interpret a route's __documentation__ into an OpenAPI operation.
+
+This is the whole of the manifest's per-route knowledge: there is none. A route's
+summary, its request body, and its status set are declared in the core, beside the
+pattern that routes it ("Ecluse.Core.Server.RouteDoc"), and this function renders
+whatever it is handed. There is no table here to keep in step with the routes, so there
+is nothing to drift.
+
+The tag is the ecosystem being walked, so a mount's operations are tagged with the
+registry they belong to, and the route's name is qualified by that ecosystem to form
+OpenAPI's @operationId@ (which client generators key on, and which must be unique across
+the whole document: only here, where every mount is in view, can that be guaranteed).
 -}
-routeOperation :: Route -> Operation
-routeOperation = \case
-    Packument{} -> packumentOperation
-    Tarball{} -> tarballOperation
-    Publish{} -> publishOperation
-    Ping -> pingOperation
-    Search -> searchOperation
-    Unsupported -> unsupportedOperation
+operationFrom :: Ecosystem -> RouteName -> RouteDoc -> Operation
+operationFrom eco name doc =
+    (mempty :: Operation)
+        { _operationTags = InsOrdSet.fromList [ecosystemName eco]
+        , _operationOperationId = Just (operationIdFor eco name)
+        , _operationSummary = Just (rdSummary doc)
+        , _operationDescription = Just (rdDescription doc)
+        , _operationRequestBody = Inline . requestBodyFrom <$> rdRequest doc
+        , _operationResponses =
+            (mempty :: Responses)
+                { _responsesResponses =
+                    InsOrd.fromList [(respStatus r, Inline (responseFrom r)) | r <- rdResponses doc]
+                }
+        }
+
+{- | A route's globally unique @operationId@: its ecosystem-local name, qualified by the
+mount it is served under (@packument@ under the npm mount is @npm.packument@).
+-}
+operationIdFor :: Ecosystem -> RouteName -> Text
+operationIdFor eco name = ecosystemName eco <> "." <> unRouteName name
+
+-- | The request body a write route accepts.
+requestBodyFrom :: RequestDoc -> RequestBody
+requestBodyFrom req =
+    (mempty :: RequestBody)
+        { _requestBodyDescription = Just (reqDescription req)
+        , _requestBodyRequired = Just (reqRequired req)
+        , _requestBodyContent = bodyContent (reqBody req)
+        }
+
+-- | One documented response: its status's meaning, and the body it carries.
+responseFrom :: ResponseDoc -> Response
+responseFrom r =
+    (mempty :: Response)
+        { _responseDescription = respDescription r
+        , _responseContent = bodyContent (respBody r)
+        }
+
+{- | The schema behind each body shape the core can name. __Total__ over the closed
+'BodyDoc' vocabulary, so a new body shape cannot go unrendered: it is a compile error
+here until it is given a schema.
+
+This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. The
+schemas for the documents Écluse owns are @autodocodec@ codecs that also back their
+@aeson@ instances, so the documented schema and the wire format cannot diverge.
+-}
+bodyContent :: BodyDoc -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
+bodyContent = \case
+    NoBody -> mempty
+    EmptyObjectBody -> jsonContent (Inline emptyObjectSchema)
+    ErrorEnvelopeBody -> jsonContent errorRef
+    PackumentBody -> jsonContent synthRef
+    ArtifactBody -> mediaContent "application/octet-stream" (Inline binarySchema)
+    PublishDocumentBody -> jsonContent (Inline publishDocumentSchema)
 
 -- | Render a route's 'ParamSpec' as an OpenAPI path parameter.
 toParam :: ParamSpec -> Param
@@ -312,113 +371,6 @@ pathParam name description =
         , _paramRequired = Just True
         , _paramDescription = Just description
         , _paramSchema = Just (Inline (stringSchema Nothing))
-        }
-
-packumentOperation :: Operation
-packumentOperation =
-    operation
-        "Fetch a package's metadata (packument)"
-        "Returns Écluse's merged-and-filtered packument: versions merged across upstreams and \
-        \gated, each `dist.tarball` rewritten to resolve back through this proxy. With no surviving \
-        \version the status follows the most recoverable cause."
-        Nothing
-        [ (200, jsonResponse "The synthesized packument." synthRef)
-        , (403, errorResponse "Every version was withheld by policy or admission, and none survived the merge.")
-        , (404, errorResponse "No such package upstream (a forwarded miss).")
-        , (500, errorResponse "A permanent or internal inability to decide.")
-        , (502, errorResponse "A responding upstream returned a packument for a different package.")
-        , (503, errorResponse "A transient upstream or advisory condition; retry (see `Retry-After`).")
-        ]
-
-tarballOperation :: Operation
-tarballOperation =
-    operation
-        "Stream a package artifact (tarball)"
-        "The artifact bytes are streamed verbatim with bounded memory; the manifest documents the \
-        \media type and links out rather than re-specifying the upstream artifact protocol. The \
-        \client verifies the bytes against the packument's preserved integrity digest."
-        Nothing
-        [ (200, octetResponse "The artifact bytes.")
-        , (403, errorResponse "Refused by policy, or by admission (a missing or below-floor integrity digest).")
-        , (404, errorResponse "The upstream did not have the artifact (a forwarded miss).")
-        , (500, errorResponse "A permanent or internal inability to serve.")
-        , (503, errorResponse "A transient upstream condition; retry (see `Retry-After`).")
-        ]
-
-publishOperation :: Operation
-publishOperation =
-    operation
-        "Publish a first-party package"
-        "Relays the publish document to the configured publication target after the anti-shadowing \
-        \scope guard. Écluse keys the write on the route's package name, never the document's \
-        \self-reported name."
-        (Just (Inline publishRequestBody))
-        [ (201, plainResponse "The publication target accepted the package (its response is relayed).")
-        , (403, errorResponse "The package name is outside the configured publish scopes (anti-shadowing), or refused by policy.")
-        , (405, errorResponse "Publishing is not configured (no publication target).")
-        ]
-
-pingOperation :: Operation
-pingOperation =
-    operation
-        "Liveness probe"
-        "Answered locally with `200` and an empty object; `npm ping` checks the endpoint it talks \
-        \to is up, so there is no reason to round-trip upstream."
-        Nothing
-        [(200, jsonResponse "An empty object." (Inline emptyObjectSchema))]
-
-searchOperation :: Operation
-searchOperation =
-    operation
-        "Package search (not supported)"
-        "Search is a first-class documented boundary: a discovery convenience, not an install path, \
-        \so Écluse returns `501` and points to the public registry's website rather than scope-creeping \
-        \a filtered or pass-through search."
-        Nothing
-        [(501, errorResponse "Not implemented: search is not supported.")]
-
-unsupportedOperation :: Operation
-unsupportedOperation =
-    operation
-        "Deny by default (unsupported path)"
-        "Any request under this mount matched by none of the routes above is denied with `404` -- \
-        \deny by default at the routing layer."
-        Nothing
-        [(404, errorResponse "Unrecognised path; deny by default.")]
-
-operation :: Text -> Text -> Maybe (Referenced RequestBody) -> [(HttpStatusCode, Response)] -> Operation
-operation summary description requestBody statuses =
-    (mempty :: Operation)
-        { _operationTags = InsOrdSet.fromList [ecosystemName Npm]
-        , _operationSummary = Just summary
-        , _operationDescription = Just description
-        , _operationRequestBody = requestBody
-        , _operationResponses = (mempty :: Responses){_responsesResponses = InsOrd.fromList [(code, Inline resp) | (code, resp) <- statuses]}
-        }
-
-jsonResponse :: Text -> Referenced Schema -> Response
-jsonResponse description ref =
-    (mempty :: Response){_responseDescription = description, _responseContent = jsonContent ref}
-
-errorResponse :: Text -> Response
-errorResponse description = jsonResponse description errorRef
-
-octetResponse :: Text -> Response
-octetResponse description =
-    (mempty :: Response)
-        { _responseDescription = description
-        , _responseContent = mediaContent "application/octet-stream" (Inline binarySchema)
-        }
-
-plainResponse :: Text -> Response
-plainResponse description = (mempty :: Response){_responseDescription = description}
-
-publishRequestBody :: RequestBody
-publishRequestBody =
-    (mempty :: RequestBody)
-        { _requestBodyDescription = Just "The npm publish document (the version manifest plus the base64-encoded tarball in `_attachments`)."
-        , _requestBodyRequired = Just True
-        , _requestBodyContent = jsonContent (Inline publishDocumentSchema)
         }
 
 jsonContent :: Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject

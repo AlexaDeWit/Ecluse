@@ -201,7 +201,8 @@ deps (the unserved stub) contributes nothing. -}
 logRuleBootOrder :: LogEnv -> [MountBinding] -> IO ()
 logRuleBootOrder logEnv = traverse_ logMount
   where
-    logMount binding = whenJust (bindingPackumentDeps binding) $ \deps -> do
+    logMount binding = do
+        let deps = bindingPackumentDeps binding
         let label = T.intercalate "/" (toList (bindingPrefix binding))
         logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
         traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))

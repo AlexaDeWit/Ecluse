@@ -78,7 +78,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
-import Ecluse.Core.Server.Route (isSafeComponent)
+import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 

@@ -234,8 +234,8 @@ data PackumentServe
       -- @Content-Length@ and the own @ETag@) with no body.
       PackumentHead
 
--- Dispatch shared by 'servePackument' and 'headPackument': resolve the mount's
--- dependencies (or the recognised-but-unserved @501@ stub) and serve in the given mode.
+-- Dispatch shared by 'servePackument' and 'headPackument': read the mount's
+-- dependencies and serve in the given mode.
 packumentWith ::
     PackumentServe ->
     PackageName ->
@@ -244,9 +244,8 @@ packumentWith ::
     Handler ResponseReceived
 packumentWith mode name request respond = do
     renderer <- asks (bindingRenderer . ctxMount)
-    asks (bindingPackumentDeps . ctxMount) >>= \case
-        Nothing -> liftIO (respond (recognisedButUnserved renderer))
-        Just deps -> serveWithDeps mode renderer deps name request respond
+    deps <- asks (bindingPackumentDeps . ctxMount)
+    serveWithDeps mode renderer deps name request respond
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
 -- and answer -- the credential-authority and merge logic the module header

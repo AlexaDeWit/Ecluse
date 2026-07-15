@@ -53,7 +53,7 @@ import Network.HTTP.Types.Header (hAccept, hAcceptEncoding, hIfModifiedSince, hI
 import Ecluse.Core.Credential (Secret, unSecret)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
-import Ecluse.Core.Server.Route (encodeComponent)
+import Ecluse.Core.Server.Path (encodeComponent)
 import Ecluse.Core.Text (joinUrlPath)
 
 {- | Which of npm's two metadata documents to request, selected by the @Accept@
