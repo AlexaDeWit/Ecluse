@@ -177,10 +177,12 @@ data AuthToken = AuthToken { secret :: Secret, expiresAt :: Maybe UTCTime }
 ```
 
 It mints the token for any upstream that needs one: the mirror-target write always, and
-under `service` the private-upstream read too. Under the default `passthrough` strategy a
-deployment configures one provider (for the mirror target) and forwards the client's own
-credential; `service` adds a read provider for the private upstream (per-request and
-uncached, since Écluse forbids a shared private cache). The public upstream is anonymous
+under `service` the private-upstream read too. The mirror-target provider is **derived from
+the mirror-target URL** (a CodeArtifact host mints per its domain; any other host uses a
+static token), so a token can never be paired with an endpoint it was not minted for. Under
+the default `passthrough` strategy a deployment holds one provider (for the mirror target)
+and forwards the client's own credential; `service` adds a read provider for the private
+upstream (per-request and uncached, since Écluse forbids a shared private cache). The public upstream is anonymous
 under every strategy. See [Access & Credential Model](access-model.md) and
 [Credential flow and authority](registry-model.md#credential-flow-and-authority).
 

@@ -90,10 +90,11 @@ for it unless you have a specific reason to diverge; each step links to its deta
    each caller's token to the private upstream and publication target, so access matches your
    registry IAM exactly (no escalation) and Écluse holds no standing read credential. This is the
    default; nothing to set. See [access model](docs/architecture/access-model.md).
-3. **Mint the mirror-write token from the container role.** Set
-   `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
-   token under the task/instance role instead of carrying a static secret (`static` is supported
-   but discouraged). Scope that role **write-only** to the mirror store and keep
+3. **Mint the mirror-write token from the container role.** Point
+   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint so the worker mints a short-lived
+   write token under the task/instance role, scoped to that domain, instead of carrying a static
+   secret (a non-CodeArtifact target is written with a static `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`,
+   supported but discouraged). Scope that role **write-only** to the mirror store and keep
    `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` short: it's Écluse's only standing
    credential and it writes to the trusted store. **Scope the mirror queue the same way**: a job
    tells the worker to fetch-and-publish, so grant only the serve role `SendMessage` and only the
@@ -176,13 +177,9 @@ rationale behind each setting are in
 | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes |  | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). Required to activate the mount: any other `ECLUSE_MOUNTS__NPM__*` key set without it is a boot error. |
 | `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
 | `ECLUSE_PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | Yes |  | Registry that approved packages are mirrored to. Required for every active mount, and declared explicitly even when it equals `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` (one registry, read and written); unset ⇒ boot error naming the key. The write credential is chosen separately via `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
-| `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER` | No | `codeartifact` | Mirror-target write credential: `codeartifact` (mints a short-lived token under the container/task role, the shipped default) or `static` (a fixed `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`). `gcp-artifact-registry` is recognised but not yet built. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | No |  | Static write token, used when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static`. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN` | Depends | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER` | Depends | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION` | Depends | `codeartifact` only | Region, this key, else the host (its authoritative region), else `AWS_REGION`. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No |  | Token lifetime in seconds, capped at `43200` (12 h). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | Yes |  | Registry that approved packages are mirrored to. Required for every active mount, and declared explicitly even when it equals `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` (one registry, read and written); unset ⇒ boot error naming the key. **The write credential is derived from this URL:** a CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) mints a short-lived token scoped to that domain; any other host is written with the static `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | Depends |  | Static write token for a **non-CodeArtifact** mirror target. Required when the mirror target is not a CodeArtifact endpoint (absent ⇒ boot error naming the key); must **not** be set when it is one (the token is minted, so a static token alongside it is refused at boot as a conflict). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No |  | Lifetime in seconds of the minted CodeArtifact write token (applies only when the mirror target is a CodeArtifact endpoint), capped at `43200` (12 h). |
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No |  | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream. Protect this surface; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No |  | Static fallback credential for the publication target, forwarded only when a publishing client sends none. The default is **passthrough** (the publisher's own token). ⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` | Conditionally | If `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard: a publish outside the list is refused before any upstream write. It limits names, not callers, and is not authentication. An empty list with a publication target set is a fail-loud boot error. |

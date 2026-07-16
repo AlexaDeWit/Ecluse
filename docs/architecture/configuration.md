@@ -26,7 +26,7 @@ unrepresentable. The document is a YAML config file, the source of truth: review
 diffable, the expected form once the rule policy is non-trivial.
 
 A mount serves only when the operator declares it. The shipped defaults carry a dormant
-template per ecosystem (the canonical public upstream and the default credential provider),
+template per ecosystem (the canonical public upstream),
 and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
 `ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
 upstream and declare its mirror target: a declared-but-incomplete mount is a boot error naming
@@ -72,17 +72,22 @@ by Écluse.
 ### Outbound registry credentials
 
 Écluse always holds a credential to write the mirror target, and, depending on the mount's
-[credential strategy](access-model.md), may also hold one to read the private upstream. Each such
-endpoint selects a [`CredentialProvider`](cloud-backends.md#credential-provider): cloud-managed
-(CodeArtifact / Artifact Registry, a token minted from the ambient cloud identity) or a static token.
+[credential strategy](access-model.md), may also hold one to read the private upstream. The
+mirror write is distinct from the reads: under the default `passthrough` the private upstream
+carries no Écluse credential, while the mirror write runs on the async worker under Écluse's own
+identity.
 
-The mirror-write credential is explicit even when the mirror-target URL is declared equal to the
-private upstream: under the default `passthrough` the private upstream carries no Écluse credential,
-while the mirror write runs on the async worker under Écluse's own identity, so the two are chosen
-independently. Provider granularity follows the credential's real scope: a CodeArtifact token is
-minted per domain, so mounts whose resolved CodeArtifact identities coincide share one provider
-(one boot mint, one refresh schedule, one breaker). The read-side and publish-target providers follow the same prefixed-provider pattern;
-see [USAGE](../../USAGE.md#environment-variables) for the exact keys.
+The mirror-write credential is **derived from the mirror-target URL**, so it is always the
+credential that endpoint dictates and can never be paired with an endpoint it was not minted for.
+A CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) encodes its
+whole mint identity in its host, so the worker mints a short-lived token scoped to that domain; any
+other host is written with a static token (`…MIRROR_TARGET_TOKEN`). Two arrangements are refused at
+load so neither degrades silently: a non-CodeArtifact target with no static token, and a
+CodeArtifact target that also carries a static token. Provider granularity follows the credential's
+real scope: a CodeArtifact token is minted per domain, so mounts whose resolved CodeArtifact
+identities coincide share one provider (one boot mint, one refresh schedule, one breaker). The
+read-side and publish-target providers follow the same [`CredentialProvider`](cloud-backends.md#credential-provider)
+pattern; see [USAGE](../../USAGE.md#environment-variables) for the exact keys.
 
 How reads are credentialled is the mount's
 [credential strategy](access-model.md#credential-strategies-per-mount). Config-side, the one
@@ -305,10 +310,11 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
   `mirrorTarget` is rejected at boot,
   naming the mount and each missing key (every incomplete mount in one report); the shipped
   per-ecosystem templates alone never activate anything.
-- Credential references must resolve. A mount whose [credential strategy](access-model.md) draws
-  on an uninitialised provider (a `service` mount with no read provider, or a mirror target
-  naming a backend whose ambient cloud identity is absent) is rejected at boot. Credential
-  providers are [process-global](cloud-backends.md#credential-provider).
+- The mirror-write credential must resolve. It is derived from the mirror-target URL: a
+  non-CodeArtifact target with no static write token, or a CodeArtifact target that also carries a
+  static token, is rejected at load; and a CodeArtifact target whose ambient cloud identity cannot
+  mint an initial token is rejected at boot. A `service` mount with no read provider is likewise
+  rejected. Credential providers are [process-global](cloud-backends.md#credential-provider).
 - A static publish credential requires a verifiable edge:
   `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` set without `ECLUSE_AUTH_TOKEN` is rejected at
   boot (`PublishStaticCredentialNeedsEdge`), since a static credential makes Écluse publish under

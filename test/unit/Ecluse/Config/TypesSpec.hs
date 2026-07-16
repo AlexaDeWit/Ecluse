@@ -9,7 +9,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, parseQueueBackend, unUrl)
+import Ecluse.Config.Types (QueueBackend (..), mkUrl, parseQueueBackend, unUrl)
 import Ecluse.Core.Wire (parseWire, renderWire)
 
 spec :: Spec
@@ -42,29 +42,6 @@ backendSpec = describe "backend selection" $ do
         it "rejects unknown backends" $
             parseQueueBackend "kafka"
                 `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
-
-    describe "CredentialBackend" $ do
-        it "round-trips each backend through parse/render" $ do
-            parseWire "codeartifact" `shouldBe` Right CodeArtifactCredential
-            parseWire "static" `shouldBe` Right StaticCredential
-            parseWire "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
-            renderWire CodeArtifactCredential `shouldBe` "codeartifact"
-            renderWire StaticCredential `shouldBe` "static"
-            renderWire GcpArtifactRegistryCredential `shouldBe` "gcp-artifact-registry"
-        it "rejects an unknown name, naming the accepted set" $
-            (parseWire "vault" :: Either Text CredentialBackend)
-                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
-
-    describe "parseCredentialBackend" $ do
-        it "parses codeartifact to CodeArtifactCredential" $
-            parseCredentialBackend "codeartifact" `shouldBe` Right CodeArtifactCredential
-        it "parses static to StaticCredential" $
-            parseCredentialBackend "static" `shouldBe` Right StaticCredential
-        it "parses gcp-artifact-registry to GcpArtifactRegistryCredential" $
-            parseCredentialBackend "gcp-artifact-registry" `shouldBe` Right GcpArtifactRegistryCredential
-        it "rejects unknown backends" $
-            parseCredentialBackend "vault"
-                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, gcp-artifact-registry)"
 
 urlSpec :: Spec
 urlSpec = describe "Url" $ do

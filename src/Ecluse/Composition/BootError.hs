@@ -23,7 +23,6 @@ module Ecluse.Composition.BootError (
 import Data.Text qualified as T
 
 import Ecluse.Config (
-    CredentialBackend,
     PolicyError,
     QueueBackend (SqsQueue),
     renderPolicyError,
@@ -42,10 +41,12 @@ data BootError
       cannot be served (a loud miss, never a silent drop). Carries the ecosystem.
       -}
       MissingAdapter Ecosystem
-    | {- | A mount names a credential backend with no initialised provider. Carries
-      the ecosystem of the mount and the unresolved backend.
+    | {- | A mount has no initialised mirror-write provider. The credential is derived
+      from the mirror-target URL and realised for every active mount, so this is a
+      total safety net rather than a reachable operator misconfiguration. Carries the
+      ecosystem of the mount.
       -}
-      UnresolvedCredential Ecosystem CredentialBackend
+      UnresolvedCredential Ecosystem
     | {- | The configured mirror-queue backend has no implementation compiled into
       this binary, so no queue can be built for it. Carries the unavailable backend.
       An honest refusal -- never a silent fall-through to a different backend.
@@ -64,20 +65,6 @@ data BootError
       @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
       -}
       QueueEndpointMalformed Text
-    | {- | The selected mirror-target credential provider has no implementation
-      compiled into this binary. Carries the unavailable provider. An honest refusal,
-      never a silent fall-through.
-      -}
-      MirrorCredentialProviderUnavailable CredentialBackend
-    | {- | A required CodeArtifact input for the mirror-target token could not be
-      resolved from either its explicit key or the mirror-target host. Carries the
-      name of the key the operator must set.
-      -}
-      CodeArtifactConfigMissing Text
-    | {- | A CodeArtifact input resolved but is malformed (e.g. a domain owner that is
-      not a 12-digit AWS account id). Carries the key and a reason.
-      -}
-      CodeArtifactConfigInvalid Text Text
     | {- | The eager boot-time CodeArtifact mint threw -- a transient AWS error (worth a
       retry) or a permanent one (a bad domain\/region or missing permission, to be
       fixed). Carries the rendered exception so the cause is legible and aggregated.
@@ -107,12 +94,10 @@ renderBootError = \case
     PolicyBootError err -> renderPolicyError err
     MissingAdapter eco ->
         "mount " <> ecosystemName eco <> " has no adapter wired in this build"
-    UnresolvedCredential eco backend ->
+    UnresolvedCredential eco ->
         "mount "
             <> ecosystemName eco
-            <> " names credential source "
-            <> renderWire backend
-            <> ", not initialised in this build"
+            <> " has no initialised mirror-write credential in this build"
     QueueProviderUnavailable backend ->
         "mirror queue provider "
             <> renderWire backend
@@ -127,16 +112,6 @@ renderBootError = \case
             <> " requires ECLUSE_QUEUE_URL to be set"
     QueueEndpointMalformed url ->
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
-    MirrorCredentialProviderUnavailable backend ->
-        "mirror-target credential provider "
-            <> renderWire backend
-            <> " is not available in this build"
-    CodeArtifactConfigMissing key ->
-        "mirror-target credential provider codeartifact requires "
-            <> key
-            <> " (set it explicitly, or use a CodeArtifact ECLUSE_MIRROR_TARGET it can be parsed from)"
-    CodeArtifactConfigInvalid key reason ->
-        "mirror-target credential provider codeartifact: " <> key <> " is invalid (" <> reason <> ")"
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail

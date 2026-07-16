@@ -52,6 +52,7 @@ spec = describe "decodeDocument" $ do
         case loadConfig
             [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
             , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
             ]
             Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
@@ -74,13 +75,13 @@ spec = describe "decodeDocument" $ do
             []
             ( Just
                 "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://one.example.test\",\
-                \\"mirrorTarget\":\"https://one.example.test\"}}}"
+                \\"mirrorTarget\":\"https://one.example.test\",\"mirrorTargetToken\":\"t\"}}}"
             ) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "fails loudly when an environment key activates a mount without an upstream" $
-        loadConfig [("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")] Nothing
+        loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
             `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
 
     it "reports every incomplete active mount in one load, not only the first" $ do
@@ -89,7 +90,7 @@ spec = describe "decodeDocument" $ do
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
 
     it "reports a mount's missing private upstream and missing mirror target together" $ do
-        let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")] Nothing
+        let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")] Nothing
         outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM"
         outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
 
@@ -225,6 +226,7 @@ spec = describe "decodeDocument" $ do
             case loadConfig
                 [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")
                 , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
                 ]
                 Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
@@ -233,6 +235,7 @@ spec = describe "decodeDocument" $ do
             case loadConfig
                 [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")
                 , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
                 ]
                 Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
@@ -259,7 +262,7 @@ singleMountDoc =
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"respectUpstreamTarballHost\":false,\
-    \\"mirrorTarget\":\"https://mirror.example.test\",\"credentialProvider\":\"codeartifact\"}},\
+    \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}},\
     \\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
 
 mountDocForEcosystem :: Text -> ByteString
@@ -268,7 +271,7 @@ mountDocForEcosystem eco =
         "{\"mounts\":{\""
             <> eco
             <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
-               \\"mirrorTarget\":\"https://c\",\"credentialProvider\":\"static\"}}}"
+               \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"token\"}}}"
 
 mountDocWithMirrorTarget :: Text -> ByteString
 mountDocWithMirrorTarget target =
@@ -276,13 +279,13 @@ mountDocWithMirrorTarget target =
         "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
         \\"mirrorTarget\":\""
             <> target
-            <> "\",\"credentialProvider\":\"static\"}}}"
+            <> "\"}}}"
 
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
     encodeUtf8 $
         "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
-        \\"mirrorTarget\":\"https://c\",\"credentialProvider\":\"static\",\""
+        \\"mirrorTarget\":\"https://c\",\""
             <> extra
             <> "\":\"x\"}}}"
 

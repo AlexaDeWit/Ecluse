@@ -264,6 +264,7 @@ library
     Ecluse.CLI
     Ecluse.Config.Aeson
     Ecluse.Config.DefaultConfig
+    Ecluse.Config.MirrorCredential
     Ecluse.Config.Parser
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
@@ -659,6 +660,7 @@ test-suite ecluse-unit
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
+    Ecluse.Config.MirrorCredentialSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec

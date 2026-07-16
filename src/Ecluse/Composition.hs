@@ -26,10 +26,10 @@ providers and mirror-target credential selection in
 Three boot failures are aggregated into one report so a single run shows every
 problem: a rule policy that does not resolve ('PolicyBootError', surfaced by
 'Ecluse.Config.loadConfig'), a configured mount whose ecosystem has no adapter
-wired ('MissingAdapter'), and a mount naming a credential backend with no
-initialised provider ('UnresolvedCredential'). A bad configuration is thus a
-loud, immediate startup failure, never a quietly mis-enforced or half-wired state
-(see @docs\/architecture\/configuration.md@ → "Validation").
+wired ('MissingAdapter'), and a mount with no initialised mirror-write provider
+('UnresolvedCredential'). A bad configuration is thus a loud, immediate startup
+failure, never a quietly mis-enforced or half-wired state (see
+@docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
     -- * Boot-time wiring
@@ -51,7 +51,7 @@ import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems
 import Ecluse.Config (
     AppConfig (..),
     Config (..),
-    MirrorTarget (mtCredential, mtUrl),
+    MirrorTarget (mtUrl),
     Mount (..),
     MountConfig (..),
     MountRegistries (..),
@@ -252,10 +252,9 @@ tarballHostPolicyFor mcfg =
 -- initialised, nothing when it resolves.
 credentialError :: CredentialProviders -> Mount -> Maybe BootError
 credentialError providers mount =
-    let backend = mtCredential (regMirrorTarget (mountRegistries mount))
-     in if mountEcosystem mount `Set.member` initializedEcosystems providers
-            then Nothing
-            else Just (UnresolvedCredential (mountEcosystem mount) backend)
+    if mountEcosystem mount `Set.member` initializedEcosystems providers
+        then Nothing
+        else Just (UnresolvedCredential (mountEcosystem mount))
 
 -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
 -- under ECLUSE_PUBLIC_URL when set (so a served tarball is a full URL an npm
@@ -381,6 +380,6 @@ publishTargetFor providers mount =
                     , ptCredentials = provider
                     }
         Nothing ->
-            Left [UnresolvedCredential (mountEcosystem mount) (mtCredential target)]
+            Left [UnresolvedCredential (mountEcosystem mount)]
   where
     target = regMirrorTarget (mountRegistries mount)

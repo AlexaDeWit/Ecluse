@@ -89,10 +89,12 @@ shouldWarnOnce doc phrases = do
         warnings -> expectationFailure ("expected exactly one collision warning, got " <> show warnings)
 
 {- | An npm mount document with the given string fields; the shipped npm template
-supplies the rest (public upstream, credential provider, tarball-host posture).
+supplies the rest (public upstream, tarball-host posture). A static
+@mirrorTargetToken@ is added so the (non-CodeArtifact) mirror targets these
+collision cases use derive a valid write credential and the config loads.
 -}
 npmMountDoc :: [(Text, Text)] -> ByteString
 npmMountDoc fields =
-    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map field fields) <> "}}}")
+    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map field (fields <> [("mirrorTargetToken", "t")])) <> "}}}")
   where
     field (key, value) = "\"" <> key <> "\":\"" <> value <> "\""

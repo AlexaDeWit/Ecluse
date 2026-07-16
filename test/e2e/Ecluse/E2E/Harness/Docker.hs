@@ -277,7 +277,6 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://upstream/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("ECLUSE_QUEUE_BACKEND", "sqs")

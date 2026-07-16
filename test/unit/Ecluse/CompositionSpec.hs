@@ -15,15 +15,11 @@ import Ecluse.Composition.Support (
     expectEnv,
     expectProviders,
     fixedNow,
-    noTokenEnvVars,
     staticEnvVars,
-    withoutCredentialProvider,
     withoutMirrorTargetUrl,
  )
 import Ecluse.Config (
-    Config (configApp),
     ConfigError (..),
-    CredentialBackend (..),
     PolicyError (UnknownRuleType),
     loadConfig,
     renderConfigError,
@@ -65,18 +61,17 @@ spec = do
 expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
 
-{- | A document mount keyed by the given ecosystem, naming the given credential
-backend -- for the no-adapter and unresolved-credential boot-error cases.
+{- | A complete document mount keyed by the given ecosystem, with a non-CodeArtifact
+mirror target and a static write token so its credential resolves -- for the
+no-adapter boot-error case (where the adapter, not the credential, is the fault).
 -}
-mountDoc :: Text -> Text -> ByteString
-mountDoc eco credential =
+mountDoc :: Text -> ByteString
+mountDoc eco =
     encodeUtf8
         ( "{\"mounts\":{\""
             <> eco
             <> "\":{\"privateUpstream\":\"https://priv\",\"publicUpstream\":\"https://pub\",\
-               \\"mirrorTarget\":\"https://mir\",\"credentialProvider\":\""
-            <> credential
-            <> "\"}}}"
+               \\"mirrorTarget\":\"https://mir\",\"mirrorTargetToken\":\"t\"}}}"
         )
 
 -- Build the served bindings from an env + optional document through 'planMounts',
@@ -91,8 +86,10 @@ planFrom envVars mDocBytes = do
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(MountMissingMirrorTarget _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(MirrorCredentialTokenMissing _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(MirrorCredentialConflict _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
         Right cfg -> do
-            initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
+            initCredentialProviders noCredentialReporters cfg >>= \case
                 Left pErrs -> pure (Left pErrs)
                 Right providers -> planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers cfg
 
@@ -149,9 +146,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- Forces the remaining 'PackumentDeps' fields: the inbound token (from
         -- ECLUSE_AUTH_TOKEN), the injected clock ('pdNow'), and the operator help
         -- message -- all wired by the composition root.
-        env <- expectEnv (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars)
-        providers <- expectProviders env
         config <- expectConfig (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
+        providers <- expectProviders config
         composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
@@ -269,9 +265,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- The builder over an already-loaded Config is the testable core (it opens no
         -- listener, only 'prepare's each mount's rules); planMounts is just loadConfig
         -- sequenced into it.
-        env <- expectEnv staticEnvVars
-        providers <- expectProviders env
         config <- expectConfig staticEnvVars Nothing
+        providers <- expectProviders config
         composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
@@ -294,8 +289,8 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
                     : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")
                     : staticEnvVars
         _ <- expectEnv pypiEnv
-        _ <- expectDoc (mountDoc "pypi" "static")
-        planFrom pypiEnv (Just (mountDoc "pypi" "static")) >>= \case
+        _ <- expectDoc (mountDoc "pypi")
+        planFrom pypiEnv (Just (mountDoc "pypi")) >>= \case
             Left errs -> errs `shouldBe` [MissingAdapter PyPI]
             Right _ -> expectationFailure "expected boot failure"
 
@@ -309,39 +304,6 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
                 errs
                     `shouldBe` [PolicyBootError (UnknownRuleType "mount" (renderConfigError (MountMissingMirrorTarget Npm)))]
             Right _ -> expectationFailure "expected a missing-mirror-target boot error"
-
-    it "fails on a mount missing codeartifact config" $ do
-        let env = withoutCredentialProvider staticEnvVars
-        _ <- expectEnv env
-        _ <- expectDoc (mountDoc "npm" "codeartifact")
-        planFrom env (Just (mountDoc "npm" "codeartifact")) >>= \case
-            Left errs ->
-                errs
-                    `shouldMatchList` [ CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN"
-                                      , CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER"
-                                      , CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION"
-                                      ]
-            Right _ -> expectationFailure "expected an unresolved-credential boot error"
-
-    it "aggregates a missing adapter and an unresolved credential on one mount" $ do
-        -- Without a MIRROR_TARGET_TOKEN, PyPI's static credential is unresolved AND its adapter is missing.
-        _ <- expectEnv staticEnvVars
-        _ <- expectDoc (mountDoc "pypi" "static")
-        planFrom staticEnvVars (Just (mountDoc "pypi" "static")) >>= \case
-            Left errs ->
-                errs
-                    `shouldMatchList` [ UnresolvedCredential PyPI StaticCredential
-                                      , MissingAdapter PyPI
-                                      ]
-            Right _ -> expectationFailure "expected aggregated boot errors"
-
-    it "fails the env single-mount when no static provider is initialized" $ do
-        -- Without ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN, the env single-mount's @static@ reference does
-        -- not resolve, so even the default npm mount is an honest boot failure.
-        _ <- expectEnv noTokenEnvVars
-        planFrom noTokenEnvVars Nothing >>= \case
-            Left errs -> errs `shouldBe` [UnresolvedCredential Npm StaticCredential]
-            Right _ -> expectationFailure "expected an unresolved-credential boot error"
 
     it "fails when a publication target is set without a publish-scope allow-list" $ do
         -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES empty: the anti-shadowing guard

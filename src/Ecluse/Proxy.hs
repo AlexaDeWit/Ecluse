@@ -181,10 +181,11 @@ runProxy bootEnv = do
                 { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
                 , crRefreshReporter = deferredRefreshReporter deferredMetrics CodeArtifact
                 }
-    -- Build the process-global mirror-target write provider(s) selected by config:
-    -- the static token, or the CodeArtifact mint (whose inputs are validated and which
-    -- mints once eagerly, so a misconfiguration fails loudly here at boot).
-    providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
+    -- Build the process-global mirror-target write provider(s) each mount's resolved
+    -- credential names: the static token, or the CodeArtifact mint (derived from the
+    -- mirror-target host, minting once eagerly so a misconfiguration fails loudly here
+    -- at boot).
+    providers <- initCredentialProviders credentialReporters config >>= orExit (T.unlines . map renderBootError)
     -- The advisory-database sync plan: with a bucket configured, every configured
     -- mount ecosystem gets its own slot (the shadow-swap read side), its own
     -- supervised sync task, and its own one-way first-sync readiness flag, each

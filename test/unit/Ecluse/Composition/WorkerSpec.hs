@@ -13,7 +13,6 @@ import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget, planMounts, planPublishTargets)
 import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars)
 import Ecluse.Composition.Worker (workerPoliciesFor)
-import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdMinIntegrity))
@@ -65,7 +64,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
 composedFixtures :: IO (Env, [MountBinding], [PublishTarget])
 composedFixtures = do
     config <- expectConfig staticEnvVars Nothing
-    providers <- expectProviders (configApp config)
+    providers <- expectProviders config
     bindings <-
         planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
