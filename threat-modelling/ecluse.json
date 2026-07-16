@@ -2203,12 +2203,12 @@
                 },
                 {
                   "number": 22,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Mirror-write credential can be sent to a misconfigured registry target",
                   "type": "Information disclosure",
-                  "description": "The mirror target URL and the mirror-write credential provider are configured separately. If an operator explicitly supplies a CodeArtifact credential identity while pointing ECLUSE_MOUNTS__NPM__MIRROR_TARGET at a different registry, the worker can attach a CodeArtifact bearer to that wrong endpoint. The default inferred CodeArtifact path fails closed for a non-CodeArtifact mirror host, but the explicit MIRROR_CODE_ARTIFACT_* path can still bind a minted token to an unrelated target.",
-                  "mitigation": "Open correctness work is tracked in #808: decide the intended provider/endpoint binding invariant and add either a boot-time guard or an explicit operator override for deliberate cross-binding. Until then, the operational control is to keep the mirror target and credential provider identity aligned, prefer deriving CodeArtifact identity from the mirror-target host when using CodeArtifact, and scope the container role write-only to the intended mirror store. Residual impact is primarily credential disclosure to the configured wrong endpoint; public registries should reject the bearer, but an attacker-controlled endpoint could log it.",
+                  "description": "A minted CodeArtifact write token is a live bearer credential scoped to a domain. If the write credential and the mirror-target endpoint could be chosen independently, an operator could point the mirror target at one registry while the token was minted for another, disclosing the bearer to an endpoint that could log or replay it.",
+                  "mitigation": "The mirror-write credential is derived from the mirror-target URL rather than configured separately, so the two cannot diverge. A CodeArtifact endpoint mints a token scoped to the domain parsed from that same host; any other host is written with an operator-supplied static token. No configuration expresses a CodeArtifact identity independent of the target, so a minted token can never be attached to an endpoint it was not scoped for: the divergence class is unrepresentable. A non-CodeArtifact target with no static token, and a CodeArtifact target that also carries a static token, are both rejected at config load. Least-privilege IAM additionally scopes the container role write-only to the intended mirror store as defence in depth.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000111"
                 }

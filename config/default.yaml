@@ -44,15 +44,12 @@ osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
 mounts:
   npm:
     publicUpstream: https://registry.npmjs.org
-    credentialProvider: codeartifact
     respectUpstreamTarballHost: false
   pypi:
     publicUpstream: https://pypi.org
-    credentialProvider: codeartifact
     respectUpstreamTarballHost: false
   rubygems:
     publicUpstream: https://rubygems.org
-    credentialProvider: codeartifact
     respectUpstreamTarballHost: false
 
 rules:

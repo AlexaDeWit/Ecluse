@@ -10,8 +10,7 @@ module Ecluse.Config.Types (
     unUrl,
     QueueBackend (..),
     parseQueueBackend,
-    CredentialBackend (..),
-    parseCredentialBackend,
+    MirrorCredential (..),
     MountConfig (..),
     AppConfig (..),
     MountRegistries (..),
@@ -36,6 +35,7 @@ import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
+import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
@@ -69,33 +69,26 @@ instance WireVocab QueueBackend where
 parseQueueBackend :: Text -> Either Text QueueBackend
 parseQueueBackend = parseWire
 
-data CredentialBackend
-    = CodeArtifactCredential
-    | StaticCredential
-    | GcpArtifactRegistryCredential
-    deriving stock (Eq, Ord, Show)
-
-instance WireVocab CredentialBackend where
-    wireKind = "credential provider"
-    wireTable =
-        (CodeArtifactCredential, "codeartifact")
-            :| [ (StaticCredential, "static")
-               , (GcpArtifactRegistryCredential, "gcp-artifact-registry")
-               ]
-
-parseCredentialBackend :: Text -> Either Text CredentialBackend
-parseCredentialBackend = parseWire
+{- | The mirror-write credential, __derived from the mirror-target URL__ so a token
+can never be paired with an endpoint it was not minted for. A CodeArtifact endpoint
+encodes its whole identity in its host, so that identity is parsed straight from the
+URL; any other host is written with an operator-supplied static bearer. The choice is
+made once, at config load ('Ecluse.Config.MirrorCredential.resolveMirrorCredential'),
+and carried here so the pairing is correct by construction.
+-}
+data MirrorCredential
+    = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
+      MirrorCodeArtifact CodeArtifactConfig
+    | -- | Any other mirror target: an operator-supplied static write token.
+      MirrorStatic Secret
+    deriving stock (Eq, Show)
 
 data MountConfig = MountConfig
     { mntPrivateUpstream :: Maybe RegistryUrl
     , mntPublicUpstream :: RegistryUrl
     , mntMirrorTarget :: Maybe RegistryUrl
     , mntMirrorTargetToken :: Maybe Secret
-    , mntCredentialProvider :: CredentialBackend
     , mntRespectUpstreamTarballHost :: Bool
-    , mntMirrorCodeArtifactDomain :: Maybe Text
-    , mntMirrorCodeArtifactDomainOwner :: Maybe Text
-    , mntMirrorCodeArtifactRegion :: Maybe Text
     , mntMirrorCodeArtifactTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
@@ -153,7 +146,7 @@ data MountRegistries = MountRegistries
 
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
-    , mtCredential :: CredentialBackend
+    , mtCredential :: MirrorCredential
     }
     deriving stock (Eq, Show)
 
@@ -183,6 +176,17 @@ data ConfigError
       from another endpoint.
       -}
       MountMissingMirrorTarget Ecosystem
+    | {- | An active mount's mirror target is not a CodeArtifact endpoint (whose write
+      token would be minted), so it needs an explicit static write token, and none was
+      supplied. Carries the mount's ecosystem.
+      -}
+      MirrorCredentialTokenMissing Ecosystem
+    | {- | An active mount's mirror target is a CodeArtifact endpoint (its write token is
+      minted automatically from the host identity) yet a static write token was also
+      supplied. Refused so the two credential sources can never silently contend.
+      Carries the mount's ecosystem.
+      -}
+      MirrorCredentialConflict Ecosystem
     deriving stock (Eq, Show)
 
 renderConfigError :: ConfigError -> Text
@@ -208,3 +212,23 @@ renderConfigError (MountMissingMirrorTarget eco) =
             <> ".mirrorTarget in the config document (or "
             <> envKey
             <> "), or remove the mount's keys to leave it unmounted"
+renderConfigError (MirrorCredentialTokenMissing eco) =
+    let name = ecosystemName eco
+        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__MIRROR_TARGET_TOKEN"
+     in "mount \""
+            <> name
+            <> "\" mirror target is not a CodeArtifact endpoint, so its write credential is not minted: set a static write token with mounts."
+            <> name
+            <> ".mirrorTargetToken (or "
+            <> envKey
+            <> ")"
+renderConfigError (MirrorCredentialConflict eco) =
+    let name = ecosystemName eco
+        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__MIRROR_TARGET_TOKEN"
+     in "mount \""
+            <> name
+            <> "\" mirror target is a CodeArtifact endpoint (its write token is minted from the host identity), so a static write token must not also be set: remove mounts."
+            <> name
+            <> ".mirrorTargetToken (or "
+            <> envKey
+            <> ")"

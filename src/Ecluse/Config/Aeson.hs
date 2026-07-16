@@ -40,11 +40,7 @@ mountConfigParser o = do
         <*> (o .: "publicUpstream" >>= parseRegistryUrl)
         <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-        <*> (o .: "credentialProvider" >>= parseEnum parseCredentialBackend "credentialProvider")
         <*> o .: "respectUpstreamTarballHost"
-        <*> o .:? "mirrorCodeArtifactDomain"
-        <*> (o .:? "mirrorCodeArtifactDomainOwner" >>= traverse parseTextOrNumber)
-        <*> o .:? "mirrorCodeArtifactRegion"
         <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
         <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
@@ -57,11 +53,7 @@ acceptedMountKeys =
     , "publicUpstream"
     , "mirrorTarget"
     , "mirrorTargetToken"
-    , "credentialProvider"
     , "respectUpstreamTarballHost"
-    , "mirrorCodeArtifactDomain"
-    , "mirrorCodeArtifactDomainOwner"
-    , "mirrorCodeArtifactRegion"
     , "mirrorCodeArtifactTokenDuration"
     , "publicationTarget"
     , "publicationTargetToken"
@@ -74,10 +66,6 @@ parseDuration (String t) = case readMaybe (T.unpack t) :: Maybe Natural of
     Just n -> pure n
     Nothing -> fail ("invalid duration: " <> T.unpack t)
 parseDuration v = parseJSON v
-
-parseTextOrNumber :: Value -> Parser Text
-parseTextOrNumber (String t) = pure t
-parseTextOrNumber v = T.pack . show <$> (parseJSON v :: Parser Integer)
 
 parseScopes :: Value -> Parser [Scope]
 parseScopes = withText "Scopes" $ \t ->

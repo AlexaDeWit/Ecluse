@@ -12,10 +12,8 @@ without duplicating it.
 module Ecluse.Composition.Support (
     fixedNow,
     staticEnvVars,
-    noTokenEnvVars,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
-    withoutCredentialProvider,
     overrideEnv,
     expectEnv,
     expectProviders,
@@ -32,8 +30,8 @@ import Ecluse.Test.Credential (noCredentialReporters)
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 
-{- | A minimal valid environment with a static mirror-target token, so the env
-single-mount's @static@ credential reference resolves.
+{- | A minimal valid environment. The mirror target is a non-CodeArtifact host with a
+static write token, so the mount's mirror credential derives to a static provider.
 -}
 staticEnvVars :: [(String, String)]
 staticEnvVars =
@@ -43,15 +41,10 @@ staticEnvVars =
     , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
     , ("ECLUSE_QUEUE_BACKEND", "sqs")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
-    , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
     ]
 
--- | The same environment without the static write token (no provider initialized).
-noTokenEnvVars :: [(String, String)]
-noTokenEnvVars = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) staticEnvVars
-
-{- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test that supplies its own (a CodeArtifact
-endpoint to parse) is not shadowed by the base fixture's value.
+{- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test that supplies its own
+is not shadowed by the base fixture's value.
 -}
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
@@ -62,10 +55,6 @@ set (memory needs none; sqs fails loud without one).
 withoutQueueUrl :: [(String, String)] -> [(String, String)]
 withoutQueueUrl = filter ((/= "ECLUSE_QUEUE_URL") . fst)
 
--- | Drop the mount's credential-provider selector.
-withoutCredentialProvider :: [(String, String)] -> [(String, String)]
-withoutCredentialProvider = filter ((/= "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER") . fst)
-
 -- | Override (or insert) one environment entry.
 overrideEnv :: String -> String -> [(String, String)] -> [(String, String)]
 overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
@@ -74,12 +63,12 @@ overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
 expectEnv :: [(String, String)] -> IO AppConfig
 expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) (pure . configApp) . (`loadConfig` Nothing)
 
-{- | Build the credential providers, failing the test on a boot error (the static-path
-examples expect a clean build).
+{- | Build the credential providers from a resolved 'Config', failing the test on a
+boot error (the static-path examples expect a clean build).
 -}
-expectProviders :: AppConfig -> IO CredentialProviders
-expectProviders env =
-    initCredentialProviders noCredentialReporters env >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+expectProviders :: Config -> IO CredentialProviders
+expectProviders config =
+    initCredentialProviders noCredentialReporters config >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 {- | Build a 'Config' from an env + optional document, failing the test on a policy
 error (the composeBindings examples want a successfully-loaded config).

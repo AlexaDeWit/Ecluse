@@ -24,7 +24,6 @@ runEnv =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
     , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
-    , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_PORT", "0")
@@ -93,15 +92,6 @@ spec = do
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do
-            traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
-            traverse_ (unsetEnv . fst) awsRunEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
-            outcome `shouldBe` Left (ExitFailure 2)
-
         it "aborts fast at boot when an active mount declares no mirror target" $ do
             -- Every mounted ecosystem must declare its mirror target explicitly,
             -- even when it equals the private upstream; activation never implies one.
@@ -112,11 +102,23 @@ spec = do
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when codeartifact is selected but its domain cannot be resolved" $ do
+        it "aborts fast at boot when a non-CodeArtifact mirror target has no write token" $ do
+            -- The mirror credential is derived from the target: a non-CodeArtifact
+            -- endpoint is written with a static token, so its absence fails at boot.
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact"
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
+            traverse_ (unsetEnv . fst) awsRunEnv
+            -- The typed process supervisor maps the boot abort to exit 2.
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "aborts fast at boot when a CodeArtifact mirror target also carries a static token" $ do
+            -- A CodeArtifact endpoint mints its own token, so pairing it with a static
+            -- token is a loud conflict (caught before any AWS call), never a silent choice.
+            traverse_ (uncurry setEnv) awsRunEnv
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             traverse_ (unsetEnv . fst) awsRunEnv
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)

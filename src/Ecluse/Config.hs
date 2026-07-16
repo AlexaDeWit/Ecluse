@@ -10,9 +10,9 @@ module Ecluse.Config (
     Mount (..),
     MountRegistries (..),
     MirrorTarget (..),
+    MirrorCredential (..),
     MountConfig (..),
     QueueBackend (..),
-    CredentialBackend (..),
     Url (..),
     mkUrl,
     unUrl,
@@ -40,6 +40,7 @@ import Data.Yaml (decodeEither')
 
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
+import Ecluse.Config.MirrorCredential (resolveMirrorCredential)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
 import Ecluse.Config.Rule
 import Ecluse.Config.Types
@@ -137,9 +138,7 @@ resolveMounts globalPolicy appConfig =
   where
     resolveOne (eco, mcfg) = case (mntPrivateUpstream mcfg, mntMirrorTarget mcfg) of
         (Just privateUpstream, Just mirrorTarget) ->
-            case resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg of
-                Left errs -> Left [PolicyErrors errs]
-                Right mount -> Right (eco, mount)
+            (eco,) <$> resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg
         (mPrivate, mMirror) ->
             Left
                 ( [MountMissingPrivateUpstream eco | isNothing mPrivate]
@@ -147,11 +146,17 @@ resolveMounts globalPolicy appConfig =
                 )
 
 {- | Project an active mount, whose private upstream and explicit mirror target the
-caller has already established (see 'resolveMounts'), onto its served form.
+caller has already established (see 'resolveMounts'), onto its served form. The
+mirror-write credential is derived from the mirror-target URL here
+('resolveMirrorCredential'), so the resolved 'MirrorTarget' pairs an endpoint only
+with the credential that endpoint dictates.
 -}
-resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [PolicyError] Mount
+resolveMount :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [ConfigError] Mount
 resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg = do
-    policy <- resolvePolicy globalPolicy (mntAdditionalRules mcfg)
+    policy <- first (\errs -> [PolicyErrors errs]) (resolvePolicy globalPolicy (mntAdditionalRules mcfg))
+    credential <-
+        first (: []) $
+            resolveMirrorCredential eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorCodeArtifactTokenDuration mcfg)
     Right $
         Mount
             { mountEcosystem = eco
@@ -162,7 +167,7 @@ resolveMount globalPolicy eco privateUpstream mirrorTarget mcfg = do
                     , regMirrorTarget =
                         MirrorTarget
                             { mtUrl = mirrorTarget
-                            , mtCredential = mntCredentialProvider mcfg
+                            , mtCredential = credential
                             }
                     }
             , mountPolicy = rulesOf policy
