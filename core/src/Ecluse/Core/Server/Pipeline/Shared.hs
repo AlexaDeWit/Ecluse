@@ -4,19 +4,18 @@
 
 {- | Shared utilities for the data-plane handler modules.
 
-This module provides the common combinators and shared types used across the packument,
-tarball, and publish handlers. It handles edge authentication checks, defines common
-HTTP response rendering functions, and declares shared serve rejection values (e.g.,
-for integrity floor enforcement).
+Common combinators used across the packument, tarball, and publish handlers: edge
+authentication, the JSON response for a served document, the mount's error-body rendering
+(through its 'MountError'), and the shared serve rejection values for integrity-floor
+enforcement.
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
-    notFoundInMount,
     edgeTokenMatches,
     edgeUnauthorised,
     serveOverloaded,
+    denial,
     forwardedToken,
     jsonResponse,
-    renderedResponse,
     bodiless,
     integrityMissing,
     integrityBelowFloor,
@@ -26,35 +25,21 @@ module Ecluse.Core.Server.Pipeline.Shared (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status404, status503)
+import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status503)
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Server.Context (MountError (renderMountError))
 import Ecluse.Core.Server.Response (
-    MountRenderer,
+    HelpMessage,
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
-    RenderedBody (RenderedBody),
     ServeDecision (Reject),
-    renderError,
+    appendHelp,
  )
 
 hRetryAfter :: HeaderName
 hRetryAfter = "Retry-After"
-
-{- | The answer to a request no ecosystem route matched: a @404@ in the mount's own
-error surface.
-
-This is the routing layer's __deny by default__, mirroring the rules engine: the front
-door serves nothing it was not explicitly taught to. It is the one locally-answered
-response that is genuinely shared across ecosystems, because "I do not recognise this"
-is the only thing every ecosystem's router must be able to say. Distinct from the
-neutral @text\/plain@ @404@ __above__ the mounts, where there is no ecosystem to render
-one.
--}
-notFoundInMount :: MountRenderer -> Response
-notFoundInMount renderer =
-    renderedResponse status404 [] (renderError renderer Nothing "not found")
 
 {- | The shared edge gate against a configured inbound token: with none configured the
 edge is open; with one configured the request's forwarded bearer must match it exactly.
@@ -73,21 +58,26 @@ edgeTokenMatches expected forwarded = case expected of
     Nothing -> True
     Just want -> forwarded == Just want
 
--- A @401@ for a request that failed edge authentication, before any upstream
--- fetch; the body is shaped by the mount's renderer.
-edgeUnauthorised :: MountRenderer -> Response
-edgeUnauthorised renderer =
-    renderedResponse status401 [] (renderError renderer Nothing "authentication required")
-
-{- | An admission refusal: the request found the waiting room full, or waited out
-its slot budget ("Ecluse.Core.Server.Admission"). The body follows the matched
-mount's error surface and the retry hint is deliberately short: capacity, unlike a
-policy denial, can clear as soon as one in-flight metadata operation completes,
-and a budget-expiry refusal has already waited one such interval in-process.
+{- | An in-mount error response, shaped through the mount's 'MountError': the given
+status and extra headers, and the human-facing reason with the operator help message (if
+any) appended. This is how every data-plane handler renders a denial or unavailability,
+so the body shape is the ecosystem's (npm's @{"error": …}@) and single-sourced with the
+routes' declared outcome codecs.
 -}
-serveOverloaded :: MountRenderer -> Response
-serveOverloaded renderer =
-    renderedResponse status503 [(hRetryAfter, "1")] (renderError renderer Nothing "server is busy; retry later")
+denial :: MountError -> Status -> [Header] -> Maybe HelpMessage -> Text -> Response
+denial err status extra help message =
+    renderMountError err status extra (appendHelp help message)
+
+-- A @401@ for a request that failed edge authentication, before any upstream fetch.
+edgeUnauthorised :: MountError -> Response
+edgeUnauthorised err = denial err status401 [] Nothing "authentication required"
+
+{- | An admission refusal: the request found the waiting room full, or waited out its slot
+budget ("Ecluse.Core.Server.Admission"). The retry hint is deliberately short: capacity,
+unlike a policy denial, can clear as soon as one in-flight metadata operation completes.
+-}
+serveOverloaded :: MountError -> Response
+serveOverloaded err = denial err status503 [(hRetryAfter, "1")] Nothing "server is busy; retry later"
 
 {- The client's forwarded bearer credential, recovered from the request's
 @Authorization: Bearer …@ header. 'Nothing' when no bearer credential is present;
@@ -109,12 +99,6 @@ forwardedToken request = do
 jsonResponse :: Status -> ResponseHeaders -> LByteString -> Response
 jsonResponse status extra =
     responseLBS status ((hContentType, "application/json") : extra)
-
--- A response built from a renderer's 'RenderedBody': its content type, then any
--- extra headers, then the rendered bytes.
-renderedResponse :: Status -> ResponseHeaders -> RenderedBody -> Response
-renderedResponse status extra (RenderedBody contentType body) =
-    responseLBS status ((hContentType, contentType) : extra) body
 
 -- Strip a response's body while keeping its status and headers -- the bodiless form a
 -- HEAD reply takes on every branch (HTTP semantics: a HEAD carries no message body).

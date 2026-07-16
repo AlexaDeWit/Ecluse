@@ -23,18 +23,21 @@ module Ecluse.Core.Server.Contract (
     -- * The documented body shape
     BodySchema (..),
 
+    -- * A request body a route accepts
+    RequestSpec (..),
+
     -- * A declared, emittable response
     Outcome (..),
+    OutcomeBody (..),
     SomeOutcome (..),
-    outcomeStatus,
-    outcomeSchema,
 
     -- * The concrete answer a handler emits
     Answer (..),
     Body (..),
     answerWith,
-    emptyAnswer,
-    opaqueAnswer,
+
+    -- * The last leg: an answer as a WAI response
+    answerToResponse,
 
     -- * Rendering a JSON body to bytes
     encodeBody,
@@ -42,7 +45,8 @@ module Ecluse.Core.Server.Contract (
 
 import Autodocodec (JSONCodec, toJSONVia)
 import Data.Aeson qualified as Aeson
-import Network.HTTP.Types (Header, Status)
+import Network.HTTP.Types (Header, Status, hContentType)
+import Network.Wai (Response, StreamingBody, responseLBS, responseStream)
 
 {- | The structural shape of a response body, for documentation. A closed, universal
 vocabulary: every ecosystem's bodies are one of these three, so this never grows with
@@ -55,6 +59,24 @@ data BodySchema
       SchemaOpaque ByteString
     | -- | A JSON document whose codec is the source of truth for wire and schema alike.
       forall a. SchemaJson (JSONCodec a)
+    | {- | A JSON document Écluse builds imperatively rather than round-tripping through a
+      type (the merged packument, the publish document), documented by a hand-authored
+      schema the manifest holds under this name and bound to the emitted bytes by a
+      validation check.
+      -}
+      SchemaDocumented Text
+
+{- | A request body a route accepts: how it is described, whether it is required, and its
+body shape.
+-}
+data RequestSpec = RequestSpec
+    { reqDescription :: Text
+    -- ^ What the body is (the OpenAPI request-body description).
+    , reqRequired :: Bool
+    -- ^ Whether the request is rejected without it.
+    , reqSchema :: BodySchema
+    -- ^ The shape of the accepted body.
+    }
 
 {- | A declared response outcome, typed by its body payload. Its 'ocStatus' and
 'ocSchema' are what the manifest documents; the same value is how the handler answers
@@ -75,6 +97,8 @@ supplies), an opaque stream (the handler supplies the bytes\/source), or nothing
 data OutcomeBody a
     = -- | A JSON body: the handler supplies a value of type @a@, encoded through the codec.
       JsonOutcome (JSONCodec a)
+    | -- | A JSON body Écluse builds imperatively, documented by a named hand-authored schema.
+      DocumentedOutcome Text
     | -- | An opaque body of the given media type; @a@ is unconstrained (the payload is bytes).
       OpaqueOutcome ByteString
     | -- | No body.
@@ -84,17 +108,6 @@ data OutcomeBody a
 heterogeneous @['SomeOutcome']@ for the manifest to fold.
 -}
 data SomeOutcome = forall a. SomeOutcome (Outcome a)
-
--- | The status a declared outcome answers with.
-outcomeStatus :: SomeOutcome -> Status
-outcomeStatus (SomeOutcome o) = ocStatus o
-
--- | The documented body shape of a declared outcome.
-outcomeSchema :: SomeOutcome -> BodySchema
-outcomeSchema (SomeOutcome o) = case ocBody o of
-    JsonOutcome c -> SchemaJson c
-    OpaqueOutcome m -> SchemaOpaque m
-    EmptyOutcome -> SchemaEmpty
 
 {- | A concrete response a handler emits: a status, headers, and a body. Built only
 through a declared 'Outcome' (see 'answerWith'), so what the server emits is what the
@@ -106,12 +119,16 @@ data Answer = Answer
     , answerBody :: Body
     }
 
--- | The concrete body of an 'Answer': encoded JSON bytes, opaque bytes, or nothing.
+{- | The concrete body of an 'Answer': encoded JSON bytes, buffered opaque bytes, a
+streamed opaque body, or nothing.
+-}
 data Body
     = -- | An already-encoded JSON body, tagged @application\/json@.
       JsonBody LByteString
-    | -- | Opaque bytes of the given media type (a buffered artifact; streaming is a later leg).
+    | -- | Buffered opaque bytes of the given media type.
       OpaqueBody ByteString LByteString
+    | -- | A streamed opaque body of the given media type (an artifact relayed from upstream).
+      StreamBody ByteString StreamingBody
     | -- | No body.
       NoBody
 
@@ -123,16 +140,23 @@ answerWith :: [Header] -> Outcome a -> a -> Answer
 answerWith headers o value =
     Answer (ocStatus o) headers $ case ocBody o of
         JsonOutcome c -> JsonBody (encodeBody c value)
-        OpaqueOutcome m -> OpaqueBody m mempty
+        -- 'answerWith' is the codec path; a documented or opaque body is emitted by a
+        -- handler building the 'Answer' directly (the streaming\/documented answer helpers
+        -- land with the effectful-handler migration), so those are empty here.
+        DocumentedOutcome _ -> NoBody
+        OpaqueOutcome _ -> NoBody
         EmptyOutcome -> NoBody
 
--- | Answer through a declared empty outcome (no body).
-emptyAnswer :: [Header] -> Outcome a -> Answer
-emptyAnswer headers o = Answer (ocStatus o) headers NoBody
-
--- | Answer through a declared opaque outcome with the given already-buffered bytes.
-opaqueAnswer :: [Header] -> Outcome a -> ByteString -> LByteString -> Answer
-opaqueAnswer headers o media bytes = Answer (ocStatus o) headers (OpaqueBody media bytes)
+{- | The last leg: turn a handler's 'Answer' into a WAI 'Response'. The one place a
+declared outcome becomes wire bytes, so the serve path and the manifest read the same
+outcome and cannot disagree on status or body shape.
+-}
+answerToResponse :: Answer -> Response
+answerToResponse (Answer status headers body) = case body of
+    JsonBody bytes -> responseLBS status ((hContentType, "application/json") : headers) bytes
+    OpaqueBody media bytes -> responseLBS status ((hContentType, media) : headers) bytes
+    StreamBody media stream -> responseStream status ((hContentType, media) : headers) stream
+    NoBody -> responseLBS status headers ""
 
 -- | Encode a JSON value to bytes through its @autodocodec@ codec.
 encodeBody :: JSONCodec a -> a -> LByteString

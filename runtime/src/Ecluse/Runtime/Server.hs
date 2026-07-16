@@ -96,8 +96,8 @@ module Ecluse.Runtime.Server (
 
 import Data.List (dropWhileEnd)
 import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
-import Network.HTTP.Types (Method, Status, hContentType, status500)
-import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestMethod, responseLBS)
+import Network.HTTP.Types (Method, Status, status500)
+import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestMethod)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.Timeout (timeout)
@@ -106,13 +106,14 @@ import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
     MountBinding (..),
+    MountError (renderMountError),
     RequestCtx (RequestCtx),
     RouteAction (AnswerLocally, RunPipeline),
     ServeRuntime (srMetrics),
     runHandler,
  )
+import Ecluse.Core.Server.Contract (answerToResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
-import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
@@ -265,14 +266,14 @@ recognised-but-unwired @501@, and one with no publication target answers a publi
 serve :: Env -> MountBinding -> RouteAction -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding action request respond =
     case action of
-        AnswerLocally toResponse -> respond (toResponse renderer)
+        AnswerLocally answer -> respond (answerToResponse answer)
         -- The data-plane handler under the typed request perimeter: it is discharged
         -- through 'run', and the perimeter's observation channel is the bounded
         -- @ecluse.serve.perimeter.faults@ metric plus the audit log line.
         RunPipeline handler -> perimeterGuard observeFault renderer respond (run . handler request)
   where
-    renderer :: MountRenderer
-    renderer = bindingRenderer binding
+    renderer :: MountError
+    renderer = bindingError binding
 
     observeFault fault = do
         mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
@@ -321,8 +322,8 @@ request.
 perimeterGuard ::
     -- | Observe a classified pre-commit fault (the metric and the audit line).
     (RequestFault -> IO ()) ->
-    -- | The mount's renderer, shaping the neutral 500.
-    MountRenderer ->
+    -- | The mount's error renderer, shaping the neutral 500.
+    MountError ->
     -- | The client's respond continuation.
     (Response -> IO ResponseReceived) ->
     -- | The route's handler, discharged to 'IO', awaiting the tracked respond.
@@ -382,10 +383,8 @@ dropTrailingSlashes = dropWhileEnd (== "")
 -- An in-mount error response: the status, with the body shaped by the mount's
 -- renderer. The perimeter's neutral @500@ is the one such response the web layer still
 -- owns; every route's own body is shaped by its ecosystem's router.
-renderedError :: MountRenderer -> Status -> Text -> Response
-renderedError renderer status message =
-    let RenderedBody contentType body = renderError renderer Nothing message
-     in responseLBS status [(hContentType, contentType)] body
+renderedError :: MountError -> Status -> Text -> Response
+renderedError renderer status message = renderMountError renderer status [] message
 
 {- | The cross-cutting middleware stack composed around the proxy 'Application': a
 defensive request-body size cap (rejecting an over-cap body with @413@ once a

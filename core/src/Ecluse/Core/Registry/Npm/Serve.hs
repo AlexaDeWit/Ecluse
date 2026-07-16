@@ -2,49 +2,53 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm's client-facing error surface: the denial-body renderer wired into an npm
-mount.
+{- | npm's client-facing error body, as a codec.
 
-The agnostic serve layer ("Ecluse.Core.Server.Response") decides the HTTP /status/ of a
-refusal; the /body/ shape is npm's, and lives here. npm clients read the human-facing
-reason from a JSON error object (preferring @message@, then @error@); \xc9cluse emits the
-@error@ key, matching npm's own denial bodies. 'npmRenderer' is the 'MountRenderer' a
-composition root binds to an npm mount, so the npm @{"error": \u2026}@ shape never leaks into
-the ecosystem-neutral web layer.
+The agnostic serve layer decides the HTTP /status/ of a refusal; the /body/ shape is
+npm's, and it lives here as one 'NpmError' type with an @autodocodec@ codec. That codec
+is the single source of truth: the serve path encodes the wire denial from it, and the
+capability manifest renders the /same/ codec to the documented schema (in its own tier,
+so @openapi3@ never reaches the proxy). npm clients read the human-facing reason from a
+JSON @{"error": …}@ object, matching npm's own denial bodies.
 
-npm's /routes/ are its route table ("Ecluse.Core.Registry.Npm.Route"), which names this
-renderer's responses through the agnostic 'Ecluse.Core.Server.Response.MountRenderer'
-rather than importing it.
+There is no separate renderer Handle any more. A route declares the
+'Ecluse.Core.Server.Contract.Outcome's it can emit (a status paired with a body codec),
+the handler answers through one of them, and the emitted body is the documented body by
+construction.
 -}
 module Ecluse.Core.Registry.Npm.Serve (
-    npmRenderer,
-    npmDenialBody,
+    NpmError (..),
+    npmErrorCodec,
+    npmErrorKey,
+    npmError,
 ) where
 
-import Data.Aeson (object, (.=))
-import Data.Aeson qualified as Aeson
+import Autodocodec (HasCodec (codec), JSONCodec, object, requiredField, (.=))
 
-import Ecluse.Core.Server.Response (
-    HelpMessage,
-    MountRenderer (MountRenderer),
-    RenderedBody (RenderedBody),
-    appendHelp,
- )
+import Ecluse.Core.Server.Response (HelpMessage, appendHelp)
 
-{- | The npm mount renderer: every error body is npm's @{"error": \u2026}@ JSON object,
-tagged @application\/json@.
+{- | npm's client-facing error body: a JSON object carrying the human-facing reason under
+a single @error@ string ('npmErrorKey'). One codec backs both the wire encoding and the
+documented schema, so the served body and its documentation cannot diverge.
 -}
-npmRenderer :: MountRenderer
-npmRenderer =
-    MountRenderer (\help message -> RenderedBody "application/json" (npmDenialBody help message))
+newtype NpmError = NpmError {npmErrorReason :: Text}
+    deriving stock (Eq, Show)
 
-{- | Render an npm denial body -- the @{"error": \u2026}@ object whose @error@ string is
-the message with the operator help message, if any, appended. A blank or absent
-help message is omitted rather than appended as empty text.
+-- | The JSON key an npm denial body carries its reason under.
+npmErrorKey :: Text
+npmErrorKey = "error"
 
->>> npmDenialBody Nothing "denied because reasons"
-"{\\"error\\":\\"denied because reasons\\"}"
+instance HasCodec NpmError where
+    codec =
+        object "NpmError" $
+            NpmError <$> requiredField npmErrorKey "The human-facing reason the request was refused." .= npmErrorReason
+
+-- | npm's error-body codec: the source of truth for its wire form and documented schema.
+npmErrorCodec :: JSONCodec NpmError
+npmErrorCodec = codec
+
+{- | Build an npm error body from the human-facing reason and the operator help message,
+appending the help (if any) as the serve path has always done.
 -}
-npmDenialBody :: Maybe HelpMessage -> Text -> LByteString
-npmDenialBody help message =
-    Aeson.encode (object ["error" .= appendHelp help message])
+npmError :: Maybe HelpMessage -> Text -> NpmError
+npmError help message = NpmError (appendHelp help message)

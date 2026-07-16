@@ -118,7 +118,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterEcosystem,
     adapterFor,
     adapterServe,
-    serveRenderer,
+    serveError,
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
@@ -429,7 +429,7 @@ mountOf adapter packumentDeps publishDeps =
         , bindingRouter = serveRouter (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
-        , bindingRenderer = serveRenderer (adapterServe adapter)
+        , bindingError = serveError (adapterServe adapter)
         }
 
 {- | Run the supervised mirror worker over the composition-root 'Env' and the

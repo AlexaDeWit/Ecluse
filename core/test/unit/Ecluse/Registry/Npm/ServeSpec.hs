@@ -9,8 +9,9 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
-import Ecluse.Core.Registry.Npm.Serve (npmDenialBody, npmRenderer)
-import Ecluse.Core.Server.Response (RenderedBody (..), mkHelpMessage, renderError)
+import Ecluse.Core.Registry.Npm.Serve (npmError, npmErrorCodec)
+import Ecluse.Core.Server.Contract (encodeBody)
+import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
 {- | Decode a denial body and read its @error@ string. 'Right' the string when the
 body is a JSON object carrying a string @error@; 'Left' (which fails the
@@ -26,35 +27,28 @@ errorField raw =
                 _ -> Left "denial body has no string \"error\" field"
         _ -> Left "denial body is not a JSON object"
 
+-- The npm denial body: an 'NpmError' (with any operator help appended) encoded through
+-- 'npmErrorCodec' -- the same codec the manifest documents, so wire and schema are one.
+denialBody :: Maybe HelpMessage -> Text -> LByteString
+denialBody help message = encodeBody npmErrorCodec (npmError help message)
+
 spec :: Spec
 spec = do
-    describe "npmDenialBody -- the npm {\"error\": …} shape" $ do
+    describe "the npm denial body -- the {\"error\": …} codec" $ do
         it "is a JSON object with a string error field carrying the message" $
-            errorField (npmDenialBody Nothing "denied because reasons")
+            errorField (denialBody Nothing "denied because reasons")
                 `shouldBe` Right "denied because reasons"
+        it "renders exactly the npm {\"error\": …} object" $
+            denialBody Nothing "denied" `shouldBe` "{\"error\":\"denied\"}"
         it "appends a configured help message to the error text" $
-            errorField (npmDenialBody (Just (mkHelpMessage "Contact #platform-eng.")) "denied")
+            errorField (denialBody (Just (mkHelpMessage "Contact #platform-eng.")) "denied")
                 `shouldBe` Right "denied Contact #platform-eng."
         it "appends nothing when no help message is configured" $
-            errorField (npmDenialBody Nothing "denied")
+            errorField (denialBody Nothing "denied")
                 `shouldBe` Right "denied"
         it "does not duplicate spacing when the message already ends in a space" $
-            errorField (npmDenialBody (Just (mkHelpMessage "Help.")) "denied ")
+            errorField (denialBody (Just (mkHelpMessage "Help.")) "denied ")
                 `shouldBe` Right "denied Help."
         it "ignores a blank help message rather than appending empty text" $
-            errorField (npmDenialBody (Just (mkHelpMessage "   ")) "denied")
+            errorField (denialBody (Just (mkHelpMessage "   ")) "denied")
                 `shouldBe` Right "denied"
-
-    describe "npmRenderer -- the npm mount renderer" $ do
-        it "tags the rendered body application/json" $
-            renderedContentType (renderError npmRenderer Nothing "denied")
-                `shouldBe` "application/json"
-        it "renders the full content-type + bytes pair" $
-            renderError npmRenderer Nothing "denied"
-                `shouldBe` RenderedBody "application/json" "{\"error\":\"denied\"}"
-        it "shapes the body as the npm {\"error\": …} object" $
-            errorField (renderedBytes (renderError npmRenderer Nothing "denied"))
-                `shouldBe` Right "denied"
-        it "appends the operator help message through the renderer" $
-            errorField (renderedBytes (renderError npmRenderer (Just (mkHelpMessage "Ask #eng.")) "denied"))
-                `shouldBe` Right "denied Ask #eng."

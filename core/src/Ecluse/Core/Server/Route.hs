@@ -42,8 +42,7 @@ module Ecluse.Core.Server.Route (
 import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
 
 import Ecluse.Core.Server.Context (MountRouter, RouteAction (AnswerLocally))
-import Ecluse.Core.Server.Pipeline.Shared (notFoundInMount)
-import Ecluse.Core.Server.RouteDoc (RouteDoc)
+import Ecluse.Core.Server.Contract (Answer, RequestSpec, SomeOutcome)
 
 {- | One route, whole: how it matches, what it does, and what it means.
 
@@ -77,10 +76,17 @@ data Route v = Route
     rather than a distinct route: it matches the same pattern, and the builder selects the
     head-mode handler.
     -}
-    , routeDoc :: RouteDoc
-    {- ^ What this route does, and every status it answers with. Carried here, so a route
-    cannot be added without documenting it, and the manifest can render the same records
-    the router runs.
+    , routeSummary :: Text
+    -- ^ A one-line summary (the OpenAPI operation summary).
+    , routeDescription :: Text
+    -- ^ The fuller prose description of what the route does.
+    , routeRequest :: Maybe RequestSpec
+    -- ^ The request body a write route accepts; 'Nothing' for a read.
+    , routeOutcomes :: [SomeOutcome]
+    {- ^ The closed set of responses this route can emit, each a status paired with its
+    body codec ('Ecluse.Core.Server.Contract.Outcome'). The handler answers /through/ one
+    of these, and the manifest documents this same set, so a route cannot emit a status or
+    body it does not declare, nor be added without documenting what it answers with.
     -}
     }
 
@@ -142,11 +148,12 @@ the request decides what is done with it, and a request no route claims is the
 deny-by-default @404@ in the mount's own error surface.
 
 Deny-by-default is __structural__ here: 'routerOf' has no other way to answer. There is no
-catch-all branch to forget.
+catch-all branch to forget. The @404@ 'Answer' a mount supplies for a path no route
+claims is its deny-by-default surface (npm's @{"error": "not found"}@).
 -}
-routerOf :: [Route v] -> MountRouter
-routerOf routes method segments =
-    maybe (AnswerLocally notFoundInMount) snd (matchRoute routes method segments)
+routerOf :: Answer -> [Route v] -> MountRouter
+routerOf notFound routes method segments =
+    maybe (AnswerLocally notFound) snd (matchRoute routes method segments)
 
 {- | The route that claims a request, and the action it names: the first whose method
 condition holds, whose segments are consumed __exactly__, and whose builder accepts the

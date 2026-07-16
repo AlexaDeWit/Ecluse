@@ -127,8 +127,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Route (npmMountError, npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
@@ -490,7 +489,7 @@ npmMount deps =
         , bindingRouter = npmRouter
         , bindingPackumentDeps = deps
         , bindingPublishDeps = Nothing
-        , bindingRenderer = npmRenderer
+        , bindingError = npmMountError
         }
 
 {- | A permissive rule set: every version old enough to clear a one-day quarantine is

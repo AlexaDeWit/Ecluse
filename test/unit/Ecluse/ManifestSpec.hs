@@ -10,7 +10,6 @@ import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
 import Data.Text qualified as T
 
-import Autodocodec (eitherDecodeJSONViaCodec, encodeJSONViaCodec)
 import Data.OpenApi (
     Components (_componentsSchemas),
     OpenApi (_openApiComponents, _openApiInfo, _openApiPaths, _openApiServers),
@@ -23,12 +22,8 @@ import Data.OpenApi (
     _pathItemGet,
     _pathItemPut,
  )
-import Hedgehog (forAll, (===))
-import Hedgehog.Gen qualified as Gen
-import Hedgehog.Range qualified as Range
 import Network.HTTP.Types.Method (StdMethod (GET, PUT), renderStdMethod)
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
@@ -37,10 +32,9 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes)
 import Ecluse.Core.Server.Route (matchRoute)
 import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod))
 import Ecluse.Manifest (
-    ErrorEnvelope (ErrorEnvelope),
     buildOpenApi,
     canonicalManifestSource,
-    errorEnvelopeSchemaName,
+    publishDocumentSchemaName,
     renderManifest,
     routePathKey,
     synthesizedPackumentSchemaName,
@@ -61,10 +55,10 @@ spec = do
             _infoTitle (_openApiInfo doc) `shouldNotBe` ""
             _openApiServers doc `shouldNotSatisfy` null
 
-        it "registers the owned schemas in components" $ do
+        it "registers the owned hand-authored schemas in components" $ do
             let schemas = _componentsSchemas (_openApiComponents doc)
-            InsOrd.member errorEnvelopeSchemaName schemas `shouldBe` True
             InsOrd.member synthesizedPackumentSchemaName schemas `shouldBe` True
+            InsOrd.member publishDocumentSchemaName schemas `shouldBe` True
 
         it "emits top-level keys in sorted order (deterministic key ordering)" $ do
             let rendered = decodeUtf8 (renderManifest doc) :: Text
@@ -84,7 +78,7 @@ spec = do
     -- claimed by no route still denies by default.
     describe "documented routes correspond to the live classifier" $ do
         it "the npm mount exposes a route grammar" $
-            npmSpecs `shouldNotSatisfy` null
+            null npmSpecs `shouldBe` False
 
         it "each documented route is rendered under its declared method" $
             for_ npmSpecs $ \rs ->
@@ -111,13 +105,6 @@ spec = do
                 `shouldBe` Just ["application/octet-stream"]
         it "operations are tagged by ecosystem (npm)" $
             (InsOrdSet.member "npm" . _operationTags <$> getOp "/npm/{package}") `shouldBe` Just True
-
-    describe "owned autodocodec codecs round-trip (hedgehog)" $
-        it "ErrorEnvelope encodes and decodes back to itself" $
-            hedgehog $ do
-                msg <- forAll (Gen.text (Range.linear 0 64) Gen.unicode)
-                let value = ErrorEnvelope msg
-                eitherDecodeJSONViaCodec (encodeJSONViaCodec value) === Right value
   where
     doc :: OpenApi
     doc = buildOpenApi canonicalManifestSource

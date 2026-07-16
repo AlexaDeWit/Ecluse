@@ -33,13 +33,12 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Route (npmMountError, npmNotFound, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), RouteAction (AnswerLocally))
+import Ecluse.Core.Server.Contract (Answer (Answer), Body (JsonBody))
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
-import Ecluse.Core.Server.Pipeline.Shared (jsonResponse, notFoundInMount)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
@@ -107,7 +106,7 @@ publishMountAt prefix router publishDeps =
         , bindingRouter = router
         , bindingPackumentDeps = inertPackumentDeps
         , bindingPublishDeps = publishDeps
-        , bindingRenderer = npmRenderer
+        , bindingError = npmMountError
         }
 
 {- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, so
@@ -163,8 +162,8 @@ fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) 
     -- different answers. It ignores the method (it names no write action), proving the
     -- web layer follows the injected router rather than a baked-in npm grammar.
     fakeRouter :: MountRouter
-    fakeRouter _method ["beep"] = AnswerLocally (const (jsonResponse status200 [] "{}"))
-    fakeRouter _method _ = AnswerLocally notFoundInMount
+    fakeRouter _method ["beep"] = AnswerLocally (Answer status200 [] (JsonBody "{}"))
+    fakeRouter _method _ = AnswerLocally npmNotFound
 
 {- | The 'application' with __no mounts__: every path but the control-plane health
 probes matches no mount and is the neutral @404@.
@@ -465,7 +464,7 @@ driveGuard handler = do
     let respond response = do
             modifyIORef' responses (<> [statusCode (responseStatus response)])
             pure ResponseReceived
-    outcome <- try (void (perimeterGuard (\fault -> modifyIORef' observed (<> [rqCause fault])) npmRenderer respond handler))
+    outcome <- try (void (perimeterGuard (\fault -> modifyIORef' observed (<> [rqCause fault])) npmMountError respond handler))
     (,,) <$> readIORef responses <*> readIORef observed <*> pure outcome
 
 perimeterGuardSpec :: Spec

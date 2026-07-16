@@ -24,9 +24,10 @@ is a projection of how the server mounts routes, not a hand-kept parallel copy. 
 owned response bodies carry code-first schemas. Three kinds of surface are
 distinguished:
 
-* __Owned / synthesized__ bodies -- the error\/denial envelope ('ErrorEnvelope')
-  and the merged-and-filtered packument ('synthesizedPackumentSchema') -- are
-  modelled in full, because Écluse authors them.
+* __Owned__ bodies -- the error\/denial envelope (a codec, rendered from the same
+  'Ecluse.Core.Registry.Npm.Serve.npmErrorCodec' the serve path emits) and the
+  merged-and-filtered packument ('synthesizedPackumentSchema') -- are modelled in full,
+  because Écluse authors them.
 * __Opaque pass-through__ -- artifact bytes -- are described as a streamed media
   type and link out rather than reproducing the upstream protocol.
 * __Unsupported__ -- @search@ and any unrecognised path -- are first-class
@@ -44,17 +45,17 @@ or the output would churn on per-deployment values.
 
 == Schema strategy
 
-The owned error envelope is a code-first type: one @autodocodec@ codec backs both
-its @aeson@ instances and its OpenAPI schema, so the /documented/ schema is derived
-rather than hand-maintained. The codec backs the documented schema only -- the
-denial body the server renders is shaped separately in
-"Ecluse.Core.Registry.Npm.Serve", and the two are expected to agree on the
-@{"error": …}@ shape (a behavioural correspondence, not one this codec enforces).
-The synthesized packument is a further exception: it is an /open/ schema (unlisted
-fields relayed unchanged from upstream), which has no clean codec representation, so
-it carries a hand-written partial schema. npm's /inbound/ wire decoding stays
-lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") -- @autodocodec@ is for
-what Écluse owns and emits, not for tolerantly parsing someone else's loose document.
+A response body is either a codec or a hand-authored schema, and the route's declared
+'Ecluse.Core.Server.Contract.Outcome's say which. A __codec body__ (npm's error envelope)
+carries one @autodocodec@ codec in core; the serve path encodes the wire body from it and
+this tier renders the /same/ codec to the documented schema, so the emitted body and its
+documentation are one source and cannot diverge. A __documented body__ (the merged
+packument, the publish document) is one Écluse builds imperatively rather than
+round-tripping through a type: it carries a hand-written schema here, registered as a
+named component, and is bound to the emitted bytes by a validation check. npm's /inbound/
+wire decoding stays lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") --
+codecs are for what Écluse owns and emits, not for tolerantly parsing someone else's loose
+document.
 -}
 module Ecluse.Manifest (
     -- * Inputs
@@ -67,26 +68,19 @@ module Ecluse.Manifest (
     routePathKey,
 
     -- * Owned schemas
-    ErrorEnvelope (..),
-    errorEnvelopeSchemaName,
     SynthesizedPackument,
     synthesizedPackumentSchema,
     synthesizedPackumentSchemaName,
+    publishDocumentSchemaName,
 ) where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson.Encode.Pretty qualified as Pretty
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
 import Data.Text qualified as T
 
-import Autodocodec (HasCodec (codec), object, requiredField, (.=))
-
--- The 'Autodocodec' data constructor must be in scope: deriving the @aeson@
--- instances via it coerces aeson's default methods (@omitField@\/@omittedField@)
--- through the newtype. The 'ToSchema' deriving needs only the type constructor.
-import Autodocodec.DerivingVia (Autodocodec (Autodocodec))
-import Autodocodec.OpenAPI.DerivingVia (AutodocodecOpenApi)
+import Autodocodec (JSONCodec)
+import Autodocodec.OpenAPI (declareNamedSchemaVia)
 import Data.List (nubBy)
 import Data.OpenApi (
     AdditionalProperties (AdditionalPropertiesAllowed, AdditionalPropertiesSchema),
@@ -119,25 +113,27 @@ import Data.OpenApi (
     Server (Server, _serverDescription, _serverUrl, _serverVariables),
     Tag (Tag),
     ToSchema (declareNamedSchema),
-    toSchema,
  )
+import Data.OpenApi.Declare (undeclare)
 import Network.HTTP.Media (MediaType)
 import Network.HTTP.Types.Method (StdMethod (..))
+import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
-import Ecluse.Core.Server.Route (RouteName, unRouteName)
-import Ecluse.Core.Server.RouteDoc (
-    BodyDoc (ArtifactBody, EmptyObjectBody, ErrorEnvelopeBody, NoBody, PackumentBody, PublishDocumentBody),
-    RequestDoc (reqBody, reqDescription, reqRequired),
-    ResponseDoc (respBody, respDescription, respStatus),
-    RouteDoc (rdDescription, rdRequest, rdResponses, rdSummary),
+import Ecluse.Core.Server.Contract (
+    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque),
+    Outcome (ocBody, ocDoc, ocStatus),
+    OutcomeBody (DocumentedOutcome, EmptyOutcome, JsonOutcome, OpaqueOutcome),
+    RequestSpec (reqDescription, reqRequired, reqSchema),
+    SomeOutcome (SomeOutcome),
  )
+import Ecluse.Core.Server.Route (RouteName, unRouteName)
 import Ecluse.Core.Server.RouteSpec (
     ParamSpec (psDescription, psName),
     PathSeg (Lit, Param),
-    RouteSpec (rsDoc, rsMethod, rsName, rsPattern),
+    RouteSpec (rsDescription, rsMethod, rsName, rsOutcomes, rsPattern, rsRequest, rsSummary),
  )
 
 {- | The explicit inputs the manifest is a pure function of: the server's
@@ -207,8 +203,8 @@ manifestInfo =
 ownedSchemas :: InsOrd.InsOrdHashMap Text Schema
 ownedSchemas =
     InsOrd.fromList
-        [ (errorEnvelopeSchemaName, toSchema (Proxy :: Proxy ErrorEnvelope))
-        , (synthesizedPackumentSchemaName, synthesizedPackumentSchema)
+        [ (synthesizedPackumentSchemaName, synthesizedPackumentSchema)
+        , (publishDocumentSchemaName, publishDocumentSchema)
         ]
 
 -- | The tag for an ecosystem (the manifest groups operations by mount).
@@ -245,7 +241,7 @@ pathsFrom entries =
   where
     operations = foldl' addOperation InsOrd.empty entries
     addOperation acc (eco, key, spec) =
-        InsOrd.insertWith (<>) key (methodItem (rsMethod spec) (operationFrom eco (rsName spec) (rsDoc spec))) acc
+        InsOrd.insertWith (<>) key (methodItem (rsMethod spec) (operationFrom eco spec)) acc
 
     parameters = foldl' addParams InsOrd.empty entries
     -- Accumulate a key's parameters in first-seen order (@old <> new@) before the
@@ -304,18 +300,17 @@ registry they belong to, and the route's name is qualified by that ecosystem to 
 OpenAPI's @operationId@ (which client generators key on, and which must be unique across
 the whole document: only here, where every mount is in view, can that be guaranteed).
 -}
-operationFrom :: Ecosystem -> RouteName -> RouteDoc -> Operation
-operationFrom eco name doc =
+operationFrom :: Ecosystem -> RouteSpec -> Operation
+operationFrom eco spec =
     (mempty :: Operation)
         { _operationTags = InsOrdSet.fromList [ecosystemName eco]
-        , _operationOperationId = Just (operationIdFor eco name)
-        , _operationSummary = Just (rdSummary doc)
-        , _operationDescription = Just (rdDescription doc)
-        , _operationRequestBody = Inline . requestBodyFrom <$> rdRequest doc
+        , _operationOperationId = Just (operationIdFor eco (rsName spec))
+        , _operationSummary = Just (rsSummary spec)
+        , _operationDescription = Just (rsDescription spec)
+        , _operationRequestBody = Inline . requestBodyFrom <$> rsRequest spec
         , _operationResponses =
             (mempty :: Responses)
-                { _responsesResponses =
-                    InsOrd.fromList [(respStatus r, Inline (responseFrom r)) | r <- rdResponses doc]
+                { _responsesResponses = InsOrd.fromList (map responseFrom (rsOutcomes spec))
                 }
         }
 
@@ -326,38 +321,60 @@ operationIdFor :: Ecosystem -> RouteName -> Text
 operationIdFor eco name = ecosystemName eco <> "." <> unRouteName name
 
 -- | The request body a write route accepts.
-requestBodyFrom :: RequestDoc -> RequestBody
+requestBodyFrom :: RequestSpec -> RequestBody
 requestBodyFrom req =
     (mempty :: RequestBody)
         { _requestBodyDescription = Just (reqDescription req)
         , _requestBodyRequired = Just (reqRequired req)
-        , _requestBodyContent = bodyContent (reqBody req)
+        , _requestBodyContent = bodyContent (reqSchema req)
         }
 
--- | One documented response: its status's meaning, and the body it carries.
-responseFrom :: ResponseDoc -> Response
-responseFrom r =
-    (mempty :: Response)
-        { _responseDescription = respDescription r
-        , _responseContent = bodyContent (respBody r)
-        }
-
-{- | The schema behind each body shape the core can name. __Total__ over the closed
-'BodyDoc' vocabulary, so a new body shape cannot go unrendered: it is a compile error
-here until it is given a schema.
-
-This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. The
-schemas for the documents Écluse owns are @autodocodec@ codecs that also back their
-@aeson@ instances, so the documented schema and the wire format cannot diverge.
+{- | One documented response, from a declared 'SomeOutcome': its status's meaning, and
+the body it carries.
 -}
-bodyContent :: BodyDoc -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
+responseFrom :: SomeOutcome -> (Int, Referenced Response)
+responseFrom (SomeOutcome o) =
+    ( statusCode (ocStatus o)
+    , Inline
+        (mempty :: Response)
+            { _responseDescription = ocDoc o
+            , _responseContent = bodyContent (schemaOfBody (ocBody o))
+            }
+    )
+
+-- | The documented 'BodySchema' an outcome's body carries.
+schemaOfBody :: OutcomeBody a -> BodySchema
+schemaOfBody = \case
+    JsonOutcome c -> SchemaJson c
+    DocumentedOutcome n -> SchemaDocumented n
+    OpaqueOutcome m -> SchemaOpaque m
+    EmptyOutcome -> SchemaEmpty
+
+{- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body
+vocabulary, so a new shape cannot go unrendered.
+
+This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. A codec
+body ('SchemaJson') renders its schema from the /same/ @autodocodec@ codec the serve path
+encodes the wire body with (via @autodocodec-openapi3@, in this tier only), so the
+documented schema and the wire format cannot diverge. A 'SchemaDocumented' body references
+a hand-authored component schema by name (the packument, the publish document): Écluse
+builds those imperatively, so they are documented rather than round-tripped.
+-}
+bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
-    NoBody -> mempty
-    EmptyObjectBody -> jsonContent (Inline emptyObjectSchema)
-    ErrorEnvelopeBody -> jsonContent errorRef
-    PackumentBody -> jsonContent synthRef
-    ArtifactBody -> mediaContent "application/octet-stream" (Inline binarySchema)
-    PublishDocumentBody -> jsonContent (Inline publishDocumentSchema)
+    SchemaEmpty -> mempty
+    SchemaOpaque _media -> mediaContent "application/octet-stream" (Inline binarySchema)
+    SchemaJson c -> jsonContent (Inline (schemaViaCodec c))
+    SchemaDocumented name -> jsonContent (Ref (Reference name))
+
+{- | Render an @autodocodec@ 'JSONCodec' to its OpenAPI schema (this tier only). The
+codec bodies Écluse owns are flat, so the declared definitions are empty and the schema
+inlines; 'undeclare' discards the (empty) definition set.
+-}
+schemaViaCodec :: JSONCodec a -> Schema
+schemaViaCodec c =
+    let NamedSchema _ s = undeclare (declareNamedSchemaVia c Proxy)
+     in s
 
 -- | Render a route's 'ParamSpec' as an OpenAPI path parameter.
 toParam :: ParamSpec -> Param
@@ -378,41 +395,6 @@ jsonContent = mediaContent "application/json"
 
 mediaContent :: MediaType -> Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 mediaContent mediaType ref = InsOrd.singleton mediaType ((mempty :: MediaTypeObject){_mediaTypeObjectSchema = Just ref})
-
-errorRef :: Referenced Schema
-errorRef = Ref (Reference errorEnvelopeSchemaName)
-
-synthRef :: Referenced Schema
-synthRef = Ref (Reference synthesizedPackumentSchemaName)
-
-{- | The owned model of the client-facing error\/denial body: a single @error@
-string carrying the human-facing reason. One @autodocodec@ codec backs both this
-type's @aeson@ instances and its OpenAPI schema, so the /documented/ schema is
-code-first.
-
-This type backs the manifest's documented schema only. The denial body the server
-actually emits is shaped independently by each mount's renderer (npm's
-@{"error": …}@ object lives in "Ecluse.Core.Registry.Npm.Serve"); that the rendered
-body matches this documented shape is a behavioural correspondence, not an invariant
-this codec enforces.
--}
-newtype ErrorEnvelope = ErrorEnvelope
-    { errorEnvelopeError :: Text
-    -- ^ The human-facing reason the request was refused.
-    }
-    deriving stock (Eq, Show)
-    deriving (FromJSON, ToJSON) via (Autodocodec ErrorEnvelope)
-    deriving (ToSchema) via (AutodocodecOpenApi ErrorEnvelope)
-
-instance HasCodec ErrorEnvelope where
-    codec =
-        object "ErrorEnvelope" $
-            ErrorEnvelope
-                <$> requiredField "error" "The human-facing reason the request was refused." .= errorEnvelopeError
-
--- | The @components.schemas@ name the error envelope is registered under.
-errorEnvelopeSchemaName :: Text
-errorEnvelopeSchemaName = "ErrorEnvelope"
 
 {- | A type-level handle for the synthesized packument's hand-written schema. It
 has no values: the served packument is built by the npm serve path, not decoded
@@ -523,14 +505,6 @@ binarySchema =
         , _schemaDescription = Just "Opaque artifact bytes, streamed verbatim."
         }
 
-emptyObjectSchema :: Schema
-emptyObjectSchema =
-    (mempty :: Schema)
-        { _schemaType = Just OpenApiObject
-        , _schemaAdditionalProperties = Just (AdditionalPropertiesAllowed False)
-        , _schemaDescription = Just "An empty object."
-        }
-
 publishDocumentSchema :: Schema
 publishDocumentSchema =
     (mempty :: Schema)
@@ -538,6 +512,10 @@ publishDocumentSchema =
         , _schemaAdditionalProperties = Just (AdditionalPropertiesAllowed True)
         , _schemaDescription = Just "The npm publish document, relayed to the publication target (its full shape is npm's, not re-specified here)."
         }
+
+-- | The @components.schemas@ name the publish document is registered under.
+publishDocumentSchemaName :: Text
+publishDocumentSchemaName = "PublishDocument"
 
 {- | Render the document to __byte-stable__ JSON: object keys are sorted, so the
 output is independent of insertion order and reproducible across runs and

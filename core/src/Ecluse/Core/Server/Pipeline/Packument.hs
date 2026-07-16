@@ -122,7 +122,8 @@ import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
+    MountBinding (bindingError, bindingPackumentDeps),
+    MountError,
     PackumentDeps (..),
     ServeRuntime (..),
     ctxMount,
@@ -149,7 +150,6 @@ import Ecluse.Core.Server.Pipeline.Origin (
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
-    MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
@@ -158,7 +158,6 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve),
     packumentStatus,
     packumentStatusCode,
-    renderError,
     serveDecisionOf,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -243,7 +242,7 @@ packumentWith ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 packumentWith mode name request respond = do
-    renderer <- asks (bindingRenderer . ctxMount)
+    renderer <- asks (bindingError . ctxMount)
     deps <- asks (bindingPackumentDeps . ctxMount)
     serveWithDeps mode renderer deps name request respond
 
@@ -254,7 +253,7 @@ packumentWith mode name request respond = do
 -- would-be body's @Content-Length@ (the 'bodiless' wrapper withholds the bytes).
 serveWithDeps ::
     PackumentServe ->
-    MountRenderer ->
+    MountError ->
     PackumentDeps ->
     PackageName ->
     Request ->
@@ -276,7 +275,7 @@ to the module level, taking its serve context as parameters rather than closing 
 large @where@, so the request flow reads as a flat sequence rather than deep nesting. -}
 serveAdmittedPackument ::
     PackumentServe ->
-    MountRenderer ->
+    MountError ->
     PackumentDeps ->
     PackageName ->
     Request ->
@@ -614,9 +613,9 @@ notModifiedResponse etag =
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
 exclusions, with a denial body collecting the reasons. Never a @404@ -- the package
 existed and its versions were withheld. -}
-noSurvivors :: MountRenderer -> PackumentDeps -> [ServeDecision] -> Response
+noSurvivors :: MountError -> PackumentDeps -> [ServeDecision] -> Response
 noSurvivors renderer deps decisions =
-    renderedResponse (toStatus status) (retryAfterHeader status) (renderError renderer (pdHelp deps) message)
+    denial renderer (toStatus status) (retryAfterHeader status) (pdHelp deps) message
   where
     status :: PackumentStatus
     status = packumentStatus decisions

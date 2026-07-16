@@ -162,7 +162,6 @@ library ecluse-core
     Ecluse.Core.Server.Path
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
-    Ecluse.Core.Server.RouteDoc
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
     Ecluse.Core.Supervision

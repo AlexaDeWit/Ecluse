@@ -33,7 +33,8 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPublishDeps, bindingRenderer),
+    MountBinding (bindingError, bindingPublishDeps),
+    MountError,
     PublishDeps (..),
     ServeRuntime (srPrivateManager),
     ctxMount,
@@ -41,18 +42,13 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Pipeline.Shared
 
-import Ecluse.Core.Server.Response (
-    MountRenderer,
-    renderError,
- )
-
 servePublish ::
     PackageName ->
     Request ->
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 servePublish name request respond = do
-    renderer <- asks (bindingRenderer . ctxMount)
+    renderer <- asks (bindingError . ctxMount)
     asks (bindingPublishDeps . ctxMount) >>= \case
         Nothing -> liftIO (respond (publishDisabled renderer))
         Just deps -> publishWithDeps renderer deps name request respond
@@ -61,7 +57,7 @@ servePublish name request respond = do
 -- anti-shadowing scope guard, then the body-name agreement check (all before any write),
 -- then the relay to the publication target with the publisher's forwarded credential.
 publishWithDeps ::
-    MountRenderer ->
+    MountError ->
     PublishDeps ->
     PackageName ->
     Request ->
@@ -117,7 +113,7 @@ shape, a @409@, a @403@ the registry's own authorisation produced); a @502@ when
 target's answer never arrived whole (a transport fault, or a response past the bound);
 a @500@ when its URL is unformable (misconfiguration). -}
 renderRelay ::
-    MountRenderer ->
+    MountError ->
     PublishDeps ->
     Either PublishRelayFault PublishRelayResponse ->
     Response
@@ -125,24 +121,24 @@ renderRelay renderer deps = \case
     Right (PublishRelayResponse code relayed) ->
         jsonResponse (mkStatus code "") [] relayed
     Left (RelayUrlUnformable _urlErr) ->
-        renderedResponse status500 [] (renderError renderer (pubHelp deps) "the publication target URL is misconfigured")
+        denial renderer status500 [] (pubHelp deps) "the publication target URL is misconfigured"
     Left (RelayTransport _fault) ->
-        renderedResponse status502 [] (renderError renderer (pubHelp deps) "the publication target could not be reached")
+        denial renderer status502 [] (pubHelp deps) "the publication target could not be reached"
     Left (RelayBoundExceeded _limit) ->
-        renderedResponse status502 [] (renderError renderer (pubHelp deps) "the publication target could not be reached")
+        denial renderer status502 [] (pubHelp deps) "the publication target could not be reached"
 
 -- A @405@ for a publish on a mount with no publication target configured: the
 -- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@
 -- header advertises the read methods the package route does serve.
-publishDisabled :: MountRenderer -> Response
+publishDisabled :: MountError -> Response
 publishDisabled renderer =
-    renderedResponse status405 [("Allow", "GET, HEAD")] (renderError renderer Nothing "publishing is not enabled on this proxy (no publication target is configured)")
+    denial renderer status405 [("Allow", "GET, HEAD")] Nothing "publishing is not enabled on this proxy (no publication target is configured)"
 
 -- A @403@ for a publish whose name is outside the configured publish-scope
 -- allow-list -- the anti-shadowing guard, refused before any upstream write.
-outOfScope :: MountRenderer -> PublishDeps -> PackageName -> Response
+outOfScope :: MountError -> PublishDeps -> PackageName -> Response
 outOfScope renderer deps name =
-    renderedResponse status403 [] (renderError renderer (pubHelp deps) message)
+    denial renderer status403 [] (pubHelp deps) message
   where
     message :: Text
     message =
@@ -155,9 +151,9 @@ outOfScope renderer deps name =
 -- URL-path name. The body-name agreement leg of the anti-shadowing guard (issue #391),
 -- refused before any upstream write so the identity the guard authorises is the
 -- identity written.
-bodyNameMismatch :: MountRenderer -> PublishDeps -> PackageName -> Text -> Response
+bodyNameMismatch :: MountError -> PublishDeps -> PackageName -> Text -> Response
 bodyNameMismatch renderer deps name declared =
-    renderedResponse status403 [] (renderError renderer (pubHelp deps) message)
+    denial renderer status403 [] (pubHelp deps) message
   where
     message :: Text
     message =

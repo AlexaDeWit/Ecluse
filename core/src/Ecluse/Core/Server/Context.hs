@@ -42,6 +42,7 @@ module Ecluse.Core.Server.Context (
 
     -- * Mount binding
     MountBinding (..),
+    MountError (..),
 
     -- * Per-request context
     RequestCtx (..),
@@ -57,7 +58,7 @@ import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.HTTP.Client (Manager, Request)
-import Network.HTTP.Types (Method)
+import Network.HTTP.Types (Header, Method, Status)
 import Network.Wai (Response, ResponseReceived)
 import Network.Wai qualified as Wai
 import UnliftIO (MonadUnliftIO)
@@ -75,8 +76,9 @@ import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballH
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
+import Ecluse.Core.Server.Contract (Answer)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
-import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
+import Ecluse.Core.Server.Response (HelpMessage)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -389,11 +391,11 @@ mutually-recursive knot: a mount carries a router, the router names an action, a
 action is a handler that reads the mount.
 -}
 data RouteAction
-    = -- | A pure response the proxy answers itself, shaped by the mount's renderer.
-      AnswerLocally (MountRenderer -> Response)
+    = -- | A pure declared 'Answer' the proxy emits itself: no upstream round-trip, no effects.
+      AnswerLocally Answer
     | {- | A data-plane handler, awaiting the request and the respond continuation. It
-      reads its mount's serve dependencies from the request context, and answers the
-      recognised-but-unwired stub itself when they are absent.
+      reads its mount's serve dependencies from the request context, and answers through
+      its route's declared outcomes.
       -}
       RunPipeline (Wai.Request -> (Response -> IO ResponseReceived) -> Handler ResponseReceived)
 
@@ -445,11 +447,21 @@ data MountBinding = MountBinding
     configured; 'Nothing' is the opt-out -- a @PUT \/{pkg}@ is then @405@ (no implicit
     write path).
     -}
-    , bindingRenderer :: MountRenderer
-    {- ^ This mount's renderer for error\/denial bodies -- the ecosystem surface an
-    in-mount @403@\/@404@\/@501@ is shaped into.
+    , bindingError :: MountError
+    {- ^ This mount's renderer for /infrastructure/ error responses that no declared
+    outcome shapes: the request perimeter's neutral @500@ on an escaped fault, and the
+    deny-by-default @404@ for a path no route claims. An in-route @403@\/@404@\/@503@ is
+    a declared 'Ecluse.Core.Server.Contract.Outcome' instead, encoded through its codec.
     -}
     }
+
+{- | A mount's renderer for the two error responses that arise /outside/ any route's
+declared outcomes: the perimeter's neutral @500@ and the deny-by-default @404@. It shapes
+a status and a human-facing message into the ecosystem's body surface (npm's
+@{"error": …}@ object), built at the composition root from the same error codec the
+routes' outcomes use, so even these infrastructure bodies share the one shape.
+-}
+newtype MountError = MountError {renderMountError :: Status -> [Header] -> Text -> Response}
 
 {- | The context one request is served through: the request runtime 'ServeRuntime'
 paired with the 'MountBinding' the request matched. A concrete record with plain

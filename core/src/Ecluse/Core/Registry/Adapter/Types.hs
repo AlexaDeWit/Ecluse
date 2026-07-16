@@ -54,9 +54,8 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Server.Context (MountRouter)
+import Ecluse.Core.Server.Context (MountError, MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
-import Ecluse.Core.Server.Response (MountRenderer)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -110,8 +109,11 @@ data AdapterServe = AdapterServe
     ("Ecluse.Manifest") renders this rather than re-describing the path grammar, so the
     documented surface cannot drift from what is routed.
     -}
-    , serveRenderer :: MountRenderer
-    -- ^ The ecosystem body shape an in-mount denial or error renders through.
+    , serveError :: MountError
+    {- ^ The ecosystem's renderer for /infrastructure/ error responses no declared outcome
+    shapes (the perimeter's neutral @500@, the deny-by-default @404@), built from the same
+    error codec the routes' outcomes use.
+    -}
     }
 
 {- | The ecosystem's metadata capability: how a package's metadata is read from an

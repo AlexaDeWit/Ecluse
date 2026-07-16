@@ -140,7 +140,8 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
+    MountBinding (bindingError, bindingPackumentDeps),
+    MountError,
     PackumentDeps (..),
     ServeRuntime (..),
     ctxMount,
@@ -159,7 +160,6 @@ import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    MountRenderer,
     RejectReason (Unavailable),
     Rejection (Rejection, rejectionMessage),
     RetryAfter (..),
@@ -167,7 +167,6 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve, WontResolve),
     artifactStatus,
     artifactStatusCode,
-    renderError,
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
@@ -264,7 +263,7 @@ tarballWith ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 tarballWith mode name version filename request respond = do
-    renderer <- asks (bindingRenderer . ctxMount)
+    renderer <- asks (bindingError . ctxMount)
     deps <- asks (bindingPackumentDeps . ctxMount)
     serveTarballWithDeps mode renderer deps name version filename request respond
 
@@ -274,7 +273,7 @@ tarballWith mode name version filename request respond = do
 -- both legs so a HEAD takes the identical gating as a GET, probing bodiless.
 serveTarballWithDeps ::
     ArtifactServe ->
-    MountRenderer ->
+    MountError ->
     PackumentDeps ->
     PackageName ->
     Version ->
@@ -382,7 +381,7 @@ The public version metadata is fetched anonymously to decide. -}
 servePublicArtifact ::
     ArtifactServe ->
     ServeRuntime ->
-    MountRenderer ->
+    MountError ->
     PackumentDeps ->
     RequestHeaders ->
     PackageName ->
@@ -531,7 +530,7 @@ credential and the public fetch stays anonymous. -}
 streamPublicArtifact ::
     ArtifactServe ->
     ServeRuntime ->
-    MountRenderer ->
+    MountError ->
     PackumentDeps ->
     RequestHeaders ->
     PackageName ->
@@ -778,9 +777,9 @@ single-artifact path has none to offer). A @404@ is the version-absent miss, whi
 'gatePublicVersion' flags as a 'WontResolve' rejection -- the only such cause on this
 path -- so it is mapped to @404@ rather than the @500@ a 'WontResolve' would
 otherwise render. -}
-artifactError :: MountRenderer -> PackumentDeps -> ArtifactStatus -> ServeDecision -> Response
+artifactError :: MountError -> PackumentDeps -> ArtifactStatus -> ServeDecision -> Response
 artifactError renderer deps status decision =
-    renderedResponse (toStatus actualStatus) retryHeaders (renderError renderer (pdHelp deps) message)
+    denial renderer (toStatus actualStatus) retryHeaders (pdHelp deps) message
   where
     retryHeaders :: ResponseHeaders
     retryHeaders = case actualStatus of
