@@ -35,7 +35,7 @@ the protocol research (see @docs\/research\/reverse-engineering\/npm.md@ §2 and
   us, so a scoped name arrives either as one decoded segment (@\@scope\/pkg@) or as two
   (@\@scope@, @pkg@). Both are normalised to the same 'PackageName' here.
 
-* __A tarball path is @\/{pkg}\/-\/{file}.tgz@.__ 'tarballRoute' is the npm-side parse of
+* __A tarball path is @\/{pkg}\/-\/{file}.tgz@.__ 'tarballCoordinate' is the npm-side parse of
   the artifact coordinate; a basename that does not match the package is a
   __path-confusion__ attempt and denies.
 
@@ -55,7 +55,7 @@ module Ecluse.Core.Registry.Npm.Route (
 
     -- * The leaf parsers (exported for their specs)
     takePackage,
-    tarballRoute,
+    tarballCoordinate,
 ) where
 
 import Autodocodec (JSONCodec, object, pureCodec)
@@ -126,14 +126,19 @@ share the one shape.
 npmMountError :: MountError
 npmMountError = MountError (\status extra message -> jsonResponse status extra (encodeBody npmErrorCodec (NpmError message)))
 
-{- | npm's routes, in matching order. The __structure__ is here; the security-critical
-__leaf__ parsing stays in the named functions the captures and builders reference
-('takePackage', 'tarballRoute'). Ordering follows npm's conventions: the reserved
-meta-routes are literal and tried first.
+{- | npm's routes, in matching order: one named value each, aggregated here. The
+__structure__ of each is in its own definition; the security-critical __leaf__ parsing
+stays in the named functions the captures and builders reference ('takePackage',
+'tarballCoordinate'). Ordering follows npm's conventions: the reserved meta-routes are
+literal and tried first.
 -}
 npmRoutes :: [Route NpmCap]
-npmRoutes =
-    [ Route
+npmRoutes = [pingRoute, searchRoute, tarballRoute, packumentRoute, publishRoute]
+
+-- @GET \/-\/ping@: a liveness probe, answered locally with @200 {}@.
+pingRoute :: Route NpmCap
+pingRoute =
+    Route
         (RouteName "ping")
         MethodRead
         [SegLit "-", SegLit "ping"]
@@ -143,7 +148,11 @@ npmRoutes =
         \to is up, so there is no reason to round-trip upstream."
         Nothing
         [emptyObjectOutcome status200 "An empty object."]
-    , Route
+
+-- @GET \/-\/v1\/search@: a documented @501@ boundary; search is not proxied.
+searchRoute :: Route NpmCap
+searchRoute =
+    Route
         (RouteName "search")
         MethodRead
         [SegLit "-", SegLit "v1", SegLit "search"]
@@ -153,7 +162,11 @@ npmRoutes =
         \so Écluse returns `501` and points to the public registry's website."
         Nothing
         [errorOutcome status501 "Not implemented: search is not supported."]
-    , Route
+
+-- @GET \/{package}\/-\/{filename}@: a package artifact, streamed.
+tarballRoute :: Route NpmCap
+tarballRoute =
+    Route
         (RouteName "tarball")
         MethodRead
         [SegCap capPackage, SegLit "-", SegCap capFilename]
@@ -168,7 +181,11 @@ npmRoutes =
         , errorOutcome status500 "A permanent or internal inability to serve."
         , errorOutcome status503 "A transient upstream condition; retry (see `Retry-After`)."
         ]
-    , Route
+
+-- @GET \/{package}@: the merged, gated packument.
+packumentRoute :: Route NpmCap
+packumentRoute =
+    Route
         (RouteName "packument")
         MethodRead
         [SegCap capPackage]
@@ -185,7 +202,11 @@ npmRoutes =
         , errorOutcome status502 "A responding upstream returned a packument for a different package."
         , errorOutcome status503 "A transient upstream or advisory condition; retry (see `Retry-After`)."
         ]
-    , Route
+
+-- @PUT \/{package}@: a first-party publish, relayed after the anti-shadowing guard.
+publishRoute :: Route NpmCap
+publishRoute =
+    Route
         (RouteName "publish")
         MethodPut
         [SegCap capPackage]
@@ -199,7 +220,6 @@ npmRoutes =
         , errorOutcome status403 "The package name is outside the configured publish scopes (anti-shadowing), or refused by policy."
         , errorOutcome status405 "Publishing is not configured (no publication target)."
         ]
-    ]
 
 -- The octet-stream media type an artifact is documented and served under.
 octetStream :: ByteString
@@ -280,14 +300,14 @@ buildPublish _method = \case
     [NpmPackage name] -> Just (RunPipeline (servePublish name))
     _ -> Nothing
 
-{- @GET \/{package}\/-\/{filename}@: an artifact read. 'tarballRoute' applies the
+{- @GET \/{package}\/-\/{filename}@: an artifact read. 'tarballCoordinate' applies the
 __cross-capture__ path-confusion check and reads the version; a mismatched name yields
 'Nothing', so the route falls through to the @404@ rather than being fabricated into a
 coordinate. A @HEAD@ takes the head-mode handler, which probes the upstream bodiless. -}
 buildTarball :: Method -> [NpmCap] -> Maybe RouteAction
 buildTarball method = \case
     [NpmPackage name, NpmFilename file] -> do
-        (version, filename) <- tarballRoute name file
+        (version, filename) <- tarballCoordinate name file
         pure $
             if isHead method
                 then RunPipeline (headTarball name version filename)
@@ -323,7 +343,7 @@ capPackage =
 
 {- | The artifact-file capture: one segment, accepted only when it is a safe component
 ('isSafeComponent'); the coordinate parse (the @.tgz@ basename and the version) is
-'tarballRoute''s, applied in 'buildTarball'.
+'tarballCoordinate''s, applied in 'buildTarball'.
 -}
 capFilename :: Capture NpmCap
 capFilename =
@@ -389,8 +409,8 @@ the @version@ run is read by the total 'mkVersion', and the @file@ is preserved 
 Exported so the coordinate parse -- the security-critical half of the artifact route -- is
 asserted directly, rather than only through the router.
 -}
-tarballRoute :: PackageName -> Text -> Maybe (Version, Filename)
-tarballRoute name file =
+tarballCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
+tarballCoordinate name file =
     case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
         Just version
             | not (T.null version) -> Just (mkVersion Npm version, Filename file)
