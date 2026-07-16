@@ -108,7 +108,7 @@ import Data.OpenApi (
     Referenced (Inline, Ref),
     RequestBody (_requestBodyContent, _requestBodyDescription, _requestBodyRequired),
     Response (_responseContent, _responseDescription),
-    Responses (_responsesResponses),
+    Responses (_responsesDefault, _responsesResponses),
     Schema (_schemaAdditionalProperties, _schemaDescription, _schemaFormat, _schemaProperties, _schemaRequired, _schemaTitle, _schemaType),
     Server (Server, _serverDescription, _serverUrl, _serverVariables),
     Tag (Tag),
@@ -123,11 +123,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Server.Contract (
-    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque),
-    Outcome (ocBody, ocDoc, ocStatus),
-    OutcomeBody (DocumentedOutcome, EmptyOutcome, JsonOutcome, OpaqueOutcome),
+    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque, SchemaPassthrough),
     RequestSpec (reqDescription, reqRequired, reqSchema),
-    SomeOutcome (SomeOutcome),
+    ResponseDoc (responseBodySchema, responseDescription, responseStatus),
+    ResponseStatus (DefaultResponse, ExactResponse),
  )
 import Ecluse.Core.Server.Route (RouteName, unRouteName)
 import Ecluse.Core.Server.RouteSpec (
@@ -310,9 +309,12 @@ operationFrom eco spec =
         , _operationRequestBody = Inline . requestBodyFrom <$> rsRequest spec
         , _operationResponses =
             (mempty :: Responses)
-                { _responsesResponses = InsOrd.fromList (map responseFrom (rsOutcomes spec))
+                { _responsesDefault = responseFrom <$> find isDefault (rsOutcomes spec)
+                , _responsesResponses = InsOrd.fromList (mapMaybe exactResponseFrom (rsOutcomes spec))
                 }
         }
+  where
+    isDefault doc = responseStatus doc == DefaultResponse
 
 {- | A route's globally unique @operationId@: its ecosystem-local name, qualified by the
 mount it is served under (@packument@ under the npm mount is @npm.packument@).
@@ -329,26 +331,20 @@ requestBodyFrom req =
         , _requestBodyContent = bodyContent (reqSchema req)
         }
 
-{- | One documented response, from a declared 'SomeOutcome': its status's meaning, and
-the body it carries.
--}
-responseFrom :: SomeOutcome -> (Int, Referenced Response)
-responseFrom (SomeOutcome o) =
-    ( statusCode (ocStatus o)
-    , Inline
-        (mempty :: Response)
-            { _responseDescription = ocDoc o
-            , _responseContent = bodyContent (schemaOfBody (ocBody o))
-            }
-    )
+-- | One exact documented response, omitted when the document is OpenAPI's default.
+exactResponseFrom :: ResponseDoc -> Maybe (Int, Referenced Response)
+exactResponseFrom doc = case responseStatus doc of
+    ExactResponse status -> Just (statusCode status, responseFrom doc)
+    DefaultResponse -> Nothing
 
--- | The documented 'BodySchema' an outcome's body carries.
-schemaOfBody :: OutcomeBody a -> BodySchema
-schemaOfBody = \case
-    JsonOutcome c -> SchemaJson c
-    DocumentedOutcome n -> SchemaDocumented n
-    OpaqueOutcome m -> SchemaOpaque m
-    EmptyOutcome -> SchemaEmpty
+-- | Render one response document independently of how its status is keyed.
+responseFrom :: ResponseDoc -> Referenced Response
+responseFrom doc =
+    Inline
+        (mempty :: Response)
+            { _responseDescription = responseDescription doc
+            , _responseContent = bodyContent (responseBodySchema doc)
+            }
 
 {- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body
 vocabulary, so a new shape cannot go unrendered.
@@ -363,9 +359,13 @@ builds those imperatively, so they are documented rather than round-tripped.
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
     SchemaEmpty -> mempty
-    SchemaOpaque _media -> mediaContent "application/octet-stream" (Inline binarySchema)
+    SchemaOpaque media -> mediaContent (mediaTypeOf media) (Inline binarySchema)
     SchemaJson c -> jsonContent (Inline (schemaViaCodec c))
     SchemaDocumented name -> jsonContent (Ref (Reference name))
+    SchemaPassthrough -> mediaContent "*/*" (Inline binarySchema)
+
+mediaTypeOf :: ByteString -> MediaType
+mediaTypeOf media = fromString (decodeUtf8 media :: String)
 
 {- | Render an @autodocodec@ 'JSONCodec' to its OpenAPI schema (this tier only). The
 codec bodies Écluse owns are flat, so the declared definitions are empty and the schema

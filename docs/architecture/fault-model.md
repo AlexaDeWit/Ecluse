@@ -36,7 +36,7 @@ flowchart LR
   `Ecluse.Runtime.Server.serve`): a synchronous escape before the response is committed is
   classified into the closed `RequestFault` vocabulary (`Ecluse.Core.Server.Fault`),
   counted on `ecluse.serve.perimeter.faults`, logged with its audit payload, and answered
-  with the mount-shaped neutral `500`; after the commit there is no honest second response,
+  with the route's contract-admitted neutral `500`; after the commit there is no honest second response,
   so the escape rethrows and the `scOnException` hook logs the teardown. Details in
   [Web Layer → The typed request perimeter](web-layer.md#the-typed-request-perimeter).
 - **The process perimeter** (`superviseProcess` in `Ecluse`): classifies how the whole run
@@ -135,7 +135,7 @@ on every exit without interpreting the exception.
 An unreachable upstream degrades with a typed log cause and no default-handler noise; a
 killed dependency drives Transient backoff without a process exit; a wiring fault fails up
 to a logged `ServiceExited` and exit `1`; `SIGTERM` drains to exit `0`; an injected
-pre-commit fault renders the mount-shaped `500` with its audit line; and a public relay
+pre-commit fault renders the route's declared `500` with its audit line; and a public relay
 that visibly was not the admitted artifact is logged, counted, and never mirrored. The
 alarms an operator should watch for movement are `ecluse.serve.perimeter.faults` and
 `ecluse.serve.relay.anomalies`, both steady-state zero (see

@@ -11,10 +11,10 @@ capability manifest renders the /same/ codec to the documented schema (in its ow
 so @openapi3@ never reaches the proxy). npm clients read the human-facing reason from a
 JSON @{"error": …}@ object, matching npm's own denial bodies.
 
-There is no separate renderer Handle any more. A route declares the
-'Ecluse.Core.Server.Contract.Outcome's it can emit (a status paired with a body codec),
-the handler answers through one of them, and the emitted body is the documented body by
-construction.
+There is no separate renderer handle. A route's abstract
+'Ecluse.Core.Server.Contract.ResponseContract' pairs each status with its body codec, the
+handler receives only constructors for values admitted by that contract, and the emitted
+body is therefore the documented body by construction.
 -}
 module Ecluse.Core.Registry.Npm.Serve (
     NpmError (..),

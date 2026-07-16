@@ -53,7 +53,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmMountError, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
@@ -238,7 +238,6 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 , bindingRouter = npmRouter
                 , bindingPackumentDeps = deps
                 , bindingPublishDeps = Nothing
-                , bindingError = npmMountError
                 }
     pure (application (mkServerConfig [binding]) env)
 

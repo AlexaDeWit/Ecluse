@@ -36,6 +36,10 @@ than queued. npm is the first supported ecosystem; the core is registry-agnostic
 ecosystem registers as a self-contained adapter (`Ecluse.Core.Registry.Adapter`), and PyPI
 and RubyGems are on the roadmap.
 
+Each ecosystem route carries an abstract response contract interpreted as both runtime
+wire behaviour and OpenAPI capability documentation; handlers receive only the matching
+typed responder, so status and body declarations cannot drift from what they emit.
+
 [`docs/architecture.md`](docs/architecture.md) has the full design: the four-role registry
 model, the rules engine, the mirror queue, and the configuration reference. The threat model
 (OWASP Threat Dragon, STRIDE) is generated into a readable

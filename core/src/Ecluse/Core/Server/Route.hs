@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE ExistentialQuantification #-}
 
 {- | A route: one record saying everything there is to say about one URL the proxy
 serves.
@@ -41,8 +42,8 @@ module Ecluse.Core.Server.Route (
 
 import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
 
-import Ecluse.Core.Server.Context (MountRouter, RouteAction (AnswerLocally))
-import Ecluse.Core.Server.Contract (Answer, RequestSpec, SomeOutcome)
+import Ecluse.Core.Server.Context (MountRouter, ResponseAction, RouteAction (RouteAction))
+import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContract)
 
 {- | One route, whole: how it matches, what it does, and what it means.
 
@@ -50,7 +51,7 @@ Generic over the ecosystem's capture-value type @v@, which is the only thing abo
 route that is not shared (npm's captures yield a parsed package or an artifact name;
 another registry's would yield its own).
 -}
-data Route v = Route
+data Route v = forall response. Route
     { routeName :: RouteName
     {- ^ This route's name, unique within its ecosystem (@"packument"@). It is the handle
     a test asserts on when it checks /which/ route a request took, and the manifest
@@ -62,7 +63,7 @@ data Route v = Route
     -- ^ The method condition a request must satisfy to match.
     , routeSegs :: [PatternSeg v]
     -- ^ The mount-relative path template: literal segments and named captures, in order.
-    , routeBuild :: Method -> [v] -> Maybe RouteAction
+    , routeBuild :: Method -> [v] -> Maybe (ResponseAction response)
     {- ^ What serving this route amounts to, given the request method and the captured
     values (one per 'SegCap', in template order).
 
@@ -82,11 +83,11 @@ data Route v = Route
     -- ^ The fuller prose description of what the route does.
     , routeRequest :: Maybe RequestSpec
     -- ^ The request body a write route accepts; 'Nothing' for a read.
-    , routeOutcomes :: [SomeOutcome]
-    {- ^ The closed set of responses this route can emit, each a status paired with its
-    body codec ('Ecluse.Core.Server.Contract.Outcome'). The handler answers /through/ one
-    of these, and the manifest documents this same set, so a route cannot emit a status or
-    body it does not declare, nor be added without documenting what it answers with.
+    , routeContract :: ResponseContract response
+    {- ^ The response contract whose indexed value the builder's action can produce.
+    Runtime dispatch renders that value to WAI while the manifest renders the same
+    contract's response documents, so the action and documentation cannot be paired with
+    different response sets.
     -}
     }
 
@@ -151,9 +152,13 @@ Deny-by-default is __structural__ here: 'routerOf' has no other way to answer. T
 catch-all branch to forget. The @404@ 'Answer' a mount supplies for a path no route
 claims is its deny-by-default surface (npm's @{"error": "not found"}@).
 -}
-routerOf :: Answer -> [Route v] -> MountRouter
+routerOf :: RouteAction -> [Route v] -> MountRouter
 routerOf notFound routes method segments =
-    maybe (AnswerLocally notFound) snd (matchRoute routes method segments)
+    maybe (fallbackFor method notFound) snd (matchRoute routes method segments)
+  where
+    fallbackFor requested (RouteAction contract action)
+        | requested == methodHead = RouteAction (bodilessContract contract) action
+        | otherwise = RouteAction contract action
 
 {- | The route that claims a request, and the action it names: the first whose method
 condition holds, whose segments are consumed __exactly__, and whose builder accepts the
@@ -167,12 +172,16 @@ matchRoute :: [Route v] -> Method -> [Text] -> Maybe (Route v, RouteAction)
 matchRoute routes method segments =
     listToMaybe (mapMaybe claim routes)
   where
-    claim route
-        | methodMatches (routeMethod route) method = do
-            captures <- consumeSegs (routeSegs route) segments
-            action <- routeBuild route method captures
-            pure (route, action)
+    claim route@Route{routeMethod = matchedMethod, routeSegs = patternSegs, routeBuild = build, routeContract = contract}
+        | methodMatches matchedMethod method = do
+            captures <- consumeSegs patternSegs segments
+            action <- build method captures
+            pure (route, RouteAction (contractFor method contract) action)
         | otherwise = Nothing
+
+    contractFor requested
+        | requested == methodHead = bodilessContract
+        | otherwise = id
 
 {- Run a route's segments against a request's segments, collecting one value per capture
 in template order. Requires __exact__ consumption: a leftover request segment, or a

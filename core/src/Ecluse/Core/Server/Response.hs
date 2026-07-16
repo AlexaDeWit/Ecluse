@@ -13,10 +13,11 @@ streams the body is separate (see @docs\/architecture\/web-layer.md@).
 
 This module decides the HTTP /status/ of a refusal but holds __no body shape of
 its own__: the bytes a client reads an error from are an ecosystem's (npm's
-@{"error": …}@ JSON, a different surface for PyPI), so a mount supplies a
-'MountRenderer' -- chosen at the composition root alongside its path grammar -- and
-the agnostic web layer never names one. 'appendHelp' is the ecosystem-neutral part
-the renderer reuses: joining the operator help message onto a denial.
+@{"error": …}@ JSON, a different surface for PyPI). The ecosystem's route-scoped
+'Ecluse.Core.Server.Contract.ResponseContract' supplies the response constructor and
+codec; the agnostic pipeline selects it through injected reply factories. 'appendHelp'
+is the ecosystem-neutral operation those factories reuse: joining the operator help
+message onto a denial.
 
 == The outcome model
 
@@ -34,13 +35,13 @@ single 'ArtifactStatus'. The load-bearing rule is __503 only when we believe it
 will resolve__ -- a transient upstream\/advisory condition invites a retry, while a
 permanent or internal inability to decide ('WontResolve') is a @500@, because
 retrying it cannot help and we should not invite it. A policy rejection is a
-@403@ whose body the mount's 'MountRenderer' shapes. A __packument__ request has
+@403@ whose body the route's response contract shapes. A __packument__ request has
 no single status -- its versions are filtered and the status is chosen over the
 surviving set -- so this module deliberately maps __per outcome__, not per request.
 
 An operator help message, when configured, is appended to every denial
 ('appendHelp') so clients are told where to ask; how the joined text is then
-wrapped into bytes is the mount renderer's.
+wrapped into bytes is the route contract's.
 -}
 module Ecluse.Core.Server.Response (
     -- * Serve outcomes
@@ -193,7 +194,7 @@ case.
 data ArtifactStatus
     = -- | @200@ -- admitted; the artifact is streamed.
       Ok
-    | -- | @403@ -- refused by policy; the body is shaped by the mount's 'MountRenderer'.
+    | -- | @403@ -- refused by policy; the body is shaped by the route's response contract.
       Forbidden
     | {- | @503@ -- a transient inability to decide; the 'RetryAfter', if known,
       becomes the @Retry-After@ header.
@@ -378,8 +379,8 @@ mkHelpMessage = HelpMessage . T.strip
 single space; a blank or absent help message contributes nothing.
 
 This is the ecosystem-neutral part of denial rendering -- every ecosystem appends
-the operator's help text the same way. How the joined text is then wrapped into
-body bytes is the mount's 'MountRenderer'.
+the operator's help text the same way. How the joined text is then wrapped into body
+bytes is the route contract's concern.
 -}
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help message =

@@ -16,8 +16,7 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 * __Mount dispatch__: match a request's leading path segments to a configured
   'MountBinding', strip the prefix, and hand the remainder (an ecosystem-native
   path) to that mount's 'Ecluse.Core.Server.Context.MountRouter'. A binding carries a
-  mount's __complete__ ecosystem wiring: its router, its packument-serve dependencies,
-  and its error 'Ecluse.Core.Server.Response.MountRenderer'. The web layer is closed
+  mount's __complete__ ecosystem wiring: its router and serve dependencies. The web layer is closed
   over the agnostic 'Ecluse.Core.Server.Context.RouteAction' vocabulary and holds no
   ecosystem's path grammar or body shape of its own. Every registry is
   __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
@@ -33,10 +32,9 @@ Responses split into __two tiers__:
 
 * __Within a matched mount.__ The mount's router
   ('Ecluse.Core.Server.Context.MountRouter', supplied by its ecosystem adapter) says what
-  the request names, as an 'Ecluse.Core.Server.Context.RouteAction': either a pure
-  response the proxy answers itself (through that mount's
-  'Ecluse.Core.Server.Response.MountRenderer', in the ecosystem's own error surface), or
-  a data-plane handler to run.
+  the request names, as an 'Ecluse.Core.Server.Context.RouteAction': a route-scoped
+  response contract existentially paired with either a pure response value or a data-plane
+  handler that can produce only that value type.
 
 This module holds __no route knowledge of its own__. It does not name a route, a path
 grammar, or a status: it asks the matched mount's router for an action and either
@@ -96,7 +94,7 @@ module Ecluse.Runtime.Server (
 
 import Data.List (dropWhileEnd)
 import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
-import Network.HTTP.Types (Method, Status, status500)
+import Network.HTTP.Types (Method, status500)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestMethod)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -106,13 +104,13 @@ import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
     MountBinding (..),
-    MountError (renderMountError),
     RequestCtx (RequestCtx),
-    RouteAction (AnswerLocally, RunPipeline),
+    ResponseAction (AnswerLocally, RunPipeline),
+    RouteAction (RouteAction),
     ServeRuntime (srMetrics),
     runHandler,
  )
-import Ecluse.Core.Server.Contract (answerToResponse)
+import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
@@ -254,26 +252,25 @@ dispatch cfg env request respond =
 
 The route itself was decided by that router ('bindingRouter', which the mount's
 ecosystem adapter supplies); this function knows only the two kinds of action it can
-return. An 'AnswerLocally' action is a pure 'Response' through the mount's renderer. A
+return. An 'AnswerLocally' action is a pure value interpreted through the route contract. A
 'RunPipeline' action is discharged to 'IO' under the typed request perimeter, over the
 per-request 'RequestCtx' built once here (the request runtime 'serveRuntimeOf' paired
 with the matched 'MountBinding'), so the handler reads its mount's serve dependencies
-and renderer from context rather than as threaded arguments. The deps-or-stub decision
+from context rather than as threaded arguments. The deps-or-stub decision
 is the handler's: a mount with no packument dependencies answers the
 recognised-but-unwired @501@, and one with no publication target answers a publish with
 @405@.
 -}
 serve :: Env -> MountBinding -> RouteAction -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-serve env binding action request respond =
+serve env binding (RouteAction contract action) request respond =
     case action of
-        AnswerLocally answer -> respond (answerToResponse answer)
+        AnswerLocally answer -> send answer
         -- The data-plane handler under the typed request perimeter: it is discharged
         -- through 'run', and the perimeter's observation channel is the bounded
         -- @ecluse.serve.perimeter.faults@ metric plus the audit log line.
-        RunPipeline handler -> perimeterGuard observeFault renderer respond (run . handler request)
+        RunPipeline fallback handler -> perimeterGuard observeFault send fallback (run . handler request)
   where
-    renderer :: MountError
-    renderer = bindingError binding
+    send value = respond (responseToWai contract value)
 
     observeFault fault = do
         mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
@@ -313,7 +310,7 @@ escape from some dependency's typed contract.
 Pre-commit, the escape is classified ('Ecluse.Core.Server.Fault.classifyEscape'),
 handed to the injected observation channel (the composition wires the bounded
 @ecluse.serve.perimeter.faults@ metric and the audit log line), and answered with
-the mount-shaped neutral 500 -- no fault detail ever reaches the client.
+the route's declared neutral 500 -- no fault detail ever reaches the client.
 Post-commit -- the wrapped respond has already begun the response -- there is no
 second response to give: the escape rethrows, warp tears the connection down, and
 the 'scOnException' hook logs it. Exported for its spec; 'serve' wires it per
@@ -322,14 +319,14 @@ request.
 perimeterGuard ::
     -- | Observe a classified pre-commit fault (the metric and the audit line).
     (RequestFault -> IO ()) ->
-    -- | The mount's error renderer, shaping the neutral 500.
-    MountError ->
-    -- | The client's respond continuation.
-    (Response -> IO ResponseReceived) ->
+    -- | The route-scoped response continuation.
+    (response -> IO ResponseReceived) ->
+    -- | The route's declared neutral pre-commit fallback.
+    response ->
     -- | The route's handler, discharged to 'IO', awaiting the tracked respond.
-    ((Response -> IO ResponseReceived) -> IO ResponseReceived) ->
+    ((response -> IO ResponseReceived) -> IO ResponseReceived) ->
     IO ResponseReceived
-perimeterGuard observeFault renderer respond handlerOn = do
+perimeterGuard observeFault respond fallback handlerOn = do
     committed <- newIORef False
     let respondCommitted response = do
             atomicWriteIORef committed True
@@ -340,7 +337,7 @@ perimeterGuard observeFault renderer respond handlerOn = do
             then throwIO escape
             else do
                 observeFault (classifyEscape escape)
-                respond (renderedError renderer status500 "internal server error")
+                respond fallback
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
 with, paired with the action its ecosystem's router names for the remainder.
@@ -383,8 +380,6 @@ dropTrailingSlashes = dropWhileEnd (== "")
 -- An in-mount error response: the status, with the body shaped by the mount's
 -- renderer. The perimeter's neutral @500@ is the one such response the web layer still
 -- owns; every route's own body is shaped by its ecosystem's router.
-renderedError :: MountError -> Status -> Text -> Response
-renderedError renderer status = renderMountError renderer status []
 
 {- | The cross-cutting middleware stack composed around the proxy 'Application': a
 defensive request-body size cap (rejecting an over-cap body with @413@ once a
@@ -455,7 +450,7 @@ runWarp cfg0 getApp = do
                 -- warp itself): a neutral JSON 500 (no exception detail) rather than
                 -- warp's default body. A pre-commit handler escape never reaches
                 -- this -- the typed request perimeter ('serve') answers it first,
-                -- mount-shaped.
+                -- route-shaped.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp

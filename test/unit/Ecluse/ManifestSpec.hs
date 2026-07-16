@@ -8,6 +8,7 @@ import Data.Aeson (Value (Object), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
+import Data.List (nub)
 import Data.Text qualified as T
 
 import Data.OpenApi (
@@ -17,20 +18,22 @@ import Data.OpenApi (
     PathItem,
     Referenced (Inline),
     Response (_responseContent),
-    Responses (_responsesResponses),
+    Responses (_responsesDefault, _responsesResponses),
     _infoTitle,
     _pathItemGet,
+    _pathItemHead,
     _pathItemPut,
  )
-import Network.HTTP.Types.Method (StdMethod (GET, PUT), renderStdMethod)
+import Network.HTTP.Types.Method (StdMethod (GET, HEAD, PUT), renderStdMethod)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route (npmRoutes)
+import Ecluse.Core.Server.Contract (ResponseDoc (responseStatus))
 import Ecluse.Core.Server.Route (matchRoute)
-import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod))
+import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod, rsOutcomes))
 import Ecluse.Manifest (
     buildOpenApi,
     canonicalManifestSource,
@@ -84,6 +87,11 @@ spec = do
             for_ npmSpecs $ \rs ->
                 (lookupPath rs >>= operationForMethod (rsMethod rs)) `shouldSatisfy` isJust
 
+        it "each operation has one document per response key" $
+            for_ npmSpecs $ \rs -> do
+                let keys = map responseStatus (rsOutcomes rs)
+                keys `shouldBe` nub keys
+
         it "the manifest's path keys are exactly the rendered route templates" $
             sort (InsOrd.keys (_openApiPaths doc))
                 `shouldBe` sort (ordNub (map renderedKey npmSpecs))
@@ -99,10 +107,19 @@ spec = do
         it "the deny-by-default catch-all carries 404" $
             (statusCodes <$> getOp "/npm/{unsupportedPath}") `shouldBe` Just [404]
         it "the packument GET documents the gate statuses" $
-            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 403, 404, 500, 502, 503]
-        it "the tarball GET serves opaque octet-stream on 200" $
-            (okMediaTypes <$> getOp "/npm/{package}/-/{filename}")
-                `shouldBe` Just ["application/octet-stream"]
+            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 304, 401, 403, 500, 502, 503]
+        it "the derived packument HEAD documents the same statuses with no bodies" $
+            case headOp "/npm/{package}" of
+                Nothing -> expectationFailure "packument HEAD was not rendered"
+                Just op -> do
+                    statusCodes op `shouldBe` [200, 304, 401, 403, 500, 502, 503]
+                    responsesAreBodiless op `shouldBe` True
+        it "the tarball GET honestly documents its transparent upstream relay" $
+            (defaultMediaTypes <$> getOp "/npm/{package}/-/{filename}")
+                `shouldBe` Just ["*/*"]
+        it "the publish PUT honestly documents arbitrary JSON-labelled target replies" $
+            (defaultMediaTypes <$> putOp "/npm/{package}")
+                `shouldBe` Just ["application/json"]
         it "operations are tagged by ecosystem (npm)" $
             (InsOrdSet.member "npm" . _operationTags <$> getOp "/npm/{package}") `shouldBe` Just True
   where
@@ -111,6 +128,12 @@ spec = do
 
     getOp :: FilePath -> Maybe Operation
     getOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemGet
+
+    headOp :: FilePath -> Maybe Operation
+    headOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemHead
+
+    putOp :: FilePath -> Maybe Operation
+    putOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemPut
 
     -- The npm mount's declarative route grammar, resolved through the same adapter
     -- registry the composition root mounts and the manifest renders.
@@ -127,14 +150,26 @@ spec = do
     operationForMethod :: StdMethod -> PathItem -> Maybe Operation
     operationForMethod = \case
         GET -> _pathItemGet
+        HEAD -> _pathItemHead
         PUT -> _pathItemPut
         _ -> const Nothing
 
     statusCodes :: Operation -> [Int]
     statusCodes = sort . InsOrd.keys . _responsesResponses . _operationResponses
 
-    okMediaTypes :: Operation -> [String]
-    okMediaTypes op =
-        case InsOrd.lookup 200 (_responsesResponses (_operationResponses op)) of
-            Just (Inline resp) -> sort (map show (InsOrd.keys (_responseContent resp)))
-            _ -> []
+    defaultMediaTypes :: Operation -> [String]
+    defaultMediaTypes =
+        maybe [] responseMediaTypes . _responsesDefault . _operationResponses
+
+    responseMediaTypes :: Referenced Response -> [String]
+    responseMediaTypes = \case
+        Inline resp -> sort (map show (InsOrd.keys (_responseContent resp)))
+        _ -> []
+
+    responsesAreBodiless :: Operation -> Bool
+    responsesAreBodiless op =
+        all (null . responseMediaTypes) exact
+            && maybe True (null . responseMediaTypes) (_responsesDefault responses)
+      where
+        responses = _operationResponses op
+        exact = InsOrd.elems (_responsesResponses responses)

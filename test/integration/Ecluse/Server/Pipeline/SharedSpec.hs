@@ -19,7 +19,7 @@ import UnliftIO.Exception (impureThrow, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Registry.Npm.Route (npmMountError, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
@@ -267,7 +267,6 @@ captureBreachLog privateBody = do
                             , bindingRouter = npmRouter
                             , bindingPackumentDeps = withLimits tightLimits baseDeps
                             , bindingPublishDeps = Nothing
-                            , bindingError = npmMountError
                             }
                         ]
             captureStdout $ do
@@ -304,12 +303,12 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
 
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
-    it "answers a bottoming assembly with the mount-shaped neutral 500, never a torn session" $ do
+    it "answers a bottoming assembly with the route's declared neutral 500, never a torn session" $ do
         -- Both origins serve happily; the assembly hook then bottoms when the
         -- render forces it -- an invariant break escaping the handler pre-commit.
         -- The perimeter must answer it: the session survives (an unanswered
         -- escape would abort it), the status is the neutral 500, and the body is
-        -- the mount's own error shape carrying no fault detail.
+        -- the route's own error shape carrying no fault detail.
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue

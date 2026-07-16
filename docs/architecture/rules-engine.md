@@ -329,9 +329,8 @@ When a request is denied (no allow rule matched, or a deny rule fired):
 
 - HTTP status is decided by the agnostic serve layer (403 for policy denials; see
   [Web Layer → Error model](web-layer.md#error-model)).
-- The response body shape is the mount's: its error renderer shapes the bytes in the ecosystem's
-  surface (see [Multi-ecosystem mounts](web-layer.md#multi-ecosystem-mounts)), so the agnostic layer
-  holds no body shape of its own. For npm the renderer
+- The response body shape is the ecosystem's: the route contract supplies the typed response
+  constructor and codec, so the agnostic pipeline holds no body shape of its own. For npm the codec
   (`Ecluse.Core.Registry.Npm.Serve`) emits the npm error object:
   ```json
   {

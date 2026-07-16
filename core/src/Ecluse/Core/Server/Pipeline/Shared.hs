@@ -5,18 +5,11 @@
 {- | Shared utilities for the data-plane handler modules.
 
 Common combinators used across the packument, tarball, and publish handlers: edge
-authentication, the JSON response for a served document, the mount's error-body rendering
-(through its 'MountError'), and the shared serve rejection values for integrity-floor
-enforcement.
+authentication and the shared serve rejection values for integrity-floor enforcement.
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
     edgeTokenMatches,
-    edgeUnauthorised,
-    serveOverloaded,
-    denial,
     forwardedToken,
-    jsonResponse,
-    bodiless,
     integrityMissing,
     integrityBelowFloor,
     trustedIntegrityMissing,
@@ -25,17 +18,14 @@ module Ecluse.Core.Server.Pipeline.Shared (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status503)
-import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
+import Network.HTTP.Types (HeaderName, hAuthorization)
+import Network.Wai (Request, requestHeaders)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Server.Context (MountError (renderMountError))
 import Ecluse.Core.Server.Response (
-    HelpMessage,
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
     ServeDecision (Reject),
-    appendHelp,
  )
 
 hRetryAfter :: HeaderName
@@ -58,27 +48,6 @@ edgeTokenMatches expected forwarded = case expected of
     Nothing -> True
     Just want -> forwarded == Just want
 
-{- | An in-mount error response, shaped through the mount's 'MountError': the given
-status and extra headers, and the human-facing reason with the operator help message (if
-any) appended. This is how every data-plane handler renders a denial or unavailability,
-so the body shape is the ecosystem's (npm's @{"error": …}@) and single-sourced with the
-routes' declared outcome codecs.
--}
-denial :: MountError -> Status -> [Header] -> Maybe HelpMessage -> Text -> Response
-denial err status extra help message =
-    renderMountError err status extra (appendHelp help message)
-
--- A @401@ for a request that failed edge authentication, before any upstream fetch.
-edgeUnauthorised :: MountError -> Response
-edgeUnauthorised err = denial err status401 [] Nothing "authentication required"
-
-{- | An admission refusal: the request found the waiting room full, or waited out its slot
-budget ("Ecluse.Core.Server.Admission"). The retry hint is deliberately short: capacity,
-unlike a policy denial, can clear as soon as one in-flight metadata operation completes.
--}
-serveOverloaded :: MountError -> Response
-serveOverloaded err = denial err status503 [(hRetryAfter, "1")] Nothing "server is busy; retry later"
-
 {- The client's forwarded bearer credential, recovered from the request's
 @Authorization: Bearer …@ header. 'Nothing' when no bearer credential is present;
 the recovered 'Secret' is what is forwarded to the private upstream and compared
@@ -93,18 +62,6 @@ forwardedToken request = do
     let token = T.dropWhile (== ' ') rest
     guard (not (T.null token))
     pure (mkSecret token)
-
--- A JSON response with the given status, extra headers, and body. Used for the
--- served packument document itself, which is npm JSON.
-jsonResponse :: Status -> ResponseHeaders -> LByteString -> Response
-jsonResponse status extra =
-    responseLBS status ((hContentType, "application/json") : extra)
-
--- Strip a response's body while keeping its status and headers -- the bodiless form a
--- HEAD reply takes on every branch (HTTP semantics: a HEAD carries no message body).
--- The headers a GET would carry (notably any relayed @Content-Length@) are preserved.
-bodiless :: Response -> Response
-bodiless response = responseLBS (responseStatus response) (responseHeaders response) ""
 
 {- A __public__ version refused by the integrity-presence admission policy: its selected
 artifact carries no integrity digest of any kind, so it cannot be tied to a

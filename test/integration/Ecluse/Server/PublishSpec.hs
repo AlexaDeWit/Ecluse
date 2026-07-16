@@ -30,7 +30,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Route (npmMountError, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
@@ -121,7 +121,6 @@ proxyWith publishDeps = do
                     , bindingRouter = npmRouter
                     , bindingPackumentDeps = inertPackumentDeps
                     , bindingPublishDeps = publishDeps
-                    , bindingError = npmMountError
                     }
                 ]
     pure (application cfg env)

@@ -8,8 +8,9 @@
 {- | npm's route table: the list of routes an npm mount serves.
 
 Each entry is one 'Ecluse.Core.Server.Route.Route' record, carrying its method condition,
-its path template, what to /do/ when it matches, its prose, and the closed set of
-'Ecluse.Core.Server.Contract.Outcome's it can emit. 'npmRouter' folds the list into the
+its path template, what to /do/ when it matches, its prose, and the
+'Ecluse.Core.Server.Contract.ResponseContract' that admits every response it can emit.
+'npmRouter' folds the list into the
 mount's router (first match wins; no match is the deny-by-default @404@) and 'npmRouteSpecs'
 projects the same list for the capability manifest, so the routed surface, the emitted
 responses, and the documented ones are all readings of one declaration.
@@ -44,10 +45,17 @@ agnostic web layer (see @docs\/architecture\/web-layer.md@); this table only eve
 npm-native request.
 -}
 module Ecluse.Core.Registry.Npm.Route (
-    -- * The mount's router and error surface
+    -- * The mount's router and fallback action
     npmRouter,
     npmNotFound,
-    npmMountError,
+
+    -- * Route-scoped pipeline contracts (exported for direct pipeline specs)
+    npmPackumentContract,
+    npmPackumentReplies,
+    npmTarballContract,
+    npmTarballReplies,
+    npmPublishContract,
+    npmPublishReplies,
 
     -- * The table, as data
     npmRoutes,
@@ -62,37 +70,54 @@ import Autodocodec (JSONCodec, object, pureCodec)
 import Data.Text qualified as T
 import Network.HTTP.Types (
     Method,
-    Status,
+    hContentType,
     methodHead,
     status200,
-    status201,
+    status304,
+    status401,
     status403,
     status404,
-    status405,
     status500,
     status501,
     status502,
     status503,
  )
-import Network.HTTP.Types.Method (StdMethod (GET))
+import Network.HTTP.Types.Method (StdMethod (GET, HEAD))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Registry.Npm.Serve (NpmError (NpmError), npmError, npmErrorCodec)
-import Ecluse.Core.Server.Context (MountError (MountError), MountRouter, RouteAction (AnswerLocally, RunPipeline))
+import Ecluse.Core.Server.Context (
+    MountRouter,
+    ResponseAction (AnswerLocally, RunPipeline),
+    RouteAction (RouteAction),
+ )
 import Ecluse.Core.Server.Contract (
-    Answer,
     BodySchema (SchemaDocumented),
-    Outcome (Outcome),
-    OutcomeBody (DocumentedOutcome, EmptyOutcome, JsonOutcome, OpaqueOutcome),
+    PassthroughBody (PassthroughBytes, PassthroughEmpty, PassthroughStream),
+    PassthroughResponse,
     RequestSpec (RequestSpec),
-    SomeOutcome (SomeOutcome),
-    answerWith,
+    ResponseChoice (FirstResponse, SecondResponse),
+    ResponseContract,
+    ResponseValue,
+    VariableResponse,
+    bodilessContract,
+    chooseContract,
+    documentedJsonContract,
+    emptyContract,
     encodeBody,
+    jsonContract,
+    passthroughContract,
+    passthroughResponse,
+    responseDocs,
+    responseValue,
+    variableOpaqueContract,
+    variableResponse,
  )
 import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
-import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
-import Ecluse.Core.Server.Pipeline.Shared (jsonResponse)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
+import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
+import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MethodMatch (MethodPut, MethodRead),
@@ -101,7 +126,7 @@ import Ecluse.Core.Server.Route (
     RouteName (RouteName),
     routerOf,
  )
-import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Param), RouteSpec (RouteSpec), specOf)
+import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Param), RouteSpec (RouteSpec), specsOf)
 import Ecluse.Core.Version (Version, mkVersion)
 
 {- | npm's mount router: the route table folded into the whole routing decision. The
@@ -111,20 +136,14 @@ claims is the deny-by-default @404@ ('npmNotFound') in npm's own error surface.
 npmRouter :: MountRouter
 npmRouter = routerOf npmNotFound npmRoutes
 
-{- | The deny-by-default @404@ 'Answer' for a path no route claims: npm's
-@{"error": "not found"}@, answered through the declared @unsupported@ outcome so the
-emitted body is the documented one.
+{- | The deny-by-default @404@ action for a path no route claims. Its local value and
+manifest entry are two interpretations of 'unsupportedContract'.
 -}
-npmNotFound :: Answer
-npmNotFound = answerWith [] unsupported404 (NpmError "not found")
-
-{- | npm's renderer for the infrastructure error responses no declared outcome shapes: the
-request perimeter's neutral @500@ on an escaped fault. It emits the same
-'Ecluse.Core.Registry.Npm.Serve.NpmError' body as the routes' outcomes, so even these
-share the one shape.
--}
-npmMountError :: MountError
-npmMountError = MountError (\status extra message -> jsonResponse status extra (encodeBody npmErrorCodec (NpmError message)))
+npmNotFound :: RouteAction
+npmNotFound =
+    RouteAction
+        unsupportedContract
+        (AnswerLocally (responseValue [] (NpmError "not found")))
 
 {- | npm's routes, in matching order: one named value each, aggregated here. The
 __structure__ of each is in its own definition; the security-critical __leaf__ parsing
@@ -147,7 +166,7 @@ pingRoute =
         "Answered locally with `200` and an empty object; `npm ping` checks the endpoint it talks \
         \to is up, so there is no reason to round-trip upstream."
         Nothing
-        [emptyObjectOutcome status200 "An empty object."]
+        pingContract
 
 -- @GET \/-\/v1\/search@: a documented @501@ boundary; search is not proxied.
 searchRoute :: Route NpmCap
@@ -161,7 +180,7 @@ searchRoute =
         "Search is a first-class documented boundary: a discovery convenience, not an install path, \
         \so Écluse returns `501` and points to the public registry's website."
         Nothing
-        [errorOutcome status501 "Not implemented: search is not supported."]
+        searchContract
 
 -- @GET \/{package}\/-\/{filename}@: a package artifact, streamed.
 tarballRoute :: Route NpmCap
@@ -173,14 +192,10 @@ tarballRoute =
         buildTarball
         "Stream a package artifact (tarball)"
         "The artifact bytes are streamed verbatim with bounded memory; the client verifies the bytes \
-        \against the packument's preserved integrity digest."
+        \against the packument's preserved integrity digest. Upstream statuses, headers, and media \
+        \types are relayed transparently; locally generated refusals use npm's JSON error shape."
         Nothing
-        [ opaqueOutcome status200 "The artifact bytes." octetStream
-        , errorOutcome status403 "Refused by policy, or by admission (a missing or below-floor integrity digest)."
-        , errorOutcome status404 "The upstream did not have the artifact (a forwarded miss)."
-        , errorOutcome status500 "A permanent or internal inability to serve."
-        , errorOutcome status503 "A transient upstream condition; retry (see `Retry-After`)."
-        ]
+        npmTarballContract
 
 -- @GET \/{package}@: the merged, gated packument.
 packumentRoute :: Route NpmCap
@@ -195,13 +210,7 @@ packumentRoute =
         \each `dist.tarball` rewritten to resolve back through this proxy. With no surviving version \
         \the status follows the most recoverable cause."
         Nothing
-        [ documentedOutcome status200 "The synthesized packument." synthesizedPackumentSchema
-        , errorOutcome status403 "Every version was withheld by policy or admission, and none survived the merge."
-        , errorOutcome status404 "No such package upstream (a forwarded miss)."
-        , errorOutcome status500 "A permanent or internal inability to decide."
-        , errorOutcome status502 "A responding upstream returned a packument for a different package."
-        , errorOutcome status503 "A transient upstream or advisory condition; retry (see `Retry-After`)."
-        ]
+        npmPackumentContract
 
 -- @PUT \/{package}@: a first-party publish, relayed after the anti-shadowing guard.
 publishRoute :: Route NpmCap
@@ -214,16 +223,9 @@ publishRoute =
         "Publish a first-party package"
         "Relays the publish document to the configured publication target after the anti-shadowing \
         \scope guard. Écluse keys the write on the route's package name, never the document's \
-        \self-reported name."
+        \self-reported name. The target's status and JSON-labelled bytes are relayed transparently."
         (Just publishRequest)
-        [ noBodyOutcome status201 "The publication target accepted the package (its response is relayed)."
-        , errorOutcome status403 "The package name is outside the configured publish scopes (anti-shadowing), or refused by policy."
-        , errorOutcome status405 "Publishing is not configured (no publication target)."
-        ]
-
--- The octet-stream media type an artifact is documented and served under.
-octetStream :: ByteString
-octetStream = "application/octet-stream"
+        npmPublishContract
 
 -- The named hand-authored schemas the manifest holds for the documents Écluse builds
 -- imperatively rather than round-tripping through a codec.
@@ -241,78 +243,160 @@ publishRequest =
         True
         (SchemaDocumented publishDocumentSchema)
 
--- An error outcome carrying npm's @{"error": …}@ body, documented from its codec.
-errorOutcome :: Status -> Text -> SomeOutcome
-errorOutcome status doc = SomeOutcome (Outcome status doc (JsonOutcome npmErrorCodec))
-
--- A JSON outcome whose body Écluse builds imperatively, documented by a named schema.
-documentedOutcome :: Status -> Text -> Text -> SomeOutcome
-documentedOutcome status doc schema = SomeOutcome (Outcome status doc (DocumentedOutcome schema))
-
--- An opaque (streamed) outcome of the given media type.
-opaqueOutcome :: Status -> Text -> ByteString -> SomeOutcome
-opaqueOutcome status doc media = SomeOutcome (Outcome status doc (OpaqueOutcome media))
-
--- A no-body outcome (a relayed publish acceptance).
-noBodyOutcome :: Status -> Text -> SomeOutcome
-noBodyOutcome status doc = SomeOutcome (Outcome status doc (EmptyOutcome :: OutcomeBody ()))
-
--- A @200 {}@ liveness outcome: an empty JSON object, from a codec that renders @{}@.
-emptyObjectOutcome :: Status -> Text -> SomeOutcome
-emptyObjectOutcome status doc = SomeOutcome (Outcome status doc (JsonOutcome emptyObjectCodec))
-
 -- The empty-object codec: encodes @()@ to @{}@ and documents an empty object schema.
 emptyObjectCodec :: JSONCodec ()
 emptyObjectCodec = object "EmptyObject" (pureCodec ())
 
--- The @unsupported@ outcome the deny-by-default @404@ answers through.
-unsupported404 :: Outcome NpmError
-unsupported404 = Outcome status404 "Unrecognised path; deny by default." (JsonOutcome npmErrorCodec)
+pingContract :: ResponseContract (ResponseValue ())
+pingContract = jsonContract status200 "An empty object." emptyObjectCodec
+
+searchContract :: ResponseContract (ResponseValue NpmError)
+searchContract = jsonContract status501 "Not implemented: search is not supported." npmErrorCodec
+
+unsupportedContract :: ResponseContract (ResponseValue NpmError)
+unsupportedContract = jsonContract status404 "Unrecognised path; deny by default." npmErrorCodec
+
+{- | The closed packument response sum. Every constructor is introduced by the matching
+leaf in 'npmPackumentContract'; 'npmPackumentReplies' is the only interface the pipeline
+receives for selecting one.
+-}
+type NpmPackumentResponse =
+    ResponseChoice
+        (ResponseValue LByteString)
+        ( ResponseChoice
+            (ResponseValue ())
+            ( ResponseChoice
+                (ResponseValue NpmError)
+                ( ResponseChoice
+                    (ResponseValue NpmError)
+                    ( ResponseChoice
+                        (ResponseValue NpmError)
+                        (ResponseChoice (ResponseValue NpmError) (ResponseValue NpmError))
+                    )
+                )
+            )
+        )
+
+npmPackumentContract :: ResponseContract NpmPackumentResponse
+npmPackumentContract =
+    chooseContract
+        (documentedJsonContract status200 "The synthesized packument." synthesizedPackumentSchema)
+        ( chooseContract
+            (emptyContract status304 "The client's validator matched the synthesized packument.")
+            ( chooseContract
+                (jsonContract status401 "Edge authentication failed." npmErrorCodec)
+                ( chooseContract
+                    (jsonContract status403 "Every version was withheld by policy or admission, and none survived the merge." npmErrorCodec)
+                    ( chooseContract
+                        (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
+                        ( chooseContract
+                            (jsonContract status502 "A responding upstream returned a packument for a different package." npmErrorCodec)
+                            (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
+                        )
+                    )
+                )
+            )
+        )
+
+npmPackumentReplies :: PackumentReplies NpmPackumentResponse
+npmPackumentReplies =
+    PackumentReplies
+        { packumentOk = \headers body -> FirstResponse (responseValue headers body)
+        , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
+        , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError message))))
+        , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError message)))))
+        , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError message))))))
+        , packumentBadGateway = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError message)))))))
+        , packumentUnavailable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (responseValue headers (NpmError message)))))))
+        }
+
+{- | The tarball is deliberately an open relay: any upstream status, headers, media type,
+and bytes can be forwarded. The one @default@ document is therefore more accurate than a
+closed list that the upstream can escape.
+-}
+npmTarballContract :: ResponseContract PassthroughResponse
+npmTarballContract =
+    passthroughContract
+        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status."
+
+npmTarballReplies :: TarballReplies PassthroughResponse
+npmTarballReplies =
+    TarballReplies
+        { tarballError = \status headers message ->
+            passthroughResponse
+                status
+                ((hContentType, "application/json") : headers)
+                (PassthroughBytes (encodeBody npmErrorCodec (NpmError message)))
+        , tarballStream = \status headers body -> passthroughResponse status headers (PassthroughStream body)
+        , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
+        }
+
+type NpmPublishResponse = VariableResponse LByteString
+
+npmPublishContract :: ResponseContract NpmPublishResponse
+npmPublishContract =
+    variableOpaqueContract
+        "application/json"
+        "The publication target's status and JSON-labelled response bytes are relayed. Local authentication, scope, configuration, transport, and internal failures use npm's JSON error body."
+
+npmPublishReplies :: PublishReplies NpmPublishResponse
+npmPublishReplies =
+    PublishReplies
+        { publishRelayed = variableResponse
+        , publishError = \status headers message ->
+            variableResponse status headers (encodeBody npmErrorCodec (NpmError message))
+        }
 
 -- A route answered locally, whatever the method and captures (the literal meta-routes).
-answering :: Answer -> Method -> [NpmCap] -> Maybe RouteAction
+answering :: response -> Method -> [NpmCap] -> Maybe (ResponseAction response)
 answering answer _method _captures = Just (AnswerLocally answer)
 
 -- @\/-\/ping@: answered locally with @200 {}@.
-pingAnswer :: Answer
-pingAnswer = answerWith [] (Outcome status200 "" (JsonOutcome emptyObjectCodec)) ()
+pingAnswer :: ResponseValue ()
+pingAnswer = responseValue [] ()
 
 -- @\/-\/v1\/search@: a @501@ pointer, in npm's error surface.
-searchAnswer :: Answer
+searchAnswer :: ResponseValue NpmError
 searchAnswer =
-    answerWith
-        []
-        (Outcome status501 "" (JsonOutcome npmErrorCodec))
-        (npmError Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
+    responseValue [] (npmError Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
 
 {- @GET \/{package}@: a bare package unit is a packument read. A @HEAD@ takes the
 head-mode handler, which runs the identical gating and merge but withholds the body. -}
-buildPackument :: Method -> [NpmCap] -> Maybe RouteAction
+buildPackument :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPackumentResponse)
 buildPackument method = \case
     [NpmPackage name]
-        | isHead method -> Just (RunPipeline (headPackument name))
-        | otherwise -> Just (RunPipeline (servePackument name))
+        | isHead method -> Just (RunPipeline perimeterFallback (headPackument npmPackumentReplies name))
+        | otherwise -> Just (RunPipeline perimeterFallback (servePackument npmPackumentReplies name))
     _ -> Nothing
+  where
+    perimeterFallback = packumentInternal npmPackumentReplies [] "internal server error"
 
 {- @PUT \/{package}@: a bare package unit under the write method is a publish. -}
-buildPublish :: Method -> [NpmCap] -> Maybe RouteAction
+buildPublish :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPublishResponse)
 buildPublish _method = \case
-    [NpmPackage name] -> Just (RunPipeline (servePublish name))
+    [NpmPackage name] ->
+        Just
+            ( RunPipeline
+                (publishError npmPublishReplies status500 [] "internal server error")
+                (servePublish npmPublishReplies name)
+            )
     _ -> Nothing
 
 {- @GET \/{package}\/-\/{filename}@: an artifact read. 'tarballCoordinate' applies the
 __cross-capture__ path-confusion check and reads the version; a mismatched name yields
 'Nothing', so the route falls through to the @404@ rather than being fabricated into a
 coordinate. A @HEAD@ takes the head-mode handler, which probes the upstream bodiless. -}
-buildTarball :: Method -> [NpmCap] -> Maybe RouteAction
+buildTarball :: Method -> [NpmCap] -> Maybe (ResponseAction PassthroughResponse)
 buildTarball method = \case
     [NpmPackage name, NpmFilename file] -> do
         (version, filename) <- tarballCoordinate name file
         pure $
             if isHead method
-                then RunPipeline (headTarball name version filename)
-                else RunPipeline (serveTarball name version filename)
+                then RunPipeline perimeterFallback (headTarball npmTarballReplies name version filename)
+                else RunPipeline perimeterFallback (serveTarball npmTarballReplies name version filename)
     _ -> Nothing
+  where
+    perimeterFallback = tarballError npmTarballReplies status500 [] "internal server error"
 
 isHead :: Method -> Bool
 isHead = (== methodHead)
@@ -416,18 +500,18 @@ tarballCoordinate name file =
             | not (T.null version) -> Just (mkVersion Npm version, Filename file)
         _ -> Nothing
 
-{- | npm's routes as data for the __capability manifest__: the 'specOf' projection of the
+{- | npm's routes as data for the __capability manifest__: the 'specsOf' projection of the
 same 'npmRoutes' the router runs, plus the synthetic deny-by-default catch-all.
 -}
 npmRouteSpecs :: NonEmpty RouteSpec
-npmRouteSpecs = unsupportedSpec :| map specOf npmRoutes
+npmRouteSpecs = unsupportedGetSpec :| (unsupportedHeadSpec : concatMap specsOf npmRoutes)
 
 {- | The synthetic spec for the deny-by-default catch-all. It is not a route (it is the
 /absence/ of a match), so it has no record in 'npmRoutes'; the manifest documents it
 explicitly as the boundary.
 -}
-unsupportedSpec :: RouteSpec
-unsupportedSpec =
+unsupportedGetSpec :: RouteSpec
+unsupportedGetSpec =
     RouteSpec
         (RouteName "unsupported")
         GET
@@ -436,7 +520,19 @@ unsupportedSpec =
         "Any request under this mount matched by none of the routes above is denied with `404` -- \
         \deny by default at the routing layer."
         Nothing
-        [SomeOutcome unsupported404]
+        (responseDocs unsupportedContract)
+
+unsupportedHeadSpec :: RouteSpec
+unsupportedHeadSpec =
+    RouteSpec
+        (RouteName "unsupported.head")
+        HEAD
+        [Param unsupportedParam]
+        "Deny by default (unsupported path)"
+        "Any HEAD request under this mount matched by none of the routes above is denied with `404` \
+        \and no response body."
+        Nothing
+        (responseDocs (bodilessContract unsupportedContract))
 
 unsupportedParam :: ParamSpec
 unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

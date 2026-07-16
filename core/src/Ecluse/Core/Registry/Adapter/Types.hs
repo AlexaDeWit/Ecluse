@@ -6,8 +6,8 @@
 ecosystem registers ('RegistryAdapter') and its four cohesive slices.
 
 A 'RegistryAdapter' captures what an ecosystem __is__ -- a static fact of the
-build, independent of anything an operator configures: how its request paths
-classify and its errors render (the serve surface), how its metadata is read and
+build, independent of anything an operator configures: how its request paths classify
+and respond (the serve surface), how its metadata is read and
 assembled, how its artifact requests are formed, and how a publish reaches a
 registry. Which ecosystems are __active__ is configuration's fact, not this
 record's: nothing here holds a URL, a credential, a limit, or a policy. Those
@@ -54,7 +54,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Server.Context (MountError, MountRouter)
+import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -73,7 +73,7 @@ data RegistryAdapter = RegistryAdapter
     foreign ecosystem unnoticed.
     -}
     , adapterServe :: AdapterServe
-    -- ^ The web-facing serve surface: the path grammar and the error renderer.
+    -- ^ The web-facing serve surface: the route grammar and response contracts.
     , adapterMetadata :: AdapterMetadata
     -- ^ The metadata capability: the read-handle constructor and the packument assembly.
     , adapterArtifact :: AdapterArtifact
@@ -108,11 +108,6 @@ data AdapterServe = AdapterServe
     patterns 'serveRouter' routes on, one per served route. The capability manifest
     ("Ecluse.Manifest") renders this rather than re-describing the path grammar, so the
     documented surface cannot drift from what is routed.
-    -}
-    , serveError :: MountError
-    {- ^ The ecosystem's renderer for /infrastructure/ error responses no declared outcome
-    shapes (the perimeter's neutral @500@, the deny-by-default @404@), built from the same
-    error codec the routes' outcomes use.
     -}
     }
 

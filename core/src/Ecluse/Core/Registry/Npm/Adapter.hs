@@ -52,7 +52,6 @@ npmAdapter =
             AdapterServe
                 { serveRouter = NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
-                , serveError = NpmRoute.npmMountError
                 }
         , adapterMetadata =
             AdapterMetadata

@@ -10,6 +10,8 @@ enforces body-name agreement between the URL path and the publish document, and
 relays the request to the upstream publication target with the publisher's credential.
 -}
 module Ecluse.Core.Server.Pipeline.Publish (
+    PublishReplies (..),
+
     -- * The first-party publish handler
     servePublish,
 ) where
@@ -21,8 +23,8 @@ import Data.ByteString.Lazy qualified as LBS
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Types (mkStatus, status403, status405, status500, status502)
-import Network.Wai (Request, Response, ResponseReceived, consumeRequestBodyStrict)
+import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502)
+import Network.Wai (Request, ResponseReceived, consumeRequestBodyStrict)
 
 import Ecluse.Core.Package (
     PackageName,
@@ -33,41 +35,52 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingError, bindingPublishDeps),
-    MountError,
+    MountBinding (bindingPublishDeps),
     PublishDeps (..),
     ServeRuntime (srPrivateManager),
     ctxMount,
     ctxRuntime,
  )
 import Ecluse.Core.Server.Pipeline.Shared
+import Ecluse.Core.Server.Response (appendHelp)
+
+{- | The route-owned ways the publish pipeline may answer. The configured target may
+return any status, so npm supplies these constructors from an explicit OpenAPI @default@
+contract whose media type remains @application/json@.
+-}
+data PublishReplies response = PublishReplies
+    { publishRelayed :: Status -> ResponseHeaders -> LByteString -> response
+    -- ^ Relay the publication target's status and bytes.
+    , publishError :: Status -> ResponseHeaders -> Text -> response
+    -- ^ Emit an ecosystem-shaped local error.
+    }
 
 servePublish ::
+    PublishReplies response ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-servePublish name request respond = do
-    renderer <- asks (bindingError . ctxMount)
+servePublish replies name request respond = do
     asks (bindingPublishDeps . ctxMount) >>= \case
-        Nothing -> liftIO (respond (publishDisabled renderer))
-        Just deps -> publishWithDeps renderer deps name request respond
+        Nothing -> liftIO (respond (publishDisabled replies))
+        Just deps -> publishWithDeps replies deps name request respond
 
 -- Serve a publish once the mount's publication target is known: the edge gate, the
 -- anti-shadowing scope guard, then the body-name agreement check (all before any write),
 -- then the relay to the publication target with the publisher's forwarded credential.
 publishWithDeps ::
-    MountError ->
+    PublishReplies response ->
     PublishDeps ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-publishWithDeps renderer deps name request respond
+publishWithDeps replies deps name request respond
     | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
-        liftIO (respond (edgeUnauthorised renderer))
+        liftIO (respond (publishError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
     | not (inPublishScope (pubScopes deps) name) =
-        liftIO (respond (outOfScope renderer deps name))
+        liftIO (respond (outOfScope replies deps name))
     | otherwise = do
         rt <- asks ctxRuntime
         -- The body is bounded by the client→proxy request-size cap (the size-limit
@@ -81,7 +94,7 @@ publishWithDeps renderer deps name request respond
         -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
         -- URL-path name, so the identity authorised is provably the identity written.
         case bodyNameDisagreement (pubCanonicaliseName deps) name body of
-            Just declared -> liftIO (respond (bodyNameMismatch renderer deps name declared))
+            Just declared -> liftIO (respond (bodyNameMismatch replies deps name declared))
             -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
             -- publish builder ('relayPublishDocument') puts it on the wire as a strict
             -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
@@ -91,7 +104,7 @@ publishWithDeps renderer deps name request respond
                 -- 'PublishRelayFault' value, so the render below is a total
                 -- match -- nothing caught, and residue is the perimeter's.
                 outcome <- liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body))
-                liftIO (respond (renderRelay renderer deps outcome))
+                liftIO (respond (renderRelay replies deps outcome))
   where
     -- The publisher's bearer, scanned out of the headers once: the edge gate
     -- compares it and the relay forwards it (falling back to the static token).
@@ -113,32 +126,32 @@ shape, a @409@, a @403@ the registry's own authorisation produced); a @502@ when
 target's answer never arrived whole (a transport fault, or a response past the bound);
 a @500@ when its URL is unformable (misconfiguration). -}
 renderRelay ::
-    MountError ->
+    PublishReplies response ->
     PublishDeps ->
     Either PublishRelayFault PublishRelayResponse ->
-    Response
-renderRelay renderer deps = \case
+    response
+renderRelay replies deps = \case
     Right (PublishRelayResponse code relayed) ->
-        jsonResponse (mkStatus code "") [] relayed
+        publishRelayed replies (mkStatus code "") [] relayed
     Left (RelayUrlUnformable _urlErr) ->
-        denial renderer status500 [] (pubHelp deps) "the publication target URL is misconfigured"
+        publishError replies status500 [] (appendHelp (pubHelp deps) "the publication target URL is misconfigured")
     Left (RelayTransport _fault) ->
-        denial renderer status502 [] (pubHelp deps) "the publication target could not be reached"
+        publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
     Left (RelayBoundExceeded _limit) ->
-        denial renderer status502 [] (pubHelp deps) "the publication target could not be reached"
+        publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
 
 -- A @405@ for a publish on a mount with no publication target configured: the
 -- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@
 -- header advertises the read methods the package route does serve.
-publishDisabled :: MountError -> Response
-publishDisabled renderer =
-    denial renderer status405 [("Allow", "GET, HEAD")] Nothing "publishing is not enabled on this proxy (no publication target is configured)"
+publishDisabled :: PublishReplies response -> response
+publishDisabled replies =
+    publishError replies status405 [("Allow", "GET, HEAD")] "publishing is not enabled on this proxy (no publication target is configured)"
 
 -- A @403@ for a publish whose name is outside the configured publish-scope
 -- allow-list -- the anti-shadowing guard, refused before any upstream write.
-outOfScope :: MountError -> PublishDeps -> PackageName -> Response
-outOfScope renderer deps name =
-    denial renderer status403 [] (pubHelp deps) message
+outOfScope :: PublishReplies response -> PublishDeps -> PackageName -> response
+outOfScope replies deps name =
+    publishError replies status403 [] (appendHelp (pubHelp deps) message)
   where
     message :: Text
     message =
@@ -151,9 +164,9 @@ outOfScope renderer deps name =
 -- URL-path name. The body-name agreement leg of the anti-shadowing guard (issue #391),
 -- refused before any upstream write so the identity the guard authorises is the
 -- identity written.
-bodyNameMismatch :: MountError -> PublishDeps -> PackageName -> Text -> Response
-bodyNameMismatch renderer deps name declared =
-    denial renderer status403 [] (pubHelp deps) message
+bodyNameMismatch :: PublishReplies response -> PublishDeps -> PackageName -> Text -> response
+bodyNameMismatch replies deps name declared =
+    publishError replies status403 [] (appendHelp (pubHelp deps) message)
   where
     message :: Text
     message =

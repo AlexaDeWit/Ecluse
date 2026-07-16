@@ -19,9 +19,10 @@ how each route is handled:
   filters, and re-serialises it; see
   [Packument merge](registry-model.md#packument-merge-across-upstreams)) are documents
   Écluse authors, so their schemas are described in full.
-- Opaque pass-through is described, not re-specified: tarball/artifact bytes stream verbatim
-  (see [Streaming](web-layer.md#streaming-and-resource-lifetime)); the manifest gives the
-  operation and media type and links to the upstream protocol.
+- Opaque pass-through is described, not re-specified: tarball/artifact responses stream verbatim
+  (see [Streaming](web-layer.md#streaming-and-resource-lifetime)). Their status, media type, and
+  body are upstream-controlled, so the operation carries an explicit OpenAPI `default` response
+  with wildcard binary content rather than a false finite status set.
 - Unsupported routes are a documented boundary: `GET /-/v1/search` → `501` is stated
   explicitly, so a reader learns the limit from the manifest, not from an error response.
 
@@ -34,21 +35,22 @@ The manifest is derived, not hand-written, and it holds **no per-route knowledge
 
 Each ecosystem's adapter declares its routes as a list of records
 ([above](web-layer.md#the-route-table-belongs-to-the-ecosystem)). One record carries a route's
-path template, what serving it *does*, **and its documentation**: its summary, its status set,
-and the shape of each body. The manifest walks the same records the router runs
-(`serveRoutes`, their erased `RouteSpec` projection) and renders whatever it is handed.
+path template, what serving it *does*, and an abstract `ResponseContract`. The contract is indexed
+by the response value the handler must produce and owns both interpretations of that value: how it
+becomes a WAI response and the `ResponseDoc` entries the manifest renders. The manifest walks the
+same records the router runs (`serveRoutes`, their erased `RouteSpec` projection).
 
-There is nothing here to keep in step with the routes, so there is nothing to drift. A route
-cannot be declared without its documentation, because the record will not construct without it.
-That is a stronger guarantee than a total map over a route sum, which stays exhaustive only for
-as long as someone keeps it so.
+The `ResponseContract` constructor is private. Exact response leaves bind one status, body shape,
+and renderer together; `chooseContract` combines leaves into the closed response sum a handler can
+produce. Dispatch existentially packages that contract with its handler and gives the handler only
+the corresponding typed responder. A route therefore cannot be declared without response
+documentation, and its handler cannot send an unrestricted WAI response around that documentation.
 
-The documentation types in the core are deliberately **OpenAPI-free** (`RouteDoc`, and a closed
-`BodyDoc` vocabulary of the body shapes Écluse emits). Naming the body a route carries is a core
-concern; knowing what a JSON Schema is is not, and the `openapi3` dependency tree must never
-reach the running proxy. So the core says *which* body, and this generator's interpreter maps
-that to a schema, total over `BodyDoc` in the other direction: a new body shape cannot go
-unrendered. Adding PyPI is adding a mount, not describing a protocol.
+The contract types in the core are deliberately **OpenAPI-free** (`ResponseDoc` and the closed
+`BodySchema` vocabulary). Naming the body a response carries is a core concern; knowing what a
+JSON Schema is is not, and the `openapi3` dependency tree must never reach the running proxy. The
+manifest interpreter is total over `BodySchema`, so a new body shape cannot go unrendered. Adding
+PyPI is adding a mount, not describing a protocol.
 
 In the rendered docs, tags are ecosystems: Redoc groups operations by mount, so the document
 reads as "one server, these protocols". A route's `operationId` is its ecosystem-local name
@@ -92,14 +94,18 @@ proof that the filtered document is coherent.
 
 ## Contract drift controls
 
-The manifest is generated directly from the code, so it moves only when the code moves, a
-change a reviewer sees in the diff. Its paths *and* its per-route documentation are both
-projections of the route records the router runs
-([above](#source-of-truth-the-route-table--mounts)), so a route cannot be mounted without a
-documented operation: the record will not construct without one. Its owned schemas are the
-`autodocodec` codecs that also back the `aeson` instances, so documented schema and wire format
-cannot diverge. The manifest's unit tests (`ManifestSpec`) hold this together: the render stays
-well-formed, and the documented paths and methods are checked against the live routing.
+The manifest is generated directly from the code, so it moves only when the code moves. Paths and
+methods are projections of the route records the router runs. Status, media type, and body are
+projections of the same `ResponseContract` that is the handler's response capability. Exact routes
+use a closed response sum; transparent relays use an explicit OpenAPI `default`, accurately keeping
+the contract open. `HEAD` is derived from the `GET` contract in both interpreters, preserving status
+and headers while removing every documented and emitted body. A route's pre-commit `500` fallback is
+also a value admitted by its contract.
+
+Owned JSON leaves encode through the same `autodocodec` codec the manifest turns into a schema. The
+manifest tests keep the projection honest: every route method is rendered, each operation has one
+document per response key, exact packument statuses are asserted, `HEAD` bodies are absent, and the
+tarball and publish relays retain their explicit defaults.
 
 > The synthesised packument is the schema exception. It is an *open* schema
 > (`additionalProperties: true`), so "drift" there means "did we drop a field we promised to
@@ -107,16 +113,11 @@ well-formed, and the documented paths and methods are checked against the live r
 > [Packument merge](registry-model.md#packument-merge-across-upstreams)), not a schema
 > validator.
 
-The route table has a live guard: the manifest's rendered paths are held against the same route
-records the router runs, so a change to a path template or a route's method fails unless the
-manifest moves with it. Two gaps remain.
-The documented status codes and response-body shapes are not held against the running server
-(the serve handlers choose status imperatively, with no shared enumeration), so those stay
-documentation the manifest owns rather than a checked correspondence. And nothing yet answers
-the question worth gating for an external consumer: is a change breaking or safe-additive? That
-needs a semantic OpenAPI differ (oasdiff-class). Écluse has no external consumers reading this
-manifest, so the differ waits until a consumer needs it, and `openapi.json` stays derived build
-data with no stored golden to diff against.
+Two deliberately separate checks remain. The synthesised packument's hand-authored schema still
+needs its lossless projection properties because no codec constructs that document. And nothing yet
+answers whether a manifest change is breaking or safe-additive; that needs a semantic OpenAPI differ
+(oasdiff-class) once an external consumer depends on the manifest. `openapi.json` remains derived
+build data with no stored golden in the meantime.
 
 ## Config as JSON Schema (a free corollary)
 

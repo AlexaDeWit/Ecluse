@@ -138,7 +138,7 @@ private tarball miss). The default is computed at boot as `max(8, 10 x capabilit
 multiplier is empirical (a slot is held across every upstream leg plus GC and scheduling delay,
 so the load bench's dose-response levelled around 10 per capability, not the ~4 a naive
 one-round-trip model predicts). Set the key only to override it. Work beyond the cap is shed
-immediately with a mount-shaped `503` and `Retry-After: 1`; there is no application queue whose
+immediately with the route's declared `503` and `Retry-After: 1`; there is no application queue whose
 memory or latency grows with client concurrency. Health probes, locally answered routes, and
 trusted private tarball hits bypass the bound (the hit streams with constant-memory
 backpressure); admission protects resident metadata structures, not download count.

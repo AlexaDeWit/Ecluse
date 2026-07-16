@@ -3,43 +3,62 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ExistentialQuantification #-}
 
-{- | The response contract algebra: the one description of what a route answers with,
-folded three ways.
+{- | The response-contract algebra: one value interpreted as both wire behaviour and
+capability-manifest documentation.
 
-A route declares the closed set of 'Outcome's it can emit; each outcome pairs a status
-and a documentation string with a 'BodySchema', the structural shape of its body. The
-handler answers only by building an 'Answer' /through/ a declared outcome, so the set of
-statuses and bodies a route can emit is, by construction, the set the capability manifest
-documents. There is no second enumeration to keep in step.
+A 'ResponseContract' is indexed by the value a handler must produce. Its constructor is
+private: callers can only build one from the leaf contracts in this module and combine
+those leaves with 'chooseContract'. Each leaf owns both its 'ResponseDoc' and the function
+that renders its payload, so those two interpretations cannot be supplied separately.
 
-The body vocabulary is __structural__, not a list of named documents: a body is nothing,
-opaque relayed bytes (an artifact stream, documented as a media type), or a JSON document
-whose @autodocodec@ 'JSONCodec' is the single source of truth. Core encodes the wire form
-from that codec; the manifest tier renders the /same/ codec to an OpenAPI schema (via
-@autodocodec-openapi3@), so the served body and its documented schema cannot diverge. The
-codec never carries @openapi3@ into the proxy: @autodocodec@ alone has no such dependency.
+The route layer existentially packages a contract with a handler producing that
+contract's response type. The runtime gives the handler only the corresponding typed
+responder; a handler therefore cannot reach WAI with a status or body outside its route's
+contract. 'bodilessContract' is the same interpretation for @HEAD@: statuses and headers
+are preserved while every documented and emitted body is removed.
+
+Owned JSON bodies use the same @autodocodec@ 'JSONCodec' for encoding here and schema
+generation in the manifest tier. An intentionally transparent upstream relay is different:
+its status, media type, and bytes are not Écluse's to constrain, so
+'passthroughContract' documents an explicit OpenAPI @default@ response instead of claiming
+a false closed set.
 -}
 module Ecluse.Core.Server.Contract (
-    -- * The documented body shape
+    -- * Documented body shapes
     BodySchema (..),
-
-    -- * A request body a route accepts
     RequestSpec (..),
+    ResponseStatus (..),
+    ResponseDoc (..),
 
-    -- * A declared, emittable response
-    Outcome (..),
-    OutcomeBody (..),
-    SomeOutcome (..),
+    -- * A response contract
+    ResponseContract,
+    responseDocs,
+    responseToWai,
+    bodilessContract,
 
-    -- * The concrete answer a handler emits
-    Answer (..),
-    Body (..),
-    answerWith,
+    -- * Exact response leaves
+    ResponseValue,
+    responseValue,
+    jsonContract,
+    documentedJsonContract,
+    emptyContract,
+    OpaquePayload (..),
+    opaqueContract,
 
-    -- * The last leg: an answer as a WAI response
-    answerToResponse,
+    -- * Open response leaves
+    VariableResponse,
+    variableResponse,
+    variableOpaqueContract,
+    PassthroughBody (..),
+    PassthroughResponse,
+    passthroughResponse,
+    passthroughContract,
 
-    -- * Rendering a JSON body to bytes
+    -- * Combining closed alternatives
+    ResponseChoice (..),
+    chooseContract,
+
+    -- * Rendering JSON through a codec
     encodeBody,
 ) where
 
@@ -48,26 +67,27 @@ import Data.Aeson qualified as Aeson
 import Network.HTTP.Types (Header, Status, hContentType)
 import Network.Wai (Response, StreamingBody, responseLBS, responseStream)
 
-{- | The structural shape of a response body, for documentation. A closed, universal
-vocabulary: every ecosystem's bodies are one of these three, so this never grows with
-adapters.
+{- | The structural shape of a response body, kept OpenAPI-free in the core.
+
+'SchemaPassthrough' is deliberately broad: it means the operation transparently relays
+an upstream response whose media type and body shape are outside Écluse's control.
 -}
 data BodySchema
     = -- | No body at all.
       SchemaEmpty
-    | -- | Opaque relayed\/streamed bytes (an artifact), documented only by its media type.
+    | -- | Opaque bytes under one known media type.
       SchemaOpaque ByteString
-    | -- | A JSON document whose codec is the source of truth for wire and schema alike.
+    | -- | JSON encoded from the same codec the manifest renders as a schema.
       forall a. SchemaJson (JSONCodec a)
-    | {- | A JSON document Écluse builds imperatively rather than round-tripping through a
-      type (the merged packument, the publish document), documented by a hand-authored
-      schema the manifest holds under this name and bound to the emitted bytes by a
-      validation check.
-      -}
+    | -- | An imperatively assembled JSON document with a named manifest schema.
       SchemaDocumented Text
+    | -- | An upstream-controlled body under an upstream-controlled media type.
+      SchemaPassthrough
 
-{- | A request body a route accepts: how it is described, whether it is required, and its
-body shape.
+{- | A request body a route accepts: its prose, requiredness, and documented shape.
+
+Request decoding is not part of the response algebra. A hand-authored request schema
+still owes the separate conformance check described in the API-surface architecture.
 -}
 data RequestSpec = RequestSpec
     { reqDescription :: Text
@@ -78,86 +98,210 @@ data RequestSpec = RequestSpec
     -- ^ The shape of the accepted body.
     }
 
-{- | A declared response outcome, typed by its body payload. Its 'ocStatus' and
-'ocSchema' are what the manifest documents; the same value is how the handler answers
-('answerWith'), so a route cannot emit a status or body it does not declare.
+-- | Whether a documented response has one exact status or covers every other status.
+data ResponseStatus
+    = ExactResponse Status
+    | DefaultResponse
+    deriving stock (Eq, Show)
+
+{- | One response entry for the capability manifest. This is a projection of a
+'ResponseContract' leaf, never independently supplied by a route.
 -}
-data Outcome a = Outcome
-    { ocStatus :: Status
-    -- ^ The HTTP status this outcome answers with.
-    , ocDoc :: Text
-    -- ^ What this outcome means, in the route's own terms (the OpenAPI response description).
-    , ocBody :: OutcomeBody a
-    -- ^ The body this outcome carries.
+data ResponseDoc = ResponseDoc
+    { responseStatus :: ResponseStatus
+    -- ^ The exact HTTP status, or OpenAPI's @default@ response.
+    , responseDescription :: Text
+    -- ^ What the response means in the route's terms.
+    , responseBodySchema :: BodySchema
+    -- ^ The body shape this response carries.
     }
 
-{- | How an outcome's body is produced: a typed codec (the payload is a value the handler
-supplies), an opaque stream (the handler supplies the bytes\/source), or nothing.
--}
-data OutcomeBody a
-    = -- | A JSON body: the handler supplies a value of type @a@, encoded through the codec.
-      JsonOutcome (JSONCodec a)
-    | -- | A JSON body Écluse builds imperatively, documented by a named hand-authored schema.
-      DocumentedOutcome Text
-    | -- | An opaque body of the given media type; @a@ is unconstrained (the payload is bytes).
-      OpaqueOutcome ByteString
-    | -- | No body.
-      EmptyOutcome
+{- | A response contract indexed by the only value its handler may answer with.
 
-{- | A route's declared outcome with its body payload type erased, so a route can carry a
-heterogeneous @['SomeOutcome']@ for the manifest to fold.
+The constructor is private. The list and renderer can therefore only be extended together
+through this module's leaves and 'chooseContract'.
 -}
-data SomeOutcome = forall a. SomeOutcome (Outcome a)
-
-{- | A concrete response a handler emits: a status, headers, and a body. Built only
-through a declared 'Outcome' (see 'answerWith'), so what the server emits is what the
-manifest documents.
--}
-data Answer = Answer
-    { answerStatus :: Status
-    , answerHeaders :: [Header]
-    , answerBody :: Body
+data ResponseContract response = ResponseContract
+    { contractDocs :: [ResponseDoc]
+    , contractRender :: response -> Answer
     }
 
-{- | The concrete body of an 'Answer': encoded JSON bytes, buffered opaque bytes, a
-streamed opaque body, or nothing.
--}
-data Body
-    = -- | An already-encoded JSON body, tagged @application\/json@.
-      JsonBody LByteString
-    | -- | Buffered opaque bytes of the given media type.
-      OpaqueBody ByteString LByteString
-    | -- | A streamed opaque body of the given media type (an artifact relayed from upstream).
-      StreamBody ByteString StreamingBody
-    | -- | No body.
-      NoBody
+-- | The manifest projection of a response contract.
+responseDocs :: ResponseContract response -> [ResponseDoc]
+responseDocs = contractDocs
 
-{- | Answer through a declared JSON outcome: encode the payload with the outcome's codec.
-The payload type is tied to the outcome's codec, so the emitted body is the documented
-one.
--}
-answerWith :: [Header] -> Outcome a -> a -> Answer
-answerWith headers o value =
-    Answer (ocStatus o) headers $ case ocBody o of
-        JsonOutcome c -> JsonBody (encodeBody c value)
-        -- 'answerWith' is the codec path; a documented or opaque body is emitted by a
-        -- handler building the 'Answer' directly (the streaming\/documented answer helpers
-        -- land with the effectful-handler migration), so those are empty here.
-        DocumentedOutcome _ -> NoBody
-        OpaqueOutcome _ -> NoBody
-        EmptyOutcome -> NoBody
+-- | A payload for an exact-status response, carrying additional response headers.
+data ResponseValue a = ResponseValue [Header] a
 
-{- | The last leg: turn a handler's 'Answer' into a WAI 'Response'. The one place a
-declared outcome becomes wire bytes, so the serve path and the manifest read the same
-outcome and cannot disagree on status or body shape.
+-- | Supply the additional headers and payload for an exact response leaf.
+responseValue :: [Header] -> a -> ResponseValue a
+responseValue = ResponseValue
+
+{- | A binary response choice. Nesting 'ResponseChoice's forms a closed route response
+sum without type-level programming; 'chooseContract' builds its two matching
+interpretations together.
 -}
-answerToResponse :: Answer -> Response
-answerToResponse (Answer status headers body) = case body of
-    JsonBody bytes -> responseLBS status ((hContentType, "application/json") : headers) bytes
-    OpaqueBody media bytes -> responseLBS status ((hContentType, media) : headers) bytes
-    StreamBody media stream -> responseStream status ((hContentType, media) : headers) stream
-    NoBody -> responseLBS status headers ""
+data ResponseChoice a b
+    = FirstResponse a
+    | SecondResponse b
+
+-- | Combine two response contracts into a closed choice of their alternatives.
+chooseContract :: ResponseContract a -> ResponseContract b -> ResponseContract (ResponseChoice a b)
+chooseContract left right =
+    ResponseContract
+        { contractDocs = contractDocs left <> contractDocs right
+        , contractRender = \case
+            FirstResponse value -> contractRender left value
+            SecondResponse value -> contractRender right value
+        }
+
+-- | One exact JSON response, encoded through the codec its manifest schema uses.
+jsonContract :: Status -> Text -> JSONCodec a -> ResponseContract (ResponseValue a)
+jsonContract status description codec =
+    ResponseContract
+        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaJson codec)]
+        , contractRender = \(ResponseValue headers value) ->
+            Answer status headers (JsonAnswer (encodeBody codec value))
+        }
+
+{- | One exact JSON response whose bytes are assembled imperatively and whose schema is
+the named hand-authored component in the manifest.
+-}
+documentedJsonContract :: Status -> Text -> Text -> ResponseContract (ResponseValue LByteString)
+documentedJsonContract status description schema =
+    ResponseContract
+        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaDocumented schema)]
+        , contractRender = \(ResponseValue headers bytes) -> Answer status headers (JsonAnswer bytes)
+        }
+
+-- | One exact bodiless response.
+emptyContract :: Status -> Text -> ResponseContract (ResponseValue ())
+emptyContract status description =
+    ResponseContract
+        { contractDocs = [ResponseDoc (ExactResponse status) description SchemaEmpty]
+        , contractRender = \(ResponseValue headers ()) -> Answer status headers NoAnswerBody
+        }
+
+-- | Buffered or streamed bytes for an exact opaque response leaf.
+data OpaquePayload
+    = OpaqueBytes LByteString
+    | OpaqueStream StreamingBody
+
+-- | One exact opaque response under a known media type.
+opaqueContract :: Status -> Text -> ByteString -> ResponseContract (ResponseValue OpaquePayload)
+opaqueContract status description media =
+    ResponseContract
+        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaOpaque media)]
+        , contractRender = \(ResponseValue headers payload) ->
+            Answer status headers $ case payload of
+                OpaqueBytes bytes -> MediaAnswer media bytes
+                OpaqueStream stream -> MediaStreamAnswer media stream
+        }
+
+{- | A response whose status is supplied by the handler while its media type remains
+fixed by the contract. Used for the publication target's arbitrary JSON-labelled status.
+-}
+data VariableResponse a = VariableResponse Status [Header] a
+
+-- | Supply a dynamic status, additional headers, and body to a variable-status leaf.
+variableResponse :: Status -> [Header] -> a -> VariableResponse a
+variableResponse = VariableResponse
+
+{- | An OpenAPI @default@ response carrying opaque bytes under a fixed media type.
+
+The schema is intentionally binary even for @application/json@: Écluse relays the
+publication target's bytes without parsing them, so it must not promise they satisfy a
+JSON schema it never checks.
+-}
+variableOpaqueContract :: ByteString -> Text -> ResponseContract (VariableResponse LByteString)
+variableOpaqueContract media description =
+    ResponseContract
+        { contractDocs = [ResponseDoc DefaultResponse description (SchemaOpaque media)]
+        , contractRender = \(VariableResponse status headers bytes) ->
+            Answer status headers (MediaAnswer media bytes)
+        }
+
+-- | The body of a transparent upstream response.
+data PassthroughBody
+    = PassthroughBytes LByteString
+    | PassthroughStream StreamingBody
+    | PassthroughEmpty
+
+-- | A transparent upstream response: status, headers, and body all remain upstream's.
+data PassthroughResponse = PassthroughResponse Status [Header] PassthroughBody
+
+-- | Build a transparent response value for 'passthroughContract'.
+passthroughResponse :: Status -> [Header] -> PassthroughBody -> PassthroughResponse
+passthroughResponse = PassthroughResponse
+
+{- | An explicit OpenAPI @default@ contract for a transparent upstream relay.
+
+This is the honest contract when the proxy intentionally forwards arbitrary upstream
+statuses and media types. It prevents drift by documenting that open behaviour rather
+than placing an inaccurate finite status set beside it.
+-}
+passthroughContract :: Text -> ResponseContract PassthroughResponse
+passthroughContract description =
+    ResponseContract
+        { contractDocs = [ResponseDoc DefaultResponse description SchemaPassthrough]
+        , contractRender = \(PassthroughResponse status headers body) ->
+            Answer status headers $ case body of
+                PassthroughBytes bytes -> RawAnswer bytes
+                PassthroughStream stream -> RawStreamAnswer stream
+                PassthroughEmpty -> NoAnswerBody
+        }
+
+{- | Derive the @HEAD@ interpretation of a contract: the same response alternatives,
+statuses, and headers, with no documented or emitted body.
+-}
+bodilessContract :: ResponseContract response -> ResponseContract response
+bodilessContract contract =
+    ResponseContract
+        { contractDocs = map withoutDocumentedBody (contractDocs contract)
+        , contractRender = withoutAnswerBody . contractRender contract
+        }
+  where
+    withoutDocumentedBody doc = doc{responseBodySchema = SchemaEmpty}
+
+{- | Render one value through its contract and into WAI. This is the only application
+boundary at which a route response becomes an unrestricted WAI 'Response'.
+-}
+responseToWai :: ResponseContract response -> response -> Response
+responseToWai contract = answerToResponse . contractRender contract
 
 -- | Encode a JSON value to bytes through its @autodocodec@ codec.
 encodeBody :: JSONCodec a -> a -> LByteString
-encodeBody c = Aeson.encode . toJSONVia c
+encodeBody codec = Aeson.encode . toJSONVia codec
+
+-- The concrete response is deliberately private: pipeline modules can select only a
+-- value admitted by their route's public 'ResponseContract'.
+data Answer = Answer Status [Header] AnswerBody
+
+data AnswerBody
+    = JsonAnswer LByteString
+    | MediaAnswer ByteString LByteString
+    | MediaStreamAnswer ByteString StreamingBody
+    | RawAnswer LByteString
+    | RawStreamAnswer StreamingBody
+    | NoAnswerBody
+
+withoutAnswerBody :: Answer -> Answer
+withoutAnswerBody (Answer status headers body) =
+    Answer status (contentTypeOf body <> headers) NoAnswerBody
+  where
+    contentTypeOf = \case
+        JsonAnswer _ -> [(hContentType, "application/json")]
+        MediaAnswer media _ -> [(hContentType, media)]
+        MediaStreamAnswer media _ -> [(hContentType, media)]
+        RawAnswer _ -> []
+        RawStreamAnswer _ -> []
+        NoAnswerBody -> []
+
+answerToResponse :: Answer -> Response
+answerToResponse (Answer status headers body) = case body of
+    JsonAnswer bytes -> responseLBS status ((hContentType, "application/json") : headers) bytes
+    MediaAnswer media bytes -> responseLBS status ((hContentType, media) : headers) bytes
+    MediaStreamAnswer media stream -> responseStream status ((hContentType, media) : headers) stream
+    RawAnswer bytes -> responseLBS status headers bytes
+    RawStreamAnswer stream -> responseStream status headers stream
+    NoAnswerBody -> responseLBS status headers ""

@@ -118,7 +118,6 @@ import Ecluse.Core.Registry.Adapter (
     adapterEcosystem,
     adapterFor,
     adapterServe,
-    serveError,
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
@@ -401,8 +400,7 @@ warpExceptionHook logEnv mRequest err =
 ecosystem has no registered adapter. The adapter registry
 ('Ecluse.Core.Registry.Adapter.adapterFor') answers which ecosystems this build
 supports; the resolved adapter's serve surface supplies the router (the
-'Ecluse.Core.Server.Context.MountRouter') and the denial renderer (the
-'Ecluse.Core.Server.Response.MountRenderer'), and the path prefix is __derived__
+'Ecluse.Core.Server.Context.MountRouter'), and the path prefix is __derived__
 from the ecosystem ('prefixFor') rather than configured, so the ecosystem is the
 single thing that drives the binding (see
 @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). The composition
@@ -416,8 +414,8 @@ mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe Moun
 mountBindingFor eco packumentDeps publishDeps =
     adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps
 
-{- The mount projection of one adapter: the ecosystem's serve surface (its router
-and its denial renderer) under its derived prefix, paired with the
+{- The mount projection of one adapter: the ecosystem's serve router under its derived
+prefix, paired with the
 packument-serve and first-party publish dependencies the composition root supplies
 ('Nothing' publish deps leave a @PUT \/{pkg}@ the @405@ opt-out: no publication
 target).
@@ -429,7 +427,6 @@ mountOf adapter packumentDeps publishDeps =
         , bindingRouter = serveRouter (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
-        , bindingError = serveError (adapterServe adapter)
         }
 
 {- | Run the supervised mirror worker over the composition-root 'Env' and the

@@ -26,23 +26,23 @@ A route is an ecosystem's own concern. npm's `/{pkg}/-/{file}.tgz` and RubyGems'
 So a **route is one record**, and an ecosystem's routing table is simply a list of them:
 
 ```haskell
-data Route v = Route
-  { routeName   :: RouteName                          -- "packument"
-  , routeMethod :: MethodMatch                        -- reads, or the one write
-  , routeSegs   :: [PatternSeg v]                     -- literals + captures that parse themselves
-  , routeBuild  :: Method -> [v] -> Maybe RouteAction -- what to DO; Nothing denies
-  , routeDoc    :: RouteDoc                           -- summary, statuses, body shapes
+data Route v = forall response. Route
+  { routeName     :: RouteName
+  , routeMethod   :: MethodMatch
+  , routeSegs     :: [PatternSeg v]
+  , routeBuild    :: Method -> [v] -> Maybe (ResponseAction response)
+  , routeContract :: ResponseContract response
   }
 
-npmRoutes :: [Route NpmCap]      -- npm's table, in matching order
-npmRouter  = routerOf npmRoutes  -- first match wins; no match is the 404
+npmRoutes :: [Route NpmCap]
+npmRouter = routerOf npmNotFound npmRoutes
 ```
 
-The record holds the pattern, the action, **and** the documentation, so the three cannot disagree.
-There is no classified-route *sum*: a route type would have to be matched again to decide what to do
-about it, and again to document it, and each of those matches is a place they can fall out of step.
-`routerOf` folds the list into the mount's router and the [manifest](#capability-manifest) renders
-the erased projection of the same records, so the documented surface cannot lie about the routed one.
+The abstract response contract owns both the WAI renderer and the manifest response documents for
+the response value its handler must produce. Its constructor is private: exact leaves bind status,
+body shape, and renderer together, while `chooseContract` builds a closed response sum. There is no
+separate status list for a handler to drift from. `routerOf` folds the list into the mount's router and
+the [manifest](#capability-manifest) renders the erased projection of the same records.
 
 **Deny by default is structural.** `routerOf` has no other way to answer: a request no route claims
 is the `404`. There is no catch-all branch to forget. A builder returning `Nothing` is how a route
@@ -55,10 +55,20 @@ What the web layer shares across ecosystems is not the routes but the **kind of 
 ```haskell
 type MountRouter = Method -> [Text] -> RouteAction
 
-data RouteAction
-  = AnswerLocally (MountRenderer -> Response)                       -- pure, no upstream
-  | RunPipeline   (Request -> Respond -> Handler ResponseReceived)  -- the data plane
+data RouteAction = forall response.
+  RouteAction (ResponseContract response) (ResponseAction response)
+
+data ResponseAction response
+  = AnswerLocally response
+  | RunPipeline response
+      (Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
 ```
+
+The existential pairing is the application boundary's proof: dispatch can interpret an ecosystem's
+response without knowing its type, while a handler receives only its route-scoped typed responder.
+The `RunPipeline` value is the declared pre-commit fallback, so the request perimeter cannot escape
+the contract either. Pipeline modules accept small reply-factory records supplied by the ecosystem;
+they never receive an unrestricted WAI responder.
 
 The data-plane handlers (`Ecluse.Core.Server.Pipeline`) are themselves ecosystem-neutral: a registry's
 metadata client, packument assembly, and artifact-request formation reach them as injected
@@ -106,9 +116,7 @@ registry is path-mounted; none sits at `/`, so adding an ecosystem later never c
 consumer's URLs. A mount binds, as one unit, the ecosystem's registered capability record
 (the `RegistryAdapter` in `Ecluse.Core.Registry.Adapter`, resolved by ecosystem once at
 boot): its serve surface (its [router](#the-route-table-belongs-to-the-ecosystem) and the
-error renderer, the client-facing denial/error surface, so the agnostic layer holds no
-ecosystem body shape; see
-[Error model](#error-model)), its four [registry roles](registry-model.md#registry-roles)
+route-scoped response contracts), its four [registry roles](registry-model.md#registry-roles)
 over the [protocol boundary](registry-model.md#registry-abstraction), and an optional
 per-ecosystem [rule refinement](configuration.md#rule-policy) that merges over the shared
 policy. The single-npm
@@ -147,8 +155,9 @@ Everything else unrecognised stays `Unsupported` → `404`.
 the docs site (not served, no `GET /openapi.json` route). It is rendered from each mounted adapter's
 declarative route table (`serveRoutes`, the erased `RouteSpec` projection of the *same* records that
 ecosystem's [router](#the-route-table-belongs-to-the-ecosystem) dispatches on), across the configured
-[mounts](#multi-ecosystem-mounts). Each record carries its own documentation, so the manifest holds
-no per-route knowledge and has nothing to drift with. The full rationale, schema strategy, and publish pipeline are
+[mounts](#multi-ecosystem-mounts). Each record's `ResponseContract` is interpreted for both WAI and
+documentation, so the manifest holds no independent status or body declaration. The full rationale,
+schema strategy, and publish pipeline are
 the canonical [API Surface & Capability Manifest](api-surface.md).
 
 ## Control plane vs. data plane
@@ -180,21 +189,19 @@ when the handler returns is already gone by the time the body streams: a use-aft
 This is why frameworks that hide the response continuation make memory-bounded artifact streaming
 awkward.
 
-Raw WAI avoids it by construction. `Application` is continuation-passing, *you* call `respond`, so the
-resource acquisition can bracket the `respond` call itself:
+Raw WAI avoids it by construction. `Application` is continuation-passing, so resource acquisition
+can bracket the typed responder call itself. The stream helper receives a `RelayResponder response`;
+the tarball route adapts that to its reply factories, and only the route contract later turns the
+value into WAI:
 
 ```haskell
-serveArtifact mgr upstreamReq respond =
-  withResponse upstreamReq mgr $ \up ->            -- upstream connection acquired
-    respond $ responseStream status200 (relayHeaders up) $ \write flush -> do
-      let pump = do
-            chunk <- brRead (responseBody up)
-            unless (BS.null chunk) (write (byteString chunk) >> pump)
-      first <- brRead (responseBody up)
-      unless (BS.null first) $ do
-        write (byteString first)
-        flush                                       -- first byte out promptly
-        pump                                        -- closed only after Warp returns
+relayResponder replies respond =
+  RelayResponder
+    { relayStreamResponse = \status headers body ->
+        respond (tarballStream replies status headers body)
+    , relayEmptyResponse = \status headers ->
+        respond (tarballEmpty replies status headers)
+    }
 ```
 
 The upstream connection lives for exactly the duration of the streamed body and is closed only when
@@ -202,7 +209,7 @@ Warp returns `ResponseReceived`. `write` fills Warp's bounded output buffer and 
 send when it spills, so we pull from upstream only as fast as the client drains: constant memory
 regardless of artifact size, with backpressure for free. Only the first chunk is explicitly flushed
 (prompt first byte); later chunks coalesce in the output buffer. No `ResourceT`, no conduit on the hot
-path.
+path, and no unrestricted WAI `Response` in a pipeline module.
 
 **Integrity on the serve path.** The proxy streams artifacts through without hashing them, relying on
 the client's own integrity check against the packument's `dist.integrity`, which the proxy preserves
@@ -336,11 +343,11 @@ if none is retryable but an exclusion is a permanent inability (`WontResolve`); 
 (`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model and status mapping live in `Ecluse.Core.Server.Response`, which decides an
-error's status but holds no body shape of its own. Each mount supplies a `MountRenderer` that shapes
-the error bytes in its ecosystem's surface (npm's `{"error": …}` object in
-`Ecluse.Core.Registry.Npm.Serve`), so rendering splits into two tiers: a request matching no mount is
-a neutral `404 Not Found` in `text/plain`, while every in-mount error renders through that mount's
-renderer. The denial-body shape and `ECLUSE_HELP_MESSAGE` handling are in
+error's status but holds no body shape of its own. An ecosystem's route contract supplies the matching
+response constructor and codec (npm's `{"error": …}` object in
+`Ecluse.Core.Registry.Npm.Serve`). Rendering still has two tiers: a request matching no mount is a
+neutral `404 Not Found` in `text/plain`, while every in-mount response is interpreted through its
+route contract. The denial-body shape and `ECLUSE_HELP_MESSAGE` handling are in
 [Rules Engine → Denial responses](rules-engine.md#denial-responses).
 
 ### The typed request perimeter
@@ -355,7 +362,8 @@ leaving it to warp's defaults:
   `GateFault`, an escape from the response-assembly leg (wrapped in the confined `RenderEscape`
   marker where the assembled render runs) is a `RenderFault`, anything else `UnclassifiedFault` --
   counted on `ecluse.serve.perimeter.faults`, logged with an audit payload (path, cause, bounded
-  detail), and answered with the mount-shaped neutral `500`. No fault detail ever reaches a client.
+  detail), and answered with the route's declared neutral `500` value. No fault detail ever reaches
+  a client, and the perimeter cannot emit a response the operation does not document.
 - **Post-commit** (the response has begun, tracked by the perimeter's respond wrapper): there is no
   second response to give, so the escape rethrows; warp tears the connection down and the
   `scOnException` hook records it through the structured logger (filtered through
