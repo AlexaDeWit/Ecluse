@@ -148,6 +148,7 @@ library ecluse-core
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
+    Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Fault
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
@@ -205,6 +206,7 @@ library ecluse-core
 
   build-depends:
     , aeson                 ^>=2.2
+    , autodocodec           ^>=0.5
     , bytestring            ^>=0.12
     , cache                 ^>=0.1.3
     , clock                 ^>=0.8
