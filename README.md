@@ -89,7 +89,7 @@ See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.m
 ## Versioning
 
 Écluse follows [semantic versioning](https://semver.org) against the operator-facing
-contract (the `PROXY_*` configuration and the proxy's behaviour), not the Haskell module
+contract (the `ECLUSE_*` configuration and the proxy's behaviour), not the Haskell module
 API. The version lives in `ecluse.cabal`'s `version:` field; the image, git, and release
 tags derive from it. While it's `0.y.z` the contract is unstable: pin an exact version by
 digest and expect breaking changes. [`VERSIONING.md`](VERSIONING.md) is the full policy.

@@ -51,7 +51,7 @@ the ecosystem-agnostic core, the effectful runtime edge, and the composition she
   resolver, the `Composition` root and `Boot` bracket that assemble the runtime `Env`
   from configuration, and the `proxy`/`pilot`/`dredger` role runners that wire the
   capabilities together and run them. It depends on `ecluse-runtime` and `ecluse-core`.
-- **`ecluse` executable** (`app/Main.hs`): a multicall CLI router for the `serve`,
+- **`ecluse` executable** (`app/Main.hs`): a multicall CLI router for the `proxy`,
   `pilot`, and `dredger` roles.
 
 The build graph enforces the boundary: the dependency arrow points inward only

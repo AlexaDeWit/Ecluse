@@ -70,15 +70,16 @@ data BootError
       fixed). Carries the rendered exception so the cause is legible and aggregated.
       -}
       CodeArtifactMintFailed Text
-    | {- | A publication target was configured (@ECLUSE_PUBLICATION_TARGET@) but no
-      publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) was supplied, so the anti-shadowing
+    | {- | A publication target was configured (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET@)
+      but no publish-scope allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_SCOPES@) was
+      supplied, so the anti-shadowing
       guard would have nothing to enforce. Refused at boot rather than defaulting to an
       empty allow-list (which would deny every publish) or an open one (which would let
       a client shadow any public name).
       -}
       PublishScopesMissing Ecosystem
-    | {- | A static publish credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) was configured
-      without a verifiable inbound edge (@ECLUSE_AUTH_TOKEN@). Écluse would otherwise
+    | {- | A static publish credential (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET_TOKEN@)
+      was configured without a verifiable inbound edge (@ECLUSE_AUTH_TOKEN@). Écluse would otherwise
       substitute its own standing write credential for a publishing caller who forwards
       none, so an unauthenticated request could publish within the configured scopes
       under Écluse's own identity. Refused at boot so an internal publish credential

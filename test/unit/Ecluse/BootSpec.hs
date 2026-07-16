@@ -45,13 +45,6 @@ spec = do
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
-        it "boots with an inline PROXY_CONFIG document and serves" $ do
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
-            traverse_ (uncurry setEnv) awsRunEnv
-            outcome <- timeout 100000 (withArgs ["proxy"] run)
-            traverse_ (unsetEnv . fst) awsRunEnv
-            outcome `shouldBe` Nothing
-
         it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "pubsub"

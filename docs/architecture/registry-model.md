@@ -30,10 +30,12 @@ behaviour:
 - **Public upstream (read/fallback)**: queried anonymously under every strategy; the client's
   credential is never forwarded here. If a public mirror itself needs auth, that is Écluse's own
   configured credential, never the client's.
-- **Mirror target (write)**: always Écluse's own `CredentialProvider` token. Often the same
-  registry as the private upstream, so its URL defaults to `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`
-  when unset, but the write credential is selected explicitly (it does not fold with the URL): the
-  client reads it, Écluse writes it.
+- **Mirror target (write)**: always Écluse's own `CredentialProvider` token, derived from the
+  mirror-target URL (see
+  [Configuration](configuration.md#outbound-registry-credentials)). Often the same registry as
+  the private upstream, but declared explicitly even then
+  (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET` is required on an active mount; the write's destination
+  is never implied from another endpoint): the client reads it, Écluse writes it.
 - **Publication target (write)**: the client's own forwarded credential (`passthrough`); Écluse
   substitutes no identity and mints no token here.
 

@@ -263,7 +263,7 @@ stdout.
 ## Configuration
 
 Telemetry uses the standard `OTEL_*` variables (read by `hs-opentelemetry`) plus a few
-`PROXY_*` ones; see [Configuration](configuration.md). With `ECLUSE_TELEMETRY` unset,
+`ECLUSE_*` ones; see [Configuration](configuration.md). With `ECLUSE_TELEMETRY` unset,
 nothing is wired and no telemetry is emitted.
 
 **Self-aligning configuration.** An operator may set either dialect: `DD_*` or `OTEL_*`.

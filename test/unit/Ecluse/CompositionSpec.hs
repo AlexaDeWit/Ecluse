@@ -196,7 +196,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the response-bound budget to the secure defaults" $ do
-        -- With no PROXY_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits -- the
+        -- With no ECLUSE_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits -- the
         -- secure-default body/version/nesting ceilings (security.md invariant 4).
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -206,7 +206,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads the operator's response-bound overrides onto the deps" $ do
-        -- The three PROXY_MAX_* knobs flow from the environment layer onto every
+        -- The three ECLUSE_MAX_* knobs flow from the environment layer onto every
         -- mount's Limits budget, so a deployment tightens or loosens the bounds.
         let testEnvVars =
                 ("ECLUSE_MAX_RESPONSE_BYTES", "2048")

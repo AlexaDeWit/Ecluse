@@ -18,7 +18,7 @@ The mechanics are in [Release & Supply-Chain Operations](docs/architecture/relea
 ## What the numbers mean
 
 Écluse versions against the **operator-facing contract**, not the Haskell source: the configuration
-interface (the `PROXY_*` env vars and the config document), the proxy's request and serve behaviour
+interface (the `ECLUSE_*` env vars and the config document), the proxy's request and serve behaviour
 (what it admits, denies, mirrors), and the container interface. The Haskell modules are internal and
 carry no API stability promise.
 

@@ -59,14 +59,14 @@ is acceptable since the rules are deterministic for a given version.
 pattern). Instead of building separate binaries for the proxy server, the OSV
 ingestion pipeline (`pilot`), and the registry cleanup worker (`dredger`),
 `app/Main.hs` acts as a CLI router that runs a sub-system per invocation command
-(`ecluse serve`, `ecluse pilot`, `ecluse dredger`).
+(`ecluse proxy`, `ecluse pilot`, `ecluse dredger`).
 
 This pattern is a deliberate architectural and security decision:
 
-1. **Config and rule synchronisation.** Because `pilot`, `dredger`, and `serve`
+1. **Config and rule synchronisation.** Because `pilot`, `dredger`, and `proxy`
    are the same binary parsing the same configuration file, they share the exact
    same runtime state (the same `Env` and config models). A manual package
-   revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is respected by
+   revocation rule (`DenyByIdentity`) configured in the config document is respected by
    the dredger (to purge it) and the proxy (to block it), so the two never drift.
 2. **First-party scope protection.** By sharing the configuration, the dredger is
    aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes)
@@ -86,7 +86,7 @@ pilot) and network-egress bounds (zero ingress for the dredger) are applied
 per-container. Even though the proxy *contains* the pilot code, it has neither the
 IAM permissions nor the CLI invocation to run it.
 
-The **mirror worker** runs in the `ecluse serve` process as a supervised concurrent
+The **mirror worker** runs in the `ecluse proxy` process as a supervised concurrent
 thread (`async` / `unliftio`), not a separate service: worker load is front-loaded (a
 cold mirror back-fills heavily for a few days, then settles), so an extra deployable is
 not yet worth it. It carries its own health/liveness surface (a consume-loop heartbeat /
