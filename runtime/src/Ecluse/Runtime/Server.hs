@@ -384,7 +384,7 @@ dropTrailingSlashes = dropWhileEnd (== "")
 -- renderer. The perimeter's neutral @500@ is the one such response the web layer still
 -- owns; every route's own body is shaped by its ecosystem's router.
 renderedError :: MountError -> Status -> Text -> Response
-renderedError renderer status message = renderMountError renderer status [] message
+renderedError renderer status = renderMountError renderer status []
 
 {- | The cross-cutting middleware stack composed around the proxy 'Application': a
 defensive request-body size cap (rejecting an over-cap body with @413@ once a
