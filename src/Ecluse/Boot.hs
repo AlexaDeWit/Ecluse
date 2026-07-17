@@ -89,7 +89,7 @@ module Ecluse.Boot (
 ) where
 
 import Data.ByteString qualified as BS
-import Data.List (isSuffixOf, lookup)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), logFM, ls)
@@ -196,13 +196,14 @@ applySecretFileIndirection envVars = do
                 Right (baseVarOf name, T.unpack (T.dropWhileEnd (== '\n') (decodeUtf8 bytes)))
 
     isSecretFileVar name =
-        "ECLUSE_" `isPrefixOf` name && any (`isSuffixOf` name) secretFileSuffixes
+        let spelling = T.pack name
+         in "ECLUSE_" `T.isPrefixOf` spelling && any (`T.isSuffixOf` spelling) secretFileSuffixes
 
-    baseVarOf = reverse . drop (length ("_FILE" :: String)) . reverse
+    baseVarOf = T.unpack . T.dropEnd (T.length "_FILE") . T.pack
 
     -- The secret-typed keys, by their env-spelling tails; anything else keeps the
     -- strict no-secrets-in-config posture with no file-shaped side door.
-    secretFileSuffixes :: [String]
+    secretFileSuffixes :: [Text]
     secretFileSuffixes = ["AUTH_TOKEN_FILE", "MIRROR_TARGET_TOKEN_FILE", "PUBLICATION_TARGET_TOKEN_FILE"]
 
 {- | Locate and read the config document per the @ECLUSE_CONFIG@ semantics: the

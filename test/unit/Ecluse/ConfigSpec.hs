@@ -91,7 +91,7 @@ spec = do
         it "redacts secret-typed keys whatever layer supplies them" $ do
             let provenance = resolvedKeyProvenance [("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")] Nothing
             provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
-            provenance `shouldSatisfy` all (not . T.isInfixOf "hunter2")
+            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter2"))
 
     describe "mountCollisionWarnings" $ do
         it "is silent when every registry endpoint is distinct" $ do

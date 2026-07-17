@@ -119,5 +119,7 @@ DCO sign-off; participation is governed by the [Code of Conduct](CODE_OF_CONDUCT
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit and integration tests                                                                                               |
+| `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
+| `examples/` | Quickstart: a Compose file with serve-only and mirrored profiles, `.env.example`, `config.example.yaml`                  |
 | `docs/`     | Architecture and design documents                                                                                        |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |
