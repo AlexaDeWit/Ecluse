@@ -61,7 +61,6 @@ module Ecluse.Core.Server.Response (
     -- * Packument status (over the merged survivor set)
     PackumentStatus (..),
     packumentStatus,
-    packumentStatusCode,
     longestRetry,
 
     -- * Denial help text
@@ -244,11 +243,11 @@ survivors__: with at least one survivor the document is served; with none, the
 status follows the most recoverable cause among the exclusions (see
 'packumentStatus').
 
-A domain sum (not a raw code) so the mapping is total and the WAI layer reads an
-exhaustive set; 'packumentStatusCode' gives the numeric code. There is no @404@: a
-packument whose versions were all withheld is __not__ a miss -- the package exists,
-so a genuine upstream absence (no such package at all) is a separate concern of the
-serve layer, decided before the merge.
+A domain sum (not a raw code) so the pipeline must map every case through the route's
+typed response factories. There is no @404@: a packument whose versions were all
+withheld is __not__ a miss -- the package exists, so a genuine upstream absence (no
+such package at all) is a separate concern of the serve layer, decided before the
+merge.
 -}
 data PackumentStatus
     = -- | @200@ -- at least one version survived; the merged, filtered packument is served.
@@ -353,15 +352,6 @@ none of them suggested a delay.
 -}
 longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
 longestRetry = fmap getMax . foldMap (fmap Max)
-
--- | The numeric HTTP status code for a 'PackumentStatus'. Pure and total.
-packumentStatusCode :: PackumentStatus -> Int
-packumentStatusCode = \case
-    PackumentOk -> 200
-    PackumentForbidden -> 403
-    PackumentUnavailable{} -> 503
-    PackumentBadGateway -> 502
-    PackumentServerError -> 500
 
 {- | An operator-configured message appended to every denial -- typically where to
 ask for help (e.g. a support channel). Stored trimmed of surrounding whitespace

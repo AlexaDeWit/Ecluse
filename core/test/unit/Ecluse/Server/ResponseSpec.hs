@@ -41,7 +41,6 @@ import Ecluse.Core.Server.Response (
     longestRetry,
     mkHelpMessage,
     packumentStatus,
-    packumentStatusCode,
     serveDecisionOf,
  )
 import Ecluse.Core.Version (mkVersion)
@@ -190,15 +189,6 @@ spec = do
         it "is the maximum delay among those that suggested one" $
             longestRetry [Just (RetryAfter 5), Nothing, Just (RetryAfter 30), Just (RetryAfter 12)]
                 `shouldBe` Just (RetryAfter 30)
-
-    describe "packumentStatusCode -- numeric HTTP codes (never 404)" $
-        it "maps Ok/Forbidden/Unavailable/ServerError to 200/403/503/500" $ do
-            packumentStatusCode PackumentOk `shouldBe` 200
-            packumentStatusCode PackumentForbidden `shouldBe` 403
-            packumentStatusCode (PackumentUnavailable Nothing) `shouldBe` 503
-            packumentStatusCode (PackumentUnavailable (Just (RetryAfter 30))) `shouldBe` 503
-            packumentStatusCode PackumentBadGateway `shouldBe` 502
-            packumentStatusCode PackumentServerError `shouldBe` 500
 
     describe "HelpMessage -- trimmed at construction" $ do
         it "appends the message trimmed of surrounding whitespace, one separating space" $

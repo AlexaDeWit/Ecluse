@@ -42,8 +42,6 @@ module Ecluse.Core.Server.Contract (
     jsonContract,
     documentedJsonContract,
     emptyContract,
-    OpaquePayload (..),
-    opaqueContract,
 
     -- * Open response leaves
     VariableResponse,
@@ -180,22 +178,6 @@ emptyContract status description =
     ResponseContract
         { contractDocs = [ResponseDoc (ExactResponse status) description SchemaEmpty]
         , contractRender = \(ResponseValue headers ()) -> Answer status headers NoAnswerBody
-        }
-
--- | Buffered or streamed bytes for an exact opaque response leaf.
-data OpaquePayload
-    = OpaqueBytes LByteString
-    | OpaqueStream StreamingBody
-
--- | One exact opaque response under a known media type.
-opaqueContract :: Status -> Text -> ByteString -> ResponseContract (ResponseValue OpaquePayload)
-opaqueContract status description media =
-    ResponseContract
-        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaOpaque media)]
-        , contractRender = \(ResponseValue headers payload) ->
-            Answer status headers $ case payload of
-                OpaqueBytes bytes -> MediaAnswer media bytes
-                OpaqueStream stream -> MediaStreamAnswer media stream
         }
 
 {- | A response whose status is supplied by the handler while its media type remains
