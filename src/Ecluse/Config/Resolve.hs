@@ -11,11 +11,14 @@ resolution tree with strict precedence: Defaults < File < Env.
 module Ecluse.Config.Resolve (
     deepMerge,
     buildEnvAst,
+    secretLeafKeys,
+    secretEnvSpellings,
 ) where
 
 import Data.Aeson (Value (..), eitherDecodeStrict)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Char (isUpper)
 
 import Data.Text qualified as T
 
@@ -60,9 +63,34 @@ document; they are consumed before resolution and never become document keys.
 reservedProcessKeys :: [Text]
 reservedProcessKeys = ["ECLUSE_CONFIG"]
 
+{- | The secret-typed leaf keys of the config schema, in their document spelling.
+The one source for every site that treats a secret specially: the environment
+layer ('buildEnvAst' takes their values verbatim), the provenance dump (these
+leaves render redacted; "Ecluse.Config"), and the @*_FILE@ indirection (their env
+spellings are the only file-shaped side door; "Ecluse.Boot").
+-}
+secretLeafKeys :: [Text]
+secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
+
+-- | 'secretLeafKeys' in their environment spelling (@authToken@ -> @AUTH_TOKEN@).
+secretEnvSpellings :: [Text]
+secretEnvSpellings = map envSpellingOf secretLeafKeys
+  where
+    envSpellingOf = T.toUpper . T.concatMap underscoreUpper
+    underscoreUpper c
+        | isUpper c = "_" <> T.singleton c
+        | otherwise = T.singleton c
+
 envVarValue :: (Text, String) -> Value
 envVarValue (key, value) =
-    nest (map toCamelCase (T.splitOn "__" key)) (parseEnvValue (T.pack value))
+    nest segments (leafValue (T.pack value))
+  where
+    segments = map toCamelCase (T.splitOn "__" key)
+    -- A secret is taken verbatim: JSON-parsing it would coerce a value like
+    -- 12345 or true into a non-string the secret parser rightly refuses.
+    leafValue
+        | maybe False ((`elem` secretLeafKeys) . Key.toText) (viaNonEmpty last segments) = String
+        | otherwise = parseEnvValue
 
 toCamelCase :: Text -> Key.Key
 toCamelCase t =

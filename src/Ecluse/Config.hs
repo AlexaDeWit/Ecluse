@@ -56,7 +56,7 @@ import Data.Yaml (decodeEither')
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.MirrorCredential (resolveMirrorCredential)
-import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
+import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
@@ -330,9 +330,6 @@ renderLeafValue path v
     | otherwise = case v of
         String t -> t
         other -> decodeUtf8 (LBS.toStrict (encode other))
-  where
-    secretLeafKeys :: [Text]
-    secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
 
 {- | Boot-time posture: one line per served mount naming its derived mode and its
 consequence. The mode is derived from the declared endpoints (see 'loadConfig'), so

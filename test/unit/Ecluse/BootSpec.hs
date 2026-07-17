@@ -18,7 +18,9 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), orExit)
+import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit)
+import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
+import Ecluse.Core.Credential (unSecret)
 
 runEnv :: [(String, String)]
 runEnv =
@@ -194,6 +196,36 @@ spec = do
                 traverse_ (unsetEnv . fst) runEnv
                 -- The typed process supervisor maps the boot abort to exit 2.
                 outcome `shouldBe` Left (ExitFailure 2)
+
+        it "passes JSON-looking *_FILE contents through to the exact secret string" $
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                let secretPath = dir </> "token"
+                for_ ["12345", "true", "null"] $ \(payload :: Text) -> do
+                    writeFileText secretPath (payload <> "\n")
+                    resolved <-
+                        applySecretFileIndirection
+                            [ ("ECLUSE_SERVER__AUTH_TOKEN_FILE", secretPath)
+                            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE", secretPath)
+                            , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE", secretPath)
+                            ]
+                    case resolved of
+                        Left e -> expectationFailure (toString e)
+                        Right env -> do
+                            -- The indirection resolves each *_FILE to its base variable...
+                            map fst env
+                                `shouldMatchList` [ "ECLUSE_SERVER__AUTH_TOKEN"
+                                                  , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
+                                                  , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+                                                  ]
+                            -- ...and the value survives the whole load verbatim (a
+                            -- JSON-looking secret must never be coerced to a non-string).
+                            -- Loaded with the auth token alone: the mount tokens would
+                            -- rightly refuse to load without their mirror target.
+                            case loadConfig (filter ((== "ECLUSE_SERVER__AUTH_TOKEN") . fst) env) Nothing of
+                                Left e -> expectationFailure ("unexpected decode error for " <> toString payload <> ": " <> show e)
+                                Right cfg ->
+                                    (unSecret <$> srvAuthToken (cfgServer (configApp cfg)))
+                                        `shouldBe` Just payload
 
         it "refuses a *_FILE secret whose file cannot be read" $ do
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)

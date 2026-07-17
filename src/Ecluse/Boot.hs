@@ -114,6 +114,7 @@ import Ecluse.Config (
     resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
+import Ecluse.Config.Resolve (secretEnvSpellings)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
@@ -206,7 +207,7 @@ applySecretFileIndirection envVars = do
     -- The secret-typed keys, by their env-spelling tails; anything else keeps the
     -- strict no-secrets-in-config posture with no file-shaped side door.
     secretFileSuffixes :: [Text]
-    secretFileSuffixes = ["AUTH_TOKEN_FILE", "MIRROR_TARGET_TOKEN_FILE", "PUBLICATION_TARGET_TOKEN_FILE"]
+    secretFileSuffixes = map (<> "_FILE") secretEnvSpellings
 
 {- | Locate and read the config document per the @ECLUSE_CONFIG@ semantics: the
 bytes when a document exists (plus the path consulted), no bytes at an absent

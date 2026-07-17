@@ -22,6 +22,7 @@ import Ecluse.Config (
     loadConfig,
     renderConfigError,
  )
+import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
 
@@ -355,10 +356,39 @@ spec = describe "decodeDocument" $ do
             loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43201")] Nothing
                 `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
 
+    describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
+        it "round-trips a JSON-looking authToken exactly" $
+            for_ jsonLookingSecrets $ \payload ->
+                case loadConfig (pubUrlEnv <> [("ECLUSE_SERVER__AUTH_TOKEN", payload)]) Nothing of
+                    Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
+                    Right doc ->
+                        (unSecret <$> srvAuthToken (cfgServer (configApp doc)))
+                            `shouldBe` Just (T.pack payload)
+
+        it "loads JSON-looking mirror and publication tokens" $
+            for_ jsonLookingSecrets $ \payload ->
+                case loadConfig
+                    ( pubUrlEnv
+                        <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", payload)
+                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", payload)
+                           ]
+                    )
+                    Nothing of
+                    Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
+                    Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+
 -- server.publicUrl is required once a mount is active; supplied here so each
 -- decode example stays about its own concern.
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- Values the env layer would JSON-coerce into non-strings if secrets took the
+-- ordinary parse path.
+jsonLookingSecrets :: [String]
+jsonLookingSecrets = ["12345", "true", "null"]
 
 singleMountDoc :: ByteString
 singleMountDoc =
