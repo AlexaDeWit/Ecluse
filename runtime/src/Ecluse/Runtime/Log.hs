@@ -96,7 +96,7 @@ data LogFormat
     deriving stock (Eq, Show)
 
 -- The wire vocabulary of a 'LogFormat': the single source both 'parseWire' and
--- 'renderWire' derive from for this type.
+-- the accepted-set message derive from for this type.
 instance WireVocab LogFormat where
     wireKind = "log format"
     wireTable =

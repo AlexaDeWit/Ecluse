@@ -118,7 +118,7 @@ data TelemetrySwitch
     deriving stock (Eq, Show)
 
 -- The wire vocabulary of a 'TelemetrySwitch': the single source both 'parseWire' and
--- 'renderWire' derive from for this type. Listed @on@ before @off@, the order the
+-- the accepted-set message derive from for this type. Listed @on@ before @off@, the order the
 -- accepted-set message has always named them.
 instance WireVocab TelemetrySwitch where
     wireKind = "telemetry switch"
