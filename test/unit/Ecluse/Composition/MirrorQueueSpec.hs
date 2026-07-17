@@ -10,12 +10,14 @@ import Test.Hspec
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (..),
+    MirrorRuntimePlan (..),
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
     parseEndpointUrl,
     planMirrorQueue,
+    planMirrorRuntime,
  )
-import Ecluse.Composition.Support (expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
+import Ecluse.Composition.Support (expectConfig, expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
 import Ecluse.Config (AppConfig, QueueBackend (..))
 import Ecluse.Config.Ambient (AmbientAws (..))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig)
@@ -23,8 +25,32 @@ import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion)
 
 spec :: Spec
 spec = do
+    mirrorRuntimeSpec
     mirrorQueueSpec
     parseEndpointUrlSpec
+
+mirrorRuntimeSpec :: Spec
+mirrorRuntimeSpec = describe "planMirrorRuntime" $ do
+    it "plans no mirror runtime when no mount mirrors (queue variables never consulted)" $ do
+        -- The serve-only deployment boots under the shipped sqs default with no
+        -- ECLUSE_QUEUE_URL and no AWS_REGION: the queue selection never runs.
+        cfg <- expectConfig [("ECLUSE_MOUNTS__NPM__ENABLED", "true")] Nothing
+        planMirrorRuntime noAmbient' cfg `shouldBe` Right NoMirroring
+
+    it "delegates to the queue selection when a mount mirrors, surfacing its errors" $ do
+        -- The same missing-region/missing-URL failures as planMirrorQueue: the
+        -- mirroring mount is what makes the queue configuration load-bearing.
+        cfg <- expectConfig (withoutQueueUrl staticEnvVars) Nothing
+        planMirrorRuntime noAmbient' cfg `shouldBe` Left [QueueRegionMissing, QueueUrlMissing SqsQueue]
+
+    it "plans the selected backend when a mount mirrors and the queue resolves" $ do
+        cfg <- expectConfig staticEnvVars Nothing
+        case planMirrorRuntime noAmbient'{ambientAwsRegion = Just "us-east-1"} cfg of
+            Right (MirrorWith (SqsBackend _)) -> pass
+            other -> expectationFailure ("expected an SQS mirror runtime, got: " <> show other)
+  where
+    noAmbient' :: AmbientAws
+    noAmbient' = AmbientAws Nothing Nothing Nothing
 
 mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do

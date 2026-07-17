@@ -13,6 +13,8 @@ due. Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run
 reports every missing input.
 -}
 module Ecluse.Composition.MirrorQueue (
+    MirrorRuntimePlan (..),
+    planMirrorRuntime,
     MirrorQueuePlan (..),
     planMirrorQueue,
     mirrorQueuePlanWarning,
@@ -26,8 +28,11 @@ import Data.Text qualified as T
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Config (
     AppConfig (..),
+    Config (..),
+    Mount (mountRegistries),
     QueueBackend (..),
     Url,
+    regMirrorTarget,
     unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (..))
@@ -35,6 +40,31 @@ import Ecluse.Core.Queue.Memory (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+
+{- | Whether this deployment runs a mirror runtime at all: with zero mirroring
+mounts there is no queue to build and no worker to start ('NoMirroring'), and the
+queue configuration is not even consulted, so a serve-only deployment boots with no
+queue variables under the shipped @sqs@ default. With at least one mirroring mount,
+exactly today's queue selection applies ('MirrorWith').
+-}
+data MirrorRuntimePlan
+    = -- | No mount mirrors: no queue, no enqueue buffer, no worker.
+      NoMirroring
+    | -- | At least one mount mirrors: build the planned queue backend.
+      MirrorWith MirrorQueuePlan
+    deriving stock (Eq, Show)
+
+{- | The one decision the composition root branches the mirror runtime on: derive
+whether anything mirrors from the resolved mounts, and only then consult the queue
+configuration ('planMirrorQueue'), so a serve-only deployment can never fail boot
+over queue variables it does not need.
+-}
+planMirrorRuntime :: AmbientAws -> Config -> Either [BootError] MirrorRuntimePlan
+planMirrorRuntime ambient config
+    | noneMirror = Right NoMirroring
+    | otherwise = MirrorWith <$> planMirrorQueue ambient (configApp config)
+  where
+    noneMirror = all (isNothing . regMirrorTarget . mountRegistries) (configMounts config)
 
 {- | Which mirror-queue backend the composition root will build, resolved from
 config: the durable AWS @sqs@ backend (with its 'SqsConfig'), or the bounded

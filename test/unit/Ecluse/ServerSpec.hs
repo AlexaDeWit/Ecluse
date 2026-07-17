@@ -40,7 +40,7 @@ import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
-import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
+import Ecluse.Core.Worker (heartbeatHealthyNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
@@ -202,7 +202,10 @@ stalledWorkerApp = do
     -- A poll older than the staleness threshold: the loop has not advanced its
     -- heartbeat within the window, so liveness must read it as stalled.
     recordPoll (envWorkerHeartbeat env) (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
-    pure (application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) env)
+    -- The composition root folds the heartbeat into /livez only when a worker
+    -- runs; this fixture models that mirrored-deployment wiring explicitly.
+    let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatHealthyNow (envWorkerHeartbeat env)}
+    pure (application cfg env)
 
 {- | A header matcher that passes only when the response carries __no__
 @Connection@ header -- the not-draining expectation, the complement of the

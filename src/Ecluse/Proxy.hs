@@ -103,7 +103,7 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
-import Ecluse.Composition.MirrorQueue (planMirrorQueue)
+import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
@@ -113,7 +113,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
+import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, noMirrorQueue, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,
@@ -132,11 +132,11 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Core.Worker (WorkerPolicies, runWorkerM, workerLoop)
+import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -196,10 +196,12 @@ runProxy bootEnv = do
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
-    -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
-    -- "not built" boot error, never a silent fall-through); the resulting plan is
-    -- handed to the one queue-construction site below.
-    queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue (beAmbient bootEnv) env)
+    -- Whether a mirror runtime exists at all, then which queue backend it rides:
+    -- zero mirroring mounts is a serve-only deployment (no queue, no worker; the
+    -- queue configuration is not consulted), and with any mirroring mount the
+    -- backend selection applies exactly as before (the GCP arm is a fail-loud
+    -- "not built" boot error, never a silent fall-through).
+    runtimePlan <- orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
     -- The effective admission capacity: explicit config, else computed from the
     -- post-runtime-posture capability count, logged with its provenance beside the
     -- runtime lines. This bounds metadata materialisation only; the private manager's
@@ -223,11 +225,17 @@ runProxy bootEnv = do
     -- fan-out, not only the admission-bounded metadata misses.
     let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (cfgPublicConnectionsPerHost env) fdLimit
     logBootInfo logEnv publicConnectionsLine
+    heartbeat <- newWorkerHeartbeat
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 , scCheckReady = cveSyncReady cveSyncPlan
+                , -- Fold the worker heartbeat into /livez exactly when a worker will
+                  -- run; a serve-only deployment's liveness is the listener alone.
+                  scCheckLive = case runtimePlan of
+                    MirrorWith _ -> heartbeatHealthyNow heartbeat
+                    NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
@@ -237,20 +245,24 @@ runProxy bootEnv = do
     -- serve-only. The mode is derived from the declared endpoints, so this is the
     -- loud surface a dropped mirrorTarget shows up on.
     traverse_ (logBootInfo logEnv) (mountPostureLines config)
-    -- The config-selected mirror queue, built once here (the single constructor
-    -- call) from the validated plan: the durable AWS SQS backend, or the bounded
-    -- in-memory backend -- which first emits a loud boot warning (it is
-    -- non-durable / best-effort) and logs each rate-limited cap-overflow drop.
-    backendQueue <- buildMirrorQueue logEnv queuePlan
-    -- Decouple the serve path from the backend's own enqueue latency: what Env
-    -- captures is the buffered hand-off (an STM write), and the drain loop below --
-    -- raced against the services -- delivers to the backend (an SQS round trip on
-    -- that backend) off the request path, where it would otherwise hold the served
-    -- connection's turn.
-    (queue, drainEnqueueBuffer) <-
-        bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
+    -- The mirror runtime's queue, or nothing at all. Under MirrorWith the
+    -- config-selected backend is built once here (the single constructor call) --
+    -- the durable AWS SQS backend, or the bounded in-memory backend, which first
+    -- emits a loud boot warning (it is non-durable / best-effort) -- and wrapped in
+    -- the buffered hand-off that decouples the serve path from the backend's own
+    -- enqueue latency (the drain loop below, raced against the services, delivers
+    -- off the request path). Under NoMirroring nothing is built: Env carries the
+    -- inert queue, unreachable by construction (no mount enqueues, no worker polls).
+    (queue, mirrorDrain) <- case runtimePlan of
+        MirrorWith queuePlan -> do
+            backendQueue <- buildMirrorQueue logEnv queuePlan
+            (q, drainEnqueueBuffer) <-
+                bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
+            pure (q, Just drainEnqueueBuffer)
+        NoMirroring -> do
+            logBootInfo logEnv "mirror runtime disabled: no mount mirrors, so no queue is built and no worker starts"
+            pure (noMirrorQueue, Nothing)
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
-    heartbeat <- newWorkerHeartbeat
 
     -- Two data-plane managers, one per origin. Both are the standard validating TLS
     -- manager: registry egress is https-only by construction (a non-https endpoint
@@ -286,10 +298,21 @@ runProxy bootEnv = do
         -- ('Ecluse.Composition.Worker.workerPoliciesFor') over the served mounts,
         -- the resolved publish targets, and the adapter registry, so a future
         -- worker-only binary reuses the same function rather than re-deriving
-        -- this wiring.
-        race_
-            (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
-            (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
+        -- this wiring. With no mirror runtime there is no worker arm and no drain
+        -- loop, only the server (and the sync tasks when a bucket is configured;
+        -- racing the server against an EMPTY task list would cancel it instantly,
+        -- so the no-task shape runs the server alone).
+        case mirrorDrain of
+            Just drainEnqueueBuffer ->
+                race_
+                    (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
+                    (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
+            Nothing
+                | null syncTasks -> runServer serverConfig builtEnv
+                | otherwise ->
+                    race_
+                        (runServer serverConfig builtEnv)
+                        (mapConcurrently_ id syncTasks)
 
 {- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
 failures are logged rate-limited ('enqueueReportWorthy') and each counts an enqueue

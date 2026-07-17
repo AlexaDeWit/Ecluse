@@ -86,7 +86,8 @@ pilot) and network-egress bounds (zero ingress for the dredger) are applied
 per-container. Even though the proxy *contains* the pilot code, it has neither the
 IAM permissions nor the CLI invocation to run it.
 
-The **mirror worker** runs in the `ecluse proxy` process as a supervised concurrent
+The **mirror worker** exists only when a mount mirrors (a serve-only deployment starts
+no worker and builds no queue). It runs in the `ecluse proxy` process as a supervised concurrent
 thread (`async` / `unliftio`), not a separate service: worker load is front-loaded (a
 cold mirror back-fills heavily for a few days, then settles), so an extra deployable is
 not yet worth it. It carries its own health/liveness surface (a consume-loop heartbeat /

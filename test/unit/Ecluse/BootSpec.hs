@@ -47,6 +47,20 @@ spec = do
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
+        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
+            -- The two-variable start (ECLUSE_PUBLIC_URL being the other, for real
+            -- installs): no mount mirrors, so the shipped sqs default is never
+            -- consulted and no queue configuration is needed.
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
+            unsetEnv "AWS_REGION"
+            unsetEnv "ECLUSE_QUEUE_URL"
+            setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
+            setEnv "ECLUSE_PORT" "0"
+            outcome <- timeout 100000 (withArgs ["proxy"] run)
+            unsetEnv "ECLUSE_MOUNTS__NPM__ENABLED"
+            unsetEnv "ECLUSE_PORT"
+            outcome `shouldBe` Nothing
+
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
