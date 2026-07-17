@@ -623,7 +623,7 @@ deps privatePort publicPort inbound = do
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.test")
+            , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.test")
             , pdLimits = defaultLimits
             , pdInboundToken = mkSecret <$> inbound
             , pdNow = pure now
@@ -662,7 +662,7 @@ bare record update would leave it stale; the override harness applies this after
 -}
 consistentGate :: PackumentDeps -> PackumentDeps
 consistentGate d =
-    d{pdTarballHostGate = tarballHostGate (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
+    d{pdTarballHostGate = tarballHostGate [] (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
   where
     mirrorUrlOf = \case
         MirrorOnAdmit url -> Just url

@@ -101,7 +101,7 @@ spec = do
                     [ ("privateUpstream", "https://priv.example.test")
                     , ("mirrorTarget", "https://mirror.example.test")
                     , ("publicationTarget", "https://mirror.example.test")
-                    , ("publishScopes", "@acme")
+                    , ("publishAllow", "@acme")
                     ]
                 )
                 ["mirrorTarget", "publicationTarget"]
@@ -113,7 +113,7 @@ spec = do
                         [ ("privateUpstream", "https://priv.example.test")
                         , ("mirrorTarget", "https://mirror.example.test")
                         , ("publicationTarget", "https://priv.example.test")
-                        , ("publishScopes", "@acme")
+                        , ("publishAllow", "@acme")
                         ]
                     )
             mountCollisionWarnings cfg `shouldBe` []

@@ -71,13 +71,13 @@ data BootError
       -}
       CodeArtifactMintFailed Text
     | {- | A publication target was configured (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET@)
-      but no publish-scope allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_SCOPES@) was
+      but no publish allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@) was
       supplied, so the anti-shadowing
       guard would have nothing to enforce. Refused at boot rather than defaulting to an
       empty allow-list (which would deny every publish) or an open one (which would let
       a client shadow any public name).
       -}
-      PublishScopesMissing Ecosystem
+      PublishAllowMissing Ecosystem
     | {- | A static publish credential (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET_TOKEN@)
       was configured without a verifiable inbound edge (@ECLUSE_AUTH_TOKEN@). Écluse would otherwise
       substitute its own standing write credential for a publishing caller who forwards
@@ -117,8 +117,8 @@ renderBootError = \case
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail
             <> " (a transient AWS error may clear on retry; a permanent one -- bad domain/region or missing permission -- must be fixed)"
-    PublishScopesMissing eco ->
-        mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_SCOPES" <> " is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard."
+    PublishAllowMissing eco ->
+        mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_ALLOW" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
 

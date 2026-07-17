@@ -41,6 +41,7 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
+    tarballHostAllowedFor,
     TarballHostGate (..),
     tarballHostGate,
 
@@ -749,9 +750,17 @@ dynamic public @dist.tarball@, still parsed at the call site.
 data TarballHostGate = TarballHostGate
     { thgAllowlist :: AllowedHostPorts
     {- ^ The canonicalised @host:port@ allowlist of the mount's configured upstreams
-    (public, private, and mirror target) -- the same set every outbound fetch is gated
-    against (security.md invariant 2). An upstream URL that writes no port contributes
-    its host at 443.
+    (public, private, and mirror target) plus the ecosystem's canonical artifact
+    hosts -- the same set every outbound fetch is gated against (security.md
+    invariant 2). An upstream URL that writes no port contributes its host at 443.
+    -}
+    , thgEcosystemHosts :: AllowedHostPorts
+    {- ^ The ecosystem's canonical artifact authorities (the adapter supplies them;
+    npm has none, PyPI's is @files.pythonhosted.org@): hosts the ecosystem serves
+    artifact bytes from __by design__, treated as same-host-equivalent under the
+    secure-default 'SameHostAsPackument' policy ('tarballHostAllowedFor') so the
+    operator knob stays a policy choice rather than a hostname list. Also folded
+    into 'thgAllowlist', and still internal-range-gated like any target.
     -}
     , thgPrivateHostPort :: Maybe HostPort
     {- ^ The private upstream's authority, extracted once; 'Nothing' when the configured
@@ -762,9 +771,11 @@ data TarballHostGate = TarballHostGate
     }
     deriving stock (Eq, Show)
 
-{- | Build the 'TarballHostGate' from a mount's private, public, and mirror-target
-upstream URLs: the allowlist is the canonicalised set of their @host:port@ pairs, and
-the private and public authorities are each extracted once with 'hostPortAddress'.
+{- | Build the 'TarballHostGate' from the ecosystem's canonical artifact hosts
+(empty for an ecosystem, like npm, that serves artifacts from its registry host) and a
+mount's private, public, and mirror-target upstream URLs: the allowlist is the
+canonicalised set of their @host:port@ pairs, and the private and public authorities
+are each extracted once with 'hostPortAddress'.
 Called once per mount at the composition root (and by test fixtures); the result is
 carried on the serve dependencies so the per-request gate reads fields rather than
 re-parsing URLs. A URL from which no authority extracts contributes no allowlist entry
@@ -772,14 +783,43 @@ and leaves its reference authority 'Nothing', so a misconfigured upstream author
 nothing rather than something unintended; an __absent__ private upstream or mirror
 target (a serve-only mount) composes identically, contributing nothing.
 -}
-tarballHostGate :: Maybe Text -> Text -> Maybe Text -> TarballHostGate
-tarballHostGate privateUrl publicUrl mirrorUrl =
+tarballHostGate :: [Text] -> Maybe Text -> Text -> Maybe Text -> TarballHostGate
+tarballHostGate ecosystemHostUrls privateUrl publicUrl mirrorUrl =
     TarballHostGate
         { thgAllowlist =
-            allowedHostPorts (Set.fromList (catMaybes [privateHostPort, publicHostPort, hostPortAddress =<< mirrorUrl]))
+            allowedHostPorts
+                ( Set.fromList
+                    (catMaybes ([privateHostPort, publicHostPort, hostPortAddress =<< mirrorUrl] <> map hostPortAddress ecosystemHostUrls))
+                )
+        , thgEcosystemHosts = allowedHostPorts (Set.fromList (mapMaybe hostPortAddress ecosystemHostUrls))
         , thgPrivateHostPort = privateHostPort
         , thgPublicHostPort = publicHostPort
         }
   where
     privateHostPort = hostPortAddress =<< privateUrl
     publicHostPort = hostPortAddress publicUrl
+
+{- | 'tarballHostAllowed' with the ecosystem's canonical artifact hosts admitted as
+same-host-equivalent: an ecosystem that serves its artifact bytes from a dedicated
+files host by design (PyPI's @files.pythonhosted.org@) stays admissible under the
+secure-default 'SameHostAsPackument' without the operator widening the policy to
+every allowlisted host. The equivalence relaxes only the same-authority comparison:
+an ecosystem host is still allowlist-gated and internal-range-gated like any other
+target, and under 'AnyAllowlistedHost' it changes nothing.
+-}
+tarballHostAllowedFor ::
+    AllowedHostPorts ->
+    Origin ->
+    TarballHostPolicy ->
+    AllowedHostPorts ->
+    [IPRange] ->
+    Maybe HostPort ->
+    Maybe HostPort ->
+    Bool
+tarballHostAllowedFor ecosystemHosts origin policy allowed additionalBlockedRanges packumentOrigin tarballTarget =
+    tarballHostAllowed origin effectivePolicy allowed additionalBlockedRanges packumentOrigin tarballTarget
+  where
+    effectivePolicy = case (policy, tarballTarget) of
+        (SameHostAsPackument, Just target)
+            | isAllowedUpstreamHost ecosystemHosts target -> AnyAllowlistedHost
+        _ -> policy

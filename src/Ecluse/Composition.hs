@@ -70,6 +70,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
     artifactByFile,
     artifactByUrl,
+    artifactHosts,
     metadataAssemble,
     metadataNewClient,
     publishCanonicaliseName,
@@ -213,6 +214,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- URL and rebuilds no host set per request.
                   pdTarballHostGate =
                     tarballHostGate
+                        (artifactHosts (adapterArtifact adapter))
                         (registryUrlText <$> regPrivateUpstream regs)
                         (registryUrlText (regPublicUpstream regs))
                         (registryUrlText . mtUrl <$> regMirrorTarget regs)
@@ -225,15 +227,13 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- load, carried onto every mount's deps so the public gate refuses
                   -- a below-floor version.
                   pdMinIntegrity = cfgMinPublicIntegrity app
-                , -- The global trusted-integrity admission floor (default SHA-256,
-                  -- loosenable below it), carried onto every mount's deps so the
-                  -- trusted gate drops a below-floor private version from the listing
-                  -- and gates the private artifact serve.
-                  pdMinTrustedIntegrity = cfgMinTrustedIntegrity app
-                , -- The operator's cross-upstream divergence policy (default warn),
-                  -- carried onto every mount's deps so the serve path withholds a
-                  -- contested version under fail-closed.
-                  pdDivergencePolicy = cfgDivergencePolicy app
+                , -- The trusted-integrity admission floor: the global default
+                  -- (SHA-256, loosenable below it), refined per mount so a legacy
+                  -- registry's loosening never leaks onto a neighbouring mount.
+                  pdMinTrustedIntegrity = fromMaybe (cfgMinTrustedIntegrity app) (mntMinTrustedIntegrity mcfg)
+                , -- The cross-upstream divergence policy: the global default
+                  -- (warn), refined per mount for the same reason.
+                  pdDivergencePolicy = fromMaybe (cfgDivergencePolicy app) (mntDivergencePolicy mcfg)
                 , pdNewMetadataClient = metadataNewClient (adapterMetadata adapter)
                 , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
                 , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
@@ -281,7 +281,7 @@ mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 {- | Validate the first-party publish dependencies from the environment layer, shared
 across the (single-ecosystem) mounts: 'Nothing' when no publication target is configured
 (the publish path is off -- a @PUT \/{pkg}@ is then @405@), 'Just' when one is set and
-valid, or the accumulated fail-loud publish boot errors when not -- 'PublishScopesMissing'
+valid, or the accumulated fail-loud publish boot errors when not -- 'PublishAllowMissing'
 when a target is set without a publish-scope allow-list, and\/or
 'PublishStaticCredentialNeedsEdge' when a static publish credential is set without a
 verifiable inbound edge -- reported together rather than one reboot at a time. The target's
@@ -300,7 +300,7 @@ publishDepsFor eco mAdapter app mcfg limits helpMessage = case mntPublicationTar
                 mAdapter <&> \adapter ->
                     PublishDeps
                         { pubTargetUrl = registryUrlText url
-                        , pubScopes = mntPublishScopes mcfg
+                        , pubScopes = mntPublishAllow mcfg
                         , pubStaticToken = mntPublicationTargetToken mcfg
                         , pubInboundToken = inboundToken
                         , pubLimits = limits
@@ -321,7 +321,7 @@ publishBootErrors eco mcfg inboundToken = catMaybes [scopesError, edgeError]
   where
     scopesError, edgeError :: Maybe BootError
     scopesError
-        | null (mntPublishScopes mcfg) = Just (PublishScopesMissing eco)
+        | null (mntPublishAllow mcfg) = Just (PublishAllowMissing eco)
         | otherwise = Nothing
     edgeError
         | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)

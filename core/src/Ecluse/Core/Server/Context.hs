@@ -74,7 +74,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
+import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowedFor, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
@@ -324,7 +324,8 @@ call site.
 -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
-    tarballHostAllowed
+    tarballHostAllowedFor
+        (thgEcosystemHosts (pdTarballHostGate deps))
         origin
         (pdTarballHostPolicy deps)
         (thgAllowlist (pdTarballHostGate deps))
@@ -355,7 +356,8 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubScopes :: [Scope]
-    {- ^ The configured publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) -- the
+    {- ^ The configured publish allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@;
+    for npm, a list of scopes) -- the
     anti-shadowing guard. A publish whose package name is not within one of these
     scopes is refused __before any upstream write__, so a client cannot publish a name
     that shadows an existing public package (a dependency-confusion vector). Never

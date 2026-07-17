@@ -100,7 +100,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     deps =
                         baseDeps
                             { pdPrivateBaseUrl = Just privateUrl
-                            , pdTarballHostGate = tarballHostGate (Just privateUrl) (pdPublicBaseUrl baseDeps) (mirrorUrlOf (pdMirror baseDeps))
+                            , pdTarballHostGate = tarballHostGate [] (Just privateUrl) (pdPublicBaseUrl baseDeps) (mirrorUrlOf (pdMirror baseDeps))
                             }
                 resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
@@ -255,7 +255,7 @@ depsFor publicPort = do
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (Just "http://mirror.test")
+            , pdTarballHostGate = tarballHostGate [] (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (Just "http://mirror.test")
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow

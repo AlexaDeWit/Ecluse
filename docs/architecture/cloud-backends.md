@@ -69,14 +69,14 @@ This pattern is a deliberate architectural and security decision:
    revocation rule (`DenyByIdentity`) configured in the config document is respected by
    the dredger (to purge it) and the proxy (to block it), so the two never drift.
 2. **First-party scope protection.** By sharing the configuration, the dredger is
-   aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes)
+   aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` (internal first-party scopes)
    the proxy routes to the publication target. The dredger unconditionally excludes
    those scopes from its purge routines, so it never deletes first-party packages.
 3. **Collapsed-registry mitigation.** If an operator collapses the mirror target
    and the publication target onto a single shared registry, the dredger detects
    this and refuses to boot. That hard failure keeps the dredger from treating
    first-party packages (which might fall outside the explicit
-   `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) as stale public ones and deleting them.
+   `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`) as stale public ones and deleting them.
 4. **Deployment simplicity.** The operator deploys the same versioned Docker image
    for all three components, changing only the container command and the IAM role.
 

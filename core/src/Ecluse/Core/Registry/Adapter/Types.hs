@@ -161,6 +161,13 @@ data AdapterArtifact = AdapterArtifact
     base URL (there is no base to resolve against) and an anonymous credential
     ('Nothing'), as the mirror worker's fetch does.
     -}
+    , artifactHosts :: [Text]
+    {- ^ The ecosystem's canonical artifact hosts, as URLs whose authorities feed
+    the tarball-host gate: hosts the public registry serves artifact bytes from
+    __by design__ (PyPI's @https://files.pythonhosted.org@), so the secure-default
+    same-host policy admits them without the operator naming hostnames. Empty for
+    an ecosystem (npm) whose artifacts ride the registry host.
+    -}
     }
 
 {- | The ecosystem's publish capability: relaying a client's own publish document,

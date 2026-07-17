@@ -31,6 +31,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
+import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Context (
     MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
@@ -262,6 +263,22 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 pdMinTrustedIntegrity deps `shouldBe` sha1Floor
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
+    it "refines the trusted floor and divergence policy per mount over the global defaults" $ do
+        -- The two knobs describe trust in a particular registry, so a legacy mount's
+        -- loosening must not leak onto other mounts: the mount key overrides, the
+        -- global default stands elsewhere.
+        sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
+        let env =
+                ("ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY", "sha1")
+                    : ("ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY", "fail-closed")
+                    : staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMinTrustedIntegrity deps `shouldBe` sha1Floor
+                pdDivergencePolicy deps `shouldBe` FailClosed
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
     it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do
         -- The builder over an already-loaded Config is the testable core (it opens no
         -- listener, only 'prepare's each mount's rules); planMounts is just loadConfig
@@ -327,11 +344,11 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish-scope allow-list" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES empty: the anti-shadowing guard
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW empty: the anti-shadowing guard
         -- would have nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublishScopesMissing Npm]
+            Left errs -> errs `shouldBe` [PublishAllowMissing Npm]
             Right _ -> expectationFailure "expected a publish-scopes-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
@@ -341,7 +358,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         -- than leaving the internal credential coupled to no edge.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 ]
                     <> staticEnvVars
@@ -351,7 +368,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
     it "accumulates both publish boot errors when scopes are missing and the static credential has no edge" $ do
-        -- A publication target with no ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES and a static credential behind an
+        -- A publication target with no ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW and a static credential behind an
         -- open edge trips both couplings at once: they surface together, in a stable order
         -- (scopes first, then the edge requirement), so the operator fixes both before the
         -- next boot rather than swatting them one reboot at a time.
@@ -362,7 +379,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
                     <> staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Left errs -> errs `shouldMatchList` [PublishScopesMissing Npm, PublishStaticCredentialNeedsEdge Npm]
+            Left errs -> errs `shouldMatchList` [PublishAllowMissing Npm, PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
 publishWiringSpec :: Spec
@@ -370,7 +387,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", "@acme, @beta")
+                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme, @beta")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnv
@@ -388,7 +405,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         -- internal credential is only ever reachable behind edge authentication.
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 , ("ECLUSE_AUTH_TOKEN", "edge-token")
                 ]

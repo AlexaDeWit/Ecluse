@@ -202,8 +202,9 @@ for supported algorithms.
 ### Trusted integrity floor
 
 A trusted (private) upstream's version is served only if its selected artifact meets the trusted
-integrity floor ([invariant 5](security.md#invariants)). `ECLUSE_MIN_TRUSTED_INTEGRITY` sets it
-and defaults to `sha256`, the same secure default as the public floor, so by default a
+integrity floor ([invariant 5](security.md#invariants)). `ECLUSE_MIN_TRUSTED_INTEGRITY` sets it globally (a mount may refine it with
+`mounts.<ecosystem>.minTrustedIntegrity`, so one legacy registry's loosening never
+leaks onto a neighbouring mount) and it defaults to `sha256`, the same secure default as the public floor, so by default a
 SHA-1-only or hashless private version is dropped (filtered from the listing, and a private miss
 on the artifact path falls through to the public origin). Unlike the public floor it is
 loosenable below SHA-256 for a legacy private mirror, where trust in the operator's vetted source
@@ -220,7 +221,7 @@ catch ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11); see
 [Packument merge](registry-model.md#packument-merge-across-upstreams)). The trusted copy always
 wins the bytes, and the divergence is always logged (a `WARNING`) and metered
 (`ecluse.registry.merge.divergence`). `ECLUSE_DIVERGENCE_POLICY` decides what else happens to the
-contested version: `warn` (the default) serves the trusted copy and relies on the alarm;
+contested version (per mount, `mounts.<ecosystem>.divergencePolicy` refines it): `warn` (the default) serves the trusted copy and relies on the alarm;
 `fail-closed` additionally withholds the contested version from the served listing, so a resolver
 pinned to that exact version fails to resolve it rather than receive a contested copy. Fail-closed
 trades availability for strictness and drops any `dist-tag` (including `latest`) that pointed at the

@@ -45,7 +45,9 @@ mountConfigParser o = do
         <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
         <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
-        <*> (o .:? "publishScopes" .!= String "" >>= parseScopes)
+        <*> (o .:? "publishAllow" .!= String "" >>= parseScopes)
+        <*> (o .:? "minTrustedIntegrity" >>= traverse (parseEnum parseMinTrustedIntegrity "minTrustedIntegrity"))
+        <*> (o .:? "divergencePolicy" >>= traverse (parseEnum parseDivergencePolicy "divergencePolicy"))
         <*> o .:? "rules" .!= RulePatch Map.empty
 
 acceptedMountKeys :: [Key.Key]
@@ -59,7 +61,9 @@ acceptedMountKeys =
     , "mirrorCodeArtifactTokenDuration"
     , "publicationTarget"
     , "publicationTargetToken"
-    , "publishScopes"
+    , "publishAllow"
+    , "minTrustedIntegrity"
+    , "divergencePolicy"
     , "rules"
     ]
 

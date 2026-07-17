@@ -30,6 +30,10 @@ import Ecluse.Core.Security (
     parseIpLiteral,
     splitHostPort,
     tarballHostAllowed,
+    tarballHostAllowedFor,
+    tarballHostGate,
+    thgAllowlist,
+    thgEcosystemHosts,
  )
 
 {- | The raw configured upstream authorities (lower-/mixed-case on purpose), before
@@ -64,6 +68,7 @@ spec = do
     splitHostPortSpec
     ssrfGateSpec
     tarballHostPolicySpec
+    ecosystemHostSpec
     allowedHostPortsSpec
     propertiesSpec
     parseBlockedRangeSpec
@@ -955,3 +960,45 @@ parseBlockedRangeSpec = describe "parseBlockedRange" $ do
         parseBlockedRange "not-a-range" `shouldBe` Nothing
     it "returns Nothing for the empty string" $
         parseBlockedRange "" `shouldBe` Nothing
+
+{- Coverage of the ecosystem-host equivalence ('tarballHostAllowedFor'): an
+ecosystem's canonical artifact host (PyPI's files host) is same-host-equivalent
+under the secure default, while every other gate dimension (allowlist,
+internal-range block, the policy for non-ecosystem hosts) is unchanged.
+-}
+ecosystemHostSpec :: Spec
+ecosystemHostSpec = describe "tarballHostAllowedFor (ecosystem artifact hosts)" $ do
+    let noOptIn = []
+        filesHost = hp "files.pythonhosted.org"
+        ecoHosts = allowedHostPorts (Set.fromList [filesHost])
+        noEcoHosts = allowedHostPorts Set.empty
+        -- The gate builder folds ecosystem hosts into the allowlist; mirror that here.
+        allow = allowedHostPorts (Set.fromList [hp "pypi.org", filesHost])
+        decide ecos policy target = tarballHostAllowedFor ecos UntrustedOrigin policy allow noOptIn (Just (hp "pypi.org")) (Just target)
+
+    it "admits the ecosystem's canonical artifact host under SameHostAsPackument" $
+        decide ecoHosts SameHostAsPackument filesHost `shouldBe` True
+
+    it "still refuses a cross-host target that is not an ecosystem host" $
+        decide ecoHosts SameHostAsPackument (hp "cdn.evil.example") `shouldBe` False
+
+    it "changes nothing with no ecosystem hosts (npm's shape): cross-host stays refused" $
+        decide noEcoHosts SameHostAsPackument filesHost `shouldBe` False
+
+    it "still requires the ecosystem host to be allowlisted (fail closed off-list)" $ do
+        let allowWithoutFiles = allowedHostPorts (Set.fromList [hp "pypi.org"])
+        tarballHostAllowedFor ecoHosts UntrustedOrigin SameHostAsPackument allowWithoutFiles noOptIn (Just (hp "pypi.org")) (Just filesHost)
+            `shouldBe` False
+
+    it "still blocks an internal-range ecosystem host on the untrusted origin" $ do
+        let internal = hp "10.0.0.5"
+            ecoInternal = allowedHostPorts (Set.fromList [internal])
+            allowInternal = allowedHostPorts (Set.fromList [hp "pypi.org", internal])
+        tarballHostAllowedFor ecoInternal UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "pypi.org")) (Just internal)
+            `shouldBe` False
+
+    it "gate builder: ecosystem hosts enter the allowlist and the ecosystem set" $ do
+        let gate = tarballHostGate ["https://files.pythonhosted.org"] Nothing "https://pypi.org" Nothing
+        isAllowedUpstreamHost (thgAllowlist gate) filesHost `shouldBe` True
+        isAllowedUpstreamHost (thgEcosystemHosts gate) filesHost `shouldBe` True
+        isAllowedUpstreamHost (thgEcosystemHosts gate) (hp "pypi.org") `shouldBe` False

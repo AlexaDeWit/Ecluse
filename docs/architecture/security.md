@@ -282,7 +282,7 @@ their own requests outside `withToken`, a noted follow-up.
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
-(`ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) constrains which package names may be published; it
+(`ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`) constrains which package names may be published; it
 is not authentication and does not verify who is publishing. So if a deployment sets
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, substituting Écluse's own credential for a
 publisher who forwards none, the composition root refuses to boot without a verifiable

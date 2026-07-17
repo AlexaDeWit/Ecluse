@@ -283,7 +283,7 @@ publishScenarios = do
                 -- absence below is attributable to the refusal, not a stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
-                -- A name outside ECLUSE_PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
+                -- A name outside ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW is refused with a 403 BEFORE the relay, so npm
                 -- exits non-zero and the publication target never receives it. The absence is a
                 -- sound proof of refused-before-write *because* the harness configures Verdaccio
                 -- to accept anonymous publishes: had the document reached the target it would

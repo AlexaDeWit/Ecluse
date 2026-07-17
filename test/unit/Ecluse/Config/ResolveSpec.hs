@@ -155,7 +155,7 @@ spec = do
                     , ("ECLUSE_MIN_TRUSTED_INTEGRITY", "sha256")
                     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.com")
                     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
-                    , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", "@test")
+                    , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@test")
                     ]
 
             let expected =
@@ -178,7 +178,7 @@ spec = do
                                                     , ("mirrorCodeArtifactTokenDuration", Number 43200)
                                                     , ("publicationTarget", String "https://publish.example.com")
                                                     , ("publicationTargetToken", String "publish-token")
-                                                    , ("publishScopes", String "@test")
+                                                    , ("publishAllow", String "@test")
                                                     ]
                                             )
                                         ]

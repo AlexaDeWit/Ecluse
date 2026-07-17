@@ -27,7 +27,7 @@ spec = describe "renderBootError" $
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
         -- The mint-failure render makes the transient-vs-permanent distinction legible.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
-        renderBootError (PublishScopesMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES"
+        renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
   where
     infixed :: Text -> Text -> Bool

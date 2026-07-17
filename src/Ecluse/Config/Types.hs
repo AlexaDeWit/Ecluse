@@ -103,7 +103,13 @@ data MountConfig = MountConfig
     , mntMirrorCodeArtifactTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
-    , mntPublishScopes :: [Scope]
+    , mntPublishAllow :: [Scope]
+    , mntMinTrustedIntegrity :: Maybe MinTrustedIntegrity
+    {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
+    legacy private registry whose loosening must not leak onto other mounts.
+    -}
+    , mntDivergencePolicy :: Maybe DivergencePolicy
+    -- ^ A per-mount refinement of the global cross-upstream divergence policy.
     , mntAdditionalRules :: RulePatch
     }
     deriving stock (Eq, Show)

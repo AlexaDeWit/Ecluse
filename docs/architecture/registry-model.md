@@ -38,9 +38,9 @@ behaviour:
 - **Mirror target (write)**: always Écluse's own `CredentialProvider` token, derived from the
   mirror-target URL (see
   [Configuration](configuration.md#outbound-registry-credentials)). Often the same registry as
-  the private upstream, but declared explicitly even then
-  (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET` is required on an active mount; the write's destination
-  is never implied from another endpoint): the client reads it, Écluse writes it.
+  the private upstream, declared under its own key even then (the write's destination is never
+  implied from another endpoint, and declaring it is what makes the mount mirrored): the client
+  reads it, Écluse writes it.
 - **Publication target (write)**: the client's own forwarded credential (`passthrough`); Écluse
   substitutes no identity and mints no token here.
 
@@ -71,8 +71,8 @@ mediates the publish the same way it mediates reads.
   content, and credential from the mirror write (the mirror target is *proxy*-written with
   approved public packages through the worker's per-ecosystem publish capability).
 - **Anti-shadowing guard (the load-bearing control).** A publish is refused unless its package
-  name falls within the operator's configured publish scope allow-list (the MVP mechanism; e.g.
-  `@acme/*`). This stops a client publishing a name that shadows an existing public package, a
+  name falls within the operator's configured publish allow-list (`publishAllow`, in the
+  ecosystem's native form; for npm, scopes such as `@acme`). This stops a client publishing a name that shadows an existing public package, a
   dependency-confusion vector. The guard holds a guard-name ≡ write-name ≡ body-name invariant: the
   scope check keys on the URL-path name, and because the npm publish document carries its own
   declared identity (`_id`, top-level `name`, every `versions[].name`) that a target may key the
@@ -121,7 +121,10 @@ opt-in mode.
 The **public leg** honours the authoritative upstream location, the `dist.tarball` the gated
 version declares, fetched at exactly that URL rather than a reconstructed `/-/` path, so Écluse can
 front a public registry serving artifacts from a separate host (the PyPI-files-host shape) or a
-signed CDN URL. That location is gated, not trusted: the host allowlist and tarball-host policy
+signed CDN URL. An ecosystem whose registry serves artifact bytes from a canonical separate host
+__by design__ declares those hosts on its adapter, and the secure-default same-host policy admits
+them (still allowlist- and internal-range-gated); the operator's tarball-host knob stays a policy
+choice, never a hostname list. That location is gated, not trusted: the host allowlist and tarball-host policy
 bound where it may be fetched, https-only egress with certificate validation authenticates the
 host, and a legacy `http` tarball is upgraded (same host) or dropped (see
 [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
