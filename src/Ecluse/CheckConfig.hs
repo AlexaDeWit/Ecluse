@@ -19,7 +19,7 @@ import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure))
 
-import Ecluse.Boot (readConfigDocument)
+import Ecluse.Boot (applySecretFileIndirection, readConfigDocument)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MemoryBudget (MemoryBudget (mbQueueMemoryMaxDepth), resolveMemoryBudget)
 import Ecluse.Composition.MirrorQueue (
@@ -58,7 +58,8 @@ import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
 -- | Validate, print the resolved posture, and exit: @0@ valid, @2@ refused.
 runCheckConfig :: IO ()
 runCheckConfig = do
-    envVars <- getEnvironment
+    rawEnvVars <- getEnvironment
+    envVars <- applySecretFileIndirection rawEnvVars >>= either refuseWith pure
     docE <- readConfigDocument envVars
     (docBlob, docPath) <- either refuseWith pure docE
     TIO.putStrLn $ case docBlob of

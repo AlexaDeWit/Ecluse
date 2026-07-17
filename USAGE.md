@@ -14,6 +14,7 @@ _why_ behind everything here.
 
 - [What Écluse does](#what-écluse-does)
 - [Deployment model](#deployment-model)
+- [The two-variable start (serve-only gate)](#the-two-variable-start-serve-only-gate)
 - [The Golden Path](#the-golden-path)
 - [Configuration](#configuration)
   - [Environment variables](#environment-variables)
@@ -25,6 +26,7 @@ _why_ behind everything here.
 - [Rule policy](#rule-policy)
 - [Operating Écluse](#operating-écluse)
 - [Planned controls](#planned-controls)
+- [Appendix: runtime-sizing arithmetic](#appendix-runtime-sizing-arithmetic)
 - [Learn more](#learn-more)
 
 ## What Écluse does
@@ -72,6 +74,25 @@ overlap registry deletions. Point your package manager at the proxy as a registr
 
 Before running a published image, verify its provenance and SBOM attestations: the recipe
 (keyless Sigstore, Rekor, pinned by digest) is in the [README](README.md#verifying-the-image).
+
+## The two-variable start (serve-only gate)
+
+The fastest way to put the policy gate in front of real installs is a **serve-only** deployment:
+no mirror, no queue, no cloud account, just the gated public leg.
+
+```bash
+ECLUSE_MOUNTS__NPM__ENABLED=true \
+ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:4873 \
+ecluse proxy
+```
+
+Every rule, advisory gate, integrity floor, and egress control applies exactly as on a mirrored
+deployment; the only thing missing is the mirror write. The trade is stated plainly: the public
+leg is **permanent** (egress never shrinks and the traffic never retires), availability stays
+coupled to the public registry, and no mirrored copy survives an upstream yank. Use it to
+evaluate the gate or to front an ecosystem you are only trialling, then graduate to the
+[Golden Path](#the-golden-path) by declaring a `mirrorTarget`. A ready-made Compose file for
+both postures lives in [`examples/`](examples/).
 
 ## The Golden Path
 
@@ -173,55 +194,120 @@ in [Configuration & Authentication](docs/architecture/configuration.md).
 
 ### Environment variables
 
+> **One spelling rule.** Environment variables are the mechanical transliteration of the
+> document schema: `__` descends into an object and `_` joins a camelCase word, so
+> `ECLUSE_CACHE__MAX_BYTES` spells `cache.maxBytes` and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET`
+> spells `mounts.npm.mirrorTarget`. Every table below is one document group.
+
+The secret-typed variables also accept the container-secret file pattern: set the `_FILE` form
+(`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE`,
+`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE`) to a file path and the file's contents (one
+trailing newline stripped) become the value, so the token itself never enters the environment.
+Setting both a variable and its `_FILE` form is a fail-loud boot error, as is an unreadable
+file; only the secret-typed keys have this side door.
+
+#### Process
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_CONFIG` | No | `/etc/ecluse/config.yaml` | Path of the [config document](#the-configuration-document). A process-level setting, not a document key. With it set, a missing file at that path is a **boot error** (never a silent documentless boot); at the default path, an absent document is fine. |
+
+#### Server (`server.*`)
+
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_SERVER__PORT` | No | `8080` | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
+| `ECLUSE_SERVER__PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
+| `ECLUSE_SERVER__AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
+| `ECLUSE_SERVER__HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
+| `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
+
+#### Mounts (`mounts.npm.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `ECLUSE_MOUNTS__NPM__ENABLED` | No |  | The mount's explicit on/off switch. Any declared `ECLUSE_MOUNTS__NPM__*` key activates the mount, so `ENABLED=true` exists for the mount that needs no other key (the serve-only pure public gate: `ECLUSE_MOUNTS__NPM__ENABLED=true` + `ECLUSE_SERVER__PUBLIC_URL` is a complete deployment); `ENABLED=false` switches off a mount whose other keys remain. |
 | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Depends | Mirrored mounts | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). Required on a **mirrored** mount (one declaring `MIRROR_TARGET`: the mirror must be readable back through it); optional on a serve-only mount, where present it is still merged with the gated public set. |
 | `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
-| `ECLUSE_SERVER__PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
 | `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No |  | Registry that approved packages are mirrored to. **Declaring it is what makes the mount mirrored**; absent, the mount is serve-only (never writes anywhere, every artifact stays on the gated public leg) and the boot log names the posture. May equal `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` (one registry, read and written). **The write credential is derived from this URL:** a CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) mints a short-lived token scoped to that domain; any other host is written with the static `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`. |
 | `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | Depends |  | Static write token for a **non-CodeArtifact** mirror target. Required when the mirror target is not a CodeArtifact endpoint (absent ⇒ boot error naming the key); must **not** be set when it is one (the token is minted, so a static token alongside it is refused at boot as a conflict), and must not be set on a serve-only mount (a write setting with no mirror target is refused as a likely mistake). |
 | `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No |  | Lifetime in seconds of the minted CodeArtifact write token (applies only when the mirror target is a CodeArtifact endpoint), capped at `43200` (12 h). |
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No |  | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream. Protect this surface; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No |  | Static fallback credential for the publication target, forwarded only when a publishing client sends none. The default is **passthrough** (the publisher's own token). ⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` | Conditionally | If `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package names a client may publish, in the ecosystem's native form (npm: scopes such as `@acme,@beta`), the anti-shadowing guard: a publish outside the list is refused before any upstream write. It limits names, not callers, and is not authentication. An empty list with a publication target set is a fail-loud boot error. |
+| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |
+| `ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY` | No | global `ECLUSE_INTEGRITY__MIN_TRUSTED` | Per-mount refinement of the trusted-integrity floor, for the one legacy private registry whose loosening (e.g. `sha1`) must not leak onto other mounts. |
+| `ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY` | No | global `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | Per-mount refinement of the cross-upstream divergence policy (`warn`/`fail-closed`). |
+
+#### Mirror queue (`queue.*`) and the ambient AWS environment
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend** (the same derivation as the mirror credential, so a backend/URL disagreement is unrepresentable). A real SQS queue URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, **region taken from the host** (no `AWS_REGION` needed). A Pub/Sub topic resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot naming the accepted forms. **Unset with a mirroring mount ⇒ the bounded in-process queue**: a non-durable, best-effort mirror (fine for single-node, trial, or air-gapped deployments), warned loudly at boot. Never consulted for a serve-only deployment. |
 | `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Cap on in-process queue depth, computed at boot by the memory budget (a heap-ceiling share, clamped; `50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
 | `AWS_REGION` | Depends | AWS backends only | Region for CodeArtifact, and for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (an emulator or VPC endpoint carries no region in its host; a real SQS queue URL carries its own). Ambient AWS-SDK environment, read from the process environment directly, **not** a config-document key: `awsRegion:` in the document is rejected as unknown. |
 | `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Point at a local emulator (`ministack`) or VPC endpoint; setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, with `AWS_REGION` scoping it, and requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. Ambient, like `AWS_REGION`. |
 | `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can never silently redirect the queue. Ambient, like `AWS_REGION`. |
-| `ECLUSE_SERVER__AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
-| `ECLUSE_CONFIG` | No | `/etc/ecluse/config.yaml` | Path of the [config document](#the-configuration-document). A process-level setting, not a document key. With it set, a missing file at that path is a **boot error** (never a silent documentless boot); at the default path, an absent document is fine. |
-| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |
-| `ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY` | No | global `ECLUSE_INTEGRITY__MIN_TRUSTED` | Per-mount refinement of the trusted-integrity floor, for the one legacy private registry whose loosening (e.g. `sha1`) must not leak onto other mounts. |
-| `ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY` | No | global `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | Per-mount refinement of the cross-upstream divergence policy (`warn`/`fail-closed`). |
+
+#### Limits (`limits.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Computed at boot by the memory budget (a working-space share per admission slot, floored at 12 MiB so real packuments always fit) unless set. Positive integer. |
+| `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before the request is refused. Computed at boot by the memory budget (a heap-ceiling share, clamped; 25 MiB with no ceiling datapoint) unless set. Positive integer. |
+| `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
+| `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
+
+#### Cache (`cache.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_CACHE__TTL` | No | `60` | Seconds metadata is kept in the shared packument cache. |
+| `ECLUSE_CACHE__MAX_ENTRIES` | No | Memory budget | Maximum number of items the metadata cache will hold; computed at boot by the memory budget (tracking the byte bound at one slot per expected entry; `1024` with no ceiling datapoint) unless set. |
+| `ECLUSE_CACHE__MAX_BYTES` | No | Memory budget | Resident-byte budget for **each** of the metadata cache's stores (the full-packument store, the single-version store, and the assembled-representation store), so the worst-case total is three budgets. Computed at boot by the memory budget (a quarter of the heap ceiling, clamped; 256 MiB with no ceiling datapoint) unless set. |
+
+#### Integrity (`integrity.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_INTEGRITY__MIN_PUBLIC` | No | `sha256` | Minimum integrity algorithm a **public** (untrusted) version's digest must meet: `sha256`, `sha384`, `sha512`, or `blake2b`. A weaker or absent digest is refused with `403`. Hard-floored at SHA-256: `sha1`/`md5`/an unknown name is rejected at startup. The trusted path has its own loosenable floor (`ECLUSE_INTEGRITY__MIN_TRUSTED`). |
+| `ECLUSE_INTEGRITY__MIN_TRUSTED` | No | `sha256` | Minimum integrity algorithm a **trusted** (private) version's digest must meet. Defaults to `sha256`, so a SHA-1-only or hashless private version is dropped like a public one, but unlike the public floor is **loosenable below SHA-256** (`sha1`/`md5`) for a legacy private mirror. An unknown name is rejected at load. |
+| `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | No | `warn` | What to do when a shared version's private and public copies contradict on a shared integrity algorithm ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)). Either way the trusted copy wins the bytes, a `WARNING` is logged, and `ecluse.registry.merge.divergence` is incremented. `warn` serves the trusted copy and relies on the alarm; `fail-closed` additionally withholds the contested version from the served listing (dropping any `dist-tag`, including `latest`, that pointed at it), so a resolver pinned to it fails to resolve rather than receive a contested copy. An unknown value is rejected at load. |
+
+#### Egress (`egress.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` | No |  | Comma-separated list of CIDR ranges (e.g. `10.99.0.0/16,fd12::/8`) an operator adds to the fixed internal-address block, applied identically across every mount. Extends the block only, never narrows it; a malformed entry **fails closed at boot**. See [Securing network egress](#securing-network-egress-required). |
-| `ECLUSE_SERVER__HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
-| `ECLUSE_OBSERVABILITY__LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
-| `ECLUSE_OBSERVABILITY__TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
+
+#### Advisories (`advisories.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `ECLUSE_ADVISORIES__COMPILE_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. Positive integer. |
 | `ECLUSE_ADVISORIES__BUCKET` | No |  | The object-store bucket carrying the compiled `osv.db` advisory artifacts. Pilot uploads to it; the proxy polls it and shadow-swaps fresh artifacts into the rules engine. Unset, the proxy runs no advisory sync and `AllowIfRemediatesCve` abstains. |
 | `ECLUSE_ADVISORIES__POLL_INTERVAL` | No | `60` | Proxy only: how often each configured ecosystem's sync task polls the bucket for a fresh advisory database (a cheap conditional `HEAD`). Deliberately independent of, and more frequent than, Pilot's `ECLUSE_ADVISORIES__COMPILE_INTERVAL`: matching them would nearly double the worst-case advisory age. Positive integer. |
 | `ECLUSE_ADVISORIES__MAX_DATABASE_BYTES` | No | `536870912` | Proxy only: refuse to download an advisory database larger than this many bytes (default 512 MiB). The declared length fails fast and the streaming download enforces the cap. |
 | `ECLUSE_ADVISORIES__DATA_DIR` | No | `data/osv` | Directory for the OSV advisory databases: where Pilot compiles them, and where the proxy lands its synced per-ecosystem artifacts. During a swap, actual disk use briefly exceeds what `ls` or `du` show: the superseded file is unlinked while its last readers finish, and the kernel frees the space when the drained connection closes. |
 | `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` | No | `https://osv-vulnerabilities.storage.googleapis.com` | Base URL of the per-ecosystem OSV advisory exports Pilot compiles from (`<base>/<ecosystem>/all.zip`). Override it if the upstream moves or you mirror the exports. |
-| `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
+
+#### Runtime (`runtime.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `ECLUSE_RUNTIME__CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the container's cgroup CPU quota (floored, at least 1, clamped to the visible processors); with no cgroup limit either, the runtime's own detection stands. Give the container **whole cores**; see the runtime sizing note. The boot log prints the decision and its provenance. Positive integer. See [Operating Écluse → Runtime sizing](#operating-écluse). |
 | `ECLUSE_RUNTIME__MAX_HEAP_BYTES` | No | derived | Heap ceiling in bytes, enforced by the GHC runtime (a breach is a clean heap-overflow error rather than a kernel OOM kill). Unset ⇒ derived from the cgroup memory limit less the nursery budget and 10% slack; with no cgroup limit, unbounded unless your own `GHCRTS -M` says otherwise. Enforcing a ceiling re-executes the binary once, in place (same PID). Positive integer. |
 | `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT` | No | computed | Process-wide cap on concurrent metadata materialisation (whole packument requests and the public-metadata gate a tarball miss reaches). Unset, computed at boot as `max(8, 10 x cores)` and logged. Over the cap, a request waits up to 1 second for a slot (a bounded waiting room, no queue-jumping) and proceeds when one frees; only a request that finds the room full or waits out that budget gets `503 Service Unavailable` with `Retry-After: 1`. Trusted private tarball hits, health probes, and local routes stream outside the cap. Positive integer. A 503 **with** `Retry-After: 1` is intentional backpressure, not a failure: exclude it from alerts (a real upstream failure returns 503 without that header), and a service mesh can auto-retry it. |
 | `ECLUSE_RUNTIME__PUBLIC_CONNECTIONS_PER_HOST` | No | computed | Maximum pooled (kept-for-reuse) connections per public upstream host. Unset, computed at boot as `clamp(32, 1024, nofile / 8)` and logged. Connections beyond the pool still open, but re-handshake TLS each time. Positive integer. The private pool is sized separately (next row). |
 | `ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST` | No | computed | Maximum pooled connections to the private upstream host. Unset, computed at boot as a quarter of the soft `RLIMIT_NOFILE`, clamped to 64-4096, and logged. Sized for the trusted tarball hit, which streams outside `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT`. The pool governs reuse, not socket count. Positive integer. |
-| `ECLUSE_CACHE__TTL` | No | `60` | Seconds metadata is kept in the shared packument cache. |
-| `ECLUSE_CACHE__MAX_ENTRIES` | No | Memory budget | Maximum number of items the metadata cache will hold; computed at boot by the memory budget (tracking the byte bound at one slot per expected entry; `1024` with no ceiling datapoint) unless set. |
-| `ECLUSE_CACHE__MAX_BYTES` | No | Memory budget | Resident-byte budget for **each** of the metadata cache's stores (the full-packument store, the single-version store, and the assembled-representation store), so the worst-case total is three budgets. Computed at boot by the memory budget (a quarter of the heap ceiling, clamped; 256 MiB with no ceiling datapoint) unless set. |
-| `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Computed at boot by the memory budget (a working-space share per admission slot, floored at 12 MiB so real packuments always fit) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before the request is refused. Computed at boot by the memory budget (a heap-ceiling share, clamped; 25 MiB with no ceiling datapoint) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
-| `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
-| `ECLUSE_INTEGRITY__MIN_PUBLIC` | No | `sha256` | Minimum integrity algorithm a **public** (untrusted) version's digest must meet: `sha256`, `sha384`, `sha512`, or `blake2b`. A weaker or absent digest is refused with `403`. Hard-floored at SHA-256: `sha1`/`md5`/an unknown name is rejected at startup. The trusted path has its own loosenable floor (`ECLUSE_INTEGRITY__MIN_TRUSTED`). |
-| `ECLUSE_INTEGRITY__MIN_TRUSTED` | No | `sha256` | Minimum integrity algorithm a **trusted** (private) version's digest must meet. Defaults to `sha256`, so a SHA-1-only or hashless private version is dropped like a public one, but unlike the public floor is **loosenable below SHA-256** (`sha1`/`md5`) for a legacy private mirror. An unknown name is rejected at load. |
-| `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | No | `warn` | What to do when a shared version's private and public copies contradict on a shared integrity algorithm ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)). Either way the trusted copy wins the bytes, a `WARNING` is logged, and `ecluse.registry.merge.divergence` is incremented. `warn` serves the trusted copy and relies on the alarm; `fail-closed` additionally withholds the contested version from the served listing (dropping any `dist-tag`, including `latest`, that pointed at it), so a resolver pinned to it fails to resolve rather than receive a contested copy. An unknown value is rejected at load. |
+
+#### Observability (`observability.*`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_OBSERVABILITY__LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
+| `ECLUSE_OBSERVABILITY__TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
+
 
 Configuration is validated in full at startup and the process refuses to start on any problem (an
 unknown rule type, a bad URL, an unresolved policy reference): a misconfiguration is a loud,
@@ -434,7 +520,9 @@ network, browsing and search left open), though workstations are a softer contro
 
 Écluse evaluates a named map of rules over a built-in **deny-by-default** policy: a package is
 admitted only if a rule allows it, and every deny type outranks every allow type by default, so a
-matching deny wins. The shipped default is small and biased toward resilience rather than blanket
+matching deny wins. The policy lives in the config document's `rules` object; like every other
+key it also has an environment spelling (`ECLUSE_RULES` carrying the JSON object), which suits a
+one-rule tweak or a test harness while the document stays the reviewable home for a real policy. The shipped default is small and biased toward resilience rather than blanket
 bans:
 
 - **`min-age`**: admit public versions older than a quarantine window (7 days by default), the core
@@ -567,35 +655,10 @@ serve such a source, point it at the **private** upstream slot and loosen
   decision is boot-logged as a `memory budget:` line with its provenance, an explicit config value
   always wins, and with no ceiling datapoint the documented fallbacks apply (the values shown in
   the tables above).
-- **Runtime sizing (cores and memory).** At boot Écluse resolves how many cores to claim and what
-  heap ceiling to run under, logging each decision with its provenance, so the posture is readable
-  from the start-up lines. Resolution order per knob:
-  1. **Explicit config wins**: `ECLUSE_RUNTIME__CORES` (or `cores`) and `ECLUSE_RUNTIME__MAX_HEAP_BYTES`
-     (`runtime.maxHeapBytes`), positive integers.
-  2. **Otherwise derive from the cgroup (v2)**: the CPU quota, floored (at least 1) and clamped to
-     visible processors; the memory limit less the nursery budget (cores x allocation area) less
-     10% slack, floored at half the limit.
-  3. **No limit either way**: the GHC runtime's own resolution stands (its defaults plus any
-     `GHCRTS`), and a `GHCRTS` heap ceiling you set is never overridden.
-
-  **Give Écluse whole cores.** A fractional CPU limit (say 3.5) has no good option: claiming 4
-  capabilities overruns the CFS quota during stop-the-world GC, freezing the process mid-pause;
-  flooring to 3 never self-throttles but strands the fraction. Écluse floors the derived count, so
-  pair an integer limit with `requests = limits` (and exclusive cores where offered) to remove
-  throttling structurally. A CPU **limit** doesn't shrink the processor count the runtime sees, so
-  without `ECLUSE_RUNTIME__CORES` a 2-CPU pod on a 32-core node would claim 32 capabilities and 32 nurseries.
-  Enforcing a heap ceiling needs runtime flags fixed at start, so Écluse **re-executes its own
-  binary once, in place** (same PID), logging `runtime: re-launching with GHCRTS ...` first.
-- **Runtime memory arithmetic (proxy pod).** For the **proxy** role; the other roles differ (Pilot
-  runs a scheduled compute, the Dredger follows its pruning rules), so tune their allocation area
-  via `GHCRTS` separately, though the cores/heap resolution above still applies to every role. The
-  binary ships `-A64m -n4m` (a 64 MiB per-core allocation area in 4 MiB chunks), trading bounded
-  extra memory for far fewer GCs under load. Budget roughly `cores x 64 MiB` of nursery, plus the
-  live heap (dominated by the metadata cache), plus up to one live-heap of copying headroom during a
-  major GC. Worked shapes: a 2-CPU / 512 MiB pod runs as-is; a 2-CPU / 256 MiB pod also needs
-  `GHCRTS="-A16m"`; a 4-CPU pod wants ~750 MiB on defaults, or 512 MiB with `-A32m`. Taller pods
-  amortise the cache and coalescing better, so prefer 4-CPU-ish shapes. Tune the allocation area
-  with `GHCRTS`; the boot log prints the effective value.
+- **Runtime sizing (cores and memory).** Cores and the heap ceiling resolve at boot
+  (config, else cgroup, else the runtime's own posture) and every decision is logged with its
+  provenance; the resolution order, the whole-cores guidance, and the per-pod memory arithmetic
+  live in the [runtime-sizing appendix](#appendix-runtime-sizing-arithmetic).
 - **Revoking a mirrored version (internal yank).** The mirror store (Registry B) deliberately
   resists upstream yanks, so a benign yank doesn't break your installs, but a version later found
   malicious isn't removed automatically (Écluse never re-gates trusted content). Usually this
@@ -614,6 +677,38 @@ Documented ahead of implementation so the configuration surface is known.
   equivalents (SQS `MirrorQueue`, CodeArtifact credential leaf, mirror worker, composition root)
   are built and wired.
 The full deployment runbook ships with the launch.
+
+## Appendix: runtime-sizing arithmetic
+
+**Resolution order.** At boot Écluse resolves how many cores to claim and what
+heap ceiling to run under, logging each decision with its provenance, so the posture is readable
+from the start-up lines. Resolution order per knob:
+1. **Explicit config wins**: `ECLUSE_RUNTIME__CORES` (or `cores`) and `ECLUSE_RUNTIME__MAX_HEAP_BYTES`
+   (`runtime.maxHeapBytes`), positive integers.
+2. **Otherwise derive from the cgroup (v2)**: the CPU quota, floored (at least 1) and clamped to
+   visible processors; the memory limit less the nursery budget (cores x allocation area) less
+   10% slack, floored at half the limit.
+3. **No limit either way**: the GHC runtime's own resolution stands (its defaults plus any
+   `GHCRTS`), and a `GHCRTS` heap ceiling you set is never overridden.
+
+**Give Écluse whole cores.** A fractional CPU limit (say 3.5) has no good option: claiming 4
+capabilities overruns the CFS quota during stop-the-world GC, freezing the process mid-pause;
+flooring to 3 never self-throttles but strands the fraction. Écluse floors the derived count, so
+pair an integer limit with `requests = limits` (and exclusive cores where offered) to remove
+throttling structurally. A CPU **limit** doesn't shrink the processor count the runtime sees, so
+without `ECLUSE_RUNTIME__CORES` a 2-CPU pod on a 32-core node would claim 32 capabilities and 32 nurseries.
+Enforcing a heap ceiling needs runtime flags fixed at start, so Écluse **re-executes its own
+binary once, in place** (same PID), logging `runtime: re-launching with GHCRTS ...` first.
+**Memory arithmetic (proxy pod).** For the **proxy** role; the other roles differ (Pilot
+runs a scheduled compute, the Dredger follows its pruning rules), so tune their allocation area
+via `GHCRTS` separately, though the cores/heap resolution above still applies to every role. The
+binary ships `-A64m -n4m` (a 64 MiB per-core allocation area in 4 MiB chunks), trading bounded
+extra memory for far fewer GCs under load. Budget roughly `cores x 64 MiB` of nursery, plus the
+live heap (dominated by the metadata cache), plus up to one live-heap of copying headroom during a
+major GC. Worked shapes: a 2-CPU / 512 MiB pod runs as-is; a 2-CPU / 256 MiB pod also needs
+`GHCRTS="-A16m"`; a 4-CPU pod wants ~750 MiB on defaults, or 512 MiB with `-A32m`. Taller pods
+amortise the cache and coalescing better, so prefer 4-CPU-ish shapes. Tune the allocation area
+with `GHCRTS`; the boot log prints the effective value.
 
 ## Learn more
 

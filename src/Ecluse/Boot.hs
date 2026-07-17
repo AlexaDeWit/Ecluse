@@ -77,6 +77,7 @@ documentation conventions.
 -}
 module Ecluse.Boot (
     BootEnv (..),
+    applySecretFileIndirection,
     readConfigDocument,
     withBootEnv,
     BootAborted (..),
@@ -88,14 +89,14 @@ module Ecluse.Boot (
 ) where
 
 import Data.ByteString qualified as BS
-import Data.List (lookup)
+import Data.List (isSuffixOf, lookup)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import System.Environment (getEnvironment)
 import System.IO.Error (isDoesNotExistError)
-import UnliftIO (throwIO, tryJust)
+import UnliftIO (throwIO, tryIO, tryJust)
 
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -159,6 +160,51 @@ configuration (failing fast on any error), apply the runtime posture, build the
 logger, and bracket the telemetry substrate for the action's lifetime.
 -}
 
+{- | Apply the @*_FILE@ secret indirection: a recognised secret variable may be
+supplied as @\<VAR\>_FILE@ naming a file whose contents (one trailing newline
+stripped) become the variable's value -- the standard container-secret mount
+pattern, so a token never has to enter the environment itself. Only the
+secret-typed keys are eligible; any other @*_FILE@ spelling transliterates to an
+unknown document key and is rejected by the strict parser as usual. Setting both
+a base variable and its @_FILE@ form is a fail-loud conflict (never a silent
+precedence choice), and an unreadable file fails the same way; failures
+aggregate so one run reports them all. Shared by the boot and @check-config@.
+-}
+applySecretFileIndirection :: [(String, String)] -> IO (Either Text [(String, String)])
+applySecretFileIndirection envVars = do
+    reads' <- traverse readOne fileVars
+    let (readErrs, resolved) = partitionEithers reads'
+    pure $ case conflicts <> readErrs of
+        [] -> Right (filter (not . isSecretFileVar . fst) envVars <> resolved)
+        errs -> Left (T.unlines errs)
+  where
+    fileVars = filter (isSecretFileVar . fst) envVars
+
+    conflicts =
+        [ T.pack base <> " and " <> T.pack name <> " are both set: supply the secret through exactly one of them"
+        | (name, _) <- fileVars
+        , let base = baseVarOf name
+        , isJust (lookup base envVars)
+        ]
+
+    readOne (name, path) = do
+        outcome <- tryIO (readFileBS path)
+        pure $ case outcome of
+            Left err ->
+                Left (T.pack name <> " points at " <> T.pack path <> ", which cannot be read: " <> T.pack (displayException err))
+            Right bytes ->
+                Right (baseVarOf name, T.unpack (T.dropWhileEnd (== '\n') (decodeUtf8 bytes)))
+
+    isSecretFileVar name =
+        "ECLUSE_" `isPrefixOf` name && any (`isSuffixOf` name) secretFileSuffixes
+
+    baseVarOf = reverse . drop (length ("_FILE" :: String)) . reverse
+
+    -- The secret-typed keys, by their env-spelling tails; anything else keeps the
+    -- strict no-secrets-in-config posture with no file-shaped side door.
+    secretFileSuffixes :: [String]
+    secretFileSuffixes = ["AUTH_TOKEN_FILE", "MIRROR_TARGET_TOKEN_FILE", "PUBLICATION_TARGET_TOKEN_FILE"]
+
 {- | Locate and read the config document per the @ECLUSE_CONFIG@ semantics: the
 bytes when a document exists (plus the path consulted), no bytes at an absent
 default path (env + defaults alone boot a proxy), and a fail-loud message for an
@@ -192,7 +238,8 @@ nonBlankPath p = if T.null (T.strip (T.pack p)) then Nothing else Just p
 
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
-    envVars <- getEnvironment
+    rawEnvVars <- getEnvironment
+    envVars <- applySecretFileIndirection rawEnvVars >>= orExit id
     let ambient = ambientAwsFromEnv envVars
     (docBlob, docPath) <- readConfigDocument envVars >>= orExit id
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)

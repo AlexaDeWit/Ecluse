@@ -667,6 +667,7 @@ test-suite ecluse-unit
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.AmbientSpec
+    Ecluse.Config.DocCoverageSpec
     Ecluse.Config.MirrorCredentialSpec
     Ecluse.Config.QueueTargetSpec
     Ecluse.Config.ResolveSpec

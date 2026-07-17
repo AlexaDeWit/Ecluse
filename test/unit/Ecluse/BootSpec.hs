@@ -169,6 +169,42 @@ spec = do
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
+    describe "the *_FILE secret indirection" $ do
+        it "resolves a secret through *_FILE and serves" $ do
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                let secretPath = dir </> "mirror-token"
+                writeFileText secretPath "mirror-write-token\n"
+                traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
+                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" secretPath
+                outcome <- timeout 100000 (withArgs ["proxy"] run)
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+                traverse_ (unsetEnv . fst) runEnv
+                outcome `shouldBe` Nothing
+
+        it "refuses a secret supplied both directly and through *_FILE (no silent precedence)" $ do
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                let secretPath = dir </> "mirror-token"
+                writeFileText secretPath "mirror-write-token\n"
+                traverse_ (uncurry setEnv) runEnv
+                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" secretPath
+                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+                traverse_ (unsetEnv . fst) runEnv
+                -- The typed process supervisor maps the boot abort to exit 2.
+                outcome `shouldBe` Left (ExitFailure 2)
+
+        it "refuses a *_FILE secret whose file cannot be read" $ do
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" "/nonexistent/ecluse/secret"
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+            traverse_ (unsetEnv . fst) runEnv
+            -- The typed process supervisor maps the boot abort to exit 2.
+            outcome `shouldBe` Left (ExitFailure 2)
+
     describe "check-config (validate and print, boot nothing)" $ do
         it "validates a bootable configuration and exits 0" $ do
             traverse_ (uncurry setEnv) runEnv
