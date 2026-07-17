@@ -19,10 +19,16 @@ import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure))
 
+import Data.Map.Strict qualified as Map
+
 import Ecluse.Boot (applySecretFileIndirection, readConfigDocument)
 import Ecluse.Composition (validateComposition)
-import Ecluse.Composition.BootError (renderBootError)
-import Ecluse.Composition.MemoryBudget (MemoryBudget (mbQueueMemoryMaxDepth), resolveMemoryBudget)
+import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
+import Ecluse.Composition.MemoryPlan (
+    MemoryPlan (mpDegradations, mpOverrideViolations, mpQueueMemoryMaxDepth),
+    queueTenantDemand,
+    resolveMemoryPlan,
+ )
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     MirrorRuntimePlan (MirrorWith, NoMirroring),
@@ -33,11 +39,11 @@ import Ecluse.Composition.Sizing (
     openFileSoftLimit,
     resolvePrivateConnections,
     resolvePublicConnections,
-    resolveServeAdmission,
  )
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgQueue, cfgRuntime),
+    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),
+    MountConfig (mntPublicationTarget),
     RuntimeSettings (rtCores, rtMaxHeapBytes, rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     loadConfig,
     mountCollisionWarnings,
@@ -49,7 +55,6 @@ import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Rts (
     appliedRuntimePlan,
     currentRtsPosture,
-    effectiveCapabilities,
     readCgroupLimits,
     renderEffectivePosture,
     resolveRuntimePlan,
@@ -82,29 +87,43 @@ runCheckConfig = do
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit
-    let plan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
-        effective = appliedRuntimePlan cgroup plan rts
-        (admission, admissionLine) = resolveServeAdmission (rtServeMaxInFlight runtimeSettings) (fst (effectiveCapabilities effective))
-        (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
-        (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
-        (budget, budgetLines) = resolveMemoryBudget (cfgCache env) (cfgLimits env) (cfgQueue env) effective admission
-    -- Backend selection precedes the budget's use, exactly as a boot orders it:
-    -- the in-memory depth is a memory tenant only the memory backend spends.
+    -- Backend selection precedes the plan, exactly as a boot orders it: the
+    -- queue tenant exists only when the memory backend was selected.
     runtimePlan <-
         either
             (refuseWith . renderErrs renderBootError)
             pure
             (planMirrorRuntime (ambientAwsFromEnv envVars) config)
+    let plan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
+        effective = appliedRuntimePlan cgroup plan rts
+        (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
+        (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
+        publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts env))
+        (memoryPlan, memoryPlanLines) =
+            resolveMemoryPlan
+                (cfgCache env)
+                (cfgLimits env)
+                (cfgQueue env)
+                (rtServeMaxInFlight runtimeSettings)
+                effective
+                (queueTenantDemand runtimePlan)
+                publishConfigured
     traverse_ TIO.putStrLn $
         concat
             [ resolvedKeyProvenance envVars docBlob
             , renderEffectivePosture effective
-            , [admissionLine, privateLine, publicLine]
-            , budgetLines
-            , mirrorRuntimeLines (mbQueueMemoryMaxDepth budget) runtimePlan
+            , [privateLine, publicLine]
+            , memoryPlanLines
+            , -- The shed ladder, printed exactly as the boot would warn it: a
+              -- degraded-but-coherent plan validates (the plan is made safe by
+              -- shrinking); only an explicit override refuses below.
+              map ("warning: " <>) (mpDegradations memoryPlan)
+            , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) runtimePlan
             , mountPostureLines config
             , map ("warning: " <>) (mountCollisionWarnings config)
             ]
+    unless (null (mpOverrideViolations memoryPlan)) $
+        refuseWith (renderErrs renderBootError [MemoryPlanOverrideUnsafe (mpOverrideViolations memoryPlan)])
     TIO.putStrLn "configuration: valid"
     exitSuccess
   where

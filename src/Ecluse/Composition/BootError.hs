@@ -88,6 +88,13 @@ data BootError
       fail-closed read identity.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem
+    | {- | An explicit memory override breaks the combined memory-plan invariant even
+      after every computed tenant shed to its minimum
+      ("Ecluse.Composition.MemoryPlan"). Carries the solver's per-violation
+      diagnostics. A computed plan never raises this: it degrades gracefully and
+      boots; an override is an operator claim, and a false one is refused.
+      -}
+      MemoryPlanOverrideUnsafe [Text]
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -120,6 +127,8 @@ renderBootError = \case
         mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_ALLOW" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+    MemoryPlanOverrideUnsafe details ->
+        "memory plan refused: " <> T.intercalate "; " details
 
 {- | The full environment key of a mount-scoped setting
 (@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it -- shared by the

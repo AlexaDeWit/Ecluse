@@ -259,7 +259,7 @@ library
     Ecluse.Composition
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
-    Ecluse.Composition.MemoryBudget
+    Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.Sizing
     Ecluse.Composition.Worker
@@ -660,7 +660,7 @@ test-suite ecluse-unit
     Ecluse.CLISpec
     Ecluse.Composition.BootErrorSpec
     Ecluse.Composition.CredentialSpec
-    Ecluse.Composition.MemoryBudgetSpec
+    Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support

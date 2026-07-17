@@ -87,6 +87,7 @@ module Ecluse.Proxy (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -100,20 +101,22 @@ import Ecluse.Composition (
     planMounts,
     planPublishTargets,
  )
-import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
-import Ecluse.Composition.MemoryBudget (
-    MemoryBudget (mbMaxRequestBytes, mbMaxResponseBytes, mbQueueMemoryMaxDepth),
-    budgetCacheConfig,
-    resolveMemoryBudget,
+import Ecluse.Composition.MemoryPlan (
+    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    planCacheConfig,
+    queueTenantDemand,
+    resolveMemoryPlan,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgQueue, cfgRuntime, cfgServer),
+    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime, cfgServer),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
+    MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
     mountPostureLines,
@@ -142,7 +145,6 @@ import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRu
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
-import Ecluse.Rts (effectiveCapabilities)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (RequestSizeLimit), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort, scSizeLimit), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
@@ -209,25 +211,37 @@ runProxy bootEnv = do
     -- private manager's pool is sized independently below, since a trusted tarball
     -- hit streams outside admission (see 'Composition.resolvePrivateConnections'
     -- and issue #634).
-    let (capabilities, _capsProvenance) = effectiveCapabilities (beRuntimePlan bootEnv)
-        (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (rtServeMaxInFlight (cfgRuntime env)) capabilities
-    logBootInfo logEnv admissionLine
-    serveAdmission <- newServeAdmission serveMaxInFlight
     -- Whether a mirror runtime exists at all, and which queue backend it rides,
     -- decided from the URL's shape BEFORE any byte is budgeted: only the memory
     -- backend spends heap on queued jobs, so the queue tenant must be conditional
     -- on this selection, never allocated ahead of it.
     runtimePlan <-
         orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
-    -- The memory budget: every byte-valued bound resolved as a share of the heap
-    -- ceiling the runtime posture found (or its shipped fallback), each with its
-    -- provenance line. The admission capacity above is its working-space divisor.
-    let (budget, budgetLines) =
-            resolveMemoryBudget (cfgCache env) (cfgLimits env) (cfgQueue env) (beRuntimePlan bootEnv) serveMaxInFlight
-    traverse_ (logBootInfo logEnv) budgetLines
+    -- The memory plan: the named tenants partitioned from the effective heap
+    -- ceiling, with admission bounded jointly by CPU and the material share.
+    -- Shed-ladder steps are loud warnings and the process boots regardless; only
+    -- an explicit override breaking the combined invariant refuses.
+    let publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts env))
+        (plan, planLines) =
+            resolveMemoryPlan
+                (cfgCache env)
+                (cfgLimits env)
+                (cfgQueue env)
+                (rtServeMaxInFlight (cfgRuntime env))
+                (beRuntimePlan bootEnv)
+                (queueTenantDemand runtimePlan)
+                publishConfigured
+    traverse_ (logBootInfo logEnv) planLines
+    traverse_ (logBootWarning logEnv) (mpDegradations plan)
+    unless (null (mpOverrideViolations plan)) $
+        orExit (T.unlines . map renderBootError) (Left [MemoryPlanOverrideUnsafe (mpOverrideViolations plan)])
+    -- Where the plan shed the capability count (the nursery was the pressure),
+    -- apply it in-process before the parallel machinery spins up.
+    whenJust (mpShedCapabilities plan) setNumCapabilities
+    serveAdmission <- newServeAdmission (mpAdmissionCapacity plan)
     let limits =
             Limits
-                { maxBodyBytes = mbMaxResponseBytes budget
+                { maxBodyBytes = mpMaxResponseBytes plan
                 , maxVersionCount = limMaxVersionCount (cfgLimits env)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits env)
                 }
@@ -261,7 +275,7 @@ runProxy bootEnv = do
                 , scOnException = warpExceptionHook logEnv
                 , -- The request-body cap, resolved by the memory budget (configured
                   -- or a share of the heap ceiling).
-                  scSizeLimit = RequestSizeLimit (fromIntegral (mbMaxRequestBytes budget))
+                  scSizeLimit = RequestSizeLimit (fromIntegral (mpMaxRequestBytes plan))
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
@@ -280,14 +294,14 @@ runProxy bootEnv = do
     -- inert queue, unreachable by construction (no mount enqueues, no worker polls).
     (queue, mirrorDrain) <- case runtimePlan of
         MirrorWith queuePlan -> do
-            backendQueue <- buildMirrorQueue logEnv (mbQueueMemoryMaxDepth budget) queuePlan
+            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth plan) queuePlan
             (q, drainEnqueueBuffer) <-
                 bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
             pure (q, Just drainEnqueueBuffer)
         NoMirroring -> do
             logBootInfo logEnv "mirror runtime disabled: no mount mirrors, so no queue is built and no worker starts"
             pure (noMirrorQueue, Nothing)
-    metadataCache <- newMetadataCache (budgetCacheConfig (cfgCache env) budget)
+    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
 
     -- Two data-plane managers, one per origin. Both are the standard validating TLS
     -- manager: registry egress is https-only by construction (a non-https endpoint
