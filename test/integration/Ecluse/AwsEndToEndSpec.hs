@@ -149,7 +149,7 @@ configDrivenQueue container queueName = do
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     let ambient = ambientAwsFromEnv (sqsEnvVars queueUrl endpointUrl)
-    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue ambient env)
+    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue ambient 50000 env)
     logEnv <- newTestLogEnv
     case plan of
         -- The wire decode's egress former: the loopback dev former, since this
@@ -161,10 +161,11 @@ configDrivenQueue container queueName = do
 -- the standard endpoint override and credential keys, plus the required upstreams.
 sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "test-token")
-    , ("ECLUSE_QUEUE_URL", toString queueUrl)
+    , ("ECLUSE_QUEUE__URL", toString queueUrl)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
     , ("AWS_ACCESS_KEY_ID", "test")

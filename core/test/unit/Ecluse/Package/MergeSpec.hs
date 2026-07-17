@@ -370,7 +370,7 @@ spec = do
                         ]
             (Map.null . mpSurvivors . applyDivergencePolicy FailClosed <$> onlyDivergent) `shouldBe` Just True
 
-    describe "parseDivergencePolicy (the ECLUSE_DIVERGENCE_POLICY value)" $ do
+    describe "parseDivergencePolicy (the ECLUSE_INTEGRITY__DIVERGENCE_POLICY value)" $ do
         it "parses warn and fail-closed, case- and spelling-tolerant" $ do
             parseDivergencePolicy "warn" `shouldBe` Right Warn
             parseDivergencePolicy "fail-closed" `shouldBe` Right FailClosed

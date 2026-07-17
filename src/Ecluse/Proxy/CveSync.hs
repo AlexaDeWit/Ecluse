@@ -29,7 +29,8 @@ import System.IO.Error (IOError, catchIOError)
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
-    AppConfig (cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgVulnerabilityDatabaseBucket),
+    AdvisoriesSettings (advBucket, advDataDir, advMaxDatabaseBytes, advPollInterval),
+    AppConfig (cfgAdvisories, cfgMounts),
  )
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl))
 import Ecluse.Core.Breaker (BreakerReporter)
@@ -83,7 +84,7 @@ cveSyncScheduleFor :: AppConfig -> SyncSchedule
 cveSyncScheduleFor env =
     SyncSchedule
         { schedBootBackoff = bootBackoffDelays
-        , schedPollDelay = round (cfgCveDbPollInterval env) * 1_000_000
+        , schedPollDelay = round (advPollInterval (cfgAdvisories env)) * 1_000_000
         }
 
 -- | One configured ecosystem's advisory-sync wiring.
@@ -106,10 +107,10 @@ ecosystem Pilot does not compile has declared an artifact that never arrives,
 and the pod honestly never reports ready.
 -}
 planCveSync :: LogEnv -> AmbientAws -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv ambient appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
+planCveSync logEnv ambient appCfg = case advBucket (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just bucket -> do
-        let dataDir = cfgOsvDataDir appCfg
+        let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
         awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
@@ -125,9 +126,9 @@ cveSyncHandleFor appCfg awsEnv bucket eco = do
     let key = osvDbFileName (ecosystemName eco)
         syncEnv =
             SyncEnv
-                { syncFetch = s3CveFetch awsEnv bucket (toText key) (cfgMaxOsvDbBytes appCfg)
+                { syncFetch = s3CveFetch awsEnv bucket (toText key) (advMaxDatabaseBytes (cfgAdvisories appCfg))
                 , syncEcosystem = eco
-                , syncDbPath = cfgOsvDataDir appCfg </> key
+                , syncDbPath = advDataDir (cfgAdvisories appCfg) </> key
                 , syncSlot = slot
                 }
     pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})

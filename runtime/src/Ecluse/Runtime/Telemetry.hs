@@ -9,7 +9,7 @@ __off__.
 Écluse is a self-hosted proxy operators run inside their own infrastructure, so
 observability is __opt-in and vendor-neutral__: the substrate is OpenTelemetry,
 emitting OTLP that any compatible backend can receive. The maintainer's choice of backend (Datadog)
-must never become every consumer's obligation, so __with @ECLUSE_TELEMETRY@ unset
+must never become every consumer's obligation, so __with @ECLUSE_OBSERVABILITY__TELEMETRY@ unset
 nothing is wired and no telemetry is emitted__ -- the SDK is not even initialised.
 
 This module is purely the __substrate__: it stands up (or, by default, declines to
@@ -19,13 +19,13 @@ here instruments the hot path.
 
 == The switch and the handle
 
-'TelemetrySwitch' is the @ECLUSE_TELEMETRY@ master switch, parsed at the
+'TelemetrySwitch' is the @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch, parsed at the
 configuration boundary (@Ecluse.Config@) in the same strict, fail-loud style as
 the other enums. The 'Telemetry' handle it produces is one of two shapes:
 
 * __'telemetryDisabled'__ -- the off-by-default no-op. It holds no providers, the
   SDK is never initialised, and nothing is exported. This is what an unset
-  @ECLUSE_TELEMETRY@ yields.
+  @ECLUSE_OBSERVABILITY__TELEMETRY@ yields.
 * an __enabled__ handle carrying the SDK's tracer and meter providers, built from
   the standard @OTEL_*@ environment variables the SDK reads directly
   (@OTEL_SERVICE_NAME@, @OTEL_RESOURCE_ATTRIBUTES@, @OTEL_EXPORTER_OTLP_ENDPOINT@,
@@ -103,7 +103,7 @@ import Ecluse.Runtime.Telemetry.Resolve (
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
-{- | The @ECLUSE_TELEMETRY@ master switch: telemetry is opt-in, so 'TelemetryOff' is
+{- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch: telemetry is opt-in, so 'TelemetryOff' is
 the default and the FOSS posture. A sum type rather than a 'Bool' so each case
 names its intent and a future mode (e.g. a metrics-only switch) is a new
 constructor, not a second flag.
@@ -169,7 +169,7 @@ data TelemetryProviders = TelemetryProviders
     }
 
 {- | The disabled telemetry handle: the off-by-default no-op that holds no
-providers and emits nothing. This is what an unset @ECLUSE_TELEMETRY@ resolves to.
+providers and emits nothing. This is what an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ resolves to.
 -}
 telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
@@ -210,7 +210,7 @@ metrics -- along every exit path.
 
 * __'TelemetryOff'__ (the default) is a pure pass-through: the SDK is __never
   initialised__, the body runs against 'telemetryDisabled', the 'LogEnv' is unused,
-  and there is nothing to tear down. An unset @ECLUSE_TELEMETRY@ therefore opens no
+  and there is nothing to tear down. An unset @ECLUSE_OBSERVABILITY__TELEMETRY@ therefore opens no
   exporter and emits nothing.
 * __'TelemetryOn'__ initialises the SDK from the standard @OTEL_*@ environment with the
   OTLP exporters wrapped for failure observation (the shared throttle feeds the supplied

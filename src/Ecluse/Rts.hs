@@ -14,8 +14,8 @@ whole node's worth of capabilities under a two-CPU quota, and the only memory
 backstop is the kernel OOM killer. This module closes that gap the way Go's
 @automaxprocs@ does, but config-first:
 
-1. __Explicit configuration wins__: @cores@ (@ECLUSE_CORES@) and @maxHeapBytes@
-   (@ECLUSE_MAX_HEAP_BYTES@).
+1. __Explicit configuration wins__: @cores@ (@ECLUSE_RUNTIME__CORES@) and @maxHeapBytes@
+   (@ECLUSE_RUNTIME__MAX_HEAP_BYTES@).
 2. __Omitted values fall back to the cgroup__ (v2): @cpu.max@'s quota, __floored__
    (at least one) and clamped to the visible processors, and @memory.max@ less the
    nursery budget and slack ('deriveMaxHeapBytes'). Flooring follows Go's
@@ -66,6 +66,7 @@ module Ecluse.Rts (
     CgroupLimits (..),
     Provenance (..),
     RuntimePlan (..),
+    provenanceClause,
     resolveRuntimePlan,
     deriveMaxHeapBytes,
     requiredRtsFlags,
@@ -230,10 +231,16 @@ renderRuntimePosture plan rts =
     ]
 
 renderProvenance :: Provenance -> Text
-renderProvenance = \case
-    FromConfig -> " (from config)"
-    FromCgroup -> " (derived from the cgroup limit)"
-    FromRts -> " (as the RTS resolved it)"
+renderProvenance prov = " (" <> provenanceClause prov <> ")"
+
+{- | The provenance as a bare clause, for consumers composing their own lines
+(the memory budget's, beside this module's posture lines).
+-}
+provenanceClause :: Provenance -> Text
+provenanceClause = \case
+    FromConfig -> "from config"
+    FromCgroup -> "derived from the cgroup limit"
+    FromRts -> "as the RTS resolved it"
 
 -- A byte count in MiB: whole when exact, else to one decimal place.
 renderMiB :: Int -> Text
@@ -286,7 +293,7 @@ When the marker is already set and the posture /still/ diverges (an operator's
 logged as a warning and the process continues with what the RTS gave it -- boot
 never loops and never aborts over tuning.
 -}
-applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> Maybe Int -> Maybe Int -> IO ()
+applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> Maybe Int -> Maybe Int -> IO RuntimePlan
 applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
@@ -305,6 +312,11 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
         _ -> do
             reexecOrWarn logInfo logWarning flags
             logPosture plan rts
+    -- The resolved plan (capabilities and heap ceiling, each with provenance) is
+    -- the datapoint the downstream sizings compute from at the composition root:
+    -- admission from capabilities ("Ecluse.Composition.Sizing"), the byte bounds
+    -- from the ceiling ("Ecluse.Composition.MemoryBudget").
+    pure plan
   where
     logPosture plan rts = traverse_ logInfo (renderRuntimePosture plan rts)
 

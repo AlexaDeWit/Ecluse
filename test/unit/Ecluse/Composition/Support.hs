@@ -11,6 +11,7 @@ without duplicating it.
 -}
 module Ecluse.Composition.Support (
     fixedNow,
+    testLimits,
     staticEnvVars,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
@@ -24,21 +25,29 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Core.Security (Limits (..))
 import Ecluse.Test.Credential (noCredentialReporters)
 
 -- | A fixed clock for the injected 'pdNow'; never advanced (no timing here).
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 
+{- | The resolved 'Limits' the composition root would pass in (the memory budget's
+fallback byte cap married to the pinned structural counts).
+-}
+testLimits :: Limits
+testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}
+
 {- | A minimal valid environment. The mirror target is a non-CodeArtifact host with a
 static write token, so the mount's mirror credential derives to a static provider.
 -}
 staticEnvVars :: [(String, String)]
 staticEnvVars =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://public.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-    , ("ECLUSE_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
+    , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     ]
 
@@ -48,11 +57,11 @@ is not shadowed by the base fixture's value.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
 
-{- | Drop the ECLUSE_QUEUE_URL entry, so a test can exercise the absent-URL rollover
+{- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
 to the bounded in-memory queue.
 -}
 withoutQueueUrl :: [(String, String)] -> [(String, String)]
-withoutQueueUrl = filter ((/= "ECLUSE_QUEUE_URL") . fst)
+withoutQueueUrl = filter ((/= "ECLUSE_QUEUE__URL") . fst)
 
 -- | Override (or insert) one environment entry.
 overrideEnv :: String -> String -> [(String, String)] -> [(String, String)]

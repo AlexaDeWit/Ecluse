@@ -158,7 +158,7 @@ order-independent; only the positional labels track input order.
   ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged (a
   `WARNING` naming the package, the contradicting versions, and their digests) and metered
   (`ecluse.registry.merge.divergence`), never silently reconciled. Whether the contested version is
-  additionally withheld from the served listing is the operator's `ECLUSE_DIVERGENCE_POLICY`:
+  additionally withheld from the served listing is the operator's `ECLUSE_INTEGRITY__DIVERGENCE_POLICY`:
   `warn` (the default) serves the trusted copy and relies on the alarm; `fail-closed` drops the
   contested version from the listing (dropping any `dist-tag`, including `latest`, that pointed at
   it). The algorithm compared
@@ -173,7 +173,7 @@ order-independent; only the positional labels track input order.
   trust contexts, and on the public artifact path the gate `403`s it as `MissingIntegrity` or
   `BelowIntegrityFloor`. The exception is the private tarball serve leg, a conventional stable read
   with no serve-time floor (its bytes stay client- and worker-verified). The floors
-  (`ECLUSE_MIN_PUBLIC_INTEGRITY`, hard-floored at SHA-256; `ECLUSE_MIN_TRUSTED_INTEGRITY`,
+  (`ECLUSE_INTEGRITY__MIN_PUBLIC`, hard-floored at SHA-256; `ECLUSE_INTEGRITY__MIN_TRUSTED`,
   loosenable below it) are detailed under
   [Configuration](configuration.md#public-integrity-floor); this is
   [security invariant 5](security.md#invariants).

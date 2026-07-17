@@ -192,7 +192,7 @@ data PackumentDeps = PackumentDeps
     @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
     , pdAdditionalBlockedRanges :: [IPRange]
-    {- ^ The operator-configured ranges (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) extending the
+    {- ^ The operator-configured ranges (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) extending the
     fixed literal internal-range block when gating an honoured artifact location
     ('Ecluse.Core.Security.tarballHostAllowed'), the cheap pure defence-in-depth that
     complements the host allowlist. Empty by default.
@@ -213,7 +213,7 @@ data PackumentDeps = PackumentDeps
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and
-    decode (@ECLUSE_MAX_RESPONSE_BYTES@\/@ECLUSE_MAX_VERSION_COUNT@\/@ECLUSE_MAX_NESTING_DEPTH@):
+    decode (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@\/@ECLUSE_LIMITS__MAX_VERSION_COUNT@\/@ECLUSE_LIMITS__MAX_NESTING_DEPTH@):
     the body-size, version-count, and JSON-nesting ceilings of
     'Ecluse.Core.Security.Limits'. The data plane reads the metadata body through
     'Ecluse.Core.Security.boundedRead' against @maxBodyBytes@, checks
@@ -223,7 +223,7 @@ data PackumentDeps = PackumentDeps
     upstream document is refused, never partially served (security.md invariant 4).
     -}
     , pdInboundToken :: Maybe Secret
-    {- ^ The optional inbound token a client must present (@ECLUSE_AUTH_TOKEN@);
+    {- ^ The optional inbound token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@);
     'Nothing' leaves the edge open (the network layer guards it).
     -}
     , pdNow :: IO UTCTime
@@ -241,7 +241,7 @@ data PackumentDeps = PackumentDeps
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
     {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest must
-    meet to be admitted (the global @ECLUSE_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256).
+    meet to be admitted (the global @ECLUSE_INTEGRITY__MIN_PUBLIC@ floor, default SHA-256).
     The public gate refuses a version whose strongest digest is below this; it is
     __hard-floored at SHA-256__ and never lowerable (see "Ecluse.Core.Package.Integrity").
     The trusted private path consults 'pdMinTrustedIntegrity' instead.
@@ -250,7 +250,7 @@ data PackumentDeps = PackumentDeps
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
     , pdDivergencePolicy :: DivergencePolicy
     {- ^ What to do with a served version a cross-upstream integrity divergence was
-    detected on (@ECLUSE_DIVERGENCE_POLICY@, default 'Ecluse.Core.Package.Merge.Warn').
+    detected on (@ECLUSE_INTEGRITY__DIVERGENCE_POLICY@, default 'Ecluse.Core.Package.Merge.Warn').
     The signal (the @WARNING@ log and the @ecluse.registry.merge.divergence@ counter)
     fires regardless; this only decides whether the contested version is additionally
     withheld from the served listing ('Ecluse.Core.Package.Merge.FailClosed').
@@ -370,7 +370,7 @@ data PublishDeps = PublishDeps
     common path.
     -}
     , pubInboundToken :: Maybe Secret
-    {- ^ The optional inbound edge token a client must present (@ECLUSE_AUTH_TOKEN@),
+    {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),
     the same gate the read paths apply; 'Nothing' leaves the edge open.
     -}
     , pubLimits :: Limits

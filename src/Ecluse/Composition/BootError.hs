@@ -57,7 +57,7 @@ data BootError
       URL carries its own region and never raises this.
       -}
       QueueRegionMissing
-    | {- | @ECLUSE_QUEUE_URL@ is set but its shape names no backend this binary
+    | {- | @ECLUSE_QUEUE__URL@ is set but its shape names no backend this binary
       knows, so refusing is the only honest move (guessing a backend would send
       mirror jobs somewhere the operator did not point at). Carries the value.
       -}
@@ -80,7 +80,7 @@ data BootError
       -}
       PublishAllowMissing Ecosystem
     | {- | A static publish credential (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET_TOKEN@)
-      was configured without a verifiable inbound edge (@ECLUSE_AUTH_TOKEN@). Écluse would otherwise
+      was configured without a verifiable inbound edge (@ECLUSE_SERVER__AUTH_TOKEN@). Écluse would otherwise
       substitute its own standing write credential for a publishing caller who forwards
       none, so an unauthenticated request could publish within the configured scopes
       under Écluse's own identity. Refused at boot so an internal publish credential
@@ -103,11 +103,11 @@ renderBootError = \case
     QueueProviderUnavailable provider ->
         "mirror queue provider "
             <> provider
-            <> " (named by the ECLUSE_QUEUE_URL shape) is not available in this build"
+            <> " (named by the ECLUSE_QUEUE__URL shape) is not available in this build"
     QueueRegionMissing ->
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is set but AWS_REGION is not: an emulator or VPC endpoint does not carry its region, so AWS_REGION must scope it"
     QueueUrlUnrecognised url ->
-        "ECLUSE_QUEUE_URL names no queue backend this build knows: "
+        "ECLUSE_QUEUE__URL names no queue backend this build knows: "
             <> url
             <> " (expected an SQS queue URL, https://sqs.{region}.amazonaws.com/{account}/{queue}, or a Pub/Sub topic resource, projects/{project}/topics/{topic}; unset it to run the bounded in-memory queue)"
     QueueEndpointMalformed url ->
@@ -119,7 +119,7 @@ renderBootError = \case
     PublishAllowMissing eco ->
         mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_ALLOW" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
-        mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+        mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
 
 {- | The full environment key of a mount-scoped setting
 (@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it -- shared by the

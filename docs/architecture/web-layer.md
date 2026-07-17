@@ -270,7 +270,7 @@ crosses no trust boundary and is cached freely.
 ## Serve admission and upstream pools
 
 The packument path and a tarball miss's public-metadata gate share one process-wide, brief-wait
-admission bound. At most `ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations run at once; work
+admission bound. At most `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT` metadata materialisations run at once; work
 finding the cap busy waits briefly for a slot in a waiting room bounded at the capacity (wait budget
 equal to the shed path's `Retry-After: 1` hint), and a newcomer never jumps a non-empty room. Only a
 request that finds the room full or waits out its budget gets the mount's error shape as `503 Service
@@ -284,7 +284,7 @@ let clients starve packument traffic without protecting any parse structure).
 
 The public and private `http-client` managers have independently configurable per-host pools, both
 defaulting to a share of the process file-descriptor limit (each pooled connection is one descriptor)
-rather than following `ECLUSE_SERVE_MAX_IN_FLIGHT`. The private pool takes the larger share because a
+rather than following `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT`. The private pool takes the larger share because a
 trusted tarball hit streams outside admission, so its demand is the steady-state inbound hit fan-out,
 not the admission capacity. The public pool takes half that share: its metadata misses are
 single-flight-coalesced and admission-bounded, but the onboarding fail-over's artifact streams and the
@@ -347,7 +347,7 @@ error's status but holds no body shape of its own. An ecosystem's route contract
 response constructor and codec (npm's `{"error": …}` object in
 `Ecluse.Core.Registry.Npm.Serve`). Rendering still has two tiers: a request matching no mount is a
 neutral `404 Not Found` in `text/plain`, while every in-mount response is interpreted through its
-route contract. The denial-body shape and `ECLUSE_HELP_MESSAGE` handling are in
+route contract. The denial-body shape and `ECLUSE_SERVER__HELP_MESSAGE` handling are in
 [Rules Engine → Denial responses](rules-engine.md#denial-responses).
 
 ### The typed request perimeter
@@ -424,10 +424,10 @@ point at it. On `SIGTERM`/`SIGINT` Écluse runs a full graceful drain so in-flig
    routes to a ready instance, rather than landing on a closing process.
 3. **Drain, then exit.** The instance stops accepting new connections and waits for in-flight requests
    and in-progress artifact streams to finish (a half-delivered tarball runs to completion), bounded
-   by `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` (default 30 seconds), after which it exits regardless so a stuck
+   by `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` (default 30 seconds), after which it exits regardless so a stuck
    request cannot pin the old instance open.
 
-Set the platform's termination grace period longer than `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` so the
+Set the platform's termination grace period longer than `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` so the
 orchestrator does not `SIGKILL` mid-drain (e.g. a Kubernetes `terminationGracePeriodSeconds`
 comfortably above it). When Écluse is attached to an interactive terminal, a second `Ctrl+C` (or
 `Ctrl+D`) forces an immediate halt that bypasses the drain; this is gated on standard input being a

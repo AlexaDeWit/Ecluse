@@ -4,14 +4,15 @@
 
 {- | The config-derived runtime sizings of the composition root: the serve-admission
 capacity, the two connection-pool sizes and the file-descriptor datapoint they are
-computed from, the mirror-enqueue buffer tunables, and the metadata-cache tunables.
+computed from, and the mirror-enqueue buffer tunables. (The byte-valued bounds are
+partitioned separately, from the heap ceiling: "Ecluse.Composition.MemoryBudget".)
 
 Each resolution is a pure function of the validated configuration (plus, for the
 pools, the process file-descriptor limit read once by 'openFileSoftLimit'): an
 explicit config value always wins, and a computed default returns its boot-log
 line alongside the number so the decision's provenance lands in the standard boot
 log. Nothing here opens a socket or reads a clock; the composition root applies
-the results when it builds the managers, the admission gate, and the cache.
+the results when it builds the managers and the admission gate.
 -}
 module Ecluse.Composition.Sizing (
     -- * Connection pools and admission
@@ -24,16 +25,10 @@ module Ecluse.Composition.Sizing (
     -- * Mirror-enqueue buffering
     mirrorEnqueueBufferDepth,
     mirrorEnqueueReportInterval,
-
-    -- * Metadata-cache tunables
-    cacheConfigFor,
 ) where
 
 import Network.HTTP.Client (ManagerSettings (managerConnCount))
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
-
-import Ecluse.Config (AppConfig (..))
-import Ecluse.Core.Server.Cache (CacheConfig (..))
 
 {- | Apply an explicit per-host connection bound to an HTTP manager's settings.
 
@@ -209,15 +204,3 @@ openFileSoftLimit = do
         ResourceLimit n -> fromInteger n
         ResourceLimitInfinity -> privateConnectionsCap * privateConnectionsFdShare
         ResourceLimitUnknown -> privateConnectionsCap * privateConnectionsFdShare
-
-{- | The metadata-cache tunables drawn from the validated environment layer -- its
-TTL and entry bound -- so a deployment's cache settings flow from config rather than
-the built-in defaults (see "Ecluse.Core.Server.Cache").
--}
-cacheConfigFor :: AppConfig -> CacheConfig
-cacheConfigFor env =
-    CacheConfig
-        { cacheTtl = cfgCacheTtl env
-        , cacheMaxEntries = cfgCacheMaxEntries env
-        , cacheMaxBytes = cfgCacheMaxBytes env
-        }

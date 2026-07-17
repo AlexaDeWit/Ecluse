@@ -51,10 +51,13 @@ import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems
 import Ecluse.Config (
     AppConfig (..),
     Config (..),
+    EgressSettings (..),
+    IntegritySettings (..),
     MirrorTarget (mtUrl),
     Mount (..),
     MountConfig (..),
     MountRegistries (..),
+    ServerSettings (..),
     Url,
     regMirrorTarget,
     regPrivateUpstream,
@@ -77,7 +80,7 @@ import Ecluse.Core.Registry.Adapter (
     publishRelay,
  )
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
-import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
+import Ecluse.Core.Security (Limits, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
@@ -101,6 +104,7 @@ planMounts ::
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
+    Limits ->
     Config ->
     IO (Either [BootError] [MountBinding])
 planMounts = composeBindings
@@ -109,16 +113,20 @@ planMounts = composeBindings
 boot errors. For each mount, in ecosystem order: its credential reference must
 resolve to an initialised provider, and its ecosystem must resolve to an adapter
 (through the injected resolver, which the mount's 'PackumentDeps' are built from).
-Errors aggregate across every mount.
+Errors aggregate across every mount. The 'Limits' arrive resolved (the byte cap
+from the memory budget, "Ecluse.Composition.MemoryBudget", married to the pinned
+structural counts) and are carried onto every mount's deps, so the data plane
+reads each metadata body bounded (security.md invariant 4).
 -}
 composeBindings ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
+    Limits ->
     Config ->
     IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock ruleDepsFor providers config = do
+composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
     let (pubErrs, pubDepsMap) = case sequence (Map.mapWithKey (\eco mcfg -> publishDepsFor eco (adapterFor eco) app mcfg limits helpMessage) (cfgMounts app)) of
             Left errs -> (errs, Map.empty)
             Right m -> ([], m)
@@ -134,22 +142,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
     app :: AppConfig
     app = configApp config
 
-    -- The response-bound budget every mount enforces on its upstream fetches and
-    -- decodes (security.md invariant 4), assembled from the validated environment
-    -- ceilings. Carried onto each mount's deps so the data plane reads the metadata
-    -- body bounded, and refuses an over-deep or version-flooded document fail-closed.
-    limits :: Limits
-    limits =
-        Limits
-            { maxBodyBytes = cfgMaxResponseBytes app
-            , maxVersionCount = cfgMaxVersionCount app
-            , maxNestingDepth = cfgMaxNestingDepth app
-            }
-
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
     helpMessage :: Maybe HelpMessage
-    helpMessage = mkHelpMessage <$> cfgHelpMessage app
+    helpMessage = mkHelpMessage <$> srvHelpMessage (cfgServer app)
 
     {- Resolve one mount to its binding, or the boot errors that block it. Both the
     credential reference and the adapter are checked even when one already failed,
@@ -180,12 +176,12 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
     constructor, the artifact request builders, the packument assembly) are the
     adapter's capability fields carried over unchanged; everything else is the
     mount's configuration. The mount's externally-visible base URL drives the
-    @dist.tarball@ rewrite: an __absolute__ URL under @ECLUSE_PUBLIC_URL@
+    @dist.tarball@ rewrite: an __absolute__ URL under @ECLUSE_SERVER__PUBLIC_URL@
     (@{public}\/npm\/{pkg}\/-\/{file}@) when one is configured, so an @npm@ client
     fetches the artifact back through the proxy on the gated path; otherwise the
     relative prefix path (@\/npm@), retained for compatibility -- but note @npm@
     cannot consume a relative @dist.tarball@ (it reads a leading slash as a @file:@
-    path), so a real install path must set @ECLUSE_PUBLIC_URL@ (see @mountBaseUrl@
+    path), so a real install path must set @ECLUSE_SERVER__PUBLIC_URL@ (see @mountBaseUrl@
     and @docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts"). -}
     packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
     packumentDepsFor adapter mount mcfg = do
@@ -201,14 +197,14 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
             PackumentDeps
                 { pdPrivateBaseUrl = registryUrlText <$> regPrivateUpstream regs
                 , pdPublicBaseUrl = registryUrlText (regPublicUpstream regs)
-                , pdMountBaseUrl = mountBaseUrl (cfgPublicUrl app) (mountEcosystem mount)
+                , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
                 , pdMirror = maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs)
                 , pdRules = prepared
                 , pdTarballHostPolicy = tarballHostPolicyFor mcfg
                 , -- The operator-configured ranges extending the fixed internal-range block on
                   -- the dist.tarball host gate; the same list applies to every mount, since which
                   -- internal ranges exist on an operator's network is a deployment-wide fact.
-                  pdAdditionalBlockedRanges = cfgAdditionalBlockedRanges app
+                  pdAdditionalBlockedRanges = egrAdditionalBlockedRanges (cfgEgress app)
                 , -- The tarball-host gate's mount-constant inputs (allowlist + private and
                   -- public hosts), extracted once here so the hot artifact path parses no
                   -- URL and rebuilds no host set per request.
@@ -219,21 +215,21 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                         (registryUrlText (regPublicUpstream regs))
                         (registryUrlText . mtUrl <$> regMirrorTarget regs)
                 , pdLimits = limits
-                , pdInboundToken = cfgAuthToken app
+                , pdInboundToken = srvAuthToken (cfgServer app)
                 , pdNow = clock
                 , pdAdvisoryEtag = rdCurrentAdvisoryEtag ruleDeps
                 , pdHelp = helpMessage
                 , -- The global public-integrity admission floor, validated at config
                   -- load, carried onto every mount's deps so the public gate refuses
                   -- a below-floor version.
-                  pdMinIntegrity = cfgMinPublicIntegrity app
+                  pdMinIntegrity = intMinPublic (cfgIntegrity app)
                 , -- The trusted-integrity admission floor: the global default
                   -- (SHA-256, loosenable below it), refined per mount so a legacy
                   -- registry's loosening never leaks onto a neighbouring mount.
-                  pdMinTrustedIntegrity = fromMaybe (cfgMinTrustedIntegrity app) (mntMinTrustedIntegrity mcfg)
+                  pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (mntMinTrustedIntegrity mcfg)
                 , -- The cross-upstream divergence policy: the global default
                   -- (warn), refined per mount for the same reason.
-                  pdDivergencePolicy = fromMaybe (cfgDivergencePolicy app) (mntDivergencePolicy mcfg)
+                  pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (mntDivergencePolicy mcfg)
                 , pdNewMetadataClient = metadataNewClient (adapterMetadata adapter)
                 , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
                 , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
@@ -262,7 +258,7 @@ credentialError providers mount = case regMirrorTarget (mountRegistries mount) o
             else Just (UnresolvedCredential (mountEcosystem mount))
 
 -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
--- under ECLUSE_PUBLIC_URL when set (so a served tarball is a full URL an npm
+-- under ECLUSE_SERVER__PUBLIC_URL when set (so a served tarball is a full URL an npm
 -- client can fetch); otherwise the relative prefix path, retained for
 -- compatibility. A trailing slash on the configured URL is dropped so the join
 -- with the leading-slash mount path yields exactly one separator.
@@ -311,7 +307,7 @@ publishDepsFor eco mAdapter app mcfg limits helpMessage = case mntPublicationTar
         errs -> Left errs
   where
     inboundToken :: Maybe Secret
-    inboundToken = cfgAuthToken app
+    inboundToken = srvAuthToken (cfgServer app)
 
 -- The accumulated fail-loud publish boot errors for a configured publication
 -- target: a missing publish-scope allow-list, and a static publish credential

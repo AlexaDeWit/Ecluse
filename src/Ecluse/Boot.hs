@@ -102,8 +102,10 @@ import Ecluse.Composition.MirrorQueue (
     mirrorQueuePlanWarning,
  )
 import Ecluse.Config (
-    AppConfig (cfgCores, cfgLogFormat, cfgMaxHeapBytes, cfgTelemetry),
+    AppConfig (cfgObservability, cfgRuntime),
     Config (configApp),
+    ObservabilitySettings (obsLogFormat, obsTelemetry),
+    RuntimeSettings (rtCores, rtMaxHeapBytes),
     loadConfig,
     mountCollisionWarnings,
     renderConfigError,
@@ -114,7 +116,7 @@ import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
-import Ecluse.Rts (applyRuntimePosture)
+import Ecluse.Rts (RuntimePlan, applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleField, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
@@ -138,10 +140,15 @@ data BootEnv = BootEnv
     , beLogEnv :: LogEnv
     -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
-    -- ^ The telemetry handle, inert unless @ECLUSE_TELEMETRY@ enabled it.
+    -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beConfigFull :: Config
     {- ^ The whole loaded configuration document, for subcommands that need more than
     'beConfig' (the serve path's mount and rule wiring, for one).
+    -}
+    , beRuntimePlan :: RuntimePlan
+    {- ^ The resolved runtime posture (capabilities and heap ceiling, each with its
+    provenance), the datapoint the downstream sizings and the memory budget
+    compute from.
     -}
     }
 
@@ -175,18 +182,21 @@ withBootEnv action = do
                 )
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
-    logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+        observability = cfgObservability env
+        runtimeSettings = cfgRuntime env
+    logEnv <- newLogEnv (obsLogFormat observability) (Environment "production")
     -- Resolve and apply the runtime posture before anything else spins up: this may
     -- exec the binary in place (same PID; see Ecluse.Rts) to enforce a heap
     -- ceiling, so nothing stateful must precede it beyond config and the logger.
-    applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (cfgCores env) (cfgMaxHeapBytes env)
+    runtimePlan <-
+        applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings)
     logBootInfo logEnv $ case docBlob of
         Just _ -> "Config document: " <> T.pack docPath
         Nothing -> "Config document: none at " <> T.pack docPath <> " (defaults and environment only)"
     logBootInfo logEnv ("Loaded configuration: " <> show config)
     traverse_ (logBootWarning logEnv) (mountCollisionWarnings config)
-    prepareTelemetryBoot (cfgTelemetry env) logEnv
-    withTelemetry (cfgTelemetry env) logEnv $ \telemetry ->
+    prepareTelemetryBoot (obsTelemetry observability) logEnv
+    withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
         action
             BootEnv
                 { beConfig = env
@@ -194,6 +204,7 @@ withBootEnv action = do
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
                 , beConfigFull = config
+                , beRuntimePlan = runtimePlan
                 }
   where
     -- The shipped default; ECLUSE_CONFIG (non-blank) relocates it.
@@ -265,7 +276,7 @@ orExit render = \case
 {- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
 the identity, normalise the @OTEL_*@ environment the SDK reads, and install the
 throttled export-error handler ("Ecluse.Runtime.Telemetry.Resolve.prepareTelemetry"). A no-op
-when telemetry is off, so an unset @ECLUSE_TELEMETRY@ reads no process environment and
+when telemetry is off, so an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ reads no process environment and
 configures nothing. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
 prepareTelemetryBoot switch logEnv = case switch of

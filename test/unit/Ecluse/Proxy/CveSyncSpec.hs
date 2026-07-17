@@ -62,8 +62,8 @@ spec = do
                 writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
                 cfg <-
                     appConfigFrom
-                        [ ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", "advisories")
-                        , ("ECLUSE_OSV_DATA_DIR", dataDir)
+                        [ ("ECLUSE_ADVISORIES__BUCKET", "advisories")
+                        , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- quietLogEnv
@@ -136,7 +136,7 @@ spec = do
 
     describe "cveSyncScheduleFor" $
         it "converts the configured poll interval to microseconds over the shipped burst" $ do
-            cfg <- appConfigFrom [("ECLUSE_CVE_DB_POLL_INTERVAL", "90")] Nothing
+            cfg <- appConfigFrom [("ECLUSE_ADVISORIES__POLL_INTERVAL", "90")] Nothing
             let schedule = cveSyncScheduleFor cfg
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
@@ -184,7 +184,8 @@ setDummyAwsCredentials = do
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =
-    "{\"mounts\":{\"npm\":{\
+    "{\"server\":{\"publicUrl\":\"https://registry.example.test\"},\
+    \\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"respectUpstreamTarballHost\":false,\

@@ -97,10 +97,10 @@ Like every credential-bearing request, the publish relay disables redirect-follo
 > ⚠️ **The publish surface authorises *names*, not *callers*.** The scope allow-list limits
 > which package names a publish may target; it is not authentication. A static
 > `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` makes Écluse publish under its **own**
-> credential, so it is fail-closed: set without `ECLUSE_AUTH_TOKEN`, Écluse refuses to boot
+> credential, so it is fail-closed: set without `ECLUSE_SERVER__AUTH_TOKEN`, Écluse refuses to boot
 > (`PublishStaticCredentialNeedsEdge`), making "static publish credential + open edge",
 > which would let any unauthenticated client publish under the operator's credential,
-> unrepresentable. `ECLUSE_AUTH_TOKEN` is the verifiable edge Écluse checks itself; an
+> unrepresentable. `ECLUSE_SERVER__AUTH_TOKEN` is the verifiable edge Écluse checks itself; an
 > external layer (gateway, mesh/mTLS, network policy) is defence-in-depth but does not
 > satisfy this. Pure passthrough (no static token) needs none of it, the publisher's own
 > token is the authority (see
@@ -116,7 +116,7 @@ modes:
 1. **Open**, no app-level check; access is gated at the network layer (VPC, mesh).
    Appropriate on a closed network; the assumption it rests on is
    [threat #3](https://ecluse-proxy.com/threat-model.html#threat-3).
-2. **Static token**, `ECLUSE_AUTH_TOKEN`; the caller presents it as `Bearer` / `_authToken`.
+2. **Static token**, `ECLUSE_SERVER__AUTH_TOKEN`; the caller presents it as `Bearer` / `_authToken`.
    Standard npm tooling supports it directly.
 3. **Trusted edge identity**, a fronting proxy / cloud IAP / service mesh asserts a verified
    identity (a signed header / mTLS SAN). Écluse honours it **only over a verifiable binding

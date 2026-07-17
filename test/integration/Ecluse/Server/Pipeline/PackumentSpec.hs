@@ -430,7 +430,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             status resp `shouldNotBe` 404
 
 edgeAuthSpec :: Spec
-edgeAuthSpec = describe "inbound ECLUSE_AUTH_TOKEN validated at the edge" $ do
+edgeAuthSpec = describe "inbound ECLUSE_SERVER__AUTH_TOKEN validated at the edge" $ do
     it "401s a request with no/incorrect inbound token before proxying" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))

@@ -10,14 +10,24 @@ import Data.Text qualified as T
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Config (AppConfig (..), Config (..), ConfigError, loadConfig, renderConfigError)
+import Ecluse.Config (
+    AdvisoriesSettings (..),
+    AppConfig (..),
+    Config (..),
+    ConfigError,
+    EgressSettings (..),
+    IntegritySettings (..),
+    RuntimeSettings (..),
+    loadConfig,
+    renderConfigError,
+ )
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
 
 spec :: Spec
 spec = describe "decodeDocument" $ do
     it "decodes a document with one mount and a rule patch" $
-        case loadConfig [] (Just singleMountDoc) of
+        case loadConfig pubUrlEnv (Just singleMountDoc) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -27,7 +37,7 @@ spec = describe "decodeDocument" $ do
             Right doc -> configMounts doc `shouldBe` mempty
 
     it "keys a mount by its ecosystem name, deriving the prefix from it" $
-        case loadConfig [] (Just (mountDocForEcosystem "npm")) of
+        case loadConfig pubUrlEnv (Just (mountDocForEcosystem "npm")) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -56,10 +66,12 @@ spec = describe "decodeDocument" $ do
 
     it "activates a mount from the environment layer alone" $
         case loadConfig
-            [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
-            ]
+            ( pubUrlEnv
+                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                   ]
+            )
             Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -68,12 +80,12 @@ spec = describe "decodeDocument" $ do
         -- Mirroring is derived from the declared target: no mirrorTarget means
         -- serve-only, and with no private upstream either, the mount fronts only
         -- the template public upstream (the pure public gate).
-        case loadConfig [] (Just "{\"mounts\":{\"npm\":{}}}") of
+        case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "resolves a mount declaring only a private upstream as serve-only over the merge" $
-        case loadConfig [] (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}") of
+        case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -89,7 +101,7 @@ spec = describe "decodeDocument" $ do
         -- Equality with the private upstream is a valid arrangement; only the
         -- declaration itself is mandatory.
         case loadConfig
-            []
+            pubUrlEnv
             ( Just
                 "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://one.example.test\",\
                 \\"mirrorTarget\":\"https://one.example.test\",\"mirrorTargetToken\":\"t\"}}}"
@@ -117,143 +129,147 @@ spec = describe "decodeDocument" $ do
             Right doc -> do
                 -- serveMaxInFlight is unset by default: the effective capacity is
                 -- computed at boot from the resolved capability count (issue #634).
-                cfgServeMaxInFlight (configApp doc) `shouldBe` Nothing
+                rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Nothing
                 -- publicConnectionsPerHost is unset by default too: the effective
                 -- pool is computed at boot from the file-descriptor limit, like
                 -- the private pool.
-                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` Nothing
+                rtPublicConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Nothing
 
     it "rejects a zero cveDbPollInterval (a zero delay would spin the poll)" $
         loadConfig [] (Just "{\"cveDbPollInterval\":0}")
             `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
 
-    it "rejects a zero cveDbPollInterval given through the environment" $
-        loadConfig [("ECLUSE_CVE_DB_POLL_INTERVAL", "0")] Nothing
-            `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
+    it "rejects a zero advisories.pollInterval given through the environment" $
+        loadConfig [("ECLUSE_ADVISORIES__POLL_INTERVAL", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "advisories.pollInterval"
 
-    it "rejects a cveDbPollInterval whose microsecond conversion would overflow Int" $
-        loadConfig [] (Just "{\"cveDbPollInterval\":9223372036855}")
-            `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
+    it "rejects an advisories.pollInterval whose microsecond conversion would overflow Int" $
+        loadConfig [] (Just "{\"advisories\":{\"pollInterval\":9223372036855}}")
+            `shouldSatisfy` decodeErrorMentions "advisories.pollInterval"
 
-    it "rejects a zero cveSyncInterval (a zero delay would spin the export loop)" $
-        loadConfig [] (Just "{\"cveSyncInterval\":0}")
-            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+    it "rejects a zero advisories.compileInterval (a zero delay would spin the export loop)" $
+        loadConfig [] (Just "{\"advisories\":{\"compileInterval\":0}}")
+            `shouldSatisfy` decodeErrorMentions "advisories.compileInterval"
 
-    it "rejects a zero cveSyncInterval given through the environment" $
-        loadConfig [("ECLUSE_CVE_SYNC_INTERVAL", "0")] Nothing
-            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+    it "rejects a zero advisories.compileInterval given through the environment" $
+        loadConfig [("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "advisories.compileInterval"
 
-    it "rejects a cveSyncInterval whose microsecond conversion would overflow Int" $
-        loadConfig [] (Just "{\"cveSyncInterval\":9223372036855}")
-            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+    it "rejects an advisories.compileInterval whose microsecond conversion would overflow Int" $
+        loadConfig [] (Just "{\"advisories\":{\"compileInterval\":9223372036855}}")
+            `shouldSatisfy` decodeErrorMentions "advisories.compileInterval"
 
-    it "rejects a non-positive maxOsvDbBytes" $
-        loadConfig [] (Just "{\"maxOsvDbBytes\":0}")
-            `shouldSatisfy` decodeErrorMentions "maxOsvDbBytes"
+    it "rejects a non-positive advisories.maxDatabaseBytes" $
+        loadConfig [] (Just "{\"advisories\":{\"maxDatabaseBytes\":0}}")
+            `shouldSatisfy` decodeErrorMentions "advisories.maxDatabaseBytes"
 
     it "loads the shipped advisory-sync defaults (poll interval, byte cap, no bucket)" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgCveDbPollInterval (configApp doc) `shouldBe` 60
-                cfgMaxOsvDbBytes (configApp doc) `shouldBe` 536870912
-                cfgVulnerabilityDatabaseBucket (configApp doc) `shouldBe` Nothing
+                advPollInterval (cfgAdvisories (configApp doc)) `shouldBe` 60
+                advMaxDatabaseBytes (cfgAdvisories (configApp doc)) `shouldBe` 536870912
+                advBucket (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
     it "defaults the divergence policy to warn" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgDivergencePolicy (configApp doc) `shouldBe` Warn
+            Right doc -> intDivergencePolicy (cfgIntegrity (configApp doc)) `shouldBe` Warn
 
-    it "parses ECLUSE_DIVERGENCE_POLICY=fail-closed from the environment" $
-        case loadConfig [("ECLUSE_DIVERGENCE_POLICY", "fail-closed")] Nothing of
+    it "parses ECLUSE_INTEGRITY__DIVERGENCE_POLICY=fail-closed from the environment" $
+        case loadConfig [("ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "fail-closed")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgDivergencePolicy (configApp doc) `shouldBe` FailClosed
+            Right doc -> intDivergencePolicy (cfgIntegrity (configApp doc)) `shouldBe` FailClosed
 
-    it "rejects an unknown ECLUSE_DIVERGENCE_POLICY value, naming the field" $
-        loadConfig [("ECLUSE_DIVERGENCE_POLICY", "drop")] Nothing
+    it "rejects an unknown ECLUSE_INTEGRITY__DIVERGENCE_POLICY value, naming the field" $
+        loadConfig [("ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "drop")] Nothing
             `shouldSatisfy` decodeErrorMentions "divergencePolicy"
 
     it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgCores (configApp doc) `shouldBe` Nothing
-                cfgMaxHeapBytes (configApp doc) `shouldBe` Nothing
+                rtCores (cfgRuntime (configApp doc)) `shouldBe` Nothing
+                rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Nothing
 
     it "parses cores and maxHeapBytes from the environment layer" $ do
-        case loadConfig [("ECLUSE_CORES", "2"), ("ECLUSE_MAX_HEAP_BYTES", "419430400")] Nothing of
+        case loadConfig [("ECLUSE_RUNTIME__CORES", "2"), ("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "419430400")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgCores (configApp doc) `shouldBe` Just 2
-                cfgMaxHeapBytes (configApp doc) `shouldBe` Just 419430400
+                rtCores (cfgRuntime (configApp doc)) `shouldBe` Just 2
+                rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Just 419430400
 
     it "rejects non-positive cores and maxHeapBytes" $ do
-        loadConfig [("ECLUSE_CORES", "0")] Nothing
+        loadConfig [("ECLUSE_RUNTIME__CORES", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "cores must be a positive integer"
-        loadConfig [("ECLUSE_MAX_HEAP_BYTES", "-1")] Nothing
+        loadConfig [("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "-1")] Nothing
             `shouldSatisfy` decodeErrorMentions "maxHeapBytes must be a positive integer"
 
     it "parses an explicit serveMaxInFlight override" $ do
-        case loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "24")] Nothing of
+        case loadConfig [("ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT", "24")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgServeMaxInFlight (configApp doc) `shouldBe` Just 24
+            Right doc -> rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Just 24
 
     it "parses an explicit privateConnectionsPerHost override" $ do
         -- The private pool defaults to a value computed from the file-descriptor limit,
         -- independent of the admission capacity (it streams outside admission); an
         -- operator who knows their fan-out can still pin it.
-        case loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
+        case loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` Just 256
+            Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Just 256
 
     it "leaves privateConnectionsPerHost unset when not configured (computed at boot)" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` Nothing
+            Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Nothing
 
     it "rejects non-positive serve and connection capacities" $ do
-        loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
+        loadConfig [("ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "serveMaxInFlight must be a positive integer"
-        loadConfig [("ECLUSE_PUBLIC_CONNECTIONS_PER_HOST", "0")] Nothing
+        loadConfig [("ECLUSE_RUNTIME__PUBLIC_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "publicConnectionsPerHost must be a positive integer"
-        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "0")] Nothing
+        loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
     it "leaves additionalBlockedRanges empty by default" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` []
+            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` []
 
     it "parses a comma-separated additionalBlockedRanges from the environment layer" $
-        case loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24,2001:db8::/32")] Nothing of
+        case loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24,2001:db8::/32")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
 
     it "trims whitespace around each additionalBlockedRanges entry" $
-        case loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", " 203.0.113.0/24 , 2001:db8::/32 ")] Nothing of
+        case loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", " 203.0.113.0/24 , 2001:db8::/32 ")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
 
     it "rejects a malformed entry in additionalBlockedRanges, naming it (fails closed at boot)" $
-        loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "not-a-range")] Nothing
+        loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", "not-a-range")] Nothing
             `shouldSatisfy` decodeErrorMentions "invalid CIDR range"
 
     describe "registry URL entries (the egress gate authorises each entry's host:port pair)" $ do
         it "accepts an upstream URL with an explicit port" $
             case loadConfig
-                [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")
-                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
-                ]
+                ( pubUrlEnv
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                       ]
+                )
                 Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
         it "accepts an upstream URL with a bracketed IPv6 host and a port" $
             case loadConfig
-                [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")
-                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
-                ]
+                ( pubUrlEnv
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                       ]
+                )
                 Nothing of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -272,6 +288,11 @@ spec = describe "decodeDocument" $ do
         it "rejects a mirror-target URL with a garbage port through the document layer" $
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+
+-- server.publicUrl is required once a mount is active; supplied here so each
+-- decode example stays about its own concern.
+pubUrlEnv :: [(String, String)]
+pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
 singleMountDoc :: ByteString
 singleMountDoc =

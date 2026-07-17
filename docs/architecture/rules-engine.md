@@ -250,10 +250,10 @@ polling the bucket's stable per-ecosystem key for ETag changes. The tasks are in
 ecosystem's missing artifact never holds back another's. At boot each attempts an eager first fetch,
 retried with incremental backoff and eventually allowed to fail, so a healthy deployment is
 rules-complete within seconds while a broken bucket never wedges startup; the steady poll takes over
-from there. Its interval (`cveDbPollInterval`) is deliberately more frequent than Pilot's compile
+from there. Its interval (`advisories.pollInterval`) is deliberately more frequent than Pilot's compile
 interval, since matching the two rates would nearly double the worst-case advisory age.
 
-A newly detected `osv.db` is downloaded to a temp file, byte-bounded by `maxOsvDbBytes`, and verified
+A newly detected `osv.db` is downloaded to a temp file, byte-bounded by `advisories.maxDatabaseBytes`, and verified
 by the same acceptance that guards every open. Because the file is treated as untrusted even behind the
 bucket's access controls, the connection is hardened before its first query (`trusted_schema` off,
 `query_only` on, `cell_size_check` on, memory-mapped I/O disabled) and acceptance walks it cheapest-first:
@@ -338,5 +338,5 @@ When a request is denied (no allow rule matched, or a deny rule fired):
   }
   ```
 - The denial reason (which rule decided, and why) is always included.
-- `ECLUSE_HELP_MESSAGE`, if configured, is appended to every denial (the ecosystem-neutral
+- `ECLUSE_SERVER__HELP_MESSAGE`, if configured, is appended to every denial (the ecosystem-neutral
   `appendHelp`, before the renderer wraps it).

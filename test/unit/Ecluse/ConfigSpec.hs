@@ -11,7 +11,7 @@ import Test.Hspec
 
 import Ecluse.Config (
     Config (configMounts),
-    ConfigError (MirrorSettingWithoutWrite, MountMissingPrivateUpstream),
+    ConfigError (MirrorSettingWithoutWrite, MountMissingPrivateUpstream, PublicUrlRequired),
     Mount (mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
@@ -57,12 +57,20 @@ spec = do
             Map.keys (configMounts cfg) `shouldBe` []
 
         it "requires the private upstream on a mirrored mount (the mirror must read back)" $
-            loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
+            loadConfig pubUrlEnv (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
                 `shouldBe` Left [MountMissingPrivateUpstream Npm]
+
+        it "requires server.publicUrl once any mount is active, aggregated with the mount errors" $ do
+            -- Served tarball URLs are rewritten against the proxy's own base URL;
+            -- omitting it fails here, not client by client at install time.
+            loadConfig [] (Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}")
+                `shouldBe` Left [PublicUrlRequired]
+            loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
+                `shouldBe` Left [PublicUrlRequired, MountMissingPrivateUpstream Npm]
 
         it "refuses each leftover mirror-write setting on a serve-only mount, aggregated" $
             loadConfig
-                []
+                pubUrlEnv
                 (Just "{\"mounts\":{\"npm\":{\"mirrorTargetToken\":\"t\",\"mirrorCodeArtifactTokenDuration\":3600}}}")
                 `shouldBe` Left
                     [ MirrorSettingWithoutWrite Npm "mirrorTargetToken"
@@ -123,9 +131,14 @@ spec = do
                 (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://priv.example.test/")])
                 ["mirrorTarget", "privateUpstream"]
 
--- | Load a config document, failing the test on any load error.
+{- | Load a config document, failing the test on any load error.
+| The client-facing base URL every active-mount load needs (server.publicUrl).
+-}
+pubUrlEnv :: [(String, String)]
+pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
 configFor :: ByteString -> IO Config
-configFor doc = either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig [] (Just doc))
+configFor doc = either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig pubUrlEnv (Just doc))
 
 -- | Assert exactly one collision warning whose text carries every phrase.
 shouldWarnOnce :: ByteString -> [Text] -> Expectation

@@ -170,7 +170,7 @@ telemetryScenarios = do
     -- #325(a) -- OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry -- OTLP off, no collector (#325)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout -- no collector needed" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- It still writes structured JSONL to its stdout/stderr (docker captures

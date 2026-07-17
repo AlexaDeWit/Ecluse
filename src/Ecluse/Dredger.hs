@@ -12,7 +12,7 @@ import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgPort))
+import Ecluse.Config (AppConfig (cfgServer), ServerSettings (srvPort))
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 
@@ -29,7 +29,7 @@ probes. Its actual worker loop will clean up upstream mirrors.
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do
     let logEnv = beLogEnv bootEnv
-        port = cfgPort (beConfig bootEnv)
+        port = srvPort (cfgServer (beConfig bootEnv))
         cfg = (mkServerConfig []){scPort = port}
 
     runKatipContextT logEnv (moduleField "Ecluse.Dredger") mempty $ do

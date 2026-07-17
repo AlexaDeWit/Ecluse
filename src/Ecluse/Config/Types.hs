@@ -11,6 +11,15 @@ module Ecluse.Config.Types (
     MirrorCredential (..),
     MountConfig (..),
     AppConfig (..),
+    ServerSettings (..),
+    QueueSettings (..),
+    LimitsSettings (..),
+    CacheSettings (..),
+    IntegritySettings (..),
+    EgressSettings (..),
+    AdvisoriesSettings (..),
+    RuntimeSettings (..),
+    ObservabilitySettings (..),
     MountRegistries (..),
     MountMode (..),
     MirroredLegs (..),
@@ -94,38 +103,114 @@ data MountConfig = MountConfig
     }
     deriving stock (Eq, Show)
 
+{- | The resolved application configuration, one sub-record per document group so a
+field's home says what it governs (the document schema and this type mirror each
+other one to one).
+-}
 data AppConfig = AppConfig
-    { cfgPort :: Int
+    { cfgServer :: ServerSettings
+    , cfgQueue :: QueueSettings
+    , cfgLimits :: LimitsSettings
+    , cfgCache :: CacheSettings
+    , cfgIntegrity :: IntegritySettings
+    , cfgEgress :: EgressSettings
+    , cfgAdvisories :: AdvisoriesSettings
+    , cfgRuntime :: RuntimeSettings
+    , cfgObservability :: ObservabilitySettings
     , cfgMounts :: Map Ecosystem MountConfig
-    , cfgQueueUrl :: Maybe Url
-    , cfgQueueMemoryMaxDepth :: Int
-    , cfgAuthToken :: Maybe Secret
-    , cfgHelpMessage :: Maybe Text
-    , cfgCveSyncInterval :: NominalDiffTime
-    , cfgShutdownDrainTimeout :: Int
-    , cfgCores :: Maybe Int
-    , cfgMaxHeapBytes :: Maybe Int
-    , cfgServeMaxInFlight :: Maybe Int
-    , cfgPublicConnectionsPerHost :: Maybe Int
-    , cfgPrivateConnectionsPerHost :: Maybe Int
-    , cfgCacheTtl :: NominalDiffTime
-    , cfgCacheMaxEntries :: Int
-    , cfgCacheMaxBytes :: Int
-    , cfgMaxResponseBytes :: Int
-    , cfgMaxVersionCount :: Int
-    , cfgMaxNestingDepth :: Int
-    , cfgLogFormat :: LogFormat
-    , cfgTelemetry :: TelemetrySwitch
-    , cfgPublicUrl :: Maybe Url
-    , cfgMinPublicIntegrity :: MinIntegrity
-    , cfgMinTrustedIntegrity :: MinTrustedIntegrity
-    , cfgDivergencePolicy :: DivergencePolicy
-    , cfgAdditionalBlockedRanges :: [IPRange]
-    , cfgOsvDataDir :: FilePath
-    , cfgOsvExportBaseUrl :: Text
-    , cfgVulnerabilityDatabaseBucket :: Maybe Text
-    , cfgCveDbPollInterval :: NominalDiffTime
-    , cfgMaxOsvDbBytes :: Int
+    }
+    deriving stock (Eq, Show)
+
+-- | The @server@ group: the inbound edge Écluse itself presents.
+data ServerSettings = ServerSettings
+    { srvPort :: Int
+    , srvPublicUrl :: Maybe Url
+    {- ^ Required whenever a mount is active ('Ecluse.Config.loadConfig' refuses
+    otherwise): served artifact URLs are rewritten against it.
+    -}
+    , srvAuthToken :: Maybe Secret
+    , srvHelpMessage :: Maybe Text
+    , srvShutdownDrainTimeout :: Int
+    }
+    deriving stock (Eq, Show)
+
+{- | The @queue@ group: the mirror queue's destination and the in-memory rollover's
+depth cap. The backend is derived from the URL's shape ("Ecluse.Config.QueueTarget"),
+never named here.
+-}
+data QueueSettings = QueueSettings
+    { qsUrl :: Maybe Url
+    , qsMemoryMaxDepth :: Maybe Int
+    -- ^ Computed from the runtime posture when unset; a configured value wins.
+    }
+    deriving stock (Eq, Show)
+
+{- | The @limits@ group: the hostile-input bounds. The structural counts are pinned
+policy defaults; the byte-valued caps are computed from the memory budget when
+unset ("Ecluse.Composition.MemoryBudget"), a configured value always winning.
+-}
+data LimitsSettings = LimitsSettings
+    { limMaxResponseBytes :: Maybe Int
+    , limMaxVersionCount :: Int
+    , limMaxNestingDepth :: Int
+    , limMaxRequestBytes :: Maybe Int
+    }
+    deriving stock (Eq, Show)
+
+-- | The @cache@ group: the metadata cache's TTL and its computed-by-default bounds.
+data CacheSettings = CacheSettings
+    { csTtl :: NominalDiffTime
+    , csMaxEntries :: Maybe Int
+    -- ^ Computed from the runtime posture when unset; a configured value wins.
+    , csMaxBytes :: Maybe Int
+    -- ^ Computed from the runtime posture when unset; a configured value wins.
+    }
+    deriving stock (Eq, Show)
+
+{- | The @integrity@ group: the global integrity floors and divergence policy
+(@minTrusted@ and @divergencePolicy@ refinable per mount).
+-}
+data IntegritySettings = IntegritySettings
+    { intMinPublic :: MinIntegrity
+    , intMinTrusted :: MinTrustedIntegrity
+    , intDivergencePolicy :: DivergencePolicy
+    }
+    deriving stock (Eq, Show)
+
+-- | The @egress@ group: the operator's additions to the blocked target ranges.
+newtype EgressSettings = EgressSettings
+    { egrAdditionalBlockedRanges :: [IPRange]
+    }
+    deriving stock (Eq, Show)
+
+-- | The @advisories@ group: the OSV/CVE pipeline's bucket, cadences, and bounds.
+data AdvisoriesSettings = AdvisoriesSettings
+    { advBucket :: Maybe Text
+    , advPollInterval :: NominalDiffTime
+    , advCompileInterval :: NominalDiffTime
+    , advDataDir :: FilePath
+    , advOsvExportBaseUrl :: Text
+    , advMaxDatabaseBytes :: Int
+    }
+    deriving stock (Eq, Show)
+
+{- | The @runtime@ group: the process-sizing overrides. Every field is optional;
+unset, each is computed from the runtime posture (cgroups, RTS, file-descriptor
+limit) with its provenance boot-logged.
+-}
+data RuntimeSettings = RuntimeSettings
+    { rtCores :: Maybe Int
+    , rtMaxHeapBytes :: Maybe Int
+    , rtServeMaxInFlight :: Maybe Int
+    , rtPublicConnectionsPerHost :: Maybe Int
+    , rtPrivateConnectionsPerHost :: Maybe Int
+    }
+    deriving stock (Eq, Show)
+
+-- | The @observability@ group: log shape and telemetry switch.
+data ObservabilitySettings = ObservabilitySettings
+    { obsLogFormat :: LogFormat
+    , obsTelemetry :: TelemetrySwitch
     }
     deriving stock (Eq, Show)
 
@@ -196,6 +281,15 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
+    | {- | A mount is active but @server.publicUrl@ is unset. Served artifact URLs
+      must be rewritten against the proxy's own externally-reachable base URL; a
+      relative @dist.tarball@ reads to the npm CLI as a @file:@ path and every
+      install fails, so the omission is refused at boot rather than discovered
+      client by client. Host-header derivation is deliberately not offered (a
+      spoofed header would poison every shared-cache entry with an
+      attacker-chosen artifact URL).
+      -}
+      PublicUrlRequired
     | {- | A __mirrored__ mount (one that declares a @mirrorTarget@) does not define
       its private upstream. The mirror write must be readable back through the
       private leg, so a mirrored mount without one is refused; a serve-only mount
@@ -225,6 +319,11 @@ data ConfigError
 renderConfigError :: ConfigError -> Text
 renderConfigError (ParseError e) = e
 renderConfigError (PolicyErrors es) = T.unlines (map renderPolicyError es)
+renderConfigError PublicUrlRequired =
+    "a mount is active but server.publicUrl (ECLUSE_SERVER__PUBLIC_URL) is not set: "
+        <> "served tarball URLs are rewritten against the proxy's own externally-reachable base URL, "
+        <> "and without one the npm CLI reads the relative dist.tarball as a file: path and every install fails; "
+        <> "set it to the URL clients reach this proxy on (e.g. https://registry.example.com)"
 renderConfigError (MountMissingPrivateUpstream eco) =
     let name = ecosystemName eco
         envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__PRIVATE_UPSTREAM"

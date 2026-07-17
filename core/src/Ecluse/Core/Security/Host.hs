@@ -153,7 +153,7 @@ against:
 * __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) -- the private-network IPv6 analogue,
   which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@;
 * every range in @additionalRanges@, the operator-configured extension of this
-  fixed set (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) -- a deployment's own internal
+  fixed set (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) -- a deployment's own internal
   space this module cannot know about in advance.
 
 A @host@ that is not an IP literal (a DNS name) is __not__ blocked here:
@@ -184,7 +184,7 @@ well-known prefix @64:ff9b::\/96@ (RFC 6052), and the NAT64 local-use prefix
 cannot be enumerated here: it is operator-chosen from the operator's own unicast
 space, so nothing in the address marks it as an embedding. An operator whose
 fabric translates under such a prefix extends the block with @additionalRanges@
-(@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) instead.
+(@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) instead.
 -}
 isBlockedIP :: [IPRange] -> IP -> Bool
 isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
@@ -222,7 +222,7 @@ blockedRanges =
     , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
     ]
 
-{- | Parse one operator-configured @ECLUSE_ADDITIONAL_BLOCKED_RANGES@ entry (a
+{- | Parse one operator-configured @ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@ entry (a
 single CIDR, e.g. @"203.0.113.0\/24"@ or @"2001:db8::\/32"@) into an 'IPRange', or
 'Nothing' for anything malformed.
 

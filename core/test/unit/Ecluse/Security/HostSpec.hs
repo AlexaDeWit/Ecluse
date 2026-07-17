@@ -938,7 +938,7 @@ parseIpLiteralSpec = describe "parseIpLiteral" $ do
         void (parseIpLiteral "1::2::3") `shouldBe` Nothing
 
 {- | 'parseBlockedRange' is the total decoder the config layer relies on for
-@ECLUSE_ADDITIONAL_BLOCKED_RANGES@: a malformed entry must yield 'Nothing' (so the
+@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@: a malformed entry must yield 'Nothing' (so the
 decoder can fail the boot closed) rather than throwing, unlike the module's own
 compile-time 'IPRange' literals.
 -}

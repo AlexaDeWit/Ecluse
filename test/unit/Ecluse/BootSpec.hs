@@ -22,13 +22,14 @@ import Ecluse.Boot (BootAborted (..), orExit)
 
 runEnv :: [(String, String)]
 runEnv =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-    , ("ECLUSE_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
+    , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
-    , ("ECLUSE_PORT", "0")
+    , ("ECLUSE_SERVER__PORT", "0")
     ]
 
 awsRunEnv :: [(String, String)]
@@ -51,24 +52,26 @@ spec = do
             outcome `shouldBe` Nothing
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            -- The two-variable start (ECLUSE_PUBLIC_URL being the other, for real
+            -- The two-variable start (ECLUSE_SERVER__PUBLIC_URL being the other, for real
             -- installs): no mount mirrors, so the shipped sqs default is never
             -- consulted and no queue configuration is needed.
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
-            unsetEnv "ECLUSE_QUEUE_URL"
+            unsetEnv "ECLUSE_QUEUE__URL"
             setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
-            setEnv "ECLUSE_PORT" "0"
+            setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
+            setEnv "ECLUSE_SERVER__PORT" "0"
             outcome <- timeout 100000 (withArgs ["proxy"] run)
             unsetEnv "ECLUSE_MOUNTS__NPM__ENABLED"
-            unsetEnv "ECLUSE_PORT"
+            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
+            unsetEnv "ECLUSE_SERVER__PORT"
             outcome `shouldBe` Nothing
 
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 let path = dir </> "config.yaml"
-                writeFileText path "helpMessage: booted from the override document\n"
+                writeFileText path "server:\n  helpMessage: booted from the override document\n"
                 traverse_ (uncurry setEnv) awsRunEnv
                 setEnv "ECLUSE_CONFIG" path
                 outcome <- timeout 100000 (withArgs ["proxy"] run)
@@ -99,7 +102,7 @@ spec = do
             -- The topic-shaped URL names the GCP backend, which has no
             -- implementation compiled in: a loud refusal, never a silent fallback.
             traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE_URL" "projects/acme/topics/mirror"
+            setEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) runEnv
             -- The typed process supervisor maps the boot abort to exit 2.
@@ -107,17 +110,17 @@ spec = do
 
         it "aborts fast at boot when the queue URL's shape names no backend" $ do
             traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE_URL" "https://queue.example.test/q"
+            setEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) runEnv
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "boots on the in-memory mirror queue when no ECLUSE_QUEUE_URL is set (graceful rollover) and serves" $ do
+        it "boots on the in-memory mirror queue when no ECLUSE_QUEUE__URL is set (graceful rollover) and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
-            unsetEnv "ECLUSE_QUEUE_URL"
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
+            unsetEnv "ECLUSE_QUEUE__URL"
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE__URL") . fst) runEnv)
             outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing

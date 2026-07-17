@@ -30,6 +30,7 @@ import Ecluse.Config (
     AppConfig (..),
     Config (..),
     Mount (mountRegistries),
+    QueueSettings (qsUrl),
     regMirrorTarget,
     unUrl,
  )
@@ -58,10 +59,10 @@ whether anything mirrors from the resolved mounts, and only then consult the que
 configuration ('planMirrorQueue'), so a serve-only deployment can never fail boot
 over queue variables it does not need.
 -}
-planMirrorRuntime :: AmbientAws -> Config -> Either [BootError] MirrorRuntimePlan
-planMirrorRuntime ambient config
+planMirrorRuntime :: AmbientAws -> Int -> Config -> Either [BootError] MirrorRuntimePlan
+planMirrorRuntime ambient memoryDepth config
     | noneMirror = Right NoMirroring
-    | otherwise = MirrorWith <$> planMirrorQueue ambient (configApp config)
+    | otherwise = MirrorWith <$> planMirrorQueue ambient memoryDepth (configApp config)
   where
     noneMirror = all (isNothing . regMirrorTarget . mountRegistries) (configMounts config)
 
@@ -86,7 +87,7 @@ from, or the aggregated boot errors that block it.
 
 This is the pure half of the queue's backend choice -- the single place that knows
 which backends this binary can build. There is no backend selector: the operator
-points @ECLUSE_QUEUE_URL@ at a destination and the backend is derived from its
+points @ECLUSE_QUEUE__URL@ at a destination and the backend is derived from its
 shape ("Ecluse.Config.QueueTarget", the queue's counterpart of the mirror-credential
 derivation), so a backend\/URL disagreement is unrepresentable. A real SQS queue
 URL resolves to a 'SqsBackend' carrying its 'SqsConfig', with the region parsed
@@ -95,7 +96,7 @@ root passes that to @Ecluse.Runtime.Queue.Sqs.newSqsQueue@. A Pub\/Sub topic
 resource names the GCP backend, which is recognised but not built, so it is a
 fail-loud 'QueueProviderUnavailable' rather than a silent fall-through, and any
 other shape is a fail-loud 'QueueUrlUnrecognised' naming the accepted forms. An
-__absent__ @ECLUSE_QUEUE_URL@ rolls over to the bounded in-memory 'MemoryBackend'
+__absent__ @ECLUSE_QUEUE__URL@ rolls over to the bounded in-memory 'MemoryBackend'
 carrying its depth cap: mirroring is demand-driven and self-healing (a job lost to
 a restart re-enqueues on the next demand), so the rollover degrades durability,
 never safety, and the composition root emits the 'memoryQueueBootWarning' so it is
@@ -114,11 +115,12 @@ for the queue would let an S3-only override silently redirect the queue's traffi
 With no override, the SQS backend uses AWS's default endpoint and credential
 resolution.
 -}
-planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
-planMirrorQueue ambient env = case cfgQueueUrl env of
+planMirrorQueue :: AmbientAws -> Int -> AppConfig -> Either [BootError] MirrorQueuePlan
+planMirrorQueue ambient memoryDepth env = case qsUrl (cfgQueue env) of
     -- No queue URL: the bounded in-memory queue, a graceful rollover (loudly
-    -- warned), never a boot failure -- there is nothing to misconfigure.
-    Nothing -> Right memoryPlan
+    -- warned), never a boot failure -- there is nothing to misconfigure. The depth
+    -- cap arrives resolved (configured, or computed from the runtime posture).
+    Nothing -> Right (MemoryBackend (defaultMemoryQueueConfig memoryDepth))
     Just queueUrl ->
         let url = unUrl queueUrl
          in case nonBlank =<< ambientAwsEndpointUrlSqs ambient of
@@ -131,9 +133,6 @@ planMirrorQueue ambient env = case cfgQueueUrl env of
                     Just (PubSubTarget _project _topic) -> Left [QueueProviderUnavailable "pubsub"]
                     Nothing -> Left [QueueUrlUnrecognised url]
   where
-    memoryPlan :: MirrorQueuePlan
-    memoryPlan = MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env))
-
     -- AWS_REGION, required only under the endpoint override (a real SQS URL carries
     -- its region in its host); a blank value is treated as absent.
     regionE :: Either BootError Text
@@ -158,16 +157,16 @@ mirrorQueuePlanWarning = \case
     MemoryBackend _ -> Just memoryQueueBootWarning
 
 {- | The boot warning emitted when mirroring rolls over to the in-memory queue (no
-@ECLUSE_QUEUE_URL@): it states plainly that the mirror is in-memory, non-durable,
+@ECLUSE_QUEUE__URL@): it states plainly that the mirror is in-memory, non-durable,
 and best-effort, and that a lost job is re-mirrored on the next demand (so there is
 no data loss, only deferred mirroring), so the rollover is never mistaken for a
 durable cloud backend.
 -}
 memoryQueueBootWarning :: Text
 memoryQueueBootWarning =
-    "no ECLUSE_QUEUE_URL is set, so the mirror queue is IN-MEMORY, NON-DURABLE, and BEST-EFFORT. "
+    "no ECLUSE_QUEUE__URL is set, so the mirror queue is IN-MEMORY, NON-DURABLE, and BEST-EFFORT. "
         <> "Jobs are dropped on cap overflow and lost on restart or redeploy; each is re-mirrored on the next "
-        <> "demand (no data loss, only deferred mirroring). Point ECLUSE_QUEUE_URL at a durable queue (SQS) "
+        <> "demand (no data loss, only deferred mirroring). Point ECLUSE_QUEUE__URL at a durable queue (SQS) "
         <> "for a production mirror that must not shed under load."
 
 {- | The cap-overflow drop warning for the in-memory backend, carrying the running
@@ -180,7 +179,7 @@ memoryQueueDropWarning dropped =
     "mirror queue at capacity: dropped a mirror job (drop-newest); "
         <> show dropped
         <> " job(s) dropped so far. Each is re-mirrored on the next demand; raise "
-        <> "ECLUSE_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
+        <> "ECLUSE_QUEUE__MEMORY_MAX_DEPTH to shed fewer under load."
 
 {- | Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
 flag and the default port (443\/80) when none is given; an absent scheme or a

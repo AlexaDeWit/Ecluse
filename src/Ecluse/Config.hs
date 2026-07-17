@@ -6,6 +6,15 @@
 module Ecluse.Config (
     Config (..),
     AppConfig (..),
+    ServerSettings (..),
+    QueueSettings (..),
+    LimitsSettings (..),
+    CacheSettings (..),
+    IntegritySettings (..),
+    EgressSettings (..),
+    AdvisoriesSettings (..),
+    RuntimeSettings (..),
+    ObservabilitySettings (..),
     MountMap,
     Mount (..),
     MountRegistries (..),
@@ -92,8 +101,15 @@ loadConfig envVars mBytes = do
         -- enabled: false switches a declared mount off; anything else declared serves.
         served = Map.filter (\mcfg -> mntEnabled mcfg /= Just False) declared
         appConfig = parsed{cfgMounts = served}
+    -- Any served mount needs the proxy's own client-facing base URL: served
+    -- tarball URLs are rewritten against it, and without one every real install
+    -- fails client by client instead of loudly here. Aggregated with the mount
+    -- resolution so one load reports both classes at once.
+    let publicUrlErrs = [PublicUrlRequired | not (Map.null served), isNothing (srvPublicUrl (cfgServer appConfig))]
     globalPolicy <- resolveGlobalPolicy overridesAst
-    mounts <- resolveMounts globalPolicy appConfig
+    mounts <- case (publicUrlErrs, resolveMounts globalPolicy appConfig) of
+        ([], resolved) -> resolved
+        (errs, resolved) -> Left (errs <> fromLeft [] resolved)
     Right (Config appConfig mounts)
 
 {- | The ecosystems the operator overlay declares under @mounts@: the activation

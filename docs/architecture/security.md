@@ -81,7 +81,7 @@ not here.
    is non-supported. Behind the host allowlist (invariant 2), a cheap literal
    internal-range block stays as a second gate on the `dist.tarball` host; the trusted
    private origin is exempt from it, since a private registry may live on an internal
-   address. The fixed range set is extensible with `ECLUSE_ADDITIONAL_BLOCKED_RANGES`
+   address. The fixed range set is extensible with `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES`
    (comma-separated CIDRs, applied to every mount, fails closed at boot on a malformed
    entry); it only widens the block, with no knob to narrow it.
 4. **Parsed upstream responses are bounded**, maximum body size, version count, and JSON
@@ -96,8 +96,8 @@ not here.
    failure; the merge then serves the best-effort union of whatever resolved within budget.
    The body-size cap precedes the decode, so the document reaching the depth check is
    already size-bounded, and the depth check bounds its traversal cost. The ceilings are
-   operator-tunable with secure defaults (`ECLUSE_MAX_RESPONSE_BYTES` /
-   `ECLUSE_MAX_VERSION_COUNT` / `ECLUSE_MAX_NESTING_DEPTH`; see
+   operator-tunable with secure defaults (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES` /
+   `ECLUSE_LIMITS__MAX_VERSION_COUNT` / `ECLUSE_LIMITS__MAX_NESTING_DEPTH`; see
    [Response bounds](configuration.md#response-bounds)). Artifacts stream with constant
    memory and are not subject to the body-size bound; the inbound client→proxy
    request-body cap is the separate `sizeLimitMiddleware`.
@@ -107,7 +107,7 @@ not here.
    differ only in how far they may move:
 
    - The public (untrusted) floor is a hard SHA-256 boundary
-     (`ECLUSE_MIN_PUBLIC_INTEGRITY`, default SHA-256). It may be raised to
+     (`ECLUSE_INTEGRITY__MIN_PUBLIC`, default SHA-256). It may be raised to
      `sha384`/`sha512`/`blake2b` but never lowered below SHA-256: a sub-floor or unknown
      value is [rejected at config load](configuration.md#public-integrity-floor), never
      clamped, and no configuration accepts a sub-SHA-256 digest from an untrusted public
@@ -117,7 +117,7 @@ not here.
      a client never sees a version it could not verify. SHA-1 and MD5 have practical
      collisions, so a match cannot prove the bytes were not substituted.
    - The trusted (private) floor carries the same SHA-256 default
-     (`ECLUSE_MIN_TRUSTED_INTEGRITY`, default SHA-256), so a SHA-1-only or hashless private
+     (`ECLUSE_INTEGRITY__MIN_TRUSTED`, default SHA-256), so a SHA-1-only or hashless private
      version is dropped exactly as a public one is. But it is operator-loosenable below
      SHA-256 (down to `sha1`/`md5`) for a legacy private mirror, where trust in the
      operator's own vetted source substitutes for cryptographic strength. That is the only
@@ -288,7 +288,7 @@ is not authentication and does not verify who is publishing. So if a deployment 
 publisher who forwards none, the composition root refuses to boot without a verifiable
 inbound edge (`PublishStaticCredentialNeedsEdge`). That makes "static publish credential +
 open edge", which would let any unauthenticated client publish under the operator's
-credential within the allowed scopes, unrepresentable. `ECLUSE_AUTH_TOKEN` is the verifiable
+credential within the allowed scopes, unrepresentable. `ECLUSE_SERVER__AUTH_TOKEN` is the verifiable
 edge Écluse checks today; an external layer (API gateway, mTLS service mesh, `NetworkPolicy`)
 is defence-in-depth but cannot substitute for it, since Écluse can only verify its own edge.
 Pure passthrough (no static token) carries no such floor: the publisher's forwarded token is
@@ -343,13 +343,13 @@ three-registry topology, CodeArtifact over VPC endpoints). The threats and dispo
 in the [register](https://ecluse-proxy.com/threat-model.html); this is the
 assumptions framing.
 
-**Edge access is an operator concern** (register threat #3). `ECLUSE_AUTH_TOKEN` is off by
+**Edge access is an operator concern** (register threat #3). `ECLUSE_SERVER__AUTH_TOKEN` is off by
 default; who may reach the proxy is delegated to the deployment's access edge, which must
 hold east-west as well as north-south (an ingress-only allow-list that leaves pod-to-pod
 traffic open is the usual gap). Passthrough softens this: a caller with no forwarded token
 gets no private read or publish, so an edge breach exposes only the public-gated view plus
 the untrusted-egress and DoS surface, never private packages. (A static publication token
-requires `ECLUSE_AUTH_TOKEN`, enforced at boot:
+requires `ECLUSE_SERVER__AUTH_TOKEN`, enforced at boot:
 [a static publish credential is fail-closed](#a-static-publish-credential-is-fail-closed).)
 The planned trusted-edge-identity mode must require a verifiable binding to the edge (mutual
 TLS, or a shared secret / HMAC on the assertion), an [unrepresentable unsafe
@@ -413,4 +413,4 @@ egress guards follow that principle, made concrete for the tarball path:
 
 The internal-range block (invariant 3) runs the opposite direction: no knob narrows it (a
 literal internal address is always refused on an untrusted origin, the trusted private
-origin aside), only `ECLUSE_ADDITIONAL_BLOCKED_RANGES` widens it.
+origin aside), only `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` widens it.

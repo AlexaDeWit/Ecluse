@@ -153,10 +153,11 @@ spec =
 -- credential keys, the required upstream, and the vulnerability bucket.
 s3EnvVars :: Text -> Text -> [(String, String)]
 s3EnvVars endpointUrl bucket =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "test-token")
-    , ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", toString bucket)
+    , ("ECLUSE_ADVISORIES__BUCKET", toString bucket)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL", toString endpointUrl)
     , ("AWS_ACCESS_KEY_ID", "test")
