@@ -135,7 +135,7 @@ import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLim
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
@@ -457,14 +457,14 @@ npmDeps privatePort publicPort = do
     prepared <- prepare inertRuleDeps benchPolicy
     pure
         PackumentDeps
-            { pdPrivateBaseUrl = localhost privatePort
+            { pdPrivateBaseUrl = Just (localhost privatePort)
             , pdPublicBaseUrl = localhost publicPort
             , pdMountBaseUrl = "https://bench.proxy"
-            , pdMirrorTarget = "https://mirror.bench"
+            , pdMirror = MirrorOnAdmit "https://mirror.bench"
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.bench"
+            , pdTarballHostGate = tarballHostGate (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.bench")
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure benchNow

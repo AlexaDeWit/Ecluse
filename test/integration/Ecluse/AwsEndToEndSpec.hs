@@ -45,7 +45,7 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
     endpointFor,
@@ -209,14 +209,14 @@ mountBinding privateUrl publicUrl mirrorUrl = do
     prepared <- prepare inertRuleDeps admitOldEnough
     let deps =
             PackumentDeps
-                { pdPrivateBaseUrl = privateUrl
+                { pdPrivateBaseUrl = Just privateUrl
                 , pdPublicBaseUrl = publicUrl
                 , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirrorTarget = mirrorUrl
+                , pdMirror = MirrorOnAdmit mirrorUrl
                 , pdRules = prepared
                 , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate privateUrl publicUrl mirrorUrl
+                , pdTarballHostGate = tarballHostGate (Just privateUrl) publicUrl (Just mirrorUrl)
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow

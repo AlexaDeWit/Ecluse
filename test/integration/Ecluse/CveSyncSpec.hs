@@ -60,7 +60,7 @@ import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
@@ -213,14 +213,14 @@ proxyApp ruleDeps privateUrl publicUrl = do
     env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
     let deps =
             PackumentDeps
-                { pdPrivateBaseUrl = privateUrl
+                { pdPrivateBaseUrl = Just privateUrl
                 , pdPublicBaseUrl = publicUrl
                 , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirrorTarget = privateUrl
+                , pdMirror = MirrorOnAdmit privateUrl
                 , pdRules = prepared
                 , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate privateUrl publicUrl privateUrl
+                , pdTarballHostGate = tarballHostGate (Just privateUrl) publicUrl (Just privateUrl)
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow

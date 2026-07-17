@@ -333,6 +333,46 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
 
+    it "denies with 403 (never 503) when no version survives and the mount has no private upstream (serve-only pure gate)" $ do
+        -- The absent private leg is structural, not an outage: nothing was needed,
+        -- so nothing is unavailable, and the young-versions denial renders as the
+        -- policy 403. Contrast with the failed-private 503 above.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
+                        "2.0.0"
+                        [("1.0.0", publishedDaysAgo 1), ("2.0.0", publishedDaysAgo 1)]
+                    )
+                )
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdPrivateBaseUrl = Nothing}) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 403
+            -- The stubbed private upstream exists only to satisfy the harness; the
+            -- absent leg must never have fetched from it.
+            seenAuth privateUp `shouldReturn` []
+
+    it "serves the filtered public document with no private upstream configured (serve-only pure gate)" $ do
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdPrivateBaseUrl = Nothing}) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+            seenAuth privateUp `shouldReturn` []
+
     it "403s when all public versions are denied and the private upstream genuinely has none" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-

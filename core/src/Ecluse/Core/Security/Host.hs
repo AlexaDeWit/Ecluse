@@ -769,16 +769,17 @@ Called once per mount at the composition root (and by test fixtures); the result
 carried on the serve dependencies so the per-request gate reads fields rather than
 re-parsing URLs. A URL from which no authority extracts contributes no allowlist entry
 and leaves its reference authority 'Nothing', so a misconfigured upstream authorises
-nothing rather than something unintended.
+nothing rather than something unintended; an __absent__ private upstream or mirror
+target (a serve-only mount) composes identically, contributing nothing.
 -}
-tarballHostGate :: Text -> Text -> Text -> TarballHostGate
+tarballHostGate :: Maybe Text -> Text -> Maybe Text -> TarballHostGate
 tarballHostGate privateUrl publicUrl mirrorUrl =
     TarballHostGate
         { thgAllowlist =
-            allowedHostPorts (Set.fromList (catMaybes [privateHostPort, publicHostPort, hostPortAddress mirrorUrl]))
+            allowedHostPorts (Set.fromList (catMaybes [privateHostPort, publicHostPort, hostPortAddress =<< mirrorUrl]))
         , thgPrivateHostPort = privateHostPort
         , thgPublicHostPort = publicHostPort
         }
   where
-    privateHostPort = hostPortAddress privateUrl
+    privateHostPort = hostPortAddress =<< privateUrl
     publicHostPort = hostPortAddress publicUrl

@@ -49,6 +49,7 @@ import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServe
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
+    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
@@ -98,8 +99,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 let privateUrl = "http://localhost:" <> show privatePort
                     deps =
                         baseDeps
-                            { pdPrivateBaseUrl = privateUrl
-                            , pdTarballHostGate = tarballHostGate privateUrl (pdPublicBaseUrl baseDeps) (pdMirrorTarget baseDeps)
+                            { pdPrivateBaseUrl = Just privateUrl
+                            , pdTarballHostGate = tarballHostGate (Just privateUrl) (pdPublicBaseUrl baseDeps) (mirrorUrlOf (pdMirror baseDeps))
                             }
                 resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
@@ -174,7 +175,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmission 1
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor 1
-            let privateDeps = deps{pdPrivateBaseUrl = "http://localhost:" <> show port}
+            let privateDeps = deps{pdPrivateBaseUrl = Just ("http://localhost:" <> show port)}
             held <-
                 withServeAdmission (srMetrics rt) admission $
                     captureServe
@@ -234,19 +235,27 @@ and the merge serves the public contribution). The loopback stubs are addressed 
 @localhost@ DNS name rather than a bare IP literal, so the internal-range block (which
 only recognises a literal) never fires on the artifact leg -- no opt-in is needed.
 -}
+
+-- The mirror-target URL a serve plan carries, for rebuilding the host gate from a
+-- deps value under record updates (the gate is a cached projection of the three).
+mirrorUrlOf :: MirrorServePlan -> Maybe Text
+mirrorUrlOf = \case
+    MirrorOnAdmit url -> Just url
+    NoMirrorWrite -> Nothing
+
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare inertRuleDeps allowPolicy
     pure
         PackumentDeps
-            { pdPrivateBaseUrl = "http://localhost:1"
+            { pdPrivateBaseUrl = Just "http://localhost:1"
             , pdPublicBaseUrl = "http://localhost:" <> show publicPort
             , pdMountBaseUrl = "http://proxy.test"
-            , pdMirrorTarget = "http://mirror.test"
+            , pdMirror = MirrorOnAdmit "http://mirror.test"
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate "http://localhost:1" ("http://localhost:" <> show publicPort) "http://mirror.test"
+            , pdTarballHostGate = tarballHostGate (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (Just "http://mirror.test")
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow

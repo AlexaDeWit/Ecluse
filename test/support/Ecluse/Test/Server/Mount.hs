@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
 {- | A mount's serve dependencies wired to nowhere: every base URL is a closed loopback
@@ -44,14 +44,14 @@ or artifact request served through it fails to connect rather than being answere
 inertPackumentDeps :: PackumentDeps
 inertPackumentDeps =
     PackumentDeps
-        { pdPrivateBaseUrl = privateUrl
+        { pdPrivateBaseUrl = Just privateUrl
         , pdPublicBaseUrl = publicUrl
         , pdMountBaseUrl = "http://proxy.invalid"
-        , pdMirrorTarget = mirrorUrl
+        , pdMirror = MirrorOnAdmit mirrorUrl
         , pdRules = []
         , pdTarballHostPolicy = SameHostAsPackument
         , pdAdditionalBlockedRanges = []
-        , pdTarballHostGate = tarballHostGate privateUrl publicUrl mirrorUrl
+        , pdTarballHostGate = tarballHostGate (Just privateUrl) publicUrl (Just mirrorUrl)
         , pdLimits = defaultLimits
         , pdInboundToken = Nothing
         , pdNow = pure fixedNow

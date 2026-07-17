@@ -32,6 +32,7 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
+    MirrorServePlan (..),
     tarballHostHonoured,
 
     -- * Publish-serve dependencies
@@ -130,32 +131,52 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
+{- | Whether an admitted public artifact is enqueued for the demand-driven mirror, and
+where that write lands. The discriminant is an absent capability, not a no-op handle:
+a serve-only mount opens no mirror producer span and emits no enqueue metric, so the
+telemetry never claims work that cannot happen.
+-}
+data MirrorServePlan
+    = {- | Enqueue admitted public artifacts for publication to this mirror-target
+      endpoint (the mount's declared destination; the worker resolves its publish
+      capability from the same configuration).
+      -}
+      MirrorOnAdmit Text
+    | {- | Serve-only: admitted public artifacts stream to the client and are never
+      mirrored anywhere. Every artifact stays on the gated public leg.
+      -}
+      NoMirrorWrite
+    deriving stock (Eq, Show)
+
 {- | The per-mount inputs the serve handlers need beyond the request runtime
-'ServeRuntime': the two upstream endpoints, the mount's externally-visible base URL,
-the mirror-target endpoint, its resolved rule policy, the edge auth token, the
+'ServeRuntime': the upstream endpoints, the mount's externally-visible base URL,
+the mirror serve plan, its resolved rule policy, the edge auth token, the
 wall-clock source, and the operator help message.
 
 These are a mount-level concern, resolved at the composition root (a separate
 concern) and carried on the mount's 'MountBinding'; a handler reads exactly what it
 needs to decide and serve from the 'RequestCtx' it runs in. Both the packument and
 the tarball paths share these deps -- the tarball path additionally gates one
-version and enqueues a mirror job to 'pdMirrorTarget' -- so the name is retained for
-continuity rather than narrowed to one route.
+version and, under 'MirrorOnAdmit', enqueues a mirror job -- so the name is retained
+for continuity rather than narrowed to one route.
 -}
 data PackumentDeps = PackumentDeps
-    { pdPrivateBaseUrl :: Text
-    -- ^ The private upstream base URL; under @passthrough@, reads forward the client's credential.
+    { pdPrivateBaseUrl :: Maybe Text
+    {- ^ The private upstream base URL; under @passthrough@, reads forward the
+    client's credential. 'Nothing' when the mount has no private upstream (a
+    serve-only pure public gate): the private leg is structurally absent, never
+    fetched, and a tarball request is a clean private miss straight to the public leg.
+    -}
     , pdPublicBaseUrl :: Text
     -- ^ The public upstream base URL; reads are anonymous (no client credential).
     , pdMountBaseUrl :: Text
     {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
     URLs are rewritten so artifacts are fetched back through the gate.
     -}
-    , pdMirrorTarget :: Text
-    {- ^ The mount's mirror-target endpoint -- where the demand-driven mirror worker
-    publishes an approved artifact. Carried on the enqueued
-    'Ecluse.Core.Queue.MirrorJob' as its publish destination; the serve path never reads
-    or writes it itself.
+    , pdMirror :: MirrorServePlan
+    {- ^ Whether an admitted public artifact is enqueued for the demand-driven
+    mirror, and the declared destination when it is ('MirrorOnAdmit'); a
+    serve-only mount carries 'NoMirrorWrite' and never enqueues.
     -}
     , pdRules :: [PreparedRule]
     {- ^ The mount's resolved rule set as the engine's prepared runtime rules
@@ -185,7 +206,7 @@ data PackumentDeps = PackumentDeps
     request (only the dynamic public @dist.tarball@ authority is parsed per request).
 
     __Invariant__: this is a cached projection of 'pdPrivateBaseUrl', 'pdPublicBaseUrl',
-    and 'pdMirrorTarget'; whoever changes one of those after construction must re-derive
+    and 'pdMirror'; whoever changes one of those after construction must re-derive
     it via 'Ecluse.Core.Security.tarballHostGate' or the gate goes stale. The composition
     root builds the deps once, so production never does; a test that record-updates a URL
     field must rebuild the gate (the serve-path test harness does this centrally).

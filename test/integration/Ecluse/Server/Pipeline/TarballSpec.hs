@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -63,7 +63,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        let breakPrivate d = d{pdPrivateBaseUrl = ""}
+        let breakPrivate d = d{pdPrivateBaseUrl = Just ""}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -105,6 +105,20 @@ tarballSpec = describe "artifact (tarball) path" $ do
                                , "thing-1.0.0.tgz"
                                )
                            ]
+
+    it "serve-only mount: streams the admitted public artifact and enqueues nothing (NoMirrorWrite)" $ do
+        -- The same private-miss-to-public-admit flow as above, on a mount that never
+        -- mirrors: the gate and the stream are identical, and the queue stays empty
+        -- (the discriminant is the absent capability, so no producer span or enqueue
+        -- metric fires either).
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMirror = NoMirrorWrite}) $ \app env _publicPort -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+            drainJobs env `shouldReturn` []
 
     it "rejects a too-new version with 403 and enqueues nothing (policy denial)" $ do
         privateUp <- privateArtifactMiss
@@ -289,7 +303,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         let relax d =
                 d
                     { pdTarballHostPolicy = AnyAllowlistedHost
-                    , pdMirrorTarget = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
+                    , pdMirror = MirrorOnAdmit (T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d))
                     }
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -342,7 +356,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" (pdPrivateBaseUrl d)}
+        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" <$> pdPrivateBaseUrl d}
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app

@@ -102,15 +102,22 @@ data OriginResult
       genuine absence -- the existing degrade (no contribution).
       -}
       OriginUnresolved
+    | {- | The origin is not configured on this mount (a serve-only mount with no
+      private upstream): structurally absent, kept distinct from 'OriginUnresolved'
+      so an unconfigured leg never contributes the degraded-availability signal a
+      __failed__ fetch rightly does.
+      -}
+      OriginAbsent
 
-{- | The resolved manifest an origin contributed, if any. A name mismatch and a plain
-non-resolution alike contribute no document to the merge.
+{- | The resolved manifest an origin contributed, if any. A name mismatch, a plain
+non-resolution, and an absent origin alike contribute no document to the merge.
 -}
 originManifest :: OriginResult -> Maybe Manifest
 originManifest = \case
     OriginResolved manifest -> Just manifest
     OriginNameMismatch -> Nothing
     OriginUnresolved -> Nothing
+    OriginAbsent -> Nothing
 
 {- Classify a per-origin full-manifest fetch into an 'OriginResult'. Every fetch outcome
 -- an unreachable upstream included -- arrives typed in the 'MetadataError' channel and
@@ -145,13 +152,17 @@ origin safely is the serve-time authorisation it adds -- see
 @docs\/architecture\/access-model.md@.)
 -}
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt token name = do
-    logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-    resolved <-
-        tryAny $
-            withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token $ \client ->
-                fetchFullManifest client name
-    pure (originResultOf resolved)
+fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
+    -- No private upstream on this mount (a serve-only pure public gate): the leg is
+    -- structurally absent, so no client is constructed and no fetch is attempted.
+    Nothing -> pure OriginAbsent
+    Just privateBase -> do
+        logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
+        resolved <-
+            tryAny $
+                withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) privateBase token $ \client ->
+                    fetchFullManifest client name
+        pure (originResultOf resolved)
 
 {- | Resolve the public (gated, anonymous) upstream origin through the metadata cache,
 keyed by the origin's base URL as its 'Source', returning its coherent (parsed

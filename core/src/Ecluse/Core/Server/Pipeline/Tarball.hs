@@ -142,6 +142,7 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
+    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
     ServeRuntime (..),
@@ -378,18 +379,22 @@ streamPrivateArtifact mode replies rt deps token validators name file respond =
         Nothing -> pure Nothing
   where
     -- Build the conventional-URL private tarball request {base}/{pkg}/-/{file} by the
-    -- requested filename, when its (same-)host passes the tarball-host policy and the URL
-    -- forms. 'Nothing' on either refusal -- a private miss the caller falls through on. The
-    -- constructed URL is on the private base host, so the host gate is trivially
-    -- satisfied; it is kept applied rather than dropped. The request is marked with the
-    -- serve mode's method (GET / HEAD) and carries the client's relayed conditional
-    -- validators; 'artifactRequestByFile' attaches the forwarded credential with
-    -- redirectCount = 0 (the credential-redirect invariant).
+    -- requested filename, when the mount has a private upstream at all, its (same-)host
+    -- passes the tarball-host policy, and the URL forms. 'Nothing' on any refusal -- a
+    -- private miss the caller falls through on (an absent private leg, the serve-only
+    -- pure gate, is the same clean miss). The constructed URL is on the private base
+    -- host, so the host gate is trivially satisfied; it is kept applied rather than
+    -- dropped. The request is marked with the serve mode's method (GET / HEAD) and
+    -- carries the client's relayed conditional validators; 'artifactRequestByFile'
+    -- attaches the forwarded credential with redirectCount = 0 (the credential-redirect
+    -- invariant).
     privateRequest :: Maybe HTTP.Request
-    privateRequest =
-        if tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort
-            then withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token name file)
-            else Nothing
+    privateRequest = case pdPrivateBaseUrl deps of
+        Nothing -> Nothing
+        Just privateBase
+            | tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort ->
+                withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) privateBase token name file)
+            | otherwise -> Nothing
       where
         -- The precomputed private authority: the constructed URL is on the private
         -- base, so both the packument and the tarball sides of the trusted gate are it
@@ -584,10 +589,14 @@ streamPublicArtifact mode replies rt deps validators name version artifact obser
                     -- Mirroring is demand-driven on the GET path only, and only a
                     -- clean artifact relay back-fills: a relayed miss would
                     -- enqueue a doomed job, an oddly-shaped 2xx a misleading one.
-                    case verdict of
-                        RelayedArtifact -> enqueueOnFull mode (enqueueMirror rt deps name version artifact)
-                        RelayedOddShape _ -> pass
-                        RelayedNonSuccess _ -> pass
+                    -- A serve-only mount ('NoMirrorWrite') never enqueues, so no
+                    -- producer span opens and no enqueue metric fires for work
+                    -- that cannot happen.
+                    case (verdict, pdMirror deps) of
+                        (RelayedArtifact, MirrorOnAdmit _) -> enqueueOnFull mode (enqueueMirror rt deps name version artifact)
+                        (RelayedArtifact, NoMirrorWrite) -> pass
+                        (RelayedOddShape _, _) -> pass
+                        (RelayedNonSuccess _, _) -> pass
                     pure received
                 Nothing -> respond (artifactError replies deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
   where

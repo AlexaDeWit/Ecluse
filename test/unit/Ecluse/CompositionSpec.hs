@@ -33,6 +33,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Context (
+    MirrorServePlan (MirrorOnAdmit),
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
     PublishDeps (..),
@@ -103,15 +104,15 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 bindingPrefix binding `shouldBe` ("npm" :| [])
                 do
                     let deps = bindingPackumentDeps binding
-                    pdPrivateBaseUrl deps `shouldBe` "https://private.example.test"
+                    pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
                     pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
                     -- With no ECLUSE_PUBLIC_URL the mount base falls back to the
                     -- derived relative prefix (the npm CLI cannot consume this;
                     -- the absolute form below is what a real client needs).
                     pdMountBaseUrl deps `shouldBe` "/npm"
-                    -- The mirror-target endpoint is wired from the mount's config,
-                    -- for the demand-driven mirror job's publish destination.
-                    pdMirrorTarget deps `shouldBe` "https://mirror.example.test"
+                    -- The mirror serve plan is wired from the mount's config: an
+                    -- admitted public artifact enqueues toward the declared target.
+                    pdMirror deps `shouldBe` MirrorOnAdmit "https://mirror.example.test"
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
 
     it "rewrites the tarball base to an absolute URL under ECLUSE_PUBLIC_URL" $ do
