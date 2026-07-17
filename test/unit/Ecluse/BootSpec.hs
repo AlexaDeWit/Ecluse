@@ -18,7 +18,7 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit)
+import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit, readConfigDocument)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (unSecret)
 
@@ -99,6 +99,27 @@ spec = do
             unsetEnv "ECLUSE_CONFIG"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left (ExitFailure 2)
+
+        it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $ do
+            -- A directory is the portable unreadable-path shape (no chmod games);
+            -- the read failure must land on the same typed exit-2 path as every
+            -- other config refusal.
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                traverse_ (uncurry setEnv) awsRunEnv
+                setEnv "ECLUSE_CONFIG" dir
+                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+                unsetEnv "ECLUSE_CONFIG"
+                traverse_ (unsetEnv . fst) awsRunEnv
+                outcome `shouldBe` Left (ExitFailure 2)
+
+        it "names the path and the error for an unreadable document, never its contents" $
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                outcome <- readConfigDocument [("ECLUSE_CONFIG", dir)]
+                case outcome of
+                    Right r -> expectationFailure ("expected a typed refusal, got " <> show r)
+                    Left message -> do
+                        message `shouldSatisfy` T.isInfixOf (T.pack dir)
+                        message `shouldSatisfy` T.isInfixOf "cannot be read"
 
         it "aborts fast at boot when the queue URL names the unbuilt pubsub backend" $ do
             -- The topic-shaped URL names the GCP backend, which has no

@@ -95,8 +95,8 @@ import Data.Text.IO qualified as TIO
 import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import System.Environment (getEnvironment)
-import System.IO.Error (isDoesNotExistError)
-import UnliftIO (throwIO, tryIO, tryJust)
+import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
+import UnliftIO (throwIO, tryIO)
 
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -213,7 +213,9 @@ applySecretFileIndirection envVars = do
 bytes when a document exists (plus the path consulted), no bytes at an absent
 default path (env + defaults alone boot a proxy), and a fail-loud message for an
 explicit @ECLUSE_CONFIG@ that resolves to nothing -- a misconfiguration must never
-silently boot without the document the operator pointed at. Shared by the boot
+silently boot without the document the operator pointed at. Any other read
+failure (a permission error, a directory path) is a typed refusal too, naming the
+path and the error but never the file contents. Shared by the boot
 ('withBootEnv') and @check-config@ ("Ecluse.CheckConfig"), so the two cannot
 drift on the override semantics.
 -}
@@ -221,17 +223,27 @@ readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString, F
 readConfigDocument envVars = do
     let explicitPath = nonBlankPath =<< lookup "ECLUSE_CONFIG" envVars
         docPath = fromMaybe defaultConfigPath explicitPath
-    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile docPath)
-    pure $ case (mDocBlob, explicitPath) of
-        (Right bytes, _) -> Right (Just bytes, docPath)
-        (Left _, Nothing) -> Right (Nothing, docPath)
-        (Left _, Just path) ->
-            Left
-                ( "ECLUSE_CONFIG points at "
-                    <> T.pack path
-                    <> ", but no config document exists there; fix the path, or unset ECLUSE_CONFIG to use "
-                    <> T.pack defaultConfigPath
-                )
+    mDocBlob <- tryIO (BS.readFile docPath)
+    pure $ case mDocBlob of
+        Right bytes -> Right (Just bytes, docPath)
+        Left err
+            | isDoesNotExistError err ->
+                case explicitPath of
+                    Nothing -> Right (Nothing, docPath)
+                    Just path ->
+                        Left
+                            ( "ECLUSE_CONFIG points at "
+                                <> T.pack path
+                                <> ", but no config document exists there; fix the path, or unset ECLUSE_CONFIG to use "
+                                <> T.pack defaultConfigPath
+                            )
+            | otherwise ->
+                Left
+                    ( "config document at "
+                        <> T.pack docPath
+                        <> " cannot be read: "
+                        <> T.pack (ioeGetErrorString err)
+                    )
 
 -- The shipped default; ECLUSE_CONFIG (non-blank) relocates it.
 defaultConfigPath :: FilePath
