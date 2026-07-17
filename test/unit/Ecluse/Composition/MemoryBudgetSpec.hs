@@ -10,7 +10,7 @@ import Test.Hspec
 import Ecluse.Composition.MemoryBudget (MemoryBudget (..), budgetCacheConfig, resolveMemoryBudget)
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries, cacheTtl))
-import Ecluse.Rts (Provenance (FromCgroup, FromRts), RuntimePlan (..))
+import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
 spec :: Spec
 spec = describe "resolveMemoryBudget" $ do
@@ -73,8 +73,15 @@ spec = describe "resolveMemoryBudget" $ do
         cacheMaxBytes cacheCfg `shouldBe` mbCacheMaxBytes budget
   where
     -- A resolved posture whose ceiling came from the cgroup, the common container case.
-    planWith :: Maybe Int -> RuntimePlan
-    planWith ceiling' = RuntimePlan{planCapabilities = (4, FromRts), planMaxHeapBytes = (ceiling', FromCgroup)}
+    planWith :: Maybe Int -> EffectiveRuntimePlan
+    planWith ceiling' =
+        EffectiveRuntimePlan
+            { erpCapabilities = EffectiveAxis{axDesired = 4, axObserved = 4, axProvenance = FromRts}
+            , erpMaxHeapBytes = EffectiveAxis{axDesired = ceiling', axObserved = ceiling', axProvenance = FromCgroup}
+            , erpAllocAreaBytes = 64 * 1024 * 1024
+            , erpNurseryChunkBytes = Nothing
+            , erpContainerMemoryBytes = Nothing
+            }
 
     bareCache :: CacheSettings
     bareCache = CacheSettings{csTtl = 60, csMaxEntries = Nothing, csMaxBytes = Nothing}

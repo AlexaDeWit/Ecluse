@@ -72,7 +72,16 @@ module Ecluse.Rts (
     readCgroupLimits,
     deriveMaxHeapBytes,
     requiredRtsFlags,
-    renderRuntimePosture,
+
+    -- * The effective plan (desired reconciled with observed)
+    EffectiveAxis (..),
+    EffectiveRuntimePlan (..),
+    axEnforced,
+    reconcileRuntimePlan,
+    appliedRuntimePlan,
+    effectiveCapabilities,
+    effectiveHeapCeiling,
+    renderEffectivePosture,
 
     -- * Cgroup v2 parsing
     parseCpuMax,
@@ -192,6 +201,107 @@ rounded and the plan would forever look unapplied after the re-exec. -}
 alignToBlock :: Int -> Int
 alignToBlock bytes = max rtsBlockBytes (bytes - bytes `mod` rtsBlockBytes)
 
+{- | One axis of the runtime posture after the boot applied the plan: the value the
+resolution wanted, the value the RTS is actually running with, and where the
+desired value came from. Downstream sizings read only the effective projections
+('effectiveCapabilities', 'effectiveHeapCeiling'), never the merely desired plan:
+an apply can fail (a rejected flag, a failed exec, an operator @GHCRTS@ fighting
+the config), and a budget computed from a posture the process does not run with
+would be wrong in the direction that matters.
+-}
+data EffectiveAxis a = EffectiveAxis
+    { axDesired :: a
+    -- ^ What the resolution wanted ('resolveRuntimePlan').
+    , axObserved :: a
+    -- ^ What the RTS reports after the apply attempt.
+    , axProvenance :: Provenance
+    -- ^ Where the desired value came from.
+    }
+    deriving stock (Eq, Show)
+
+-- | Whether an axis is backed by the live RTS (desired and observed agree).
+axEnforced :: (Eq a) => EffectiveAxis a -> Bool
+axEnforced ax = axDesired ax == axObserved ax
+
+{- | The runtime plan reconciled with the posture the RTS actually runs:
+the two planned axes as desired\/observed pairs, plus the observed-only
+datapoints downstream sizing needs (the allocation area for nursery arithmetic,
+the container memory limit for the small-pod diagnosis).
+-}
+data EffectiveRuntimePlan = EffectiveRuntimePlan
+    { erpCapabilities :: EffectiveAxis Int
+    , erpMaxHeapBytes :: EffectiveAxis (Maybe Int)
+    , erpAllocAreaBytes :: Int
+    -- ^ The per-capability allocation area, observed only (never planned here).
+    , erpNurseryChunkBytes :: Maybe Int
+    -- ^ The nursery chunk size, observed only.
+    , erpContainerMemoryBytes :: Maybe Int
+    -- ^ The cgroup @memory.max@ datapoint, when one binds this process.
+    }
+    deriving stock (Eq, Show)
+
+-- | Pair the desired plan with the posture the RTS reports, axis by axis.
+reconcileRuntimePlan :: CgroupLimits -> RuntimePlan -> RtsPosture -> EffectiveRuntimePlan
+reconcileRuntimePlan cgroup plan posture =
+    EffectiveRuntimePlan
+        { erpCapabilities =
+            EffectiveAxis
+                { axDesired = fst (planCapabilities plan)
+                , axObserved = rpCapabilities posture
+                , axProvenance = snd (planCapabilities plan)
+                }
+        , erpMaxHeapBytes =
+            EffectiveAxis
+                { axDesired = fst (planMaxHeapBytes plan)
+                , axObserved = rpMaxHeapBytes posture
+                , axProvenance = snd (planMaxHeapBytes plan)
+                }
+        , erpAllocAreaBytes = rpAllocAreaBytes posture
+        , erpNurseryChunkBytes = rpNurseryChunkBytes posture
+        , erpContainerMemoryBytes = cgMemoryMaxBytes cgroup
+        }
+
+{- | The effective plan a __successful__ application would produce: observed equals
+desired on both axes. @check-config@ sizes from this -- it applies nothing, so
+prediction, not observation, is its honest datapoint (its own process posture says
+nothing about the boot it is checking); the boot itself always reconciles against
+the re-read posture instead ('applyRuntimePosture').
+-}
+appliedRuntimePlan :: CgroupLimits -> RuntimePlan -> RtsPosture -> EffectiveRuntimePlan
+appliedRuntimePlan cgroup plan posture =
+    (reconcileRuntimePlan cgroup plan posture)
+        { erpCapabilities = enforced (planCapabilities plan)
+        , erpMaxHeapBytes = enforced (planMaxHeapBytes plan)
+        }
+  where
+    enforced (v, prov) = EffectiveAxis{axDesired = v, axObserved = v, axProvenance = prov}
+
+{- | The live capability count: parallelism budgets must never exceed (or trail)
+what the RTS actually runs with, so the observed side is authoritative. When the
+desired count did not take, the provenance degrades to 'FromRts': the value in
+force is the RTS's own, whatever the plan wanted.
+-}
+effectiveCapabilities :: EffectiveRuntimePlan -> (Int, Provenance)
+effectiveCapabilities p =
+    let ax = erpCapabilities p
+     in (axObserved ax, if axEnforced ax then axProvenance ax else FromRts)
+
+{- | The sizing ceiling: the __tighter__ of desired and observed. An observed @-M@
+below the plan binds (the RTS enforces it, so budgeting above it would over-commit);
+an absent observed @-M@ leaves the desired ceiling standing as the sizing datapoint
+(the cgroup limit still backstops it through the OOM killer, so sizing to the
+desired ceiling stays honest even unenforced -- the divergence is warned, not
+silently absorbed).
+-}
+effectiveHeapCeiling :: EffectiveRuntimePlan -> (Maybe Int, Provenance)
+effectiveHeapCeiling p =
+    let ax = erpMaxHeapBytes p
+     in case (axDesired ax, axObserved ax) of
+            (Just desired, Just observed)
+                | observed < desired -> (Just observed, FromRts)
+            (Nothing, Just observed) -> (Just observed, FromRts)
+            (desired, _) -> (desired, axProvenance ax)
+
 {- | The RTS flags the plan requires beyond the live posture, in @GHCRTS@ syntax:
 a @-N@ when the capability count must change, a @-M@ when a ceiling must be
 enforced that is not already in force. Empty when the process is already running
@@ -216,21 +326,48 @@ requiredRtsFlags rts plan =
 
 {- | The boot log's posture lines, one decision per line with its provenance, plus
 the allocation-area line (always RTS-sourced; it is deliberately not config-surfaced).
-Rendered from the __plan__, so the lines describe what the process runs with after
-the plan is applied.
+Rendered from the __effective__ plan, so the lines describe what the process
+actually runs with (and sizes from), never a desire that failed to take; an
+unenforced axis additionally warns through 'unenforcedWarnings'.
 -}
-renderRuntimePosture :: RuntimePlan -> RtsPosture -> [Text]
-renderRuntimePosture plan rts =
-    [ "runtime: capabilities " <> show (fst (planCapabilities plan)) <> renderProvenance (snd (planCapabilities plan))
-    , case planMaxHeapBytes plan of
+renderEffectivePosture :: EffectiveRuntimePlan -> [Text]
+renderEffectivePosture p =
+    [ "runtime: capabilities " <> show capabilities <> renderProvenance capsProvenance
+    , case effectiveHeapCeiling p of
         (Just bytes, prov) -> "runtime: max heap " <> renderMiB bytes <> renderProvenance prov
         (Nothing, _) -> "runtime: max heap unbounded (the container memory limit is the only backstop; set maxHeapBytes or -M for a graceful ceiling)"
     , "runtime: allocation area "
-        <> renderMiB (rpAllocAreaBytes rts)
+        <> renderMiB (erpAllocAreaBytes p)
         <> "/capability"
-        <> maybe "" (\c -> ", nursery chunks " <> renderMiB c) (rpNurseryChunkBytes rts)
+        <> maybe "" (\c -> ", nursery chunks " <> renderMiB c) (erpNurseryChunkBytes p)
         <> " (RTS; tune with GHCRTS, see USAGE.md)"
     ]
+  where
+    (capabilities, capsProvenance) = effectiveCapabilities p
+
+{- One warning per axis the RTS is not enforcing, naming desired and observed:
+the budgets size from the effective side, so a divergence must be legible in the
+boot log rather than silently absorbed. -}
+unenforcedWarnings :: EffectiveRuntimePlan -> [Text]
+unenforcedWarnings p =
+    catMaybes
+        [ warnAxis "capabilities" show (erpCapabilities p)
+        , warnAxis "max heap" (maybe "unbounded" renderMiB) (erpMaxHeapBytes p)
+        ]
+  where
+    warnAxis :: (Eq a) => Text -> (a -> Text) -> EffectiveAxis a -> Maybe Text
+    warnAxis name render ax
+        | axEnforced ax = Nothing
+        | otherwise =
+            Just
+                ( "runtime: "
+                    <> name
+                    <> " desired "
+                    <> render (axDesired ax)
+                    <> " but the RTS is running with "
+                    <> render (axObserved ax)
+                    <> "; budgets use the effective value"
+                )
 
 renderProvenance :: Provenance -> Text
 renderProvenance prov = " (" <> provenanceClause prov <> ")"
@@ -294,8 +431,14 @@ When the marker is already set and the posture /still/ diverges (an operator's
 @GHCRTS@ contradicting the config, or a flag the RTS rejected), the divergence is
 logged as a warning and the process continues with what the RTS gave it -- boot
 never loops and never aborts over tuning.
+
+The returned plan is the __effective__ one: the live posture is re-read after the
+apply attempt and reconciled with the desire, so every downstream sizing (the
+admission capacity, the memory budget) computes from what the RTS actually runs
+with. An axis the apply failed to enforce is warned per axis, naming desired and
+observed.
 -}
-applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> Maybe Int -> Maybe Int -> IO RuntimePlan
+applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> Maybe Int -> Maybe Int -> IO EffectiveRuntimePlan
 applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
@@ -303,24 +446,22 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
         flags = requiredRtsFlags rts plan
     alreadyApplied <- isJust <$> lookupEnv reexecMarker
     case flags of
-        [] -> logPosture plan rts
-        _ | alreadyApplied -> do
-            warnStillDivergent logWarning flags
-            logPosture plan rts
+        [] -> pass
+        _ | alreadyApplied -> warnStillDivergent logWarning flags
         [capsOnly]
-            | "-N" `T.isPrefixOf` capsOnly -> do
+            | "-N" `T.isPrefixOf` capsOnly ->
                 setNumCapabilities (fst (planCapabilities plan))
-                logPosture plan rts{rpCapabilities = fst (planCapabilities plan)}
-        _ -> do
-            reexecOrWarn logInfo logWarning flags
-            logPosture plan rts
-    -- The resolved plan (capabilities and heap ceiling, each with provenance) is
-    -- the datapoint the downstream sizings compute from at the composition root:
-    -- admission from capabilities ("Ecluse.Composition.Sizing"), the byte bounds
-    -- from the ceiling ("Ecluse.Composition.MemoryBudget").
-    pure plan
-  where
-    logPosture plan rts = traverse_ logInfo (renderRuntimePosture plan rts)
+        _ -> reexecOrWarn logInfo logWarning flags
+    -- Re-read the posture the apply actually produced (the exec path never reaches
+    -- here on success) and reconcile it with the desire: the effective plan is the
+    -- datapoint every downstream sizing computes from at the composition root --
+    -- admission from the live capabilities ("Ecluse.Composition.Sizing"), the byte
+    -- bounds from the effective ceiling ("Ecluse.Composition.MemoryBudget").
+    applied <- currentRtsPosture
+    let effective = reconcileRuntimePlan cgroup plan applied
+    traverse_ logInfo (renderEffectivePosture effective)
+    traverse_ logWarning (unenforcedWarnings effective)
+    pure effective
 
 -- The already-re-launched process found its plan still unapplied: warn and
 -- continue with the live posture.

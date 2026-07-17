@@ -120,7 +120,7 @@ import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
-import Ecluse.Rts (RuntimePlan, applyRuntimePosture)
+import Ecluse.Rts (EffectiveRuntimePlan, applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleField, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
@@ -149,7 +149,7 @@ data BootEnv = BootEnv
     {- ^ The whole loaded configuration document, for subcommands that need more than
     'beConfig' (the serve path's mount and rule wiring, for one).
     -}
-    , beRuntimePlan :: RuntimePlan
+    , beRuntimePlan :: EffectiveRuntimePlan
     {- ^ The resolved runtime posture (capabilities and heap ceiling, each with its
     provenance), the datapoint the downstream sizings and the memory budget
     compute from.

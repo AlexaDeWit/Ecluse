@@ -48,10 +48,11 @@ import Ecluse.Config (
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig (memQueueMaxDepth))
 import Ecluse.Rts (
-    RuntimePlan (planCapabilities),
+    appliedRuntimePlan,
     currentRtsPosture,
+    effectiveCapabilities,
     readCgroupLimits,
-    renderRuntimePosture,
+    renderEffectivePosture,
     resolveRuntimePlan,
  )
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
@@ -76,15 +77,18 @@ runCheckConfig = do
     let env = configApp config
         runtimeSettings = cfgRuntime env
     -- The pure half of the posture chain: resolved exactly as a boot would, never
-    -- applied (no capability change, no re-exec).
+    -- applied (no capability change, no re-exec). The sizings compute from the
+    -- plan a successful application would produce ('appliedRuntimePlan'): the
+    -- checker's own process posture says nothing about the boot it is checking.
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit
     let plan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
-        (admission, admissionLine) = resolveServeAdmission (rtServeMaxInFlight runtimeSettings) (fst (planCapabilities plan))
+        effective = appliedRuntimePlan cgroup plan rts
+        (admission, admissionLine) = resolveServeAdmission (rtServeMaxInFlight runtimeSettings) (fst (effectiveCapabilities effective))
         (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
         (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
-        (budget, budgetLines) = resolveMemoryBudget (cfgCache env) (cfgLimits env) (cfgQueue env) plan admission
+        (budget, budgetLines) = resolveMemoryBudget (cfgCache env) (cfgLimits env) (cfgQueue env) effective admission
     runtimePlan <-
         either
             (refuseWith . renderErrs renderBootError)
@@ -93,7 +97,7 @@ runCheckConfig = do
     traverse_ TIO.putStrLn $
         concat
             [ resolvedKeyProvenance envVars docBlob
-            , renderRuntimePosture plan rts
+            , renderEffectivePosture effective
             , [admissionLine, privateLine, publicLine]
             , budgetLines
             , mirrorRuntimeLines runtimePlan

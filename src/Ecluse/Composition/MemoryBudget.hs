@@ -33,7 +33,7 @@ module Ecluse.Composition.MemoryBudget (
 
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
 import Ecluse.Core.Server.Cache (CacheConfig (..))
-import Ecluse.Rts (RuntimePlan (planMaxHeapBytes), provenanceClause)
+import Ecluse.Rts (EffectiveRuntimePlan, effectiveHeapCeiling, provenanceClause)
 
 {- | The resolved byte-valued bounds, each an explicit config value or its
 heap-ceiling-derived default (see the module header for the partition).
@@ -47,18 +47,19 @@ data MemoryBudget = MemoryBudget
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the memory budget from the configuration groups, the resolved runtime
-posture ("Ecluse.Rts"; its heap ceiling is the partitioned quantity, and its
-provenance rides into each boot line), and the resolved serve-admission capacity
-("Ecluse.Composition.Sizing"; the number of concurrent materialisation slots the
-response share is divided across). This is the memory half of one resolution
-pipeline: posture, then capacities, then this partition over both.
+{- | Resolve the memory budget from the configuration groups, the __effective__
+runtime plan ("Ecluse.Rts"; its effective heap ceiling is the partitioned
+quantity -- what the RTS actually runs with, never a desire that failed to take --
+and its provenance rides into each boot line), and the resolved serve-admission
+capacity ("Ecluse.Composition.Sizing"; the number of concurrent materialisation
+slots the response share is divided across). This is the memory half of one
+resolution pipeline: posture, then capacities, then this partition over both.
 -}
 resolveMemoryBudget ::
     CacheSettings ->
     LimitsSettings ->
     QueueSettings ->
-    RuntimePlan ->
+    EffectiveRuntimePlan ->
     Int ->
     (MemoryBudget, [Text])
 resolveMemoryBudget cacheSettings limitsSettings queueSettings plan admission =
@@ -95,7 +96,7 @@ resolveMemoryBudget cacheSettings limitsSettings queueSettings plan admission =
         resolved "memory-queue depth" (qsMemoryMaxDepth queueSettings) queueDepthFallback $ \h ->
             clampWith queueDepthFloor queueDepthCap (h `div` queueDepthHeapShareBytes)
 
-    (heapCeiling, ceilingProvenance) = planMaxHeapBytes plan
+    (heapCeiling, ceilingProvenance) = effectiveHeapCeiling plan
 
     resolved :: Text -> Maybe Int -> Int -> (Int -> Int) -> (Int, Text)
     resolved name explicit fallback compute = case explicit of

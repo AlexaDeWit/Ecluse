@@ -87,7 +87,6 @@ module Ecluse.Proxy (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import GHC.Conc (getNumCapabilities)
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -143,6 +142,7 @@ import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRu
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
+import Ecluse.Rts (effectiveCapabilities)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (RequestSizeLimit), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort, scSizeLimit), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
@@ -204,12 +204,13 @@ runProxy bootEnv = do
     cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     -- The effective admission capacity: explicit config, else computed from the
-    -- post-runtime-posture capability count, logged with its provenance beside the
-    -- runtime lines. This bounds metadata materialisation only; the private manager's
-    -- pool is sized independently below, since a trusted tarball hit streams outside
-    -- admission (see 'Composition.resolvePrivateConnections' and issue #634).
-    capabilities <- getNumCapabilities
-    let (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (rtServeMaxInFlight (cfgRuntime env)) capabilities
+    -- effective (post-apply, observed) capability count, logged with its provenance
+    -- beside the runtime lines. This bounds metadata materialisation only; the
+    -- private manager's pool is sized independently below, since a trusted tarball
+    -- hit streams outside admission (see 'Composition.resolvePrivateConnections'
+    -- and issue #634).
+    let (capabilities, _capsProvenance) = effectiveCapabilities (beRuntimePlan bootEnv)
+        (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (rtServeMaxInFlight (cfgRuntime env)) capabilities
     logBootInfo logEnv admissionLine
     serveAdmission <- newServeAdmission serveMaxInFlight
     -- The memory budget: every byte-valued bound resolved as a share of the heap
