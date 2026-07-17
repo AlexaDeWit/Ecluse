@@ -19,6 +19,7 @@ data AppCommand
     | RunPilot
     | RunPilotCompile PilotCompileOptions
     | RunDredger
+    | RunCheckConfig
     deriving stock (Eq, Show)
 
 commandParser :: Parser AppCommand
@@ -27,6 +28,7 @@ commandParser =
         ( command "proxy" (info (pure RunProxy) (progDesc "Run the Écluse proxy server"))
             <> command "pilot" (info pilotCommandParser (progDesc "Run the Écluse Pilot (OSV ingestion pipeline)"))
             <> command "dredger" (info (pure RunDredger) (progDesc "Run the Écluse Dredger (mirror pruning worker)"))
+            <> command "check-config" (info (pure RunCheckConfig) (progDesc "Validate the configuration and print the resolved posture, then exit (0 valid, 2 refused)"))
         )
         <|> pure RunProxy
 

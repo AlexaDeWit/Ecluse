@@ -77,6 +77,7 @@ documentation conventions.
 -}
 module Ecluse.Boot (
     BootEnv (..),
+    readConfigDocument,
     withBootEnv,
     BootAborted (..),
     orExit,
@@ -109,6 +110,7 @@ import Ecluse.Config (
     loadConfig,
     mountCollisionWarnings,
     renderConfigError,
+    resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -156,30 +158,43 @@ data BootEnv = BootEnv
 configuration (failing fast on any error), apply the runtime posture, build the
 logger, and bracket the telemetry substrate for the action's lifetime.
 -}
+
+{- | Locate and read the config document per the @ECLUSE_CONFIG@ semantics: the
+bytes when a document exists (plus the path consulted), no bytes at an absent
+default path (env + defaults alone boot a proxy), and a fail-loud message for an
+explicit @ECLUSE_CONFIG@ that resolves to nothing -- a misconfiguration must never
+silently boot without the document the operator pointed at. Shared by the boot
+('withBootEnv') and @check-config@ ("Ecluse.CheckConfig"), so the two cannot
+drift on the override semantics.
+-}
+readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString, FilePath))
+readConfigDocument envVars = do
+    let explicitPath = nonBlankPath =<< lookup "ECLUSE_CONFIG" envVars
+        docPath = fromMaybe defaultConfigPath explicitPath
+    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile docPath)
+    pure $ case (mDocBlob, explicitPath) of
+        (Right bytes, _) -> Right (Just bytes, docPath)
+        (Left _, Nothing) -> Right (Nothing, docPath)
+        (Left _, Just path) ->
+            Left
+                ( "ECLUSE_CONFIG points at "
+                    <> T.pack path
+                    <> ", but no config document exists there; fix the path, or unset ECLUSE_CONFIG to use "
+                    <> T.pack defaultConfigPath
+                )
+
+-- The shipped default; ECLUSE_CONFIG (non-blank) relocates it.
+defaultConfigPath :: FilePath
+defaultConfigPath = "/etc/ecluse/config.yaml"
+
+nonBlankPath :: FilePath -> Maybe FilePath
+nonBlankPath p = if T.null (T.strip (T.pack p)) then Nothing else Just p
+
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     envVars <- getEnvironment
     let ambient = ambientAwsFromEnv envVars
-        explicitPath = nonBlankPath =<< lookup "ECLUSE_CONFIG" envVars
-        docPath = fromMaybe defaultConfigPath explicitPath
-    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile docPath)
-    -- An absent document is fine at the default path (env + defaults alone boot a
-    -- proxy), but an explicit ECLUSE_CONFIG that resolves to nothing is a
-    -- misconfiguration and fails loud rather than silently booting without the
-    -- document the operator pointed at.
-    docBlob <- case (mDocBlob, explicitPath) of
-        (Right bytes, _) -> pure (Just bytes)
-        (Left _, Nothing) -> pure Nothing
-        (Left _, Just path) ->
-            orExit
-                id
-                ( Left
-                    ( "ECLUSE_CONFIG points at "
-                        <> T.pack path
-                        <> ", but no config document exists there; fix the path, or unset ECLUSE_CONFIG to use "
-                        <> T.pack defaultConfigPath
-                    )
-                )
+    (docBlob, docPath) <- readConfigDocument envVars >>= orExit id
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
         observability = cfgObservability env
@@ -193,7 +208,10 @@ withBootEnv action = do
     logBootInfo logEnv $ case docBlob of
         Just _ -> "Config document: " <> T.pack docPath
         Nothing -> "Config document: none at " <> T.pack docPath <> " (defaults and environment only)"
-    logBootInfo logEnv ("Loaded configuration: " <> show config)
+    -- The resolved configuration, one provenance line per key (secrets redacted),
+    -- so the effective posture and where each value came from read straight from
+    -- the boot log.
+    traverse_ (logBootInfo logEnv) (resolvedKeyProvenance envVars docBlob)
     traverse_ (logBootWarning logEnv) (mountCollisionWarnings config)
     prepareTelemetryBoot (obsTelemetry observability) logEnv
     withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
@@ -206,13 +224,6 @@ withBootEnv action = do
                 , beConfigFull = config
                 , beRuntimePlan = runtimePlan
                 }
-  where
-    -- The shipped default; ECLUSE_CONFIG (non-blank) relocates it.
-    defaultConfigPath :: FilePath
-    defaultConfigPath = "/etc/ecluse/config.yaml"
-
-    nonBlankPath :: FilePath -> Maybe FilePath
-    nonBlankPath p = if T.null (T.strip (T.pack p)) then Nothing else Just p
 
 {- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
 or the bounded in-memory backend. The in-memory arm first emits the loud boot warning

@@ -264,6 +264,7 @@ library
     Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
+    Ecluse.CheckConfig
     Ecluse.Config.Aeson
     Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig

@@ -41,11 +41,13 @@ The design is in [`docs/architecture.md`](docs/architecture.md).
 Écluse ships as a single reproducible container image, a multicall executable: `ecluse proxy`
 (the HTTP proxy), `ecluse pilot` (the OSV ingestion pipeline), or `ecluse dredger` (the registry
 cleanup worker), selected by the container command. All three roles share one config file and
-rule set.
+rule set. A fourth mode, `ecluse check-config`, validates that shared configuration exactly as a
+boot would and prints the whole resolved posture without starting anything (exit `0` valid, `2`
+refused); run it in CI or before a rollout to read what a boot will do.
 
 `ecluse pilot compile --out DIR` runs one OSV compilation and exits: it fetches an ecosystem's
 advisory export (`--ecosystem`, default `npm`; `--source URL` overrides the configured
-`osvExportBaseUrl`), filters the flattened advisory rows to that ecosystem, writes `osv.db` into
+`advisories.osvExportBaseUrl`), filters the flattened advisory rows to that ecosystem, writes `osv.db` into
 `DIR`, and exits non-zero on failure, so it's safe to script and schedule. `--upload` also publishes
 the artifact to the vulnerability-database bucket, making one invocation a full sync cycle; `--upload`
 without a configured bucket aborts immediately.
@@ -156,18 +158,18 @@ optional **config document** (YAML) for the two things too expressive for flat e
 policy and the mount map. A single-mount npm deployment on the default policy needs no document.
 
 A mount serves only when you declare it: setting any `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable (or
-any key under `mounts.<ecosystem>` in the document) activates that mount, and an active mount must
-define its private upstream **and** declare its mirror target or the boot fails naming each
-missing key. The mirror target is explicit even when it equals the private upstream: activation
-implies a mirror write, and the target is never implied from another endpoint. A mount you never
-mention stays off. Declaring the public upstream explicitly as well is recommended; endpoints that
-resolve to the same registry are logged as boot
-warnings (see [Deviating from the Golden Path](#deviating-from-the-golden-path)).
+any key under `mounts.<ecosystem>` in the document) activates that mount, and a mount you never
+mention stays off. Whether an active mount **mirrors** is derived from its declared endpoints:
+declaring `mirrorTarget` makes it mirrored (its private upstream is then required, so the mirror
+can be read back), and omitting it makes the mount serve-only. Each boot logs one posture line
+per mount naming the derived mode, and endpoints that resolve to the same registry are logged as
+boot warnings (see [Deviating from the Golden Path](#deviating-from-the-golden-path)).
 
 The table below is the complete environment-variable reference. A value resolves as defaults <
-config document < environment variable, so the environment wins. The resolution model and the
-rationale behind each setting are in
-[Configuration & Authentication](docs/architecture/configuration.md).
+config document < environment variable, so the environment wins, and the boot log carries one
+`config:` line per resolved key naming the layer that supplied it (secrets redacted) -- the same
+dump `ecluse check-config` prints. The resolution model and the rationale behind each setting are
+in [Configuration & Authentication](docs/architecture/configuration.md).
 
 ### Environment variables
 

@@ -21,6 +21,7 @@ import Ecluse.Config (
     mountCollisionWarnings,
     mountPostureLines,
     renderConfigError,
+    resolvedKeyProvenance,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
@@ -76,6 +77,21 @@ spec = do
                     [ MirrorSettingWithoutWrite Npm "mirrorTargetToken"
                     , MirrorSettingWithoutWrite Npm "mirrorCodeArtifactTokenDuration"
                     ]
+
+    describe "resolvedKeyProvenance" $ do
+        it "labels each resolved key with the layer that supplied it" $ do
+            let provenance =
+                    resolvedKeyProvenance
+                        [("ECLUSE_SERVER__PORT", "4873")]
+                        (Just "{\"server\":{\"helpMessage\":\"ask platform-eng\"}}")
+            provenance `shouldSatisfy` elem "config: server.port = 4873 (environment)"
+            provenance `shouldSatisfy` elem "config: server.helpMessage = ask platform-eng (document)"
+            provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
+
+        it "redacts secret-typed keys whatever layer supplies them" $ do
+            let provenance = resolvedKeyProvenance [("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")] Nothing
+            provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
+            provenance `shouldSatisfy` all (not . T.isInfixOf "hunter2")
 
     describe "mountCollisionWarnings" $ do
         it "is silent when every registry endpoint is distinct" $ do

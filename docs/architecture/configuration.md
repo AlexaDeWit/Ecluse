@@ -350,6 +350,14 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
 
 A bad config is a loud, immediate startup failure, never a quietly mis-enforced policy.
 
+The same validation is available without a boot: `ecluse check-config` runs the full resolution
+chain (the config load, the runtime plan, the sizing and memory-budget resolvers, the
+mirror-queue selection) and prints every decision without starting anything, exiting `0` on a
+valid configuration and `2` with the same aggregated report a boot would log. A successful run
+also prints one provenance line per resolved key (environment > document > default, secrets
+redacted); the boot logs the identical dump, so the effective configuration and where each value
+came from is always readable from the start-up lines.
+
 ## Client authentication
 
 This section covers inbound auth (client → proxy), the edge-authentication half of the

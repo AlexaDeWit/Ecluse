@@ -40,12 +40,14 @@ module Ecluse.Config (
     loadConfig,
     mountCollisionWarnings,
     mountPostureLines,
+    resolvedKeyProvenance,
 ) where
 
-import Data.Aeson (Result (..), Value (..), fromJSON)
+import Data.Aeson (Result (..), Value (..), encode, fromJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither, withObject, (.!=), (.:?))
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -282,6 +284,55 @@ sameRegistry :: RegistryUrl -> RegistryUrl -> Bool
 sameRegistry a b = strip a == strip b
   where
     strip = T.dropWhileEnd (== '/') . registryUrlText
+
+{- | One line per resolved leaf of the merged configuration: the dotted path, the
+rendered value (secret-typed keys redacted), and the layer that supplied it
+(environment > document > default, mirroring the merge precedence). Derived and
+computed values are deliberately absent: they are not configuration, and their
+resolvers log their own provenance lines (the runtime posture, the memory budget,
+the queue selection). Renders nothing if the layers fail to parse; callers dump
+provenance only after a successful 'loadConfig'.
+-}
+resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
+resolvedKeyProvenance envVars mBytes = fromRight [] $ do
+    defaultAst <- parseDefaultAst
+    docAst <- parseDocumentAst mBytes
+    let envAst = buildEnvAst envVars
+        merged = deepMerge defaultAst (deepMerge docAst envAst)
+    pure (map (renderResolvedLeaf envAst docAst) (sortOn fst (leafPaths [] merged)))
+
+-- Every leaf of a config AST with its dotted path (objects recurse; anything
+-- else, arrays included, is a leaf).
+leafPaths :: [Text] -> Value -> [(Text, Value)]
+leafPaths path (Object o) =
+    concatMap (\(k, v) -> leafPaths (path <> [Key.toText k]) v) (KeyMap.toList o)
+leafPaths path v = [(T.intercalate "." path, v)]
+
+renderResolvedLeaf :: Value -> Value -> (Text, Value) -> Text
+renderResolvedLeaf envAst docAst (path, v) =
+    "config: " <> path <> " = " <> renderLeafValue path v <> " (" <> source <> ")"
+  where
+    source
+        | pathPresentIn envAst = "environment"
+        | pathPresentIn docAst = "document"
+        | otherwise = "default"
+    pathPresentIn ast = isJust (lookupPath (T.splitOn "." path) ast)
+    lookupPath [] ast = Just ast
+    lookupPath (k : ks) (Object o) = lookupPath ks =<< KeyMap.lookup (Key.fromText k) o
+    lookupPath _ _ = Nothing
+
+-- A leaf's rendering, with secret-typed keys redacted rather than shown: the
+-- provenance dump must never widen a secret's exposure beyond the layer it
+-- arrived on.
+renderLeafValue :: Text -> Value -> Text
+renderLeafValue path v
+    | any (`T.isSuffixOf` path) secretLeafKeys = "<redacted>"
+    | otherwise = case v of
+        String t -> t
+        other -> decodeUtf8 (LBS.toStrict (encode other))
+  where
+    secretLeafKeys :: [Text]
+    secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
 
 {- | Boot-time posture: one line per served mount naming its derived mode and its
 consequence. The mode is derived from the declared endpoints (see 'loadConfig'), so

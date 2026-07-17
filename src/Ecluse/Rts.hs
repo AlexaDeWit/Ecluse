@@ -68,6 +68,8 @@ module Ecluse.Rts (
     RuntimePlan (..),
     provenanceClause,
     resolveRuntimePlan,
+    currentRtsPosture,
+    readCgroupLimits,
     deriveMaxHeapBytes,
     requiredRtsFlags,
     renderRuntimePosture,

@@ -169,6 +169,29 @@ spec = do
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
+    describe "check-config (validate and print, boot nothing)" $ do
+        it "validates a bootable configuration and exits 0" $ do
+            traverse_ (uncurry setEnv) runEnv
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left ExitSuccess
+
+        it "refuses an invalid configuration with exit 2" $ do
+            -- An active mount with no server.publicUrl: the same refusal a boot
+            -- would print, from the same loadConfig.
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) runEnv)
+            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "refuses an unrecognised queue URL with exit 2 (the queue plan is checked too)" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left (ExitFailure 2)
+
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $
             superviseProcess pass `shouldReturn` ShutdownRequested
