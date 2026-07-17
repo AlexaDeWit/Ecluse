@@ -150,6 +150,7 @@ library ecluse-core
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics

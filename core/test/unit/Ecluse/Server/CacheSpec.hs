@@ -21,12 +21,14 @@ import Ecluse.Core.Server.Cache (
     CacheEntry (..),
     MetadataCache,
     Source (..),
+    StoreBudget (..),
     cachedMetadata,
     newMetadataCache,
     weighCacheEntry,
  )
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Resolve through the cache with an inert metrics port, so these tests assert the
@@ -99,9 +101,20 @@ budget generous enough that the entry count is the binding bound.
 config :: NominalDiffTime -> Int -> CacheConfig
 config ttl size = configBytes ttl size (1024 * 1024 * 1024)
 
--- | A cache config with the given TTL (seconds), entry count, and resident-byte budget.
+{- | A cache config with the given TTL (seconds), entry count, and resident-byte budget,
+each store getting the same bounds (these specs exercise one store at a time; the
+production split is the composition root's concern).
+-}
 configBytes :: NominalDiffTime -> Int -> Int -> CacheConfig
-configBytes ttl size bytes = CacheConfig{cacheTtl = ttl, cacheMaxEntries = size, cacheMaxBytes = bytes}
+configBytes ttl size bytes =
+    CacheConfig
+        { cacheTtl = ttl
+        , cacheFullBudget = budget
+        , cacheVersionBudget = budget
+        , cacheAssembledBudget = budget
+        }
+  where
+    budget = StoreBudget{sbMaxEntries = size, sbMaxBytes = bytes}
 
 {- | The resident weight a single empty-versions cache entry is estimated at, so a byte
 budget can be expressed as a count of these entries.
@@ -300,3 +313,57 @@ spec = do
             _ <- resolveAssembled c "\"tag-b\"" (countingRender renders (mkBytes bigBytes 'b'))
             _ <- resolveAssembled c "\"tag-a\"" (countingRender renders (mkBytes bigBytes 'a'))
             readIORef renders `shouldReturn` 3
+
+    describe "the named sub-budgets" $ do
+        it "a version-store flood evicts only version entries; the full store stays resident" $ do
+            c <-
+                newMetadataCache
+                    CacheConfig
+                        { cacheTtl = 60
+                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 100 * entryWeight}
+                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
+                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        }
+            let name = pkg "hot-head"
+            _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
+            for_ ([1 .. 5] :: [Int]) $ \i ->
+                Cache.resolveVersion noopMetricsPort c publicSource name (mkVersion Npm (show i <> ".0.0")) (pure (Right Nothing))
+            -- The flood churned the version store past its own entry bound...
+            Cache.cachedVersion c publicSource name (mkVersion Npm "1.0.0") `shouldReturn` Nothing
+            -- ...while the full store's resident head was untouched (class isolation:
+            -- one store's eviction pressure never reaches a sibling).
+            found <- cachedMetadata c publicSource name
+            found `shouldSatisfy` isJust
+
+        it "keeps the summed residency of all three stores within the summed sub-budgets" $ do
+            -- The architect-flagged worst case was three stores each holding a whole
+            -- aggregate (3B); with per-store sub-budgets the total reported residency
+            -- must stay within their sum however every class is flooded.
+            fullSeen <- newIORef 0
+            versionSeen <- newIORef 0
+            assembledSeen <- newIORef 0
+            let port =
+                    noopMetricsPort
+                        { mpCacheResidentBytes = writeIORef fullSeen
+                        , mpVersionCacheResidentBytes = writeIORef versionSeen
+                        , mpAssembledCacheResidentBytes = writeIORef assembledSeen
+                        }
+                fullBytes = 4 * entryWeight
+                versionBytes = 64 * 1024
+                assembledBytes = 8 * 1024
+            c <-
+                newMetadataCache
+                    CacheConfig
+                        { cacheTtl = 60
+                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = fullBytes}
+                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = versionBytes}
+                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = assembledBytes}
+                        }
+            for_ ([1 .. 10] :: [Int]) $ \i -> do
+                let name = pkg ("filler-" <> show i)
+                _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
+                _ <- Cache.resolveVersion port c publicSource name (mkVersion Npm "1.0.0") (pure (Right Nothing))
+                _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
+                pass
+            total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
+            total `shouldSatisfy` (<= fullBytes + versionBytes + assembledBytes)

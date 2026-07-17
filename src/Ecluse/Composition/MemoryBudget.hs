@@ -32,7 +32,7 @@ module Ecluse.Composition.MemoryBudget (
 ) where
 
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
-import Ecluse.Core.Server.Cache (CacheConfig (..))
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveRuntimePlan, effectiveHeapCeiling, provenanceClause)
 
 {- | The resolved byte-valued bounds, each an explicit config value or its
@@ -122,15 +122,40 @@ resolveMemoryBudget cacheSettings limitsSettings queueSettings plan admission =
     clampWith lo hi = max lo . min hi
 
 {- | The metadata cache's tunables: the configured TTL married to the budget's
-resolved bounds, so the pairing happens once here rather than at each consumer.
+resolved bounds, split into the three stores' named sub-budgets __summing exactly
+to the aggregate__ (the assembled share is the remainder), so the cache's total
+residency is bounded by the one aggregate the budget allocated rather than three
+copies of it. The shares: the full-packument store carries the decoded working
+set (the heaviest class) at 60%; the single-version store holds small flat
+entries at 15% but four times the entry count; the assembled store's encoded
+documents take the remaining 25%.
 -}
 budgetCacheConfig :: CacheSettings -> MemoryBudget -> CacheConfig
 budgetCacheConfig cacheSettings budget =
     CacheConfig
         { cacheTtl = csTtl cacheSettings
-        , cacheMaxEntries = mbCacheMaxEntries budget
-        , cacheMaxBytes = mbCacheMaxBytes budget
+        , cacheFullBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = fullBytes}
+        , cacheVersionBudget = StoreBudget{sbMaxEntries = cacheVersionEntriesFactor * entries, sbMaxBytes = versionBytes}
+        , cacheAssembledBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = aggregate - fullBytes - versionBytes}
         }
+  where
+    aggregate = mbCacheMaxBytes budget
+    entries = mbCacheMaxEntries budget
+    fullBytes = aggregate * cacheFullSharePercent `div` 100
+    versionBytes = aggregate * cacheVersionSharePercent `div` 100
+
+-- The named split of the cache aggregate, in percent; the assembled store takes
+-- the remainder so the three sub-budgets sum to exactly the aggregate.
+cacheFullSharePercent :: Int
+cacheFullSharePercent = 60
+
+cacheVersionSharePercent :: Int
+cacheVersionSharePercent = 15
+
+-- The version store's entries are flat and small (16 KiB estimates against the
+-- full store's 256 KiB), so it holds several per full entry.
+cacheVersionEntriesFactor :: Int
+cacheVersionEntriesFactor = 4
 
 -- Half the ceiling is materialisation working space (the divisor 2 below), spread
 -- across the admission slots; a decoded packument runs several times its wire

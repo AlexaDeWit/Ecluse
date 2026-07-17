@@ -15,11 +15,12 @@ module Ecluse.Test.Server.Cache (
     defaultCacheConfig,
 ) where
 
-import Ecluse.Core.Server.Cache (CacheConfig (..))
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 
-{- | The standard cache-tunables fixture: a 60-second TTL, 1024 entries, and a
-256 MiB resident budget, the same balanced posture the shipped configuration
-defaults to. Suites and harnesses pass it to
+{- | The standard cache-tunables fixture: a 60-second TTL over a 256 MiB cache
+aggregate split into the three stores' sub-budgets the way the live composition
+root splits it (full 60%, version 15% at four times the entries, assembled the
+remainder). Suites and harnesses pass it to
 'Ecluse.Core.Server.Cache.newMetadataCache' wherever a cache is needed and the
 tunables are not the axis under test.
 -}
@@ -27,6 +28,7 @@ defaultCacheConfig :: CacheConfig
 defaultCacheConfig =
     CacheConfig
         { cacheTtl = 60
-        , cacheMaxEntries = 1024
-        , cacheMaxBytes = 256 * 1024 * 1024
+        , cacheFullBudget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 154 * 1024 * 1024}
+        , cacheVersionBudget = StoreBudget{sbMaxEntries = 4096, sbMaxBytes = 38 * 1024 * 1024}
+        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 64 * 1024 * 1024}
         }

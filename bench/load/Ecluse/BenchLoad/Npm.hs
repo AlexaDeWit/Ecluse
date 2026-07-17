@@ -134,7 +134,7 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
@@ -194,7 +194,7 @@ mergeScenario =
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Public download path with the private + public packument merge in the loop, over a large-emphasis mix drawn from the curated real-world corpus (the heavy many-version packuments are the primary drivers): GET /{pkg} fans to both upstreams -> merge -> rule-filter -> URL-rewrite -> ETag -> re-serialise, with the public metadata cache disabled (TTL 0). The public leg is single-flight, so concurrent misses coalesce onto one in-flight fetch+decode and followers share the leader's parsed packument: the public fetch+decode is amortised under load, not paid per request. Every request still pays the live private fetch, the merge, the rule sweep, and the re-serialise."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs 0 (cacheMaxEntries defaultCacheConfig) serveMix (k . DriveHttpUrls)
+        , scenarioBoot = \knobs k -> withNpmProxy knobs 0 defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
 {- | The cheap, common high-throughput path: the same packument @GET@, but with the
@@ -209,7 +209,7 @@ cacheHitScenario =
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "The cheap cache-served path over the same large-emphasis corpus mix: GET /{pkg} with the anonymous public origin served from the warm metadata cache (no public fetch or decode), the live private leg merged in. The passthrough model caches the public origin, not the per-client private one, so this is the faithful no-public-fetch shape."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) serveMix (k . DriveHttpUrls)
+        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
 {- | The conditional-revalidation path: every request echoes a freshly primed @ETag@
@@ -230,7 +230,7 @@ revalidateScenario =
             "Conditional revalidation of the heaviest corpus packument: a priming GET captures the served ETag, then every driven request echoes it as If-None-Match and is answered 304 off the derived validator -- the private leg still fetched and the plan still computed per request, but no assembly, encode, or output hash. The realistic shape for CI fleets restoring npm's cache: metadata traffic that revalidates instead of re-downloading."
         , scenarioBoot = \knobs k ->
             let pkgs = take 1 (workingSet knobs)
-             in withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) (uniformMix pkgs) $ \case
+             in withNpmProxy knobs longCacheTtl defaultCacheEntries (uniformMix pkgs) $ \case
                     url : _ -> do
                         etag <- primeETag url
                         k (DriveHttpHeaders [("If-None-Match", etag)] [url])
@@ -272,7 +272,7 @@ cacheFitsScenario =
 all and continually evicts least-room entries and re-derives them on the next request. It
 isolates eviction cost -- throughput and latency under churn, the alloc-per-request of
 re-deriving (re-fetch + decode + project) each evicted large packument on its miss, and a
-peak residency bounded by @cacheMaxEntries@ large entries plus the transient re-derivation
+peak residency bounded by the store's entry bound of large entries plus the transient re-derivation
 -- against the @cache-fits-large@ baseline. The bound and working-set size are the
 @BENCH_LOAD_CACHE_MAX_ENTRIES@ and @BENCH_LOAD_WORKING_SET@ knobs.
 -}
@@ -295,7 +295,7 @@ tarballScenario =
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Tarball proxy hot path: GET /npm/{pkg}/-/{unscoped-pkg}-9999.0.2.tgz (the scope-dropping npm convention) fans to the packument first to read the dist.tarball URL (instantly served from the metadata cache), then streams the tarball from the artifact upstream."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
+        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries tarballMix (k . DriveHttpUrls)
         }
 
 {- | The onboarding (fail-over) regime: every tarball request misses the private
@@ -319,7 +319,7 @@ tarballOnboardingScenario =
              in withProxyOverStubs
                     knobs
                     longCacheTtl
-                    (cacheMaxEntries defaultCacheConfig)
+                    defaultCacheEntries
                     (onboardingPrivateStub latency)
                     (onboardingPublicStub latency bytes)
                     onboardingMix
@@ -345,7 +345,7 @@ tarballCeilingScenario =
         , scenarioDescription =
             "Streaming-ceiling probe on the private-hit relay: 4x the shared concurrency, 2 ms stub latency (overriding the probed RTT for this scenario alone), same conventional private read as tarball-hot-path. Chases the proxy's own streaming knee -- relay pump, connection handling, syscall pressure -- instead of the client's connections x RTT ceiling. Throughput here x the worker-artifact payload size approximates the relay's byte rate."
         , scenarioBoot = \knobs k ->
-            withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
+            withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl defaultCacheEntries tarballMix (k . DriveHttpUrls)
         }
 
 -- A cache TTL comfortably longer than any single scenario's warm-up plus measured
@@ -353,6 +353,23 @@ tarballCeilingScenario =
 -- expiring, and the cache-fits baseline stays resident for the whole run.
 longCacheTtl :: NominalDiffTime
 longCacheTtl = 3600
+
+-- The fixture's full-store entry bound, the scenarios' default working-set knob.
+defaultCacheEntries :: Int
+defaultCacheEntries = sbMaxEntries (cacheFullBudget defaultCacheConfig)
+
+-- The fixture's byte split with the scenario's TTL and entry knob applied to every
+-- store: the knob is the axis under test, never the split.
+benchCacheConfig :: NominalDiffTime -> Int -> CacheConfig
+benchCacheConfig ttl maxEntries =
+    defaultCacheConfig
+        { cacheTtl = ttl
+        , cacheFullBudget = capEntries (cacheFullBudget defaultCacheConfig)
+        , cacheVersionBudget = capEntries (cacheVersionBudget defaultCacheConfig)
+        , cacheAssembledBudget = capEntries (cacheAssembledBudget defaultCacheConfig)
+        }
+  where
+    capEntries budget = budget{sbMaxEntries = maxEntries}
 
 {- | Boot the two packument upstreams over the real-world corpus -- a path-aware public
 upstream serving each package's real captured packument by the requested name, and a
@@ -397,7 +414,7 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             -- tarball hit streams outside admission (see resolvePrivateConnections).
             privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
             admission <- newServeAdmission admissionCapacity
-            cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
+            cache <- newMetadataCache (benchCacheConfig ttl (max 1 maxEntries))
             logEnv <- benchLogEnv
             heartbeat <- newWorkerHeartbeat
             -- The production memory backend at the shipped default depth cap (50000,

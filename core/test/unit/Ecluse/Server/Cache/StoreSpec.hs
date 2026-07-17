@@ -79,6 +79,15 @@ resolveOkRecording seen sf key fetch =
     either (throwIO . UnexpectedFault) pure
         =<< resolveSingleFlight (pure ()) (const pass) (writeIORef seen . Just) sf key (Right <$> fetch)
 
+{- | As 'resolveOkRecording', but accumulating __every__ post-insert occupancy, so a
+concurrency case can assert that no insert, however interleaved, ever left the store
+past its budget.
+-}
+resolveOkAccumulating :: IORef [CacheOccupancy] -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
+resolveOkAccumulating seen sf key fetch =
+    either (throwIO . UnexpectedFault) pure
+        =<< resolveSingleFlight (pure ()) (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) sf key (Right <$> fetch)
+
 -- | A counting fetch: bumps the call counter, then yields the given value.
 countingFetch :: IORef Int -> Text -> IO Text
 countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> value
@@ -292,3 +301,48 @@ spec = do
                 resolveOk sf ("cold-" <> show i) (pure "raw")
             lookupStore sf "hot" `shouldReturn` Just "raw"
             lookupStore sf "cold-1" `shouldReturn` Nothing
+
+    describe "the oversized pass-through" $ do
+        it "serves a value larger than the whole byte budget without retaining it" $ do
+            sf <- newStore 60 100 (flatWeight - 1)
+            calls <- newIORef (0 :: Int)
+            resolveOk sf "big" (countingFetch calls "huge") `shouldReturn` "huge"
+            -- Served, never retained: the next resolution re-leads its own fetch.
+            lookupStore sf "big" `shouldReturn` Nothing
+            resolveOk sf "big" (countingFetch calls "huge") `shouldReturn` "huge"
+            readIORef calls `shouldReturn` 2
+
+        it "evicts nothing resident to make room that cannot exist" $ do
+            -- The budget fits exactly two flat entries; the weigher charges triple
+            -- for the pathological value, so admitting it could only flush the store.
+            let weigh v = if v == "pathological" then 3 * flatWeight else flatWeight
+            sf <- newSingleFlight 60 100 (2 * flatWeight) weigh :: IO (SingleFlight StoreFault Text Text)
+            _ <- resolveOk sf "a" (pure "resident")
+            _ <- resolveOk sf "b" (pure "resident")
+            _ <- resolveOk sf "big" (pure "pathological")
+            lookupStore sf "a" `shouldReturn` Just "resident"
+            lookupStore sf "b" `shouldReturn` Just "resident"
+            lookupStore sf "big" `shouldReturn` Nothing
+
+        it "reports no occupancy for a pass-through (the gauges describe the store, not the serve)" $ do
+            seen <- newIORef Nothing
+            sf <- newStore 60 100 (flatWeight - 1)
+            _ <- resolveOkRecording seen sf "big" (pure "huge")
+            (isNothing <$> readIORef seen) `shouldReturn` True
+
+    describe "concurrent different-key leaders under the byte budget" $ do
+        it "never lands the resident sum past the budget (the insert lock)" $ do
+            -- Eight leaders on distinct keys with barrier-released fetches, so all
+            -- eight evict-then-insert sequences collide; without the per-store
+            -- insert lock two of them can both read the pre-insert resident sum
+            -- and both admit, landing the store past its budget.
+            let budget = 3 * flatWeight
+            seen <- newIORef []
+            sf <- newStore 60 1000 budget
+            barrier <- newEmptyMVar
+            leaders <- traverse (\(i :: Int) -> async (resolveOkAccumulating seen sf (show i) (readMVar barrier $> "v"))) [1 .. 8]
+            putMVar barrier ()
+            _ <- traverse wait leaders
+            byteReadings <- map occBytes <$> readIORef seen
+            byteReadings `shouldSatisfy` (not . null)
+            byteReadings `shouldSatisfy` all (<= budget)

@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.MemoryBudget (MemoryBudget (..), budgetCacheConfig, resolveMemoryBudget)
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
-import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries, cacheTtl))
+import Ecluse.Core.Server.Cache (CacheConfig (cacheAssembledBudget, cacheFullBudget, cacheTtl, cacheVersionBudget), StoreBudget (sbMaxBytes, sbMaxEntries))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
 spec :: Spec
@@ -65,12 +65,21 @@ spec = describe "resolveMemoryBudget" $ do
         -- reconciles with the runtime-posture lines it derives from.
         computedLines `shouldSatisfy` any (T.isInfixOf "heap ceiling 1073741824, derived from the cgroup limit")
 
-    it "marries the configured TTL to the budget's cache bounds" $ do
+    it "marries the configured TTL to the budget's cache bounds, split summing to the aggregate" $ do
         let (budget, _) = resolveMemoryBudget bareCache{csTtl = 45} bareLimits bareQueue (planWith Nothing) 40
             cacheCfg = budgetCacheConfig bareCache{csTtl = 45} budget
         cacheTtl cacheCfg `shouldBe` 45
-        cacheMaxEntries cacheCfg `shouldBe` mbCacheMaxEntries budget
-        cacheMaxBytes cacheCfg `shouldBe` mbCacheMaxBytes budget
+        -- The three named sub-budgets sum to exactly the aggregate the budget
+        -- allocated: the cache tenant is one share, never three copies of it.
+        sbMaxBytes (cacheFullBudget cacheCfg)
+            + sbMaxBytes (cacheVersionBudget cacheCfg)
+            + sbMaxBytes (cacheAssembledBudget cacheCfg)
+            `shouldBe` mbCacheMaxBytes budget
+        -- The full store is the largest share (it carries the decoded working set).
+        sbMaxBytes (cacheFullBudget cacheCfg) `shouldSatisfy` (> sbMaxBytes (cacheVersionBudget cacheCfg))
+        sbMaxBytes (cacheFullBudget cacheCfg) `shouldSatisfy` (> sbMaxBytes (cacheAssembledBudget cacheCfg))
+        sbMaxEntries (cacheFullBudget cacheCfg) `shouldBe` mbCacheMaxEntries budget
+        sbMaxEntries (cacheVersionBudget cacheCfg) `shouldBe` 4 * mbCacheMaxEntries budget
   where
     -- A resolved posture whose ceiling came from the cgroup, the common container case.
     planWith :: Maybe Int -> EffectiveRuntimePlan
