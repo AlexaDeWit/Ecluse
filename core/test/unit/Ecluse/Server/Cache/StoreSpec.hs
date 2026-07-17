@@ -342,7 +342,7 @@ spec = do
             barrier <- newEmptyMVar
             leaders <- traverse (\(i :: Int) -> async (resolveOkAccumulating seen sf (show i) (readMVar barrier $> "v"))) [1 .. 8]
             putMVar barrier ()
-            _ <- traverse wait leaders
+            traverse_ wait leaders
             byteReadings <- map occBytes <$> readIORef seen
             byteReadings `shouldSatisfy` (not . null)
             byteReadings `shouldSatisfy` all (<= budget)
