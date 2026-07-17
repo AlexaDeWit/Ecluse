@@ -87,6 +87,7 @@ module Ecluse.Boot (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), logFM, ls)
@@ -107,6 +108,7 @@ import Ecluse.Config (
     mountCollisionWarnings,
     renderConfigError,
  )
+import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
@@ -129,6 +131,10 @@ the mirror queue, the metadata cache) are built later, per subcommand (see
 data BootEnv = BootEnv
     { beConfig :: AppConfig
     -- ^ The application-level configuration slice the subcommands read.
+    , beAmbient :: AmbientAws
+    {- ^ The ambient AWS SDK environment (region, endpoint overrides), read from
+    the process environment beside the config, never through the config AST.
+    -}
     , beLogEnv :: LogEnv
     -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
@@ -146,8 +152,27 @@ logger, and bracket the telemetry substrate for the action's lifetime.
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     envVars <- getEnvironment
-    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile "/etc/ecluse/config.yaml")
-    let docBlob = either (const Nothing) Just mDocBlob
+    let ambient = ambientAwsFromEnv envVars
+        explicitPath = nonBlankPath =<< lookup "ECLUSE_CONFIG" envVars
+        docPath = fromMaybe defaultConfigPath explicitPath
+    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile docPath)
+    -- An absent document is fine at the default path (env + defaults alone boot a
+    -- proxy), but an explicit ECLUSE_CONFIG that resolves to nothing is a
+    -- misconfiguration and fails loud rather than silently booting without the
+    -- document the operator pointed at.
+    docBlob <- case (mDocBlob, explicitPath) of
+        (Right bytes, _) -> pure (Just bytes)
+        (Left _, Nothing) -> pure Nothing
+        (Left _, Just path) ->
+            orExit
+                id
+                ( Left
+                    ( "ECLUSE_CONFIG points at "
+                        <> T.pack path
+                        <> ", but no config document exists there; fix the path, or unset ECLUSE_CONFIG to use "
+                        <> T.pack defaultConfigPath
+                    )
+                )
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
@@ -155,6 +180,9 @@ withBootEnv action = do
     -- exec the binary in place (same PID; see Ecluse.Rts) to enforce a heap
     -- ceiling, so nothing stateful must precede it beyond config and the logger.
     applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (cfgCores env) (cfgMaxHeapBytes env)
+    logBootInfo logEnv $ case docBlob of
+        Just _ -> "Config document: " <> T.pack docPath
+        Nothing -> "Config document: none at " <> T.pack docPath <> " (defaults and environment only)"
     logBootInfo logEnv ("Loaded configuration: " <> show config)
     traverse_ (logBootWarning logEnv) (mountCollisionWarnings config)
     prepareTelemetryBoot (cfgTelemetry env) logEnv
@@ -162,10 +190,18 @@ withBootEnv action = do
         action
             BootEnv
                 { beConfig = env
+                , beAmbient = ambient
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
                 , beConfigFull = config
                 }
+  where
+    -- The shipped default; ECLUSE_CONFIG (non-blank) relocates it.
+    defaultConfigPath :: FilePath
+    defaultConfigPath = "/etc/ecluse/config.yaml"
+
+    nonBlankPath :: FilePath -> Maybe FilePath
+    nonBlankPath p = if T.null (T.strip (T.pack p)) then Nothing else Just p
 
 {- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
 or the bounded in-memory backend. The in-memory arm first emits the loud boot warning

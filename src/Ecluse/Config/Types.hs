@@ -103,10 +103,6 @@ data AppConfig = AppConfig
     , cfgQueueBackend :: QueueBackend
     , cfgQueueUrl :: Maybe Url
     , cfgQueueMemoryMaxDepth :: Int
-    , cfgAwsRegion :: Maybe Text
-    , cfgAwsEndpointUrlSqs :: Maybe Text
-    , cfgAwsEndpointUrl :: Maybe Text
-    , cfgGoogleProject :: Maybe Text
     , cfgAuthToken :: Maybe Secret
     , cfgHelpMessage :: Maybe Text
     , cfgCveSyncInterval :: NominalDiffTime

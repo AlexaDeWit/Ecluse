@@ -191,14 +191,14 @@ runProxy bootEnv = do
     -- independent so one ecosystem's missing artifact never holds back
     -- another's. Without a bucket the map is empty: rules abstain and
     -- readiness is ungated.
-    cveSyncPlan <- planCveSync logEnv env
+    cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
     -- "not built" boot error, never a silent fall-through); the resulting plan is
     -- handed to the one queue-construction site below.
-    queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
+    queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue (beAmbient bootEnv) env)
     -- The effective admission capacity: explicit config, else computed from the
     -- post-runtime-posture capability count, logged with its provenance beside the
     -- runtime lines. This bounds metadata materialisation only; the private manager's

@@ -29,8 +29,9 @@ import System.IO.Error (IOError, catchIOError)
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
-    AppConfig (cfgAwsEndpointUrl, cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgVulnerabilityDatabaseBucket),
+    AppConfig (cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgVulnerabilityDatabaseBucket),
  )
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl))
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -104,14 +105,14 @@ tasks start clean. Note the readiness consequence: an operator who mounts an
 ecosystem Pilot does not compile has declared an artifact that never arrives,
 and the pod honestly never reports ready.
 -}
-planCveSync :: LogEnv -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
+planCveSync :: LogEnv -> AmbientAws -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv ambient appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
     Nothing -> pure Map.empty
     Just bucket -> do
         let dataDir = cfgOsvDataDir appCfg
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
-        awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl)
+        awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
         Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
 
 -- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync

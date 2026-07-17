@@ -28,6 +28,7 @@ import Ecluse (runWorker)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue)
 import Ecluse.Config (Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
@@ -147,7 +148,8 @@ configDrivenQueue container queueName = do
     let endpoint = endpointFor container
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
-    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
+    let ambient = ambientAwsFromEnv (sqsEnvVars queueUrl endpointUrl)
+    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue ambient env)
     logEnv <- newTestLogEnv
     case plan of
         -- The wire decode's egress former: the loopback dev former, since this

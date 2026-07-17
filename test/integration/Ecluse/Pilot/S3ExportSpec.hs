@@ -21,7 +21,6 @@ import Amazonka.S3 qualified as S3
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
-import Ecluse.Config (AppConfig (..), Config (..), loadConfig)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
@@ -62,19 +61,11 @@ spec = do
                     let dummyDb = tmpDir <> "/dummy.sqlite"
                     liftIO $ writeFile dummyDb "dummy sqlite data"
 
-                    -- Configure AppConfig
-                    fullConfig <- case loadConfig [] Nothing of
-                        Right c -> pure c
-                        Left e -> fail ("Config error: " <> show e)
-                    let appCfg =
-                            (configApp fullConfig)
-                                { cfgVulnerabilityDatabaseBucket = Just bucket
-                                , cfgAwsEndpointUrl = Just endpoint
-                                }
-
-                    -- Run exportToS3 with Katip context
+                    -- Run exportToS3 with Katip context; the endpoint override is the
+                    -- ambient AWS_ENDPOINT_URL a released image would carry, here passed
+                    -- straight through as the composition root does.
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dummyDb)
+                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (parseEndpointUrl endpoint) bucket dummyDb)
 
                     -- Verify upload
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))

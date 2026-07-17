@@ -124,7 +124,7 @@ run = do
     dispatch cmd bootEnv = case cmd of
         RunProxy -> runProxy bootEnv
         RunPilot -> runPilot bootEnv
-        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beConfig bootEnv) opts)
+        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
         RunDredger -> runDredger bootEnv
 
 {- | How one whole service run ended: the typed outer perimeter of the process,

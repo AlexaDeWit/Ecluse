@@ -61,8 +61,8 @@ data BootError
       in-memory backend does not raise this -- it has no external queue.
       -}
       QueueUrlMissing QueueBackend
-    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
-      @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
+    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is not a
+      parseable endpoint URL. Carries the offending value.
       -}
       QueueEndpointMalformed Text
     | {- | The eager boot-time CodeArtifact mint threw -- a transient AWS error (worth a
@@ -112,7 +112,7 @@ renderBootError = \case
             <> renderWire backend
             <> " requires ECLUSE_QUEUE_URL to be set"
     QueueEndpointMalformed url ->
-        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL: " <> url
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail

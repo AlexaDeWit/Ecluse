@@ -85,10 +85,6 @@ appConfigParser o = do
         <*> (o .: "queueBackend" >>= parseEnum parseQueueBackend "queueBackend")
         <*> (o .:? "queueUrl" >>= traverse parseUrl)
         <*> o .: "queueMemoryMaxDepth"
-        <*> o .:? "awsRegion"
-        <*> o .:? "awsEndpointUrlSqs"
-        <*> o .:? "awsEndpointUrl"
-        <*> o .:? "googleProject"
         <*> (o .:? "authToken" >>= traverse parseSecret)
         <*> o .:? "helpMessage"
         <*> (o .: "cveSyncInterval" >>= parseDelaySeconds "cveSyncInterval")
@@ -124,12 +120,6 @@ acceptedDocumentKeys =
     , "queueBackend"
     , "queueUrl"
     , "queueMemoryMaxDepth"
-    , "awsRegion"
-    , "awsEndpointUrlSqs"
-    , "awsEndpointUrl"
-    , "awsAccessKeyId"
-    , "awsSecretAccessKey"
-    , "googleProject"
     , "authToken"
     , "helpMessage"
     , "cveSyncInterval"

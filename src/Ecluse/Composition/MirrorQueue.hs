@@ -30,6 +30,7 @@ import Ecluse.Config (
     Url,
     unUrl,
  )
+import Ecluse.Config.Ambient (AmbientAws (..))
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
@@ -50,9 +51,9 @@ data MirrorQueuePlan
       MemoryBackend MemoryQueueConfig
     deriving stock (Eq, Show)
 
-{- | Select the mirror-queue backend from the environment layer, yielding the
-'MirrorQueuePlan' the composition root builds the queue from, or the aggregated boot
-errors that block it.
+{- | Select the mirror-queue backend from the configuration and the ambient SDK
+environment, yielding the 'MirrorQueuePlan' the composition root builds the queue
+from, or the aggregated boot errors that block it.
 
 This is the pure half of the queue's backend choice -- the single place that knows
 which backends this binary can build. The AWS @sqs@ backend resolves to a
@@ -72,20 +73,22 @@ __here__ for @sqs@ (the jobs need a queue), so a missing one is a fail-loud
 endpoint failures, and the whole result is a list so it aggregates with the rest of
 the boot-time validation.
 
-When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
-@AWS_ENDPOINT_URL@ -- the AWS-SDK-standard variables), it is parsed into the
-backend's 'SqsEndpoint' so the released image can target a local emulator
-(@ministack@) or a VPC endpoint without a test-only code path; a malformed override URL is
-a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
-uses AWS's default endpoint and credential resolution.
+When an endpoint override is set (@AWS_ENDPOINT_URL_SQS@, the AWS-SDK-standard
+service-specific variable), it is parsed into the backend's 'SqsEndpoint' so the
+released image can target a local emulator (@ministack@) or a VPC endpoint without a
+test-only code path; a malformed override URL is a fail-loud
+'QueueEndpointMalformed' boot error. The generic @AWS_ENDPOINT_URL@ is deliberately
+__not__ consulted here: it is the S3 advisory client's override, and honouring it for
+the queue would let an S3-only override silently redirect the queue's traffic. With
+no override, the SQS backend uses AWS's default endpoint and credential resolution.
 -}
-planMirrorQueue :: AppConfig -> Either [BootError] MirrorQueuePlan
-planMirrorQueue env = case cfgQueueBackend env of
+planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
+planMirrorQueue ambient env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
     -- The in-memory backend needs no cloud queue: ECLUSE_QUEUE_URL and AWS_REGION are
     -- not consulted, so it can never fail on a missing one.
     MemoryQueue -> Right (MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env)))
-    SqsQueue -> case (regionE, urlE, resolveSqsEndpoint env) of
+    SqsQueue -> case (regionE, urlE, resolveSqsEndpoint ambient) of
         (Right region, Right url, Right endpoint) ->
             Right (SqsBackend (defaultSqsConfig (unUrl url) region){sqsEndpoint = endpoint})
         (_, _, endpointE) ->
@@ -95,7 +98,7 @@ planMirrorQueue env = case cfgQueueBackend env of
   where
     -- AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
     regionE :: Either BootError Text
-    regionE = case T.strip <$> cfgAwsRegion env of
+    regionE = case T.strip <$> ambientAwsRegion ambient of
         Just region | not (T.null region) -> Right region
         _ -> Left QueueRegionMissing
 
@@ -139,14 +142,15 @@ memoryQueueDropWarning dropped =
         <> "ECLUSE_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
 
 {- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
-AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence
-over the generic @AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
-host, and port, and the request signing keys are taken from the standard
+AWS's default resolution. Only the AWS-SDK-standard, service-specific
+@AWS_ENDPOINT_URL_SQS@ is consulted (the generic @AWS_ENDPOINT_URL@ belongs to the
+S3 advisory client; see 'planMirrorQueue'); the override URL is parsed into its TLS
+flag, host, and port, and the request signing keys are taken from the standard
 @AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
 A malformed override URL is a fail-loud boot error. -}
-resolveSqsEndpoint :: AppConfig -> Either [BootError] (Maybe SqsEndpoint)
-resolveSqsEndpoint env =
-    case nonBlank =<< cfgAwsEndpointUrlSqs env of
+resolveSqsEndpoint :: AmbientAws -> Either [BootError] (Maybe SqsEndpoint)
+resolveSqsEndpoint ambient =
+    case nonBlank =<< ambientAwsEndpointUrlSqs ambient of
         Nothing -> Right Nothing
         Just url -> case parseEndpointUrl url of
             Nothing -> Left [QueueEndpointMalformed url]

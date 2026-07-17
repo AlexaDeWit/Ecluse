@@ -37,6 +37,12 @@ spec = describe "decodeDocument" $ do
     it "rejects an unknown top-level key, naming it (strict, not silently dropped)" $
         loadConfig [] (Just "{\"mountz\":{}}") `shouldSatisfy` decodeErrorMentions "mountz"
 
+    it "rejects the ambient AWS SDK variables as document keys (environment, never config)" $ do
+        -- A document-side awsSecretAccessKey used to be silently accepted-and-ignored;
+        -- rejecting it keeps "secrets never live in the structured config" structural.
+        loadConfig [] (Just "{\"awsSecretAccessKey\":\"hunter2\"}") `shouldSatisfy` decodeErrorMentions "awsSecretAccessKey"
+        loadConfig [] (Just "{\"awsRegion\":\"us-east-1\"}") `shouldSatisfy` decodeErrorMentions "awsRegion"
+
     it "rejects an unknown mount ecosystem key, naming it (strict, not silently dropped)" $
         loadConfig [] (Just (mountDocForEcosystem "npmm")) `shouldSatisfy` decodeErrorMentions "npmm"
 

@@ -44,7 +44,8 @@ import Network.HTTP.Types.Status (statusCode)
 import Network.Wai.Test qualified as WaiTest
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
-import Ecluse.Config (AppConfig (cfgAwsEndpointUrl), Config (configApp), loadConfig)
+import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -93,7 +94,8 @@ spec =
                             appCfg <-
                                 either (fail . ("CveSyncSpec fixture env: " <>) . show) (pure . configApp) $
                                     loadConfig (s3EnvVars endpointUrl bucket) Nothing
-                            awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl)
+                            let ambient = ambientAwsFromEnv (s3EnvVars endpointUrl bucket)
+                            awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
                             createBucketWithRetry awsEnv bucket 30
 
                             -- One proxy wiring: the slot, the fast-lane policy over it,
@@ -130,7 +132,7 @@ spec =
                                 -- (compile the corpus, then upload via exportToS3); the
                                 -- running task's next poll verifies and swaps it in. No
                                 -- restart, no new config.
-                                publishViaPilot appCfg CorpusV1
+                                publishViaPilot ambient appCfg CorpusV1
 
                                 -- Phase 2: the identical request is admitted, and the
                                 -- served document carries the fixed version.
@@ -177,8 +179,8 @@ createBucketWithRetry awsEnv bucket attempts =
 -- direct PutObject. The compile output lands in its own temp dir, distinct from the
 -- proxy's sync data dir, mirroring the separate-disk Pilot and proxy roles. The
 -- upload target (bucket and endpoint) is read from the same 'AppConfig' the proxy booted.
-publishViaPilot :: AppConfig -> CorpusVersion -> IO ()
-publishViaPilot appCfg v = do
+publishViaPilot :: AmbientAws -> AppConfig -> CorpusVersion -> IO ()
+publishViaPilot ambient appCfg v = do
     zipBytes <- osvCorpusZip v
     logEnv <- newTestLogEnv
     withStub status200 zipBytes $ \stub ->
@@ -187,6 +189,7 @@ publishViaPilot appCfg v = do
                 runPilotCompile
                     logEnv
                     telemetryDisabled
+                    ambient
                     appCfg
                     PilotCompileOptions
                         { pcoEcosystem = "npm"

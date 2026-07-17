@@ -110,7 +110,7 @@ parseDocumentAst = \case
     Nothing -> Right (Object mempty)
     Just bytes -> case decodeEither' bytes of
         Right ast -> Right ast
-        Left err -> Left [ParseError ("/etc/ecluse/config.yaml is invalid YAML: " <> T.pack (show err))]
+        Left err -> Left [ParseError ("the config document is invalid YAML: " <> T.pack (show err))]
 
 parseAppConfig :: Value -> Either [ConfigError] AppConfig
 parseAppConfig merged = case fromJSON merged of

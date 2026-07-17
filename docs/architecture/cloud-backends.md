@@ -192,7 +192,8 @@ so it is built once at the composition root, not per mount. A mount names which
 configured provider its strategy draws on. In the common deployment those references
 collapse to one identity: the same container role writes the mirror target and (under
 `service`) reads the private upstream. A multi-cloud process holds one provider per
-cloud, with `AWS_REGION` / `ECLUSE_GOOGLE_PROJECT` scoping likewise process-global. A
+cloud, with the ambient `AWS_REGION` scoping likewise process-global (a GCP project
+scope arrives with the Pub/Sub backend and derives from its topic resource). A
 mount naming a credential source with no initialised provider fails at boot (aggregated
 with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),

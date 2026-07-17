@@ -23,6 +23,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
@@ -37,6 +38,7 @@ spec = describe "osv.dev npm export (live oracle)" $
                     runPilotCompile
                         le
                         telemetryDisabled
+                        (ambientAwsFromEnv [])
                         appCfg
                         PilotCompileOptions
                             { pcoEcosystem = "npm"

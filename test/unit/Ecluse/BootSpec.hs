@@ -11,6 +11,8 @@ import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
 import System.Environment (setEnv, unsetEnv, withArgs)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
@@ -44,6 +46,37 @@ spec = do
             outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
+
+        it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                let path = dir </> "config.yaml"
+                writeFileText path "helpMessage: booted from the override document\n"
+                traverse_ (uncurry setEnv) awsRunEnv
+                setEnv "ECLUSE_CONFIG" path
+                outcome <- timeout 100000 (withArgs ["proxy"] run)
+                unsetEnv "ECLUSE_CONFIG"
+                traverse_ (unsetEnv . fst) awsRunEnv
+                outcome `shouldBe` Nothing
+
+        it "aborts fast when the ECLUSE_CONFIG document carries an unknown key (the override is read and validated)" $ do
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                let path = dir </> "config.yaml"
+                writeFileText path "bogusKey: 1\n"
+                traverse_ (uncurry setEnv) awsRunEnv
+                setEnv "ECLUSE_CONFIG" path
+                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+                unsetEnv "ECLUSE_CONFIG"
+                traverse_ (unsetEnv . fst) awsRunEnv
+                outcome `shouldBe` Left (ExitFailure 2)
+
+        it "aborts fast when ECLUSE_CONFIG points at a missing file (never a silent documentless boot)" $ do
+            traverse_ (uncurry setEnv) awsRunEnv
+            setEnv "ECLUSE_CONFIG" "/nonexistent/ecluse/config.yaml"
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+            unsetEnv "ECLUSE_CONFIG"
+            traverse_ (unsetEnv . fst) awsRunEnv
+            outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
             traverse_ (uncurry setEnv) awsRunEnv

@@ -70,7 +70,7 @@ valueKind = \case
 
 rejectUnknownKeys :: String -> [Key.Key] -> KeyMap.KeyMap Value -> Parser ()
 rejectUnknownKeys context accepted o =
-    let isUnknown k = k `notElem` accepted && not ("aws" `T.isPrefixOf` Key.toText k)
+    let isUnknown k = k `notElem` accepted
      in case filter isUnknown (KeyMap.keys o) of
             [] -> pure ()
             unknown ->

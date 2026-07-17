@@ -186,10 +186,11 @@ rationale behind each setting are in
 | `ECLUSE_QUEUE_BACKEND` | No | `sqs` | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue: a non-durable, best-effort mirror for single-node or air-gapped deployments, never an automatic fallback, warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
 | `ECLUSE_QUEUE_URL` | Depends | Cloud backends only | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); not needed for `memory` (ignored). |
 | `ECLUSE_QUEUE_MEMORY_MAX_DEPTH` | No | `50000` | `memory` only. Cap on in-process queue depth. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
-| `AWS_REGION` | Depends | AWS backends only | Region for SQS and CodeArtifact. |
-| `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No |  | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
-| `ECLUSE_GOOGLE_PROJECT` | Depends | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
+| `AWS_REGION` | Depends | AWS backends only | Region for SQS and CodeArtifact. Ambient AWS-SDK environment, read from the process environment directly, **not** a config-document key: `awsRegion:` in the document is rejected as unknown. |
+| `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Point at a local emulator (`ministack`) or VPC endpoint; with it set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. Ambient, like `AWS_REGION`. |
+| `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can never silently redirect the queue. Ambient, like `AWS_REGION`. |
 | `ECLUSE_AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
+| `ECLUSE_CONFIG` | No | `/etc/ecluse/config.yaml` | Path of the [config document](#the-configuration-document). A process-level setting, not a document key. With it set, a missing file at that path is a **boot error** (never a silent documentless boot); at the default path, an absent document is fine. |
 | `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_ADDITIONAL_BLOCKED_RANGES` | No |  | Comma-separated list of CIDR ranges (e.g. `10.99.0.0/16,fd12::/8`) an operator adds to the fixed internal-address block, applied identically across every mount. Extends the block only, never narrows it; a malformed entry **fails closed at boot**. See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
@@ -235,7 +236,8 @@ immediate failure, never a quietly mis-enforced policy.
 
 ### The configuration document
 
-A YAML file mounted at `/etc/ecluse/config.yaml`. It carries the **rule policy** (see [Rule
+A YAML file mounted at `/etc/ecluse/config.yaml` (relocate it with `ECLUSE_CONFIG`; a
+non-existent explicit path is a boot error). It carries the **rule policy** (see [Rule
 policy](#rule-policy)) and, for multi-mount deployments, the **mount map**. Single-mount
 deployments desugar from the env vars above and need no document. Schema and examples:
 [Configuration & Authentication](docs/architecture/configuration.md#configuration).

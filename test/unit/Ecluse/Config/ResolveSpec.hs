@@ -107,6 +107,21 @@ spec = do
             let env = [("ECLUSE_EMPTY", "")]
             buildEnvAst env `shouldBe` Object (KeyMap.fromList [("empty", String "")])
 
+        it "ignores ambient AWS_* variables (SDK environment, never config keys)" $ do
+            let env =
+                    [ ("AWS_REGION", "us-east-1")
+                    , ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
+                    , ("AWS_ACCESS_KEY_ID", "k")
+                    , ("AWS_SECRET_ACCESS_KEY", "s")
+                    ]
+            buildEnvAst env `shouldBe` Object KeyMap.empty
+
+        it "ignores the reserved process-level ECLUSE_CONFIG path override" $ do
+            -- ECLUSE_CONFIG is consumed by Ecluse.Boot before resolution; were it not
+            -- reserved, it would transliterate to an unknown "config" document key and
+            -- fail every boot that uses the override.
+            buildEnvAst [("ECLUSE_CONFIG", "/etc/other/config.yaml")] `shouldBe` Object KeyMap.empty
+
         it "provides a comprehensive regression test for all documented environment variables" $ do
             -- This verifies that all top-level Ecluse documented variables correctly map to camelCase keys
             -- expected by `FromJSON EnvConfig` and `FromJSON ConfigDoc`.
@@ -118,9 +133,6 @@ spec = do
                     , ("ECLUSE_QUEUE_BACKEND", "sqs")
                     , ("ECLUSE_QUEUE_URL", "https://sqs.example.com")
                     , ("ECLUSE_QUEUE_MEMORY_MAX_DEPTH", "50000")
-                    , ("AWS_REGION", "us-east-1")
-                    , ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
-                    , ("ECLUSE_GOOGLE_PROJECT", "test-project")
                     , ("ECLUSE_AUTH_TOKEN", "secret-token")
                     , ("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "true")
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-token")
@@ -174,9 +186,6 @@ spec = do
                             , ("queueBackend", String "sqs")
                             , ("queueUrl", String "https://sqs.example.com")
                             , ("queueMemoryMaxDepth", Number 50000)
-                            , ("awsEndpointUrlSqs", String "http://localhost:4566")
-                            , ("awsRegion", String "us-east-1")
-                            , ("googleProject", String "test-project")
                             , ("authToken", String "secret-token")
                             , ("helpMessage", String "contact support")
                             , ("cveSyncInterval", Number 3600)
