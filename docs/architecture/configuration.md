@@ -28,13 +28,23 @@ diffable, the expected form once the rule policy is non-trivial.
 A mount serves only when the operator declares it. The shipped defaults carry a dormant
 template per ecosystem (the canonical public upstream),
 and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
-`ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
-upstream and declare its mirror target: a declared-but-incomplete mount is a boot error naming
-each missing key, never a
-mount that silently vanishes from service, and a mount the operator never mentions stays
-off without ceremony. The mirror target is explicit even when it equals the private upstream:
-activation implies a mirror write (there are no serve-only mounts), so the write's destination
-is always the operator's own stated intent, never implied from another endpoint. Declaring the
+`ECLUSE_MOUNTS__*` variables, activates that mount; a mount the operator never mentions
+stays off without ceremony. The `enabled` key is itself a declaration, so
+`mounts.<ecosystem>.enabled: true` alone activates a mount against its template public
+upstream (the serve-only pure public gate needs nothing else), and `enabled: false`
+switches a mount off without removing its other keys.
+
+Whether an active mount **mirrors** is derived from its declared endpoints: a
+`mirrorTarget` makes the mount mirrored, and its private upstream is then required (the
+mirror must be readable back through it: a mirrored mount without one is a boot error
+naming the key, never a mount that silently vanishes from service). An absent
+`mirrorTarget` makes the mount **serve-only**: it never writes anywhere, its private
+upstream is optional (present, the two origins still merge; absent, the mount is the
+pure public gate), and every admitted public artifact stays on the gated public leg. A
+mirror-write setting left on a serve-only mount (`mirrorTargetToken`,
+`mirrorCodeArtifactTokenDuration`) is refused per key rather than silently ignored,
+and the boot log names each mount's resolved posture, so an unintentionally dropped
+`mirrorTarget` is visible at the very next start-up. Declaring the
 public upstream explicitly as well is the recommended
 posture; endpoints of one mount that resolve to the same registry are each logged as a
 boot warning (a mirror target declared equal to the private upstream included), since a
@@ -71,11 +81,12 @@ by Écluse.
 
 ### Outbound registry credentials
 
-Écluse always holds a credential to write the mirror target, and, depending on the mount's
-[credential strategy](access-model.md), may also hold one to read the private upstream. The
-mirror write is distinct from the reads: under the default `passthrough` the private upstream
+A **mirrored** mount always holds a credential to write its mirror target, and, depending on the
+mount's [credential strategy](access-model.md), may also hold one to read the private upstream.
+The mirror write is distinct from the reads: under the default `passthrough` the private upstream
 carries no Écluse credential, while the mirror write runs on the async worker under Écluse's own
-identity.
+identity. A serve-only mount never writes, so it holds no standing write credential at all; a
+deployment with zero mirrored mounts mints nothing.
 
 The mirror-write credential is **derived from the mirror-target URL**, so it is always the
 credential that endpoint dictates and can never be paired with an endpoint it was not minted for.
@@ -305,11 +316,13 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
 - Merge references must resolve. A `rules` entry that neither names a known default nor supplies
   a complete new rule (a typo'd default name, an `"enabled": false` against a non-existent rule,
   a patch missing the `type` it needs to stand alone) is rejected.
-- A declared mount must be complete. Any operator-supplied key under `mounts.<ecosystem>`
-  activates that mount, and an active mount without a `privateUpstream` or without an explicit
-  `mirrorTarget` is rejected at boot,
-  naming the mount and each missing key (every incomplete mount in one report); the shipped
-  per-ecosystem templates alone never activate anything.
+- A declared mount must be coherent with its derived mode. Any operator-supplied key under
+  `mounts.<ecosystem>` activates that mount (the shipped per-ecosystem templates alone never
+  activate anything; `enabled: false` deactivates a declared one). A **mirrored** mount (one
+  declaring a `mirrorTarget`) without a `privateUpstream` is rejected at boot naming the key
+  (every incomplete mount in one report). A **serve-only** mount (no `mirrorTarget`) carrying a
+  mirror-write setting (`mirrorTargetToken`, `mirrorCodeArtifactTokenDuration`) is rejected per
+  offending key, never silently ignored.
 - The mirror-write credential must resolve. It is derived from the mirror-target URL: a
   non-CodeArtifact target with no static write token, or a CodeArtifact target that also carries a
   static token, is rejected at load; and a CodeArtifact target whose ambient cloud identity cannot

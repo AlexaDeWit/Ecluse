@@ -4,18 +4,23 @@
 
 ## Registry roles
 
-The proxy is configured with **four registry roles**, two reads and two writes, configured
+The proxy is configured with **up to four registry roles**, two reads and two writes, configured
 separately. Several may map to one physical registry; collapsing them is the simplest setup, but
 the recommended topology keeps first-party and public-derived stores separate and unions them at
 the registry level (see
 [Registry-level composition](#registry-level-composition-the-recommended-topology)). A single
-shared registry is the degenerate floor, not the goal.
+shared registry is the degenerate floor, not the goal. A **serve-only** mount (one that
+declares no mirror target; see
+[Configuration](configuration.md#configuration)) runs on the read roles alone: the mirror
+target is absent, the private upstream optional (absent too on the pure public gate), and
+the full rules gate applies unchanged; the trade is that every artifact stays on the gated
+public leg rather than retiring onto the private read.
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | Authoritative, already-vetted source. A tarball is served by a conventional stable read at `{base}/{pkg}/-/{file}`, no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A packument's versions are trusted and merged with the gated public set (see [Packument merge](#packument-merge-across-upstreams)). |
-| **Public upstream** | Source of versions not yet in the private upstream; everything from here is rules-gated. For a tarball it is the fallback on a private miss; for a packument it is fetched alongside the private upstream and merged in. |
-| **Mirror target** | Where approved public packages are written after passing rules. May be the private upstream, but is recommended to be a distinct store unioned into the private-upstream read path, so public-derived inventory stays separable from first-party. |
+| **Private upstream** | Authoritative, already-vetted source. A tarball is served by a conventional stable read at `{base}/{pkg}/-/{file}`, no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A packument's versions are trusted and merged with the gated public set (see [Packument merge](#packument-merge-across-upstreams)). Optional on a serve-only mount. |
+| **Public upstream** | Source of versions not yet in the private upstream; everything from here is rules-gated. For a tarball it is the fallback on a private miss; for a packument it is fetched alongside the private upstream and merged in. The only required role: the pure public gate serves from it alone. |
+| **Mirror target** | Where approved public packages are written after passing rules. Declaring one is what makes a mount mirrored; absent, the mount is serve-only and never writes. May be the private upstream, but is recommended to be a distinct store unioned into the private-upstream read path, so public-derived inventory stays separable from first-party. |
 | **Publication target** | Where client-published first-party packages are written (`npm publish` through the proxy). The write counterpart to the private read role; recommended to be a distinct first-party store unioned into the read path. Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
 ### Credential flow and authority
@@ -277,6 +282,13 @@ after which that artifact never takes the public leg again. So the public leg's 
 for onboarding experience, not steady-state capacity, and optimisations must respect this ordering:
 trading private-hit (hot-path) work to speed the public fail-over is a regression against the
 design.
+
+A **serve-only** mount opts out of the V's back-fill: with no mirror target there is no
+worker promotion, so the public leg is permanent rather than transient. That is the openly
+accepted trade of the low-effort onboarding shape: slower installs at scale, egress that
+never retires, availability coupled to the public registry, and no mirrored copy surviving
+an upstream yank; the security gate itself is identical. Declaring a `mirrorTarget` later
+upgrades the mount in place; clients change nothing.
 
 Registry-level composition is the recommended way to get that separation but not the only one:
 Écluse's own merge gives the same correctness to operators who cannot compose at the registry level,

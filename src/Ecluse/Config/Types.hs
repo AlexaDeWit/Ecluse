@@ -14,6 +14,10 @@ module Ecluse.Config.Types (
     MountConfig (..),
     AppConfig (..),
     MountRegistries (..),
+    MountMode (..),
+    MirroredLegs (..),
+    regPrivateUpstream,
+    regMirrorTarget,
     MirrorTarget (..),
     Mount (..),
     MountMap,
@@ -22,6 +26,7 @@ module Ecluse.Config.Types (
     renderConfigError,
 ) where
 
+import Data.Char (isUpper)
 import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
@@ -84,7 +89,13 @@ data MirrorCredential
     deriving stock (Eq, Show)
 
 data MountConfig = MountConfig
-    { mntPrivateUpstream :: Maybe RegistryUrl
+    { mntEnabled :: Maybe Bool
+    {- ^ The mount's explicit on\/off switch. Any operator-declared key under the
+    mount activates it, so @enabled: true@ exists for the mount that needs no other
+    key (a serve-only pure public gate on the template public upstream), and
+    @enabled: false@ switches off a mount whose other keys remain in place.
+    -}
+    , mntPrivateUpstream :: Maybe RegistryUrl
     , mntPublicUpstream :: RegistryUrl
     , mntMirrorTarget :: Maybe RegistryUrl
     , mntMirrorTargetToken :: Maybe Secret
@@ -134,11 +145,47 @@ data AppConfig = AppConfig
     deriving stock (Eq, Show)
 
 data MountRegistries = MountRegistries
-    { regPrivateUpstream :: RegistryUrl
-    , regPublicUpstream :: RegistryUrl
-    , regMirrorTarget :: MirrorTarget
+    { regPublicUpstream :: RegistryUrl
+    , regMode :: MountMode
     }
     deriving stock (Eq, Show)
+
+{- | Whether a mount mirrors, derived from its declared endpoints: a declared
+@mirrorTarget@ makes the mount 'Mirrored' (and its private upstream is then required,
+so the mirror can be read back), an absent one makes it 'ServeOnly' (never writes
+anywhere; the private upstream is optional, and a mount with neither is the pure
+public gate). The coupling is structural, so a mirrored mount without a readable
+private leg is unrepresentable.
+-}
+data MountMode
+    = -- | The mount mirrors admitted public artifacts; both legs are required.
+      Mirrored MirroredLegs
+    | -- | The mount never writes; the optional private upstream is still merged when present.
+      ServeOnly (Maybe RegistryUrl)
+    deriving stock (Eq, Show)
+
+{- | A mirrored mount's two required halves: the readable private upstream and the
+mirror target married to its derived write credential.
+-}
+data MirroredLegs = MirroredLegs
+    { mlPrivateUpstream :: RegistryUrl
+    , mlMirrorTarget :: MirrorTarget
+    }
+    deriving stock (Eq, Show)
+
+{- | The mount's private upstream, when it has one: total over both modes, so call
+sites read as before while the compiler makes them face the serve-only absence.
+-}
+regPrivateUpstream :: MountRegistries -> Maybe RegistryUrl
+regPrivateUpstream regs = case regMode regs of
+    Mirrored legs -> Just (mlPrivateUpstream legs)
+    ServeOnly mPrivate -> mPrivate
+
+-- | The mount's mirror target (with its derived credential), when it mirrors.
+regMirrorTarget :: MountRegistries -> Maybe MirrorTarget
+regMirrorTarget regs = case regMode regs of
+    Mirrored legs -> Just (mlMirrorTarget legs)
+    ServeOnly _ -> Nothing
 
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
@@ -164,14 +211,19 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
-    | -- | An operator-declared (active) mount does not define its private upstream.
-      MountMissingPrivateUpstream Ecosystem
-    | {- | An operator-declared (active) mount does not declare its mirror target.
-      The declaration is required even when the intended value equals the private
-      upstream: activation implies a mirror write, and the target is never implied
-      from another endpoint.
+    | {- | A __mirrored__ mount (one that declares a @mirrorTarget@) does not define
+      its private upstream. The mirror write must be readable back through the
+      private leg, so a mirrored mount without one is refused; a serve-only mount
+      (no @mirrorTarget@) never raises this.
       -}
-      MountMissingMirrorTarget Ecosystem
+      MountMissingPrivateUpstream Ecosystem
+    | {- | A serve-only mount (no @mirrorTarget@ declared) carries a mirror-write
+      setting anyway. A write credential or token duration on a mount that never
+      writes signals a misunderstanding (most likely a missing @mirrorTarget@), so
+      it is refused per offending key rather than silently ignored. Carries the
+      mount's ecosystem and the offending document key.
+      -}
+      MirrorSettingWithoutWrite Ecosystem Text
     | {- | An active mount's mirror target is not a CodeArtifact endpoint (whose write
       token would be minted), so it needs an explicit static write token, and none was
       supplied. Carries the mount's ecosystem.
@@ -193,21 +245,31 @@ renderConfigError (MountMissingPrivateUpstream eco) =
         envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__PRIVATE_UPSTREAM"
      in "mount \""
             <> name
-            <> "\" is declared in the configuration, so it must define its private upstream: set mounts."
+            <> "\" declares a mirror target, so it must also define the private upstream the mirror is read back through: set mounts."
             <> name
             <> ".privateUpstream in the config document (or "
             <> envKey
-            <> "), or remove the mount's keys to leave it unmounted"
-renderConfigError (MountMissingMirrorTarget eco) =
+            <> "), or remove mounts."
+            <> name
+            <> ".mirrorTarget for a serve-only mount that never mirrors"
+renderConfigError (MirrorSettingWithoutWrite eco key) =
     let name = ecosystemName eco
-        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__MIRROR_TARGET"
+        envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__" <> envKeyOf key
      in "mount \""
             <> name
-            <> "\" is declared in the configuration, so it must declare its mirror target explicitly (even when it equals the private upstream): set mounts."
+            <> "\" declares no mirror target, so mounts."
             <> name
-            <> ".mirrorTarget in the config document (or "
+            <> "."
+            <> key
+            <> " ("
             <> envKey
-            <> "), or remove the mount's keys to leave it unmounted"
+            <> ") has nothing to write with: set mounts."
+            <> name
+            <> ".mirrorTarget to mirror, or remove the setting for a serve-only mount"
+  where
+    -- The env form of a camelCase mount key (the resolver's transliteration, inverted).
+    envKeyOf :: Text -> Text
+    envKeyOf = T.toUpper . T.concatMap (\c -> if isUpper c then "_" <> one c else one c)
 renderConfigError (MirrorCredentialTokenMissing eco) =
     let name = ecosystemName eco
         envKey = "ECLUSE_MOUNTS__" <> T.toUpper name <> "__MIRROR_TARGET_TOKEN"

@@ -109,6 +109,7 @@ import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
     AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
+    mountPostureLines,
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
@@ -232,6 +233,10 @@ runProxy bootEnv = do
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
+    -- One posture line per mount: mirrored (and where the back-fill lands) or
+    -- serve-only. The mode is derived from the declared endpoints, so this is the
+    -- loud surface a dropped mirrorTarget shows up on.
+    traverse_ (logBootInfo logEnv) (mountPostureLines config)
     -- The config-selected mirror queue, built once here (the single constructor
     -- call) from the validated plan: the durable AWS SQS backend, or the bounded
     -- in-memory backend -- which first emits a loud boot warning (it is

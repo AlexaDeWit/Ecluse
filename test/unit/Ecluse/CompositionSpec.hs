@@ -33,7 +33,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Context (
-    MirrorServePlan (MirrorOnAdmit),
+    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
     PublishDeps (..),
@@ -86,7 +86,7 @@ planFrom envVars mDocBytes = do
             toBoot (PolicyErrors es) = map PolicyBootError es
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(MountMissingMirrorTarget _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(MirrorSettingWithoutWrite _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(MirrorCredentialTokenMissing _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(MirrorCredentialConflict _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
         Right cfg -> do
@@ -295,16 +295,36 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [MissingAdapter PyPI]
             Right _ -> expectationFailure "expected boot failure"
 
-    it "fails when an active mount declares no mirror target" $ do
-        -- Activation implies a mirror write: the target must be declared explicitly
-        -- (even when it equals the private upstream), so a mount without one is a
-        -- rendered boot error, never an implied endpoint.
+    it "refuses a leftover write token on a mount that declares no mirror target" $ do
+        -- Mirroring is derived from the declared target: no mirrorTarget means
+        -- serve-only. A write token left behind signals a misunderstanding (most
+        -- likely a dropped target), so it is refused per key, never ignored.
         let env = withoutMirrorTargetUrl staticEnvVars
         planFrom env Nothing >>= \case
             Left errs ->
                 errs
-                    `shouldBe` [PolicyBootError (UnknownRuleType "mount" (renderConfigError (MountMissingMirrorTarget Npm)))]
-            Right _ -> expectationFailure "expected a missing-mirror-target boot error"
+                    `shouldBe` [PolicyBootError (UnknownRuleType "mount" (renderConfigError (MirrorSettingWithoutWrite Npm "mirrorTargetToken")))]
+            Right _ -> expectationFailure "expected a mirror-setting-without-write boot error"
+
+    it "binds a serve-only mount (no mirror target): NoMirrorWrite deps over the private merge" $ do
+        let env = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) (withoutMirrorTargetUrl staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdMirror deps `shouldBe` NoMirrorWrite
+                pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
+            other -> expectationFailure ("expected one serve-only binding, got " <> show (fmap length other))
+
+    it "binds a pure public gate from enabled alone (no endpoint keys declared)" $ do
+        -- The two-variable start: enabled activates the mount, the template public
+        -- upstream serves, nothing is private and nothing mirrors.
+        planFrom [("ECLUSE_MOUNTS__NPM__ENABLED", "true")] Nothing >>= \case
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                pdPrivateBaseUrl deps `shouldBe` Nothing
+                pdMirror deps `shouldBe` NoMirrorWrite
+                pdPublicBaseUrl deps `shouldBe` "https://registry.npmjs.org"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish-scope allow-list" $ do
         -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES empty: the anti-shadowing guard

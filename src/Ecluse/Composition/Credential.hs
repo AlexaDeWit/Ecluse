@@ -56,7 +56,7 @@ import Ecluse.Config (
     MirrorCredential (..),
     MirrorTarget (..),
     Mount (..),
-    MountRegistries (..),
+    regMirrorTarget,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
@@ -74,16 +74,22 @@ that names an ecosystem absent from it has an unresolved credential reference.
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
 {- | Build the global credential providers from the resolved config, or the aggregated
-boot errors that block them. Each active mount already carries its resolved
+boot errors that block them. Each __mirrored__ mount already carries its resolved
 'MirrorCredential' (derived from its mirror-target URL at load), so this only realises
 it: a 'MirrorStatic' becomes a stateless static provider; the 'MirrorCodeArtifact'
 identities are grouped by domain and each built once, minting eagerly so a bad
 identity, region, or permission is a fail-loud 'CodeArtifactMintFailed' here at boot
-rather than a first-publish surprise.
+rather than a first-publish surprise. A serve-only mount holds no write credential and
+contributes nothing; with zero mirrored mounts the provider map is empty and nothing
+mints.
 -}
 initCredentialProviders :: CredentialReporters -> Config -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders reporters config = do
-    let creds = [(eco, mtCredential (regMirrorTarget (mountRegistries mount))) | (eco, mount) <- Map.toList (configMounts config)]
+    let creds =
+            [ (eco, mtCredential target)
+            | (eco, mount) <- Map.toList (configMounts config)
+            , Just target <- [regMirrorTarget (mountRegistries mount)]
+            ]
     -- The static leaf is stateless, so it stays per mount; the CodeArtifact providers
     -- are built once per distinct resolved identity and fanned out to every ecosystem
     -- that resolved it.

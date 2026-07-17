@@ -36,7 +36,8 @@ mountConfigParser :: KeyMap.KeyMap Value -> Parser MountConfig
 mountConfigParser o = do
     rejectUnknownKeys "mount" acceptedMountKeys o
     MountConfig
-        <$> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
+        <$> o .:? "enabled"
+        <*> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
         <*> (o .: "publicUpstream" >>= parseRegistryUrl)
         <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
@@ -49,7 +50,8 @@ mountConfigParser o = do
 
 acceptedMountKeys :: [Key.Key]
 acceptedMountKeys =
-    [ "privateUpstream"
+    [ "enabled"
+    , "privateUpstream"
     , "publicUpstream"
     , "mirrorTarget"
     , "mirrorTargetToken"

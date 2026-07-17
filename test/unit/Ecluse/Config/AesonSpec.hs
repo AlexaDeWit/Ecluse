@@ -64,15 +64,26 @@ spec = describe "decodeDocument" $ do
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
-    it "fails loudly when a document-declared mount omits its private upstream" $
-        loadConfig [] (Just "{\"mounts\":{\"npm\":{}}}")
-            `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
+    it "resolves a mount declared with no endpoint keys as the serve-only pure gate" $
+        -- Mirroring is derived from the declared target: no mirrorTarget means
+        -- serve-only, and with no private upstream either, the mount fronts only
+        -- the template public upstream (the pure public gate).
+        case loadConfig [] (Just "{\"mounts\":{\"npm\":{}}}") of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
-    it "fails loudly when a document-declared mount omits its mirror target" $
-        -- Activation implies a mirror write, so the target is an explicit per-mount
-        -- declaration, never implied from the private upstream.
-        loadConfig [] (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}")
-            `shouldSatisfy` decodeErrorMentions "mounts.npm.mirrorTarget"
+    it "resolves a mount declaring only a private upstream as serve-only over the merge" $
+        case loadConfig [] (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}") of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+
+    it "fails loudly when a mirrored mount (mirrorTarget declared) omits its private upstream" $
+        -- The mirror must be readable back through the private leg, so a mirrored
+        -- mount without one is refused; only serve-only mounts may omit it.
+        loadConfig
+            []
+            (Just "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"t\"}}}")
+            `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
 
     it "loads a mount whose mirror target is declared equal to its private upstream" $
         -- Equality with the private upstream is a valid arrangement; only the
@@ -86,19 +97,19 @@ spec = describe "decodeDocument" $ do
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
-    it "fails loudly when an environment key activates a mount without an upstream" $
+    it "fails loudly when an environment token activates a mount that never writes" $
+        -- A write token on a serve-only mount (no mirrorTarget) signals a
+        -- misunderstanding and is refused, naming the offending key.
         loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
-            `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
+            `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
 
-    it "reports every incomplete active mount in one load, not only the first" $ do
-        let outcome = loadConfig [] (Just "{\"mounts\":{\"npm\":{},\"pypi\":{}}}")
+    it "reports every incomplete mirrored mount in one load, not only the first" $ do
+        let doc =
+                "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://m1.example.test\",\"mirrorTargetToken\":\"t\"},\
+                \\"pypi\":{\"mirrorTarget\":\"https://m2.example.test\",\"mirrorTargetToken\":\"t\"}}}"
+        let outcome = loadConfig [] (Just doc)
         outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
-
-    it "reports a mount's missing private upstream and missing mirror target together" $ do
-        let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")] Nothing
-        outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM"
-        outcome `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
 
     it "loads the bounded serve and connection-pool defaults" $
         case loadConfig [] Nothing of

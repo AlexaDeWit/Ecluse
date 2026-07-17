@@ -56,6 +56,8 @@ import Ecluse.Config (
     MountConfig (..),
     MountRegistries (..),
     Url,
+    regMirrorTarget,
+    regPrivateUpstream,
     unUrl,
  )
 import Ecluse.Core.Credential (CredentialProvider, Secret)
@@ -76,7 +78,7 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), MountBinding, PackumentDeps (..), PublishDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
 {- | Validate the environment layer and optional document into the served mount
@@ -196,10 +198,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
         let regs = mountRegistries mount
         pure
             PackumentDeps
-                { pdPrivateBaseUrl = Just (registryUrlText (regPrivateUpstream regs))
+                { pdPrivateBaseUrl = registryUrlText <$> regPrivateUpstream regs
                 , pdPublicBaseUrl = registryUrlText (regPublicUpstream regs)
                 , pdMountBaseUrl = mountBaseUrl (cfgPublicUrl app) (mountEcosystem mount)
-                , pdMirror = MirrorOnAdmit (registryUrlText (mtUrl (regMirrorTarget regs)))
+                , pdMirror = maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs)
                 , pdRules = prepared
                 , pdTarballHostPolicy = tarballHostPolicyFor mcfg
                 , -- The operator-configured ranges extending the fixed internal-range block on
@@ -211,9 +213,9 @@ composeBindings resolveAdapter clock ruleDepsFor providers config = do
                   -- URL and rebuilds no host set per request.
                   pdTarballHostGate =
                     tarballHostGate
-                        (Just (registryUrlText (regPrivateUpstream regs)))
+                        (registryUrlText <$> regPrivateUpstream regs)
                         (registryUrlText (regPublicUpstream regs))
-                        (Just (registryUrlText (mtUrl (regMirrorTarget regs))))
+                        (registryUrlText . mtUrl <$> regMirrorTarget regs)
                 , pdLimits = limits
                 , pdInboundToken = cfgAuthToken app
                 , pdNow = clock
@@ -248,13 +250,16 @@ tarballHostPolicyFor mcfg =
         then AnyAllowlistedHost
         else SameHostAsPackument
 
--- The credential reference of a mount: an error when the named backend is not
--- initialised, nothing when it resolves.
+-- The credential reference of a mount: an error when a mirrored mount's write
+-- backend is not initialised, nothing when it resolves. A serve-only mount never
+-- writes, so it references no provider and can never fail here.
 credentialError :: CredentialProviders -> Mount -> Maybe BootError
-credentialError providers mount =
-    if mountEcosystem mount `Set.member` initializedEcosystems providers
-        then Nothing
-        else Just (UnresolvedCredential (mountEcosystem mount))
+credentialError providers mount = case regMirrorTarget (mountRegistries mount) of
+    Nothing -> Nothing
+    Just _ ->
+        if mountEcosystem mount `Set.member` initializedEcosystems providers
+            then Nothing
+            else Just (UnresolvedCredential (mountEcosystem mount))
 
 -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
 -- under ECLUSE_PUBLIC_URL when set (so a served tarball is a full URL an npm
@@ -355,23 +360,26 @@ planPublishTargets ::
     Either [BootError] [PublishTarget]
 planPublishTargets = composePublishTargets
 
--- Resolve every mount's publish target from a validated config, aggregating an
--- unresolved-credential error per mount (the same check 'composeBindings' applies).
+-- Resolve every mirrored mount's publish target from a validated config,
+-- aggregating an unresolved-credential error per mount (the same check
+-- 'composeBindings' applies). A serve-only mount publishes nothing and
+-- contributes no target.
 composePublishTargets ::
     CredentialProviders ->
     Config ->
     Either [BootError] [PublishTarget]
 composePublishTargets providers config =
-    case partitionEithers (map (publishTargetFor providers) (Map.elems (configMounts config))) of
+    case partitionEithers (mapMaybe (publishTargetFor providers) (Map.elems (configMounts config))) of
         ([], targets) -> Right targets
         (errs, _) -> Left (concat errs)
 
--- One mount's publish target: its mirror-target endpoint paired with the
+-- One mirrored mount's publish target: its mirror-target endpoint paired with the
 -- initialised write provider, or the same unresolved-credential boot error the
--- serve side reports.
-publishTargetFor :: CredentialProviders -> Mount -> Either [BootError] PublishTarget
-publishTargetFor providers mount =
-    case lookupProvider (mountEcosystem mount) providers of
+-- serve side reports. 'Nothing' for a serve-only mount (no write, no target).
+publishTargetFor :: CredentialProviders -> Mount -> Maybe (Either [BootError] PublishTarget)
+publishTargetFor providers mount = do
+    target <- regMirrorTarget (mountRegistries mount)
+    pure $ case lookupProvider (mountEcosystem mount) providers of
         Just provider ->
             Right
                 PublishTarget
@@ -381,5 +389,3 @@ publishTargetFor providers mount =
                     }
         Nothing ->
             Left [UnresolvedCredential (mountEcosystem mount)]
-  where
-    target = regMirrorTarget (mountRegistries mount)

@@ -9,7 +9,21 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Config (Config, RulePolicy (..), defaultPolicy, loadConfig, mountCollisionWarnings, renderConfigError)
+import Ecluse.Config (
+    Config (configMounts),
+    ConfigError (MirrorSettingWithoutWrite, MountMissingPrivateUpstream),
+    Mount (mountRegistries),
+    MountMode (Mirrored, ServeOnly),
+    MountRegistries (regMode),
+    RulePolicy (..),
+    defaultPolicy,
+    loadConfig,
+    mountCollisionWarnings,
+    mountPostureLines,
+    renderConfigError,
+ )
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
 
 spec :: Spec
 spec = do
@@ -21,6 +35,39 @@ spec = do
             case defaultPolicy of
                 RulePolicy rules ->
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
+
+    describe "mount modes (mirroring derived from the declared target)" $ do
+        it "resolves a declared mirrorTarget to a mirrored mount" $ do
+            cfg <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
+            modeOf cfg `shouldSatisfy` \case Just (Mirrored _) -> True; _ -> False
+            mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "mirrored")
+
+        it "resolves an absent mirrorTarget to a serve-only mount over the private merge" $ do
+            cfg <- configFor (bareNpmMountDoc [("privateUpstream", "https://priv.example.test")])
+            modeOf cfg `shouldBe` (Just . ServeOnly . rightToMaybe . mkRegistryUrl) "https://priv.example.test"
+            mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "serve-only")
+
+        it "resolves enabled alone to the serve-only pure public gate" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            modeOf cfg `shouldBe` Just (ServeOnly Nothing)
+            mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "pure public gate")
+
+        it "switches a declared mount off under enabled: false (keys kept, nothing served)" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":false,\"privateUpstream\":\"https://priv.example.test\"}}}"
+            Map.keys (configMounts cfg) `shouldBe` []
+
+        it "requires the private upstream on a mirrored mount (the mirror must read back)" $
+            loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
+                `shouldBe` Left [MountMissingPrivateUpstream Npm]
+
+        it "refuses each leftover mirror-write setting on a serve-only mount, aggregated" $
+            loadConfig
+                []
+                (Just "{\"mounts\":{\"npm\":{\"mirrorTargetToken\":\"t\",\"mirrorCodeArtifactTokenDuration\":3600}}}")
+                `shouldBe` Left
+                    [ MirrorSettingWithoutWrite Npm "mirrorTargetToken"
+                    , MirrorSettingWithoutWrite Npm "mirrorCodeArtifactTokenDuration"
+                    ]
 
     describe "mountCollisionWarnings" $ do
         it "is silent when every registry endpoint is distinct" $ do
@@ -94,7 +141,17 @@ supplies the rest (public upstream, tarball-host posture). A static
 collision cases use derive a valid write credential and the config loads.
 -}
 npmMountDoc :: [(Text, Text)] -> ByteString
-npmMountDoc fields =
-    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map field (fields <> [("mirrorTargetToken", "t")])) <> "}}}")
+npmMountDoc fields = bareNpmMountDoc (fields <> [("mirrorTargetToken", "t")])
+
+{- | As 'npmMountDoc' but with no implicit write token, for the serve-only cases
+(where a leftover write setting is itself the refusal under test).
+-}
+bareNpmMountDoc :: [(Text, Text)] -> ByteString
+bareNpmMountDoc fields =
+    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map field fields) <> "}}}")
   where
     field (key, value) = "\"" <> key <> "\":\"" <> value <> "\""
+
+-- | The served npm mount's resolved mode, when one is served.
+modeOf :: Config -> Maybe MountMode
+modeOf cfg = regMode . mountRegistries <$> Map.lookup Npm (configMounts cfg)

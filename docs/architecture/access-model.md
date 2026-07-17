@@ -81,7 +81,9 @@ The strategies above govern reads. The one client-driven **write**, `npm publish
 [publication target](registry-model.md#publishing-first-party-packages-the-publication-target),
 uses **passthrough**: Écluse forwards the publisher's own `Authorization` / `_authToken`,
 which the target authorises. Écluse substitutes no identity and mints no token here, unlike
-the mirror-target write, which always uses Écluse's own `CredentialProvider` token.
+a mirrored mount's mirror-target write, which always uses Écluse's own `CredentialProvider`
+token (a serve-only mount has no mirror write and holds no standing write credential; its
+publication target, being client-credentialled, remains available).
 
 The universal invariant holds: the client's token reaches only the private upstream (on
 read, under `passthrough`) and the publication target (on publish), **never** the public
@@ -175,9 +177,10 @@ different key and misses by construction.
 ## Credential supply: the `CredentialProvider`
 
 The [`CredentialProvider`](cloud-backends.md#credential-provider) mints and refreshes a
-bearer for **any upstream endpoint that requires one**: the mirror-target **write** always,
-and the private-upstream **read** under `service`. `passthrough` reads use the forwarded
-caller token and need no read provider. A `service` mount therefore configures a read
+bearer for **any upstream endpoint that requires one**: a mirrored mount's mirror-target
+**write** always, and the private-upstream **read** under `service`. `passthrough` reads
+use the forwarded caller token and need no read provider, so a serve-only `passthrough`
+deployment holds no standing credential at all. A `service` mount therefore configures a read
 provider alongside its mirror-target one; both are the same handle and refresh /
 single-flight / breaker policy, differing only in the per-cloud `mintToken` leaf.
 
