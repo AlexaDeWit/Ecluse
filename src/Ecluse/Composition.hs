@@ -35,6 +35,7 @@ module Ecluse.Composition (
     -- * Boot-time wiring
     planMounts,
     composeBindings,
+    validateComposition,
 
     -- * Publish-side wiring
     PublishTarget (..),
@@ -127,17 +128,19 @@ composeBindings ::
     Config ->
     IO (Either [BootError] [MountBinding])
 composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
-    let (pubErrs, pubDepsMap) = case sequence (Map.mapWithKey (\eco mcfg -> publishDepsFor eco (adapterFor eco) app mcfg limits helpMessage) (cfgMounts app)) of
-            Left errs -> (errs, Map.empty)
-            Right m -> ([], m)
+    -- The pure structural refusals (missing adapters, publish policy) come from
+    -- 'validateComposition', the same function check-config runs, so the checker
+    -- and the boot cannot drift on what is refused.
+    let structuralErrs = validateComposition config
+        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg limits helpMessage) (cfgMounts app)
     -- Each resolved mount paired with its environment-layer 'MountConfig':
     -- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for
     -- entry, so the two maps share a keyset and the pairing is total.
     let mounts = Map.elems (Map.intersectionWith (,) (configMounts config) (cfgMounts app))
     bindingResults <- traverse (\(mount, mcfg) -> bindingFor (join (Map.lookup (mountEcosystem mount) pubDepsMap)) mount mcfg) mounts
-    pure $ case (pubErrs, partitionEithers bindingResults) of
+    pure $ case (structuralErrs, partitionEithers bindingResults) of
         ([], ([], bindings)) -> Right bindings
-        (_, (errs, _)) -> Left (pubErrs <> concat errs)
+        (_, (errs, _)) -> Left (structuralErrs <> concat errs)
   where
     app :: AppConfig
     app = configApp config
@@ -158,9 +161,10 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
     bindingFor :: Maybe PublishDeps -> Mount -> MountConfig -> IO (Either [BootError] MountBinding)
     bindingFor pubDeps mount mcfg =
         case adapterFor eco of
-            -- No adapter for this ecosystem: there is nothing to build deps from, and no
-            -- mount to bind. A loud boot error, never a half-wired mount.
-            Nothing -> pure (Left (maybeToList (credentialError providers mount) <> [MissingAdapter eco]))
+            -- No adapter for this ecosystem: there is nothing to build deps from, and
+            -- no mount to bind. 'validateComposition' already reported the missing
+            -- adapter; only the credential reference is still this mount's to check.
+            Nothing -> pure (Left (maybeToList (credentialError providers mount)))
             Just adapter -> do
                 deps <- packumentDepsFor adapter mount mcfg
                 pure $ case (credentialError providers mount, resolveAdapter eco deps pubDeps) of
@@ -264,37 +268,56 @@ mountBaseUrl publicUrl eco =
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
-{- | Validate the first-party publish dependencies from the environment layer, shared
-across the (single-ecosystem) mounts: 'Nothing' when no publication target is configured
-(the publish path is off -- a @PUT \/{pkg}@ is then @405@), 'Just' when one is set and
-valid, or the accumulated fail-loud publish boot errors when not -- 'PublishAllowMissing'
-when a target is set without a publish-scope allow-list, and\/or
-'PublishStaticCredentialNeedsEdge' when a static publish credential is set without a
-verifiable inbound edge -- reported together rather than one reboot at a time. The target's
-URL, the scopes, and the static fallback credential are the publish env layer; the
-response bounds ('Limits') and help message are shared with the read paths and passed in;
-the relay and the name canonicaliser are the ecosystem's own capability, projected from
-its registered adapter. A mount whose ecosystem has no adapter carries no publish deps
-(its errors above still accumulate, and its boot fails on the missing adapter regardless).
+{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig',
+shared with @ecluse check-config@ so the checker can never pass a configuration the
+proxy refuses: a served mount whose ecosystem has no registered adapter
+('MissingAdapter'), and the publish policy of every configured publication target
+('PublishAllowMissing', 'PublishStaticCredentialNeedsEdge'). Pure and
+side-effect-free: no provider is initialised and no credential minted -- the
+mirrored-mount credential expectations are already structural on 'Config' itself
+(each mirrored mount carries the credential 'Ecluse.Config.loadConfig' derived from
+its target). Only the provider-initialisation check ('UnresolvedCredential') stays
+with 'composeBindings', which consumes this same function for everything else.
 -}
-publishDepsFor :: Ecosystem -> Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
-publishDepsFor eco mAdapter app mcfg limits helpMessage = case mntPublicationTarget mcfg of
-    Nothing -> Right Nothing
-    Just url -> case publishBootErrors eco mcfg inboundToken of
-        [] ->
-            Right $
-                mAdapter <&> \adapter ->
-                    PublishDeps
-                        { pubTargetUrl = registryUrlText url
-                        , pubScopes = mntPublishAllow mcfg
-                        , pubStaticToken = mntPublicationTargetToken mcfg
-                        , pubInboundToken = inboundToken
-                        , pubLimits = limits
-                        , pubHelp = helpMessage
-                        , pubRelayPublish = publishRelay (adapterPublish adapter)
-                        , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
-                        }
-        errs -> Left errs
+validateComposition :: Config -> [BootError]
+validateComposition config = missingAdapters <> publishPolicyErrors
+  where
+    app = configApp config
+    missingAdapters =
+        [MissingAdapter eco | eco <- Map.keys (configMounts config), isNothing (adapterFor eco)]
+    publishPolicyErrors =
+        concat
+            [ publishBootErrors eco mcfg (srvAuthToken (cfgServer app))
+            | (eco, mcfg) <- Map.toAscList (cfgMounts app)
+            , isJust (mntPublicationTarget mcfg)
+            ]
+
+{- | Build the first-party publish dependencies from the environment layer, shared
+across the (single-ecosystem) mounts: 'Nothing' when no publication target is
+configured (the publish path is off -- a @PUT \/{pkg}@ is then @405@) or when the
+ecosystem has no adapter (the boot fails on the missing adapter regardless). The
+publish policy itself is 'validateComposition''s to refuse; construction here
+assumes it and is only consumed on an error-free compose. The target's URL, the
+scopes, and the static fallback credential are the publish env layer; the response
+bounds ('Limits') and help message are shared with the read paths and passed in;
+the relay and the name canonicaliser are the ecosystem's own capability, projected
+from its registered adapter.
+-}
+publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Maybe PublishDeps
+publishDepsFor mAdapter app mcfg limits helpMessage = do
+    url <- mntPublicationTarget mcfg
+    adapter <- mAdapter
+    pure
+        PublishDeps
+            { pubTargetUrl = registryUrlText url
+            , pubScopes = mntPublishAllow mcfg
+            , pubStaticToken = mntPublicationTargetToken mcfg
+            , pubInboundToken = inboundToken
+            , pubLimits = limits
+            , pubHelp = helpMessage
+            , pubRelayPublish = publishRelay (adapterPublish adapter)
+            , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
+            }
   where
     inboundToken :: Maybe Secret
     inboundToken = srvAuthToken (cfgServer app)

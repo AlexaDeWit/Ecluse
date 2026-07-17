@@ -281,6 +281,45 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
+        it "refuses a publication target without a publish allow-list with exit 2 (the boot's own refusal)" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "refuses a static publication token without an inbound edge with exit 2" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW" "@acme"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "refuses an enabled ecosystem with no adapter with exit 2" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            unsetEnv "ECLUSE_MOUNTS__PYPI__ENABLED"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "validates a CodeArtifact-shaped mirror target structurally and exits 0 (no mint, no cloud call)" $ do
+            -- The derived-credential expectation is structural on the loaded config;
+            -- check-config must never mint the token a boot would.
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
+            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left ExitSuccess
+
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $
             superviseProcess pass `shouldReturn` ShutdownRequested

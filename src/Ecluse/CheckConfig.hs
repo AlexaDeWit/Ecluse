@@ -20,6 +20,7 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure))
 
 import Ecluse.Boot (applySecretFileIndirection, readConfigDocument)
+import Ecluse.Composition (validateComposition)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MemoryBudget (MemoryBudget (mbQueueMemoryMaxDepth), resolveMemoryBudget)
 import Ecluse.Composition.MirrorQueue (
@@ -66,6 +67,12 @@ runCheckConfig = do
         Just _ -> "config document: " <> toText docPath
         Nothing -> "config document: none at " <> toText docPath <> " (defaults and environment only)"
     config <- either (refuseWith . renderErrs renderConfigError) pure (loadConfig envVars docBlob)
+    -- The pure structural half of the composition (missing adapters, publish
+    -- policy): the same validateComposition the boot's composeBindings runs, so a
+    -- configuration the proxy would refuse can never validate here.
+    case validateComposition config of
+        [] -> pass
+        errs -> refuseWith (renderErrs renderBootError errs)
     let env = configApp config
         runtimeSettings = cfgRuntime env
     -- The pure half of the posture chain: resolved exactly as a boot would, never
