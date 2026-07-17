@@ -8,8 +8,6 @@ module Ecluse.Config.Types (
     Url (..),
     mkUrl,
     unUrl,
-    QueueBackend (..),
-    parseQueueBackend,
     MirrorCredential (..),
     MountConfig (..),
     AppConfig (..),
@@ -39,7 +37,6 @@ import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Wire (WireVocab (..), parseWire)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
@@ -56,23 +53,6 @@ mkUrl raw =
 
 unUrl :: Url -> Text
 unUrl (Url u) = u
-
-data QueueBackend
-    = SqsQueue
-    | PubSubQueue
-    | MemoryQueue
-    deriving stock (Eq, Show)
-
-instance WireVocab QueueBackend where
-    wireKind = "queue provider"
-    wireTable =
-        (SqsQueue, "sqs")
-            :| [ (PubSubQueue, "pubsub")
-               , (MemoryQueue, "memory")
-               ]
-
-parseQueueBackend :: Text -> Either Text QueueBackend
-parseQueueBackend = parseWire
 
 {- | The mirror-write credential, __derived from the mirror-target URL__ so a token
 can never be paired with an endpoint it was not minted for. A CodeArtifact endpoint
@@ -117,7 +97,6 @@ data MountConfig = MountConfig
 data AppConfig = AppConfig
     { cfgPort :: Int
     , cfgMounts :: Map Ecosystem MountConfig
-    , cfgQueueBackend :: QueueBackend
     , cfgQueueUrl :: Maybe Url
     , cfgQueueMemoryMaxDepth :: Int
     , cfgAuthToken :: Maybe Secret

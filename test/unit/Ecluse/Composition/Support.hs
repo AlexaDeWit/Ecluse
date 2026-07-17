@@ -38,8 +38,7 @@ staticEnvVars =
     [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://public.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-    , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
-    , ("ECLUSE_QUEUE_BACKEND", "sqs")
+    , ("ECLUSE_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     ]
 
@@ -49,8 +48,8 @@ is not shadowed by the base fixture's value.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
 
-{- | Drop the ECLUSE_QUEUE_URL entry, so a test can exercise a backend with no queue URL
-set (memory needs none; sqs fails loud without one).
+{- | Drop the ECLUSE_QUEUE_URL entry, so a test can exercise the absent-URL rollover
+to the bounded in-memory queue.
 -}
 withoutQueueUrl :: [(String, String)] -> [(String, String)]
 withoutQueueUrl = filter ((/= "ECLUSE_QUEUE_URL") . fst)

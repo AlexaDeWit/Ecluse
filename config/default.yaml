@@ -1,6 +1,8 @@
 # Production default settings
 port: 8080
-queueBackend: sqs # default to sqs for production, switch to memory for local dev if desired
+# The mirror-queue backend is derived from the shape of queueUrl (ECLUSE_QUEUE_URL):
+# an SQS queue URL selects the durable SQS backend; unset, mirroring runs on the
+# bounded in-memory queue whose depth this caps.
 queueMemoryMaxDepth: 50000
 cveSyncInterval: 3600
 # How often the proxy polls object storage for a fresh advisory database (a cheap

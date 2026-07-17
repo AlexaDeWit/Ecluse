@@ -184,7 +184,7 @@ setDummyAwsCredentials = do
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =
-    "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\
+    "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"respectUpstreamTarballHost\":false,\

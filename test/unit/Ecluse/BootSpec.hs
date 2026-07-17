@@ -24,7 +24,7 @@ runEnv :: [(String, String)]
 runEnv =
     [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-    , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
+    , ("ECLUSE_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
@@ -40,11 +40,14 @@ awsRunEnv =
 spec :: Spec
 spec = do
     describe "run" $ do
-        it "boots from the environment layer alone (no document) and serves" $ do
+        it "boots from the environment layer alone (no document, no AWS_REGION) and serves" $ do
+            -- The queue URL's own host carries the region, so a real SQS
+            -- deployment needs no AWS_REGION at all.
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
-            traverse_ (uncurry setEnv) awsRunEnv
+            unsetEnv "AWS_REGION"
+            traverse_ (uncurry setEnv) runEnv
             outcome <- timeout 100000 (withArgs ["proxy"] run)
-            traverse_ (unsetEnv . fst) awsRunEnv
+            traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
@@ -92,49 +95,49 @@ spec = do
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
-            traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_QUEUE_BACKEND" "pubsub"
+        it "aborts fast at boot when the queue URL names the unbuilt pubsub backend" $ do
+            -- The topic-shaped URL names the GCP backend, which has no
+            -- implementation compiled in: a loud refusal, never a silent fallback.
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_QUEUE_URL" "projects/acme/topics/mirror"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_QUEUE_BACKEND"
-            traverse_ (unsetEnv . fst) awsRunEnv
+            traverse_ (unsetEnv . fst) runEnv
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "boots under the in-memory mirror-queue backend (no AWS settings, no ECLUSE_QUEUE_URL) and serves" $ do
+        it "aborts fast at boot when the queue URL's shape names no backend" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_QUEUE_URL" "https://queue.example.test/q"
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
+            traverse_ (unsetEnv . fst) runEnv
+            -- The typed process supervisor maps the boot abort to exit 2.
+            outcome `shouldBe` Left (ExitFailure 2)
+
+        it "boots on the in-memory mirror queue when no ECLUSE_QUEUE_URL is set (graceful rollover) and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
-            setEnv "ECLUSE_QUEUE_BACKEND" "memory"
             outcome <- timeout 100000 (withArgs ["proxy"] run)
-            unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
-        it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
+        it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
+            -- The override forces the SQS interpretation, and an emulator or VPC
+            -- endpoint carries no region in its host, so AWS_REGION must scope it.
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
+            setEnv "AWS_ENDPOINT_URL_SQS" "http://localhost:4566"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_QUEUE_BACKEND"
+            unsetEnv "AWS_ENDPOINT_URL_SQS"
             traverse_ (unsetEnv . fst) runEnv
             -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when the sqs backend has no ECLUSE_QUEUE_URL" $ do
-            traverse_ (uncurry setEnv) awsRunEnv
-            unsetEnv "ECLUSE_QUEUE_URL"
-            setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_QUEUE_BACKEND"
-            traverse_ (unsetEnv . fst) awsRunEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
-            outcome `shouldBe` Left (ExitFailure 2)
-
-        it "aborts fast at boot when an active mount declares no mirror target" $ do
-            -- Every mounted ecosystem must declare its mirror target explicitly,
-            -- even when it equals the private upstream; activation never implies one.
+        it "aborts fast at boot when a write-only mirror setting remains without a mirror target" $ do
+            -- The write token is a write-only setting: with no mirrorTarget to
+            -- write to it is refused per key (MirrorSettingWithoutWrite), never
+            -- silently ignored.
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst) awsRunEnv)
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))

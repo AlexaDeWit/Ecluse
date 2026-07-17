@@ -16,7 +16,6 @@ module Ecluse.Config (
     MirrorTarget (..),
     MirrorCredential (..),
     MountConfig (..),
-    QueueBackend (..),
     Url (..),
     mkUrl,
     unUrl,

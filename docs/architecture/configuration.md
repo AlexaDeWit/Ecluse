@@ -15,7 +15,7 @@ policy** and the **mount map**.
 
 The rule policy earns the document its keep: a set of rules with per-rule precedence and value
 overrides, layered over a built-in default (see [Rule policy](#rule-policy)). Mounts are
-comparatively flat, three registry endpoints and a queue backend under a prefix
+comparatively flat, a few registry endpoints and their per-mount refinements under a prefix
 [derived from the ecosystem](web-layer.md#multi-ecosystem-mounts), so the single-ecosystem
 environment variables (below) desugar to a one-entry mount map, and the common launch case (one npm
 mount on the default policy) needs no document at all. Multi-ecosystem deployments (see

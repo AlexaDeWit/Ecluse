@@ -24,11 +24,9 @@ import Data.Text qualified as T
 
 import Ecluse.Config (
     PolicyError,
-    QueueBackend (SqsQueue),
     renderPolicyError,
  )
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Wire (renderWire)
 
 {- | A reason the composition root refuses to start. Every case is a __fail-loud__
 boot failure; they are aggregated so a single run reports every problem an
@@ -47,20 +45,23 @@ data BootError
       ecosystem of the mount.
       -}
       UnresolvedCredential Ecosystem
-    | {- | The configured mirror-queue backend has no implementation compiled into
-      this binary, so no queue can be built for it. Carries the unavailable backend.
-      An honest refusal -- never a silent fall-through to a different backend.
+    | {- | The queue URL names a backend (by its shape) that has no implementation
+      compiled into this binary, so no queue can be built for it. Carries the
+      provider's name. An honest refusal -- never a silent fall-through to a
+      different backend.
       -}
-      QueueProviderUnavailable QueueBackend
-    | {- | The SQS mirror-queue backend was selected but no AWS region was supplied
-      (@AWS_REGION@), so the queue cannot be scoped to a region.
+      QueueProviderUnavailable Text
+    | {- | An SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is set but no
+      @AWS_REGION@ was supplied: an emulator or VPC endpoint does not carry a
+      region in its host, so the ambient region must scope it. A real SQS queue
+      URL carries its own region and never raises this.
       -}
       QueueRegionMissing
-    | {- | A cloud mirror-queue backend (e.g. @sqs@) was selected but no
-      @ECLUSE_QUEUE_URL@ was supplied, so there is no queue to send jobs to. The
-      in-memory backend does not raise this -- it has no external queue.
+    | {- | @ECLUSE_QUEUE_URL@ is set but its shape names no backend this binary
+      knows, so refusing is the only honest move (guessing a backend would send
+      mirror jobs somewhere the operator did not point at). Carries the value.
       -}
-      QueueUrlMissing QueueBackend
+      QueueUrlUnrecognised Text
     | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is not a
       parseable endpoint URL. Carries the offending value.
       -}
@@ -99,18 +100,16 @@ renderBootError = \case
         "mount "
             <> ecosystemName eco
             <> " has no initialised mirror-write credential in this build"
-    QueueProviderUnavailable backend ->
+    QueueProviderUnavailable provider ->
         "mirror queue provider "
-            <> renderWire backend
-            <> " is not available in this build"
+            <> provider
+            <> " (named by the ECLUSE_QUEUE_URL shape) is not available in this build"
     QueueRegionMissing ->
-        "mirror queue provider "
-            <> renderWire SqsQueue
-            <> " requires AWS_REGION to be set"
-    QueueUrlMissing backend ->
-        "mirror queue provider "
-            <> renderWire backend
-            <> " requires ECLUSE_QUEUE_URL to be set"
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is set but AWS_REGION is not: an emulator or VPC endpoint does not carry its region, so AWS_REGION must scope it"
+    QueueUrlUnrecognised url ->
+        "ECLUSE_QUEUE_URL names no queue backend this build knows: "
+            <> url
+            <> " (expected an SQS queue URL, https://sqs.{region}.amazonaws.com/{account}/{queue}, or a Pub/Sub topic resource, projects/{project}/topics/{topic}; unset it to run the bounded in-memory queue)"
     QueueEndpointMalformed url ->
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL: " <> url
     CodeArtifactMintFailed detail ->

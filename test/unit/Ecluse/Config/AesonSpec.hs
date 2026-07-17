@@ -275,7 +275,7 @@ spec = describe "decodeDocument" $ do
 
 singleMountDoc :: ByteString
 singleMountDoc =
-    "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\
+    "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"respectUpstreamTarballHost\":false,\

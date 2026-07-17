@@ -43,8 +43,8 @@ handle's contract reflects that:
 
 This module provides the handle, its payload types, and the building blocks a
 backend implementation reaches for; the STM-backed bounded, best-effort
-__production backend__ behind @ECLUSE_QUEUE_BACKEND=memory@ lives in
-"Ecluse.Core.Queue.Memory".
+__production backend__ mirroring rolls over to when no @ECLUSE_QUEUE_URL@ is set
+lives in "Ecluse.Core.Queue.Memory".
 
 It also provides 'newEnqueueBuffer', a __bounded producer-side hand-off buffer__
 wrapped in front of any backend so the serve path's 'enqueue' completes in

@@ -279,7 +279,6 @@ proxyEnv hostPort queueUrl =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    , ("ECLUSE_QUEUE_BACKEND", "sqs")
     , ("ECLUSE_QUEUE_URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
       -- alias; the dummy keys sign the request the emulator does not validate.

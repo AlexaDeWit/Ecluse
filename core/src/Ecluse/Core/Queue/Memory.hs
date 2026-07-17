@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The STM-backed in-memory 'MirrorQueue': the __bounded, best-effort
-production backend__ selected by @ECLUSE_QUEUE_BACKEND=memory@.
+production backend__ mirroring rolls over to when no @ECLUSE_QUEUE_URL@ is set.
 
 It honours the handle's contract (see "Ecluse.Core.Queue" for the @enqueue@ \/
 don't-@ack@-to-retry \/ no-@nack@ conventions) and is built from the contract
@@ -84,8 +84,8 @@ memoryQueueDropReportInterval :: Int
 memoryQueueDropReportInterval = 1000
 
 {- | Build a bounded, best-effort in-memory 'MirrorQueue' -- the production backend
-behind @ECLUSE_QUEUE_BACKEND=memory@, a 'TBQueue' shared between the serve path's
-'enqueue' and the worker's 'receive'.
+mirroring runs on when no @ECLUSE_QUEUE_URL@ is set, a 'TBQueue' shared between the
+serve path's 'enqueue' and the worker's 'receive'.
 
 It is __correctness-safe despite being lossy__: mirroring is a demand-driven
 optimization over the always-available public upstream, so a job lost to the cap or

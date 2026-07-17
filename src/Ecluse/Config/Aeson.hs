@@ -88,7 +88,6 @@ appConfigParser o = do
     AppConfig
         <$> o .: "port"
         <*> (o .:? "mounts" .!= mempty >>= parseMounts)
-        <*> (o .: "queueBackend" >>= parseEnum parseQueueBackend "queueBackend")
         <*> (o .:? "queueUrl" >>= traverse parseUrl)
         <*> o .: "queueMemoryMaxDepth"
         <*> (o .:? "authToken" >>= traverse parseSecret)
@@ -123,7 +122,6 @@ acceptedDocumentKeys :: [Key.Key]
 acceptedDocumentKeys =
     [ "port"
     , "mounts"
-    , "queueBackend"
     , "queueUrl"
     , "queueMemoryMaxDepth"
     , "authToken"
