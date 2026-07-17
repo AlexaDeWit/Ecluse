@@ -9,8 +9,7 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Security (tarballHostGate)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -297,16 +296,11 @@ tarballSpec = describe "artifact (tarball) path" $ do
         queue <- newTestMemoryQueue
         -- The double advertises its dist.tarball on cross.localhost at its own
         -- runtime port, so the tarball authority is cross.localhost:<publicPort>.
-        -- Rebuild the gate with that authority as the adapter-declared ecosystem
-        -- host (the PyPI files-host shape), derived from the public base URL
-        -- (which already carries the real port) rather than a hardcoded placeholder.
+        -- Declare that authority as the adapter's ecosystem artifact host (the PyPI
+        -- files-host shape), derived from the public base URL (which already carries
+        -- the real port) rather than a hardcoded placeholder.
         let crossBase d = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
-            relax d =
-                d
-                    { pdTarballHostGate = tarballHostGate [crossBase d] Nothing (pdPublicBaseUrl d) Nothing
-                    , pdMirror = MirrorOnAdmit (crossBase d)
-                    }
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
+        withProxyEnvQueueDepsHosts queue privateUp publicUp Nothing (\d -> [crossBase d]) id $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes

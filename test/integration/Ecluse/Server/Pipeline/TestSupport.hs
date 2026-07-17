@@ -660,8 +660,14 @@ a cached projection of those three fields (the composition root builds it once),
 bare record update would leave it stale; the override harness applies this after any tweak.
 -}
 consistentGate :: PackumentDeps -> PackumentDeps
-consistentGate d =
-    d{pdTarballHostGate = tarballHostGate [] (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
+consistentGate = consistentGateWith []
+
+{- | 'consistentGate' with adapter-declared ecosystem artifact hosts, for a test that
+exercises the ecosystem-host equivalence (the PyPI files-host shape).
+-}
+consistentGateWith :: [Text] -> PackumentDeps -> PackumentDeps
+consistentGateWith ecosystemHosts d =
+    d{pdTarballHostGate = tarballHostGate ecosystemHosts (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
   where
     mirrorUrlOf = \case
         MirrorOnAdmit url -> Just url
@@ -695,18 +701,34 @@ withProxyEnvQueueDeps ::
     Maybe Text ->
     (PackumentDeps -> PackumentDeps) ->
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
-withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
+withProxyEnvQueueDeps queue privateUp publicUp inbound =
+    withProxyEnvQueueDepsHosts queue privateUp publicUp inbound (const [])
+
+{- | Like 'withProxyEnvQueueDeps', but the re-derived tarball-host gate additionally
+declares ecosystem artifact hosts, computed from the tweaked deps so a host can carry
+an upstream double's ephemeral runtime port.
+-}
+withProxyEnvQueueDepsHosts ::
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (PackumentDeps -> [Text]) ->
+    (PackumentDeps -> PackumentDeps) ->
+    (forall a. (Application -> Env -> Int -> IO a) -> IO a)
+withProxyEnvQueueDepsHosts queue privateUp publicUp inbound hostsOf tweakDeps k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
             env <- newTestEnvWithQueue queue manager
             baseDeps <- deps privatePort publicPort inbound
-            let cfg =
+            let tweaked = tweakDeps baseDeps
+                cfg =
                     mkServerConfig
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = consistentGate (tweakDeps baseDeps)
+                            , bindingPackumentDeps = consistentGateWith (hostsOf tweaked) tweaked
                             , bindingPublishDeps = Nothing
                             }
                         ]
