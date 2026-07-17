@@ -41,7 +41,7 @@ mountConfigParser o = do
         <*> (o .: "publicUpstream" >>= parseRegistryUrl)
         <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
+        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse (parseCodeArtifactDuration "mirrorCodeArtifactTokenDuration"))
         <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
         <*> (o .:? "publishAllow" .!= String "" >>= parseScopes)
@@ -64,12 +64,6 @@ acceptedMountKeys =
     , "divergencePolicy"
     , "rules"
     ]
-
-parseDuration :: Value -> Parser Natural
-parseDuration (String t) = case readMaybe (T.unpack t) :: Maybe Natural of
-    Just n -> pure n
-    Nothing -> fail ("invalid duration: " <> T.unpack t)
-parseDuration v = parseJSON v
 
 parseScopes :: Value -> Parser [Scope]
 parseScopes = withText "Scopes" $ \t ->
@@ -108,11 +102,11 @@ serverParser :: KeyMap.KeyMap Value -> Parser ServerSettings
 serverParser o = do
     rejectUnknownKeys "server" ["port", "publicUrl", "authToken", "helpMessage", "shutdownDrainTimeout"] o
     ServerSettings
-        <$> o .: "port"
-        <*> (o .:? "publicUrl" >>= traverse parseUrl)
+        <$> (o .: "port" >>= parsePort "server.port")
+        <*> (o .:? "publicUrl" >>= traverse (parseHttpUrl "server.publicUrl"))
         <*> (o .:? "authToken" >>= traverse parseSecret)
         <*> o .:? "helpMessage"
-        <*> o .: "shutdownDrainTimeout"
+        <*> (o .: "shutdownDrainTimeout" >>= parsePositiveInt "server.shutdownDrainTimeout")
 
 queueParser :: KeyMap.KeyMap Value -> Parser QueueSettings
 queueParser o = do
@@ -126,8 +120,8 @@ limitsParser o = do
     rejectUnknownKeys "limits" ["maxResponseBytes", "maxVersionCount", "maxNestingDepth", "maxRequestBytes"] o
     LimitsSettings
         <$> (o .:? "maxResponseBytes" >>= traverse (parsePositiveInt "limits.maxResponseBytes"))
-        <*> o .: "maxVersionCount"
-        <*> o .: "maxNestingDepth"
+        <*> (o .: "maxVersionCount" >>= parsePositiveInt "limits.maxVersionCount")
+        <*> (o .: "maxNestingDepth" >>= parsePositiveInt "limits.maxNestingDepth")
         <*> (o .:? "maxRequestBytes" >>= traverse (parsePositiveInt "limits.maxRequestBytes"))
 
 cacheParser :: KeyMap.KeyMap Value -> Parser CacheSettings

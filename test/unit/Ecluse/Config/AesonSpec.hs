@@ -18,6 +18,7 @@ import Ecluse.Config (
     EgressSettings (..),
     IntegritySettings (..),
     RuntimeSettings (..),
+    ServerSettings (..),
     loadConfig,
     renderConfigError,
  )
@@ -288,6 +289,71 @@ spec = describe "decodeDocument" $ do
         it "rejects a mirror-target URL with a garbage port through the document layer" $
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
+
+    describe "field invariants (document and environment enforce the same bounds)" $ do
+        it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do
+            case loadConfig [] (Just "{\"server\":{\"port\":0}}") of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> srvPort (cfgServer (configApp doc)) `shouldBe` 0
+            case loadConfig [("ECLUSE_SERVER__PORT", "65535")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> srvPort (cfgServer (configApp doc)) `shouldBe` 65535
+
+        it "rejects a listener port outside 0..65535, through both layers" $ do
+            loadConfig [] (Just "{\"server\":{\"port\":-1}}")
+                `shouldSatisfy` decodeErrorMentions "server.port must be a port in 0..65535"
+            loadConfig [("ECLUSE_SERVER__PORT", "65536")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.port must be a port in 0..65535"
+
+        it "rejects a non-positive shutdownDrainTimeout, through both layers" $ do
+            loadConfig [] (Just "{\"server\":{\"shutdownDrainTimeout\":0}}")
+                `shouldSatisfy` decodeErrorMentions "server.shutdownDrainTimeout must be a positive integer"
+            loadConfig [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "-5")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.shutdownDrainTimeout must be a positive integer"
+
+        it "rejects non-positive parser guards (maxVersionCount, maxNestingDepth), through both layers" $ do
+            loadConfig [] (Just "{\"limits\":{\"maxVersionCount\":0}}")
+                `shouldSatisfy` decodeErrorMentions "limits.maxVersionCount must be a positive integer"
+            loadConfig [("ECLUSE_LIMITS__MAX_NESTING_DEPTH", "0")] Nothing
+                `shouldSatisfy` decodeErrorMentions "limits.maxNestingDepth must be a positive integer"
+
+        it "accepts an http public URL (loopback development deployments stay legal)" $
+            case loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "http://localhost:8080")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right _ -> pure ()
+
+        it "rejects a schemeless public URL, naming the field" $
+            loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "registry.example.test")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.publicUrl must be an http:// or https:// URL"
+
+        it "rejects a public URL with an undialable authority, through both layers" $ do
+            loadConfig [] (Just "{\"server\":{\"publicUrl\":\"https://registry.example.test:9x9\"}}")
+                `shouldSatisfy` decodeErrorMentions "server.publicUrl must carry a host"
+            loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test:0")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.publicUrl must carry a host"
+
+        it "accepts the CodeArtifact token-duration range ends: 900 and 43200" $ do
+            let docFor (n :: Int) =
+                    encodeUtf8 @Text @ByteString $
+                        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\
+                        \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"t\",\
+                        \\"mirrorCodeArtifactTokenDuration\":"
+                            <> show n
+                            <> "}}}"
+            case loadConfig pubUrlEnv (Just (docFor 900)) of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+            case loadConfig pubUrlEnv (Just (docFor 43200)) of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+
+        it "rejects a CodeArtifact token duration outside 900..43200, through both layers" $ do
+            loadConfig
+                []
+                (Just "{\"mounts\":{\"npm\":{\"mirrorCodeArtifactTokenDuration\":899}}}")
+                `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
+            loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43201")] Nothing
+                `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
 
 -- server.publicUrl is required once a mount is active; supplied here so each
 -- decode example stays about its own concern.
