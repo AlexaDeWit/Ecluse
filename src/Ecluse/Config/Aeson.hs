@@ -41,7 +41,6 @@ mountConfigParser o = do
         <*> (o .: "publicUpstream" >>= parseRegistryUrl)
         <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-        <*> o .: "respectUpstreamTarballHost"
         <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
         <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
@@ -57,7 +56,6 @@ acceptedMountKeys =
     , "publicUpstream"
     , "mirrorTarget"
     , "mirrorTargetToken"
-    , "respectUpstreamTarballHost"
     , "mirrorCodeArtifactTokenDuration"
     , "publicationTarget"
     , "publicationTargetToken"

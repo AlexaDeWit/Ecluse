@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -49,7 +49,6 @@ inertPackumentDeps =
         , pdMountBaseUrl = "http://proxy.invalid"
         , pdMirror = MirrorOnAdmit mirrorUrl
         , pdRules = []
-        , pdTarballHostPolicy = SameHostAsPackument
         , pdAdditionalBlockedRanges = []
         , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just mirrorUrl)
         , pdLimits = defaultLimits

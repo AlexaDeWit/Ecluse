@@ -74,7 +74,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowedFor, thgAllowlist, thgEcosystemHosts)
+import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
@@ -184,13 +184,6 @@ data PackumentDeps = PackumentDeps
     built-in rules run directly; an effectful rule carries a resilience policy. The
     composition root 'prepare's it (and logs its boot order) once.
     -}
-    , pdTarballHostPolicy :: TarballHostPolicy
-    {- ^ Whether a tarball may be fetched from a @dist.tarball@ host that differs
-    from the upstream that served the packument
-    ('Ecluse.Core.Security.SameHostAsPackument' by default, the secure reading of the
-    host allowlist; relaxed to 'Ecluse.Core.Security.AnyAllowlistedHost' by
-    @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@).
-    -}
     , pdAdditionalBlockedRanges :: [IPRange]
     {- ^ The operator-configured ranges (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) extending the
     fixed literal internal-range block when gating an honoured artifact location
@@ -296,13 +289,11 @@ data PackumentDeps = PackumentDeps
     }
 
 {- | Whether an artifact's @dist.tarball@ authority may be fetched, given the
-origin's trust, the mount's tarball-host policy, and the authority that served the
-packument it came from. Connects the pure
-'Ecluse.Core.Security.tarballHostAllowed' to a mount's configured policy fields:
-the tarball's @host:port@ pair must be on the upstream allowlist and -- under the
-secure-default 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the
-packument origin's pair; the opt-in 'Ecluse.Core.Security.AnyAllowlistedHost'
-relaxes that last clause to any allowlisted pair.
+origin's trust and the authority that served the packument it came from. Connects
+the pure 'Ecluse.Core.Security.tarballHostAllowed' to a mount's precomputed gate:
+the tarball's @host:port@ pair must be on the upstream allowlist and equal to the
+packument origin's pair, the ecosystem's own declared artifact hosts being the one
+same-host equivalence.
 
 The literal internal-range block is __origin-aware__: an
 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
@@ -312,7 +303,7 @@ exempt, since a private registry may legitimately live on an internal address
 (security.md invariant 3). The allowlist and same-authority clauses still gate the
 trusted origin identically.
 
-This is the __one__ composition of the host gate over a mount's policy: the serve
+This is the __one__ composition of the host gate over a mount's inputs: the serve
 pipeline applies it before its public artifact fetch, and the composition root
 closes it (against the public upstream authority) into the mirror worker's
 re-evaluation bundle, so the ingest-time host check can never drift from the
@@ -324,10 +315,9 @@ call site.
 -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
-    tarballHostAllowedFor
+    tarballHostAllowed
         (thgEcosystemHosts (pdTarballHostGate deps))
         origin
-        (pdTarballHostPolicy deps)
         (thgAllowlist (pdTarballHostGate deps))
         (pdAdditionalBlockedRanges deps)
 

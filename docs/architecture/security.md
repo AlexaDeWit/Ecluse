@@ -232,10 +232,10 @@ internal-range block):
 | Outbound connection | Trust | Manager / client | Host allowlist + literal internal-range block |
 |---|---|---|---|
 | Public-upstream **packument** fetch | Untrusted | `envManager` (untrusted) | **Yes** |
-| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (untrusted) | **Yes** (plus the tarball-host policy) |
+| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (untrusted) | **Yes** (plus the tarball-host gate) |
 | Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (untrusted) | **Yes** |
 | Private-upstream **packument** fetch | Trusted | `envPrivateManager` (trusted) | **No** |
-| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
+| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host gate still apply (trivially satisfied) |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (trusted) | **No** |
 | **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (trusted) | **No**, the destination is configuration (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No**, the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
@@ -257,7 +257,7 @@ The private origin's tarball is the one subtlety: the
 [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
 is served over the trusted manager and is exempt from the literal internal-range block as a
 `TrustedOrigin`, so a private registry on an internal https address serves its same-host
-tarball. The URL is on the private base host, so the host allowlist and same-host policy
+tarball. The URL is on the private base host, so the host allowlist and same-host gate
 are satisfied by construction. It is part of the trusted private origin, not an untrusted
 download.
 
@@ -395,20 +395,20 @@ configure.
 egress guards follow that principle, made concrete for the tarball path:
 
 - **`dist.tarball` host, disallow-by-default (public leg).** The public serve leg fetches
-  each tarball from its authoritative `dist.tarball`, but gates where: by default only the
+  each tarball from its authoritative `dist.tarball`, but gates where: only the
   same allowlisted upstream authority that served the packument, host and port compared
   as a pair, refusing a `dist.tarball` on a different host, or on the same host at a
   different port, even if otherwise allowlisted
-  (`Ecluse.Core.Security.tarballHostAllowed` with `SameHostAsPackument`, applied in
+  (`Ecluse.Core.Security.tarballHostAllowed`, applied in
   `Ecluse.Core.Server.Pipeline`). A packument origin with no written port is port 443,
   as every portless authority is. A cross-authority `dist.tarball` is refused with a
   `403` before any fetch. (The private leg never consults `dist.tarball`; its same-host
-  conventional read satisfies the gate by construction.) An operator whose registry
-  serves tarballs from a separate CDN opts in with
-  `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST`, accepting the wider fetch surface.
-  The override never escapes the `host:port` allowlist or https-only: an allowlisted
-  cross-host tarball is still dialled https-only with certificate validation, and a
-  literal internal-address host is still refused (invariant 3). See
+  conventional read satisfies the gate by construction.) The one same-host equivalence
+  is the ecosystem's own canonical artifact hosts, declared on its adapter (npm has
+  none; PyPI's is `files.pythonhosted.org`) -- never an operator knob, so the fetch
+  surface cannot be widened by configuration. An ecosystem host never escapes the
+  `host:port` allowlist or https-only: it is still dialled https-only with certificate
+  validation, and a literal internal-address host is still refused (invariant 3). See
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
 The internal-range block (invariant 3) runs the opposite direction: no knob narrows it (a

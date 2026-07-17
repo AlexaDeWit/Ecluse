@@ -787,10 +787,10 @@ enqueueMirror rt deps name version artifact =
     enqueueFailureDetail :: QueueFault -> Text
     enqueueFailureDetail fault = "mirror enqueue failed: " <> qfDetail fault
 
-{- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
-a @dist.tarball@ on a different host or port than the packument origin under the
-secure-default 'Ecluse.Core.Security.SameHostAsPackument', or an authority off the
-upstream allowlist. A policy denial, not a serve outcome the rules produced -- the
+{- A @403@ for an artifact whose authoritative @url@ the tarball-host gate refuses:
+a @dist.tarball@ on a different host or port than the packument origin (the
+ecosystem's own declared artifact hosts excepted), or an authority off the
+upstream allowlist. A gate denial, not a serve outcome the rules produced -- the
 same @403@ surface a rule denial renders, with a fixed reason. -}
 crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =

@@ -131,7 +131,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), newMetadataCache)
@@ -462,7 +462,6 @@ npmDeps privatePort publicPort = do
             , pdMountBaseUrl = "https://bench.proxy"
             , pdMirror = MirrorOnAdmit "https://mirror.bench"
             , pdRules = prepared
-            , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
             , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.bench")
             , pdLimits = defaultLimits

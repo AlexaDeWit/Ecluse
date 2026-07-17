@@ -88,7 +88,6 @@ data MountConfig = MountConfig
     , mntPublicUpstream :: RegistryUrl
     , mntMirrorTarget :: Maybe RegistryUrl
     , mntMirrorTargetToken :: Maybe Secret
-    , mntRespectUpstreamTarballHost :: Bool
     , mntMirrorCodeArtifactTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret

@@ -235,7 +235,6 @@ file; only the secret-typed keys have this side door.
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No |  | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream. Protect this surface; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No |  | Static fallback credential for the publication target, forwarded only when a publishing client sends none. The default is **passthrough** (the publisher's own token). ⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below. |
 | `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` | Conditionally | If `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package names a client may publish, in the ecosystem's native form (npm: scopes such as `@acme,@beta`), the anti-shadowing guard: a publish outside the list is refused before any upstream write. It limits names, not callers, and is not authentication. An empty list with a publication target set is a fail-loud boot error. |
-| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument** (host and port compared as a pair); set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host:port pair). See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY` | No | global `ECLUSE_INTEGRITY__MIN_TRUSTED` | Per-mount refinement of the trusted-integrity floor, for the one legacy private registry whose loosening (e.g. `sha1`) must not leak onto other mounts. |
 | `ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY` | No | global `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | Per-mount refinement of the cross-upstream divergence policy (`warn`/`fail-closed`). |
 
@@ -422,14 +421,13 @@ Provide the second layer at the platform, protecting your data targets (registri
   advisory-bucket read (`s3:GetObject`) when `ECLUSE_ADVISORIES__BUCKET` is set, and
   (under the `service` strategy) the private-read credential, nothing more.
 
-**The `dist.tarball` host policy.** `dist.tarball` is upstream-chosen, so by default Écluse
-fetches a tarball only from the same allowlisted upstream that served the packument, host **and
-port** compared as a pair; a different host, or the same host on a different port, is refused
-even if allowlisted (no explicit port means 443 on both sides). If your registry serves
-artifacts from a separate CDN/files host (the PyPI-files-host shape), set
-`ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST=true` to allow any allowlisted host:port
-pair. It never escapes the allowlist or internal-range block, but widens the fetch surface, so
-opt in deliberately.
+**The `dist.tarball` host gate.** `dist.tarball` is upstream-chosen, so Écluse fetches a
+tarball only from the same allowlisted upstream that served the packument, host **and port**
+compared as a pair; a different host, or the same host on a different port, is refused even if
+allowlisted (no explicit port means 443 on both sides). There is no widening knob: the one
+exception is an ecosystem whose registry serves artifact bytes from a canonical separate host
+by design (the PyPI files-host shape), which its adapter declares -- still allowlisted, still
+internal-range-gated, never operator-configured.
 
 The rationale is in [Security: outbound-request and input-validation
 invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).

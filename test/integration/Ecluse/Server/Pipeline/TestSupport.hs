@@ -53,7 +53,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -621,7 +621,6 @@ deps privatePort publicPort inbound = do
             , pdMountBaseUrl = "https://proxy.test"
             , pdMirror = MirrorOnAdmit "https://mirror.test"
             , pdRules = prepared
-            , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
             , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.test")
             , pdLimits = defaultLimits

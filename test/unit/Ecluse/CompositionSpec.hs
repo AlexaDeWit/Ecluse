@@ -34,7 +34,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
-import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
+import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Context (
     MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -165,24 +165,6 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     `shouldBe` Just "denied ask #platform"
                 served <- pdNow deps
                 served `shouldBe` fixedNow
-            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
-
-    it "defaults the tarball-host policy to same-host (secure default)" $ do
-        -- With ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST unset, the deny-by-default
-        -- reading of the allowlist is threaded onto every mount's deps.
-        _ <- expectEnv staticEnvVars
-        planFrom staticEnvVars Nothing >>= \case
-            Right [binding] -> do
-                let deps = bindingPackumentDeps binding
-                pdTarballHostPolicy deps `shouldBe` SameHostAsPackument
-            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
-
-    it "relaxes the tarball-host policy when the operator opts in" $ do
-        _ <- expectEnv (("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "true") : staticEnvVars)
-        planFrom (("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "true") : staticEnvVars) Nothing >>= \case
-            Right [binding] -> do
-                let deps = bindingPackumentDeps binding
-                pdTarballHostPolicy deps `shouldBe` AnyAllowlistedHost
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults additionalBlockedRanges to empty onto every mount's deps" $ do

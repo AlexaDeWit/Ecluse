@@ -37,11 +37,9 @@ module Ecluse.Core.Security.Host (
     parseIpLiteral,
     parseBlockedRange,
 
-    -- * Tarball-host policy
-    TarballHostPolicy (..),
+    -- * Tarball-host gate
     Origin (..),
     tarballHostAllowed,
-    tarballHostAllowedFor,
     TarballHostGate (..),
     tarballHostGate,
 
@@ -617,32 +615,6 @@ isHex t = not (T.null t) && T.all isHexDigit t
   where
     isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])
 
-{- | Whether a tarball may be fetched from a host that differs from the upstream
-that served the packument.
-
-An upstream's @dist.tarball@ is server-chosen data (see
-@docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
-compromised or hostile upstream can name __any__ host as the artifact location.
-This policy bounds the axis of that risk the host allowlist leaves open: /where/ the
-bytes are fetched. Even an allowlisted-but-/different/ host is a wider fetch surface than
-the packument's own source, and the safe reading of the allowlist is "same source unless
-told otherwise".
--}
-data TarballHostPolicy
-    = {- | The secure default: a tarball is fetched only from the __same__ authority
-      (host and port) that served the packument; a @dist.tarball@ on any other host,
-      or on the same host at a different port, is refused, even one otherwise on
-      the allowlist.
-      -}
-      SameHostAsPackument
-    | {- | The opt-in: a tarball may be fetched from __any allowlisted__ @host:port@
-      pair (for a registry that legitimately serves artifacts from a separate
-      CDN\/files host). This widens the fetch surface to the whole allowlist; it
-      never escapes it or the internal-range block.
-      -}
-      AnyAllowlistedHost
-    deriving stock (Eq, Show)
-
 {- | The trust of the origin a @dist.tarball@ is being served from: the
 operator-configured private upstream is 'TrustedOrigin', and the public upstream,
 together with every artifact location an attacker could influence, is 'UntrustedOrigin'.
@@ -670,21 +642,23 @@ answer is the conjunction of three independent checks and over-blocking is the
 fail-safe:
 
 * the target must be on the @host:port@ allowlist (@allowed@), as every outbound
-  target is: a @dist.tarball@ authority off the allowlist is refused regardless of
-  policy;
+  target is: a @dist.tarball@ authority off the allowlist is refused outright;
 * its host must not be an internal-address literal (the fixed range set plus the
   operator-configured @additionalBlockedRanges@), the cheap pure defence-in-depth,
   but a 'TrustedOrigin' is __exempt__ from this clause (see 'Origin'); and
-* under 'SameHostAsPackument' (the secure default) it must additionally __equal__
-  the packument origin's authority, host and port both, so a tarball on a
-  /different/ host, or on the same host at a different port, is refused even when
-  that pair is allowlisted. Under 'AnyAllowlistedHost' that last clause is relaxed,
-  leaving only the allowlist and (origin-aware) internal-range checks -- the port
-  dimension stays closed there too, since the allowlist authorises pairs.
+* it must __equal__ the packument origin's authority, host and port both -- an
+  upstream's @dist.tarball@ is server-chosen data (see
+  @docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
+  tarball on a /different/ host, or on the same host at a different port, is
+  refused even when that pair is allowlisted. The one equivalence is the
+  ecosystem's own canonical artifact hosts (@ecosystemHosts@, adapter-declared:
+  npm has none, PyPI's is @files.pythonhosted.org@): a host the ecosystem serves
+  artifact bytes from __by design__ passes the same-authority clause, while
+  staying allowlist-gated and internal-range-gated like any other target.
 
 The allowlist and same-authority clauses gate __both__ origins identically; only the
 internal-range clause is origin-aware, so a 'TrustedOrigin' is never let past its own
-allowlisted authority or onto a /different/ one than its metadata under the default.
+allowlisted authority or onto a /different/ one than its metadata.
 
 Hosts are compared by their canonical key (case-folded, and for an IP-literal the
 single canonical literal; see 'canonicalHostKey'), as the host guards are; ports
@@ -696,8 +670,9 @@ was fetched from; only its equality to the target matters, so it need not itself
 be re-validated here: it was already gated when the packument was fetched.
 -}
 tarballHostAllowed ::
+    -- | The ecosystem's canonical artifact authorities, same-host-equivalent.
+    AllowedHostPorts ->
     Origin ->
-    TarballHostPolicy ->
     -- | The @host:port@ allowlist (the same one every outbound fetch is gated by).
     AllowedHostPorts ->
     {- | The operator-configured ranges extending the fixed internal-range block
@@ -709,14 +684,12 @@ tarballHostAllowed ::
     -- | The authority of the candidate @dist.tarball@, when one could be extracted.
     Maybe HostPort ->
     Bool
-tarballHostAllowed origin policy allowed additionalBlockedRanges packumentOrigin tarballTarget =
+tarballHostAllowed ecosystemHosts origin allowed additionalBlockedRanges packumentOrigin tarballTarget =
     case (packumentOrigin, tarballTarget) of
         (Just packument, Just target) ->
             isAllowedUpstreamHost allowed target
                 && internalRangeOk target
-                && case policy of
-                    SameHostAsPackument -> sameAuthority target packument
-                    AnyAllowlistedHost -> True
+                && (sameAuthority target packument || isAllowedUpstreamHost ecosystemHosts target)
         -- No comparable authority on either side authorises nothing (fail closed).
         _ -> False
   where
@@ -757,10 +730,9 @@ data TarballHostGate = TarballHostGate
     , thgEcosystemHosts :: AllowedHostPorts
     {- ^ The ecosystem's canonical artifact authorities (the adapter supplies them;
     npm has none, PyPI's is @files.pythonhosted.org@): hosts the ecosystem serves
-    artifact bytes from __by design__, treated as same-host-equivalent under the
-    secure-default 'SameHostAsPackument' policy ('tarballHostAllowedFor') so the
-    operator knob stays a policy choice rather than a hostname list. Also folded
-    into 'thgAllowlist', and still internal-range-gated like any target.
+    artifact bytes from __by design__, the one same-host equivalence
+    'tarballHostAllowed' grants. Also folded into 'thgAllowlist', and still
+    internal-range-gated like any target.
     -}
     , thgPrivateHostPort :: Maybe HostPort
     {- ^ The private upstream's authority, extracted once; 'Nothing' when the configured
@@ -798,28 +770,3 @@ tarballHostGate ecosystemHostUrls privateUrl publicUrl mirrorUrl =
   where
     privateHostPort = hostPortAddress =<< privateUrl
     publicHostPort = hostPortAddress publicUrl
-
-{- | 'tarballHostAllowed' with the ecosystem's canonical artifact hosts admitted as
-same-host-equivalent: an ecosystem that serves its artifact bytes from a dedicated
-files host by design (PyPI's @files.pythonhosted.org@) stays admissible under the
-secure-default 'SameHostAsPackument' without the operator widening the policy to
-every allowlisted host. The equivalence relaxes only the same-authority comparison:
-an ecosystem host is still allowlist-gated and internal-range-gated like any other
-target, and under 'AnyAllowlistedHost' it changes nothing.
--}
-tarballHostAllowedFor ::
-    AllowedHostPorts ->
-    Origin ->
-    TarballHostPolicy ->
-    AllowedHostPorts ->
-    [IPRange] ->
-    Maybe HostPort ->
-    Maybe HostPort ->
-    Bool
-tarballHostAllowedFor ecosystemHosts origin policy allowed additionalBlockedRanges packumentOrigin tarballTarget =
-    tarballHostAllowed origin effectivePolicy allowed additionalBlockedRanges packumentOrigin tarballTarget
-  where
-    effectivePolicy = case (policy, tarballTarget) of
-        (SameHostAsPackument, Just target)
-            | isAllowedUpstreamHost ecosystemHosts target -> AnyAllowlistedHost
-        _ -> policy

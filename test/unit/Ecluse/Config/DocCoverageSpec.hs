@@ -54,7 +54,6 @@ documentedEnvVars =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "3600")
-    , ("ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST", "false")
     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
     , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")

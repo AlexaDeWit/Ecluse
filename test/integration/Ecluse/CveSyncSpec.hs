@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestB
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
@@ -219,7 +219,6 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 , pdMountBaseUrl = "https://proxy.test/npm"
                 , pdMirror = MirrorOnAdmit privateUrl
                 , pdRules = prepared
-                , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
                 , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just privateUrl)
                 , pdLimits = defaultLimits

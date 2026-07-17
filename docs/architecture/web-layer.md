@@ -227,7 +227,7 @@ connection and pump a whole body Warp then discards, wasted egress and a DoS-amp
 dispatch.
 
 On the tarball route a `HEAD` runs the identical gating and upstream-request construction as `GET`
-(edge auth, host allowlist and internal-range block, the same-host `dist.tarball` policy, the
+(edge auth, host allowlist and internal-range block, the same-host `dist.tarball` gate, the
 [origin trust split](access-model.md), honoured-tarball-host resolution) but issues the upstream
 request as a `HEAD` and relays its status and safe headers (`Content-Type`, `Content-Length`, `ETag`,
 `Last-Modified`, `Accept-Ranges`) with no body. A private hit probes the private upstream, a private

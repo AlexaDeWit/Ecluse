@@ -9,7 +9,7 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
+import Ecluse.Core.Security (tarballHostGate)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
@@ -281,7 +281,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "refuses a cross-host public dist.tarball under the SameHostAsPackument default (403, no fetch)" $ do
+    it "refuses a cross-host public dist.tarball (403, no fetch)" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
@@ -291,33 +291,25 @@ tarballSpec = describe "artifact (tarball) path" $ do
             seenAuth publicUp `shouldReturn` [Nothing]
             drainJobs env `shouldReturn` []
 
-    it "serves a cross-host public dist.tarball under AnyAllowlistedHost when the host is allowlisted" $ do
+    it "serves a cross-host public dist.tarball when the host is a declared ecosystem artifact host" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
         -- The double advertises its dist.tarball on cross.localhost at its own
         -- runtime port, so the tarball authority is cross.localhost:<publicPort>.
-        -- The allowlist gates host:port pairs, so the entry must name that real
-        -- port: derive it from the public base URL (which already carries it)
-        -- rather than a hardcoded placeholder.
-        let relax d =
+        -- Rebuild the gate with that authority as the adapter-declared ecosystem
+        -- host (the PyPI files-host shape), derived from the public base URL
+        -- (which already carries the real port) rather than a hardcoded placeholder.
+        let crossBase d = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
+            relax d =
                 d
-                    { pdTarballHostPolicy = AnyAllowlistedHost
-                    , pdMirror = MirrorOnAdmit (T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d))
+                    { pdTarballHostGate = tarballHostGate [crossBase d] Nothing (pdPublicBaseUrl d) Nothing
+                    , pdMirror = MirrorOnAdmit (crossBase d)
                     }
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
-
-    it "refuses a cross-host public dist.tarball under AnyAllowlistedHost when the host is off the allowlist" $ do
-        privateUp <- privateArtifactMiss
-        publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
-        queue <- newTestMemoryQueue
-        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost}
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
-            resp <- getTarball "1.0.0" Nothing app
-            status resp `shouldBe` 403
 
     it "404s a requested filename absent from the version's artifacts (selection by filename)" $ do
         privateUp <- privateArtifactMiss

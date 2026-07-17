@@ -122,9 +122,9 @@ The **public leg** honours the authoritative upstream location, the `dist.tarbal
 version declares, fetched at exactly that URL rather than a reconstructed `/-/` path, so Écluse can
 front a public registry serving artifacts from a separate host (the PyPI-files-host shape) or a
 signed CDN URL. An ecosystem whose registry serves artifact bytes from a canonical separate host
-__by design__ declares those hosts on its adapter, and the secure-default same-host policy admits
-them (still allowlist- and internal-range-gated); the operator's tarball-host knob stays a policy
-choice, never a hostname list. That location is gated, not trusted: the host allowlist and tarball-host policy
+__by design__ declares those hosts on its adapter, and the same-host gate admits them (still
+allowlist- and internal-range-gated); there is no operator knob to widen the fetch surface.
+That location is gated, not trusted: the host allowlist and same-host gate
 bound where it may be fetched, https-only egress with certificate validation authenticates the
 host, and a legacy `http` tarball is upgraded (same host) or dropped (see
 [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).

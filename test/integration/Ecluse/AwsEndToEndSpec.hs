@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
@@ -215,7 +215,6 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdMountBaseUrl = "https://proxy.test/npm"
                 , pdMirror = MirrorOnAdmit mirrorUrl
                 , pdRules = prepared
-                , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
                 , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just mirrorUrl)
                 , pdLimits = defaultLimits

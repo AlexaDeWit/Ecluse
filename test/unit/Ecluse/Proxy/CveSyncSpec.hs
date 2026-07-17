@@ -188,7 +188,6 @@ mountedNpmDoc =
     \\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
-    \\"respectUpstreamTarballHost\":false,\
     \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}}}"
 
 -- | A non-'IO' exception, to prove the sweep no longer swallows every fault.

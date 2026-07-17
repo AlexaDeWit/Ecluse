@@ -80,7 +80,7 @@ import Ecluse.Core.Registry.Adapter (
     publishRelay,
  )
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
-import Ecluse.Core.Security (Limits, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), tarballHostGate)
+import Ecluse.Core.Security (Limits, tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
@@ -200,7 +200,6 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
                 , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
                 , pdMirror = maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs)
                 , pdRules = prepared
-                , pdTarballHostPolicy = tarballHostPolicyFor mcfg
                 , -- The operator-configured ranges extending the fixed internal-range block on
                   -- the dist.tarball host gate; the same list applies to every mount, since which
                   -- internal ranges exist on an operator's network is a deployment-wide fact.
@@ -236,15 +235,6 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
                 , pdAssemble = metadataAssemble (adapterMetadata adapter)
                 , pdEgressUrl = mkRegistryUrl
                 }
-
--- The resolved tarball-host policy of a mount, from the secure-default
--- environment toggle: honour a cross-host dist.tarball only when explicitly
--- opted in (and even then, never past the allowlist or the internal block).
-tarballHostPolicyFor :: MountConfig -> TarballHostPolicy
-tarballHostPolicyFor mcfg =
-    if mntRespectUpstreamTarballHost mcfg
-        then AnyAllowlistedHost
-        else SameHostAsPackument
 
 -- The credential reference of a mount: an error when a mirrored mount's write
 -- backend is not initialised, nothing when it resolves. A serve-only mount never

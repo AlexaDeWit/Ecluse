@@ -96,13 +96,10 @@ mounts:
   # serve-only pure public gate; declaring mirrorTarget is what makes it mirrored).
   npm:
     publicUpstream: https://registry.npmjs.org
-    respectUpstreamTarballHost: false
   pypi:
     publicUpstream: https://pypi.org
-    respectUpstreamTarballHost: false
   rubygems:
     publicUpstream: https://rubygems.org
-    respectUpstreamTarballHost: false
 
 rules:
   min-age:

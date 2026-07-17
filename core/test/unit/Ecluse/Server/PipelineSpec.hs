@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Npm.Route (
  )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -253,7 +253,6 @@ depsFor publicPort = do
             , pdMountBaseUrl = "http://proxy.test"
             , pdMirror = MirrorOnAdmit "http://mirror.test"
             , pdRules = prepared
-            , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
             , pdTarballHostGate = tarballHostGate [] (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (Just "http://mirror.test")
             , pdLimits = defaultLimits

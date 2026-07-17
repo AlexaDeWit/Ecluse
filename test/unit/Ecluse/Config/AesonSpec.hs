@@ -299,7 +299,6 @@ singleMountDoc =
     "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
-    \\"respectUpstreamTarballHost\":false,\
     \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}},\
     \\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
 
@@ -308,13 +307,13 @@ mountDocForEcosystem eco =
     encodeUtf8 $
         "{\"mounts\":{\""
             <> eco
-            <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
+            <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
                \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"token\"}}}"
 
 mountDocWithMirrorTarget :: Text -> ByteString
 mountDocWithMirrorTarget target =
     encodeUtf8 $
-        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
+        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
         \\"mirrorTarget\":\""
             <> target
             <> "\"}}}"
@@ -322,7 +321,7 @@ mountDocWithMirrorTarget target =
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
     encodeUtf8 $
-        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\"respectUpstreamTarballHost\":false,\
+        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
         \\"mirrorTarget\":\"https://c\",\""
             <> extra
             <> "\":\"x\"}}}"
