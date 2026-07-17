@@ -365,7 +365,8 @@ and the token-stripping boundary and the
 [no-redirect-with-credential invariant](#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)
 (register threat #4) are load-bearing because real caller credentials cross them.
 
-**The mirror-target write token is the one standing credential Écluse holds** and its
+**The mirror-target write token is the one standing credential a mirrored deployment
+holds** (a serve-only deployment holds none) and its
 sharpest privilege, since it writes the trusted store: scope it write-only, prefer
 container-role minting over a static secret, minimise its TTL. The mirror queue is part of
 the same trust boundary: a job is unauthenticated and directs the worker to

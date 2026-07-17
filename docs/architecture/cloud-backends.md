@@ -193,8 +193,11 @@ so it is built once at the composition root, not per mount. A mount names which
 configured provider its strategy draws on. In the common deployment those references
 collapse to one identity: the same container role writes the mirror target and (under
 `service`) reads the private upstream. A multi-cloud process holds one provider per
-cloud, with the ambient `AWS_REGION` scoping likewise process-global (a GCP project
-scope arrives with the Pub/Sub backend and derives from its topic resource). A
+cloud; region scoping is per destination, parsed from the URL each mechanism serves
+(the CodeArtifact mint's region from the mirror-target host, the SQS backend's from
+the queue URL's host; the ambient `AWS_REGION` matters only under an
+`AWS_ENDPOINT_URL_SQS` override, whose endpoint carries no region), and a GCP project
+scope arrives with the Pub/Sub backend, deriving from its topic resource the same way. A
 mount naming a credential source with no initialised provider fails at boot (aggregated
 with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),

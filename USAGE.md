@@ -82,7 +82,7 @@ no mirror, no queue, no cloud account, just the gated public leg.
 
 ```bash
 ECLUSE_MOUNTS__NPM__ENABLED=true \
-ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:4873 \
+ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:8080 \
 ecluse proxy
 ```
 
@@ -217,7 +217,7 @@ file; only the secret-typed keys have this side door.
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_SERVER__PORT` | No | `8080` | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
-| `ECLUSE_SERVER__PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Unset, tarball URLs are path-relative and the `npm` CLI can't install from them (it reads a leading-slash `dist.tarball` as a `file:` path), so set this for any deployment serving real `npm install`s. |
+| `ECLUSE_SERVER__PUBLIC_URL` | When any mount is active |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. Must be an `http(s)` URL with a dialable authority (`http` stays legal for loopback development). Required the moment a mount is active: without it a served `dist.tarball` could only be path-relative, which the `npm` CLI reads as a `file:` path, so the boot refuses with the `PublicUrlRequired` error instead of serving unusable metadata. |
 | `ECLUSE_SERVER__AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
 | `ECLUSE_SERVER__HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
 | `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
@@ -244,7 +244,7 @@ file; only the secret-typed keys have this side door.
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend** (the same derivation as the mirror credential, so a backend/URL disagreement is unrepresentable). A real SQS queue URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, **region taken from the host** (no `AWS_REGION` needed); the URL is validated in full (https, single-label region, 12-digit account, exactly one queue segment, no query or fragment), and the canonical form carries no port, so an explicit port, `:443` included, is refused. A Pub/Sub topic resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot naming the accepted forms. **Unset with a mirroring mount ⇒ the bounded in-process queue**: a non-durable, best-effort mirror (fine for single-node, trial, or air-gapped deployments), warned loudly at boot. Never consulted for a serve-only deployment. |
 | `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Cap on in-process queue depth, computed at boot by the memory budget (a heap-ceiling share, clamped; `50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
-| `AWS_REGION` | Depends | AWS backends only | Region for CodeArtifact, and for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (an emulator or VPC endpoint carries no region in its host; a real SQS queue URL carries its own). Ambient AWS-SDK environment, read from the process environment directly, **not** a config-document key: `awsRegion:` in the document is rejected as unknown. |
+| `AWS_REGION` | Depends | AWS backends only | Region for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (an emulator or VPC endpoint carries no region in its host; a real SQS queue URL carries its own), and for the S3 advisory client's ambient SDK resolution. **Never consulted for CodeArtifact**: the mint's region is parsed from the mirror-target host itself. Ambient AWS-SDK environment, read from the process environment directly, **not** a config-document key: `awsRegion:` in the document is rejected as unknown. |
 | `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Point at a local emulator (`ministack`) or VPC endpoint; setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, with `AWS_REGION` scoping it, and requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. Ambient, like `AWS_REGION`. |
 | `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can never silently redirect the queue. Ambient, like `AWS_REGION`. |
 
@@ -339,7 +339,8 @@ Deployments derive their initial policy from the [default baseline configuration
 
 Secrets never live in the config document. Client and registry tokens are always env vars, and
 cloud-managed registries (CodeArtifact / Artifact Registry) derive short-lived tokens from
-ambient cloud credentials. Écluse always holds a mirror-target **write** credential; reads follow
+ambient cloud credentials. A **mirrored** mount holds a mirror-target **write** credential
+(a serve-only mount never writes and holds none); reads follow
 the mount's [credential strategy](docs/architecture/access-model.md): `passthrough` (default)
 forwards the client's own token to the private upstream and strips it before the public one,
 `service` reads with Écluse's own credential. See
