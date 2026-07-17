@@ -89,7 +89,7 @@ envVarValue (key, value) =
     -- A secret is taken verbatim: JSON-parsing it would coerce a value like
     -- 12345 or true into a non-string the secret parser rightly refuses.
     leafValue
-        | maybe False ((`elem` secretLeafKeys) . Key.toText) (viaNonEmpty last segments) = String
+        | maybe False ((`elem` secretLeafKeys) . Key.toText) (listToMaybe (reverse segments)) = String
         | otherwise = parseEnvValue
 
 toCamelCase :: Text -> Key.Key
