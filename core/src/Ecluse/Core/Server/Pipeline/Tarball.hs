@@ -56,8 +56,8 @@ gates __that one version__ against the rules (the same machinery the packument p
 gates the whole set with) and selects the artifact, and on an admit __streams the public
 bytes from @artUrl@ and enqueues a 'Ecluse.Core.Queue.MirrorJob'__ (naming that
 authoritative URL) for the worker to back-fill the mirror target; on a reject --
-including a host the tarball-host policy refuses -- it renders the serve error model
-(@403@\/@503@\/@500@\/@404@) through the mount's renderer. The enqueue is
+including a host the tarball-host policy refuses -- it selects the serve error model
+(@403@\/@503@\/@500@\/@404@) through the route's injected reply factories. The enqueue is
 __serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the client
 first, and an enqueue failure is swallowed rather than failing or delaying the response.
 The public relay is additionally __judged__ at relay time ('RelayVerdict', status and
@@ -82,6 +82,8 @@ and an upstream @304 Not Modified@ is relayed straight back to the client as a b
 tarball -- the cheap freshness check on the hot artifact path.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
+    TarballReplies (..),
+
     -- * The tarball handler
     serveTarball,
     headTarball,
@@ -94,7 +96,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusCode, statusIsSuccessful)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
+import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
 import Data.ByteString qualified as BS
 import Ecluse.Core.Credential (Secret)
@@ -140,7 +142,7 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
+    MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
     ServeRuntime (..),
     ctxMount,
@@ -159,28 +161,40 @@ import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    MountRenderer,
     RejectReason (Unavailable),
     Rejection (Rejection, rejectionMessage),
     RetryAfter (..),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
+    appendHelp,
     artifactStatus,
     artifactStatusCode,
-    renderError,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Version (Version, renderVersion)
 
+{- | The route-owned ways the tarball pipeline may answer. The response type is fixed by
+the route's explicit pass-through contract; the pipeline never receives WAI's unrestricted
+responder.
+-}
+data TarballReplies response = TarballReplies
+    { tarballError :: Status -> ResponseHeaders -> Text -> response
+    -- ^ An ecosystem-shaped local error.
+    , tarballStream :: Status -> ResponseHeaders -> StreamingBody -> response
+    -- ^ A transparent streamed upstream response.
+    , tarballEmpty :: Status -> ResponseHeaders -> response
+    -- ^ A transparent bodiless upstream response (@304@ or @HEAD@).
+    }
+
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
 request's 'RequestCtx'.
 
-The mount's 'PackumentDeps' and error renderer are read from the matched
-'MountBinding'; an unwired mount is the recognised-but-unserved @501@ stub (as for
+The mount's 'PackumentDeps' are read from the matched 'MountBinding'; an unwired mount is
+the recognised-but-unserved @501@ stub (as for
 'servePackument'). With dependencies wired and the edge token (if any) validated, the
 two legs locate the tarball by the trust of their origin:
 
@@ -194,19 +208,20 @@ two legs locate the tarball by the trust of their origin:
 * on a private miss the __public__ leg fetches that one version's metadata anonymously
   and gates it against the rules; an admit honours the gated @dist.tarball@, streaming
   the public bytes __and enqueuing a 'MirrorJob'__ (serve-then-enqueue, the enqueue
-  best-effort and non-blocking), a reject renders the serve error model
-  (@403@\/@503@\/@500@\/@404@) through the mount's renderer.
+  best-effort and non-blocking), a reject selects the serve error model
+  (@403@\/@503@\/@500@\/@404@) through the route's reply factories.
 
 The public-upstream fetch is always anonymous (the client credential is never sent to the
 public upstream); the mirror job carries no credential. The serve path does not
 verify @dist.integrity@ (see the module header → "Artifact path").
 -}
 serveTarball ::
+    TarballReplies response ->
     PackageName ->
     Version ->
     Filename ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 serveTarball = tarballWith ServeFull
 
@@ -226,19 +241,14 @@ HEAD serves no bytes, so there is nothing to back-fill (mirroring stays demand-d
 on the GET path). A refusal renders the same serve error model with an empty body.
 -}
 headTarball ::
+    TarballReplies response ->
     PackageName ->
     Version ->
     Filename ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-headTarball name version filename request respond =
-    -- A HEAD reply carries no body, by HTTP semantics: every branch -- the bodiless
-    -- upstream probe, an edge 401, a policy 403/404/503, an internal 500 -- answers
-    -- through 'bodiless', which keeps each branch's status and headers but strips the
-    -- body. (The 'ServeHead' upstream probe is what keeps the artifact body from being
-    -- fetched at all; this strips the body of the locally-rendered branches too.)
-    tarballWith ServeHead name version filename request (respond . bodiless)
+headTarball = tarballWith ServeHead
 
 -- The artifact serve mode: a full GET that streams the body through, or a HEAD that
 -- probes the upstream bodiless and relays only the headers. Threaded through the
@@ -257,16 +267,16 @@ data ArtifactServe
 -- dependencies and serve in the given mode.
 tarballWith ::
     ArtifactServe ->
+    TarballReplies response ->
     PackageName ->
     Version ->
     Filename ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-tarballWith mode name version filename request respond = do
-    renderer <- asks (bindingRenderer . ctxMount)
+tarballWith mode replies name version filename request respond = do
     deps <- asks (bindingPackumentDeps . ctxMount)
-    serveTarballWithDeps mode renderer deps name version filename request respond
+    serveTarballWithDeps mode replies deps name version filename request respond
 
 -- Serve a tarball once the mount's dependencies are known: edge auth, then the
 -- private-hit / public-miss fetches the module header describes. The request runtime
@@ -274,23 +284,24 @@ tarballWith mode name version filename request respond = do
 -- both legs so a HEAD takes the identical gating as a GET, probing bodiless.
 serveTarballWithDeps ::
     ArtifactServe ->
-    MountRenderer ->
+    TarballReplies response ->
     PackumentDeps ->
     PackageName ->
     Version ->
     Filename ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveTarballWithDeps mode renderer deps name version (Filename file) request respond
-    | not (edgeTokenMatches (pdInboundToken deps) clientToken) = liftIO (respond (edgeUnauthorised renderer))
+serveTarballWithDeps mode replies deps name version (Filename file) request respond
+    | not (edgeTokenMatches (pdInboundToken deps) clientToken) =
+        liftIO (respond (tarballError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
     | otherwise = do
         rt <- asks ctxRuntime
         -- The client's conditional validators, relayed onto the upstream
         -- artifact request on both legs so upstream can answer a 304 for a
         -- pass-through body we serve unchanged (the conditional-GET contract).
         let validators = forwardValidators (requestHeaders request)
-        privateHit <- streamPrivateArtifact mode rt deps clientToken validators name file respond
+        privateHit <- streamPrivateArtifact mode replies rt deps clientToken validators name file respond
         case privateHit of
             Just received -> do
                 -- A private hit is an admit served from the trusted upstream (no rule
@@ -298,7 +309,7 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
                 -- which records its own decision.
                 liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
                 pure received
-            Nothing -> servePublicArtifact mode rt renderer deps validators name version file respond
+            Nothing -> servePublicArtifact mode replies rt deps validators name version file respond
   where
     -- The client's bearer, scanned out of the headers once: the edge gate compares
     -- it and the private leg forwards it.
@@ -343,17 +354,27 @@ files host, a signed CDN URL) is not reached by this leg and is a clean miss tha
 through to the public origin. -}
 streamPrivateArtifact ::
     ArtifactServe ->
+    TarballReplies response ->
     ServeRuntime ->
     PackumentDeps ->
     Maybe Secret ->
     RequestHeaders ->
     PackageName ->
     Text ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler (Maybe ResponseReceived)
-streamPrivateArtifact mode rt deps token validators name file respond =
+streamPrivateArtifact mode replies rt deps token validators name file respond =
     case privateRequest of
-        Just req -> liftIO (relayUpstreamWhen mode (srPrivateManager rt) req acceptArtifact (\status headers -> pure (relayArtifact status headers)) respond)
+        Just req ->
+            liftIO
+                ( relayUpstreamWhen
+                    mode
+                    (srPrivateManager rt)
+                    req
+                    acceptArtifact
+                    (\status headers -> pure (relayArtifact status headers))
+                    (relayResponder replies respond)
+                )
         Nothing -> pure Nothing
   where
     -- Build the conventional-URL private tarball request {base}/{pkg}/-/{file} by the
@@ -381,16 +402,16 @@ single requested version against the rules, and on an admit stream the public by
 The public version metadata is fetched anonymously to decide. -}
 servePublicArtifact ::
     ArtifactServe ->
+    TarballReplies response ->
     ServeRuntime ->
-    MountRenderer ->
     PackumentDeps ->
     RequestHeaders ->
     PackageName ->
     Version ->
     Text ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-servePublicArtifact mode rt renderer deps validators name version file respond = do
+servePublicArtifact mode replies rt deps validators name version file respond = do
     let metrics = srMetrics rt
     -- The advisory database active for this request, resolved once and used both for
     -- the version's evaluation and for a denial's audit line.
@@ -399,15 +420,15 @@ servePublicArtifact mode rt renderer deps validators name version file respond =
         Just (Admitted artifact) -> do
             liftIO (mpServeDecision metrics Metric.Admit)
             withRunInIO $ \runInIO ->
-                streamPublicArtifact mode rt renderer deps validators name version artifact (runInIO . observeRelayAnomaly metrics name version) respond
+                streamPublicArtifact mode replies rt deps validators name version artifact (runInIO . observeRelayAnomaly metrics name version) respond
         Just (Refused decision) -> do
             liftIO (mpServeDecision metrics (serveDecisionClass decision))
             logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
             liftIO (recordDenials metrics [decision])
-            liftIO (respond (artifactError renderer deps (artifactStatus decision) decision))
+            liftIO (respond (artifactError replies deps (artifactStatus decision) decision))
         Nothing -> liftIO $ do
             mpServeDecision metrics Metric.Unavailable
-            respond (serveOverloaded renderer)
+            respond (tarballError replies (mkStatus 503 "Service Unavailable") [(hRetryAfter, "1")] "server is busy; retry later")
 
 {- The outcome of gating a single requested artifact on the public path: either the
 chosen 'Artifact' to fetch, or the serve decision the error model renders. The
@@ -516,7 +537,7 @@ The fetch keeps the open phase distinct from the committed stream, the same spli
 private origin uses: opening the connection is the recoverable phase, so a transient
 network failure or a TLS handshake failure (a host that cannot present a CA-trusted
 certificate for the requested name) yields no committed response and is rendered as the
-transient upstream-unavailable @503@ through the mount's renderer, not left to escape as
+transient upstream-unavailable @503@ through the route's reply factories, not left to escape as
 a bare @500@. Any upstream status is relayed
 verbatim (the @accept@ predicate is total); only a failure __after__ the stream is
 committed propagates, the connection torn down as it unwinds, so a half-sent artifact
@@ -530,8 +551,8 @@ upstream @304 Not Modified@ is relayed straight back to the client (bodiless, vi
 credential and the public fetch stays anonymous. -}
 streamPublicArtifact ::
     ArtifactServe ->
+    TarballReplies response ->
     ServeRuntime ->
-    MountRenderer ->
     PackumentDeps ->
     RequestHeaders ->
     PackageName ->
@@ -539,12 +560,12 @@ streamPublicArtifact ::
     Artifact ->
     -- | Observe the relay verdict (the anomaly log line and metric).
     (RelayVerdict -> IO ()) ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode rt renderer deps validators name version artifact observeVerdict respond
-    | not hostHonoured = respond crossHostRefused
+streamPublicArtifact mode replies rt deps validators name version artifact observeVerdict respond
+    | not hostHonoured = respond (crossHostRefused replies)
     | otherwise = case publicRequest of
-        Left _ -> respond internalArtifactError
+        Left _ -> respond (internalArtifactError replies)
         Right req -> do
             -- The verdict slot: written by the observing relay at relay time
             -- (status and headers only, before any body moves), read after the
@@ -553,7 +574,7 @@ streamPublicArtifact mode rt renderer deps validators name version artifact obse
             let verdictingRelay status headers = do
                     atomicWriteIORef verdictRef (Just (relayVerdict status headers))
                     pure (relayArtifact status headers)
-            relayUpstreamWhen mode (srPublicManager rt) req (const True) verdictingRelay respond >>= \case
+            relayUpstreamWhen mode (srPublicManager rt) req (const True) verdictingRelay (relayResponder replies respond) >>= \case
                 Just received -> do
                     -- The committed relay always ran the verdicting relay exactly
                     -- once; an unwritten slot is an invariant break, folded into
@@ -568,7 +589,7 @@ streamPublicArtifact mode rt renderer deps validators name version artifact obse
                         RelayedOddShape _ -> pass
                         RelayedNonSuccess _ -> pass
                     pure received
-                Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
+                Nothing -> respond (artifactError replies deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
   where
     hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
@@ -679,11 +700,19 @@ relayUpstreamWhen ::
     HTTP.Request ->
     (Status -> Bool) ->
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
-    (Response -> IO ResponseReceived) ->
-    IO (Maybe ResponseReceived)
+    RelayResponder response ->
+    IO (Maybe response)
 relayUpstreamWhen = \case
     ServeFull -> streamUpstreamWhen
     ServeHead -> probeUpstreamWhen
+
+-- Adapt the route's typed response constructors to the streaming helper's callback.
+-- The upstream connection remains open until the selected response has completed.
+relayResponder :: TarballReplies response -> (response -> IO received) -> RelayResponder received
+relayResponder replies respond =
+    RelayResponder
+        (\status headers body -> respond (tarballStream replies status headers body))
+        (\status headers -> respond (tarballEmpty replies status headers))
 
 -- Run the demand-driven mirror enqueue only on the 'ServeFull' (GET) path; a
 -- 'ServeHead' served no bytes, so it back-fills nothing.
@@ -754,9 +783,9 @@ a @dist.tarball@ on a different host or port than the packument origin under the
 secure-default 'Ecluse.Core.Security.SameHostAsPackument', or an authority off the
 upstream allowlist. A policy denial, not a serve outcome the rules produced -- the
 same @403@ surface a rule denial renders, with a fixed reason. -}
-crossHostRefused :: Response
-crossHostRefused =
-    responseLBS (mkStatus 403 "Forbidden") [(hContentType, "application/json")] "{\"error\":\"the upstream artifact host is not permitted by the tarball-host policy\"}"
+crossHostRefused :: TarballReplies response -> response
+crossHostRefused replies =
+    tarballError replies (mkStatus 403 "Forbidden") [] "the upstream artifact host is not permitted by the tarball-host policy"
 
 {- The relay for an artifact stream: forward the upstream status and headers,
 dropping only the hop-by-hop framing headers (@Transfer-Encoding@, @Connection@)
@@ -778,9 +807,9 @@ single-artifact path has none to offer). A @404@ is the version-absent miss, whi
 'gatePublicVersion' flags as a 'WontResolve' rejection -- the only such cause on this
 path -- so it is mapped to @404@ rather than the @500@ a 'WontResolve' would
 otherwise render. -}
-artifactError :: MountRenderer -> PackumentDeps -> ArtifactStatus -> ServeDecision -> Response
-artifactError renderer deps status decision =
-    renderedResponse (toStatus actualStatus) retryHeaders (renderError renderer (pdHelp deps) message)
+artifactError :: TarballReplies response -> PackumentDeps -> ArtifactStatus -> ServeDecision -> response
+artifactError replies deps status decision =
+    tarballError replies (toStatus actualStatus) retryHeaders (appendHelp (pdHelp deps) message)
   where
     retryHeaders :: ResponseHeaders
     retryHeaders = case actualStatus of
@@ -816,6 +845,6 @@ artifactError renderer deps status decision =
 serve decision. The package segment and filename are already known-safe, so this is
 reachable only on a misconfigured base URL; it is the internal-error tier, distinct
 from the rule\/upstream outcomes 'artifactError' renders. -}
-internalArtifactError :: Response
-internalArtifactError =
-    responseLBS (mkStatus 500 "Internal Server Error") [(hContentType, "application/json")] "{\"error\":\"could not form the upstream artifact URL\"}"
+internalArtifactError :: TarballReplies response -> response
+internalArtifactError replies =
+    tarballError replies (mkStatus 500 "Internal Server Error") [] "could not form the upstream artifact URL"

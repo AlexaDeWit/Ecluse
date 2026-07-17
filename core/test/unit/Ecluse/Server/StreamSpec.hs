@@ -18,13 +18,19 @@ import Network.HTTP.Client (
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (methodHead, status200, status304, status404, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (hContentType, hETag)
-import Network.Wai (Application, responseLBS, responseStream)
+import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), probeUpstreamWhen, pumpBody, streamUpstreamWhen)
+
+waiRelayResponder :: (Response -> IO ResponseReceived) -> RelayResponder ResponseReceived
+waiRelayResponder respond =
+    RelayResponder
+        (\status headers body -> respond (responseStream status headers body))
+        (\status headers -> respond (responseLBS status headers ""))
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
@@ -250,7 +256,7 @@ spec = do
     notModifiedProxy :: HTTP.Manager -> Int -> Application
     notModifiedProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (curry pure) respond
+        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (curry pure) (waiRelayResponder respond)
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
@@ -268,7 +274,7 @@ spec = do
     probeProxy :: HTTP.Manager -> Int -> Application
     probeProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (curry pure) respond
+        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (curry pure) (waiRelayResponder respond)
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
@@ -279,7 +285,7 @@ spec = do
     conditionalProxy :: HTTP.Manager -> Int -> Application
     conditionalProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (curry pure) respond
+        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (curry pure) (waiRelayResponder respond)
         case outcome of
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)

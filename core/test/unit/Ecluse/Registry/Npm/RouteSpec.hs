@@ -24,14 +24,14 @@ import Ecluse.Core.Package (
  )
 import Network.HTTP.Types.Method (Method, methodGet, methodPut)
 
-import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballRoute)
+import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
 
 {- | What a request routes to, reconstructed for the assertions from the table's __public__
 surface: which route claimed it ('matchRoute'), and what that route's captures parse to
-('takePackage', 'tarballRoute').
+('takePackage', 'tarballCoordinate').
 
 The routes themselves carry actions, not values, so there is nothing to compare directly.
 This restates the routing decision /and/ its parse as one comparable value, which is what
@@ -60,7 +60,7 @@ routed method segments =
             file <- case rest of
                 ["-", f] -> Just f
                 _ -> Nothing
-            (version, filename) <- tarballRoute name file
+            (version, filename) <- tarballCoordinate name file
             pure (ToTarball name version filename)
         Just _ -> Denied
 

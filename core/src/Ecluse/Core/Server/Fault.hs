@@ -12,8 +12,8 @@ response-assembly leg's
 confined 'RenderEscape' marker -- or an invariant break nothing classified.
 'classifyEscape' folds whichever it is into a 'RequestFault': the bounded cause
 feeds the @ecluse.serve.perimeter.faults@ metric, the rendered detail feeds the
-perimeter's log line, and neither ever reaches the client (the response is the
-mount-shaped neutral 500).
+perimeter's log line, and neither ever reaches the client (the response is the route's
+contract-admitted neutral 500).
 -}
 module Ecluse.Core.Server.Fault (
     RequestFault (..),

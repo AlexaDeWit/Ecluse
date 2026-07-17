@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE ExistentialQuantification #-}
 
 {- | The per-request context the serve path reads through, and the handler monad
 over it.
@@ -9,7 +10,7 @@ Mount dispatch matches a request to one 'MountBinding' -- a mount's __complete__
 ecosystem wiring -- then runs the route's handler in 'Handler', a reader over a
 'RequestCtx' pairing that binding with the request runtime 'ServeRuntime'. A handler
 reads its per-mount dependencies (the classifier, the packument-serve dependencies,
-the error renderer, the path prefix) and the shared runtime from that one context,
+the path prefix) and the shared runtime from that one context,
 rather than taking them as explicit arguments threaded down the pipeline.
 
 'ServeRuntime' is the __runtime interface__ the serve path is closed over: the two
@@ -38,6 +39,7 @@ module Ecluse.Core.Server.Context (
 
     -- * The serve action, and the router an adapter supplies
     RouteAction (..),
+    ResponseAction (..),
     MountRouter,
 
     -- * Mount binding
@@ -58,7 +60,7 @@ import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.HTTP.Client (Manager, Request)
 import Network.HTTP.Types (Method)
-import Network.Wai (Response, ResponseReceived)
+import Network.Wai (ResponseReceived)
 import Network.Wai qualified as Wai
 import UnliftIO (MonadUnliftIO)
 
@@ -75,8 +77,9 @@ import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballH
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
+import Ecluse.Core.Server.Contract (ResponseContract)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
-import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
+import Ecluse.Core.Server.Response (HelpMessage)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -369,12 +372,12 @@ nothing in common but the fact that something must be done about them), so the m
 from a request to an action is declared by the ecosystem's adapter, as its 'MountRouter'.
 What is shared is only the __kind__ of thing an action can be:
 
-* An 'AnswerLocally' action is a pure function of the mount's renderer, so the dispatcher
-  simply responds with it: no upstream round-trip, no effects.
+* An 'AnswerLocally' action is a pure value admitted by the route's response contract, so
+  the dispatcher simply responds with it: no upstream round-trip, no effects.
 
-* A 'RunPipeline' action is a data-plane handler awaiting the request and the respond
+* A 'RunPipeline' action is a data-plane handler awaiting the request and its typed respond
   continuation, so the dispatcher discharges it to 'IO' under the request perimeter (the
-  guard that answers an escaped fault with a neutral, mount-shaped @500@). Those handlers
+  guard that answers an escaped fault with the route's declared neutral @500@). Those handlers
   ("Ecluse.Core.Server.Pipeline") are themselves __ecosystem-neutral__: a registry's
   client, projection, and document assembly reach them as injected capabilities on
   'PackumentDeps', never as imports. So two ecosystems whose URL grammars share nothing
@@ -388,14 +391,24 @@ It lives here, beside 'MountBinding' and 'Handler', because the three are one
 mutually-recursive knot: a mount carries a router, the router names an action, and an
 action is a handler that reads the mount.
 -}
-data RouteAction
-    = -- | A pure response the proxy answers itself, shaped by the mount's renderer.
-      AnswerLocally (MountRenderer -> Response)
-    | {- | A data-plane handler, awaiting the request and the respond continuation. It
-      reads its mount's serve dependencies from the request context, and answers the
-      recognised-but-unwired stub itself when they are absent.
+data ResponseAction response
+    = -- | A pure value admitted by the route's response contract.
+      AnswerLocally response
+    | {- | A data-plane handler and its pre-commit perimeter fallback. The handler receives
+      only the responder for this @response@ type, so it cannot send an unrestricted WAI
+      'Response'. The fallback is a value of the same type and is therefore documented by
+      the same contract.
       -}
-      RunPipeline (Wai.Request -> (Response -> IO ResponseReceived) -> Handler ResponseReceived)
+      RunPipeline response (Wai.Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
+
+{- | A matched route's response contract existentially paired with an action that can
+produce only that contract's response type.
+
+The existential is the application boundary's proof: dispatch can render the action
+without knowing an ecosystem's response sum, while the action cannot be paired with a
+contract for another sum.
+-}
+data RouteAction = forall response. RouteAction (ResponseContract response) (ResponseAction response)
 
 {- | An ecosystem's __whole routing decision__: what to do with a mount-relative request.
 
@@ -421,9 +434,8 @@ binding.
 The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount):
 every registry is path-mounted, so a root mount -- which would force a URL change
 on every consumer the day a second ecosystem is added -- is __unrepresentable__
-rather than merely discouraged. Bundling the classifier, serve dependencies, and
-renderer into one record means a mount cannot be half-wired: there is no default
-to fall back to.
+rather than merely discouraged. Bundling the classifier and serve dependencies into one
+record means a mount cannot be half-wired: there is no default to fall back to.
 -}
 data MountBinding = MountBinding
     { bindingPrefix :: NonEmpty Text
@@ -444,10 +456,6 @@ data MountBinding = MountBinding
     {- ^ The first-party publish dependencies, when a publication target is
     configured; 'Nothing' is the opt-out -- a @PUT \/{pkg}@ is then @405@ (no implicit
     write path).
-    -}
-    , bindingRenderer :: MountRenderer
-    {- ^ This mount's renderer for error\/denial bodies -- the ecosystem surface an
-    in-mount @403@\/@404@\/@501@ is shaped into.
     -}
     }
 

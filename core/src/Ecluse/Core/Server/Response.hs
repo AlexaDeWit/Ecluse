@@ -13,10 +13,11 @@ streams the body is separate (see @docs\/architecture\/web-layer.md@).
 
 This module decides the HTTP /status/ of a refusal but holds __no body shape of
 its own__: the bytes a client reads an error from are an ecosystem's (npm's
-@{"error": …}@ JSON, a different surface for PyPI), so a mount supplies a
-'MountRenderer' -- chosen at the composition root alongside its path grammar -- and
-the agnostic web layer never names one. 'appendHelp' is the ecosystem-neutral part
-the renderer reuses: joining the operator help message onto a denial.
+@{"error": …}@ JSON, a different surface for PyPI). The ecosystem's route-scoped
+'Ecluse.Core.Server.Contract.ResponseContract' supplies the response constructor and
+codec; the agnostic pipeline selects it through injected reply factories. 'appendHelp'
+is the ecosystem-neutral operation those factories reuse: joining the operator help
+message onto a denial.
 
 == The outcome model
 
@@ -34,13 +35,13 @@ single 'ArtifactStatus'. The load-bearing rule is __503 only when we believe it
 will resolve__ -- a transient upstream\/advisory condition invites a retry, while a
 permanent or internal inability to decide ('WontResolve') is a @500@, because
 retrying it cannot help and we should not invite it. A policy rejection is a
-@403@ whose body the mount's 'MountRenderer' shapes. A __packument__ request has
+@403@ whose body the route's response contract shapes. A __packument__ request has
 no single status -- its versions are filtered and the status is chosen over the
 surviving set -- so this module deliberately maps __per outcome__, not per request.
 
 An operator help message, when configured, is appended to every denial
 ('appendHelp') so clients are told where to ask; how the joined text is then
-wrapped into bytes is the mount renderer's.
+wrapped into bytes is the route contract's.
 -}
 module Ecluse.Core.Server.Response (
     -- * Serve outcomes
@@ -60,15 +61,12 @@ module Ecluse.Core.Server.Response (
     -- * Packument status (over the merged survivor set)
     PackumentStatus (..),
     packumentStatus,
-    packumentStatusCode,
     longestRetry,
 
-    -- * Denial rendering
+    -- * Denial help text
     HelpMessage,
     mkHelpMessage,
     appendHelp,
-    RenderedBody (..),
-    MountRenderer (..),
 ) where
 
 import Data.Semigroup (Max (Max, getMax))
@@ -195,7 +193,7 @@ case.
 data ArtifactStatus
     = -- | @200@ -- admitted; the artifact is streamed.
       Ok
-    | -- | @403@ -- refused by policy; the body is shaped by the mount's 'MountRenderer'.
+    | -- | @403@ -- refused by policy; the body is shaped by the route's response contract.
       Forbidden
     | {- | @503@ -- a transient inability to decide; the 'RetryAfter', if known,
       becomes the @Retry-After@ header.
@@ -245,11 +243,11 @@ survivors__: with at least one survivor the document is served; with none, the
 status follows the most recoverable cause among the exclusions (see
 'packumentStatus').
 
-A domain sum (not a raw code) so the mapping is total and the WAI layer reads an
-exhaustive set; 'packumentStatusCode' gives the numeric code. There is no @404@: a
-packument whose versions were all withheld is __not__ a miss -- the package exists,
-so a genuine upstream absence (no such package at all) is a separate concern of the
-serve layer, decided before the merge.
+A domain sum (not a raw code) so the pipeline must map every case through the route's
+typed response factories. There is no @404@: a packument whose versions were all
+withheld is __not__ a miss -- the package exists, so a genuine upstream absence (no
+such package at all) is a separate concern of the serve layer, decided before the
+merge.
 -}
 data PackumentStatus
     = -- | @200@ -- at least one version survived; the merged, filtered packument is served.
@@ -355,15 +353,6 @@ none of them suggested a delay.
 longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
 longestRetry = fmap getMax . foldMap (fmap Max)
 
--- | The numeric HTTP status code for a 'PackumentStatus'. Pure and total.
-packumentStatusCode :: PackumentStatus -> Int
-packumentStatusCode = \case
-    PackumentOk -> 200
-    PackumentForbidden -> 403
-    PackumentUnavailable{} -> 503
-    PackumentBadGateway -> 502
-    PackumentServerError -> 500
-
 {- | An operator-configured message appended to every denial -- typically where to
 ask for help (e.g. a support channel). Stored trimmed of surrounding whitespace
 so it joins the denial text with a single separating space and an all-blank value
@@ -380,39 +369,11 @@ mkHelpMessage = HelpMessage . T.strip
 single space; a blank or absent help message contributes nothing.
 
 This is the ecosystem-neutral part of denial rendering -- every ecosystem appends
-the operator's help text the same way. How the joined text is then wrapped into
-body bytes is the mount's 'MountRenderer'.
+the operator's help text the same way. How the joined text is then wrapped into body
+bytes is the route contract's concern.
 -}
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help message =
     case help of
         Just (HelpMessage h) | not (T.null h) -> T.strip message <> " " <> h
         _ -> message
-
-{- | A rendered error body: its @Content-Type@ and the bytes.
-
-The agnostic serve layer chooses the HTTP /status/; the body shape -- JSON, plain
-text, HTML -- is the mount's, so a 'MountRenderer' returns this pair and the WAI
-layer reads the content type off it rather than assuming one.
--}
-data RenderedBody = RenderedBody
-    { renderedContentType :: ByteString
-    -- ^ The @Content-Type@ the body is tagged with (e.g. @application\/json@).
-    , renderedBytes :: LByteString
-    -- ^ The encoded error body.
-    }
-    deriving stock (Eq, Show)
-
-{- | A mount's ecosystem-specific error renderer -- the Handle that keeps the npm
-@{"error": …}@ shape (and any other ecosystem's) out of the agnostic web layer.
-
-The status machinery here is ecosystem-agnostic, but the body a client reads an
-error from is not: an npm client expects a JSON @{"error": …}@ object, a PyPI
-client a different surface. Each mount supplies a renderer, chosen at the
-composition root alongside its path grammar, so the web layer holds no body shape
-of its own. 'renderError' shapes a denial or meta-route error (a @403@\/@404@\/@501@
-body) from the optional operator help message and the human-facing reason.
--}
-newtype MountRenderer = MountRenderer
-    { renderError :: Maybe HelpMessage -> Text -> RenderedBody
-    }

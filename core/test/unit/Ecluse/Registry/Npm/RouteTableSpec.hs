@@ -17,7 +17,7 @@ is a closure (there is nothing to compare) while its /decision/ and its /parse/ 
   precedence of the reserved meta-routes, and the __denials__ (a path-confusion artifact
   name claims no route, and so falls through to the @404@).
 
-* __What a route's captures parse to__ ('takePackage', 'tarballRoute'). This is where the
+* __What a route's captures parse to__ ('takePackage', 'tarballCoordinate'). This is where the
   scoped-name decoding, the component-safety gate, and the artifact coordinate live. They
   are named functions the table references, so they are asserted directly rather than
   through the router.
@@ -43,7 +43,7 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
-import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballRoute)
+import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
 import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
@@ -122,15 +122,15 @@ spec = do
             takePackage [".."] `shouldBe` Nothing
 
         it "reads the version out of an artifact name, preserving the file verbatim" $
-            tarballRoute (mkPackageName Npm Nothing "lodash") "lodash-1.0.0.tgz"
+            tarballCoordinate (mkPackageName Npm Nothing "lodash") "lodash-1.0.0.tgz"
                 `shouldBe` Just (mkVersion Npm "1.0.0", Filename "lodash-1.0.0.tgz")
         it "drops the scope from a scoped package's artifact name, as npm does" $
-            tarballRoute (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "code-frame-7.0.0.tgz"
+            tarballCoordinate (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "code-frame-7.0.0.tgz"
                 `shouldBe` Just (mkVersion Npm "7.0.0", Filename "code-frame-7.0.0.tgz")
         it "refuses an artifact name for a different package (path confusion)" $
-            tarballRoute (mkPackageName Npm Nothing "lodash") "evil-1.0.0.tgz" `shouldBe` Nothing
+            tarballCoordinate (mkPackageName Npm Nothing "lodash") "evil-1.0.0.tgz" `shouldBe` Nothing
         it "refuses a bare .tgz with no version" $
-            tarballRoute (mkPackageName Npm Nothing "lodash") "lodash-.tgz" `shouldBe` Nothing
+            tarballCoordinate (mkPackageName Npm Nothing "lodash") "lodash-.tgz" `shouldBe` Nothing
 
 -- Generators -----------------------------------------------------------------
 

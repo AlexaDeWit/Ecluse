@@ -8,7 +8,7 @@ import Prelude hiding (get)
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (hConnection, methodPost, methodPut, status200, statusCode)
+import Network.HTTP.Types (hConnection, methodHead, methodPost, methodPut, status200, status500, statusCode)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestMethod),
@@ -33,13 +33,12 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), RouteAction (AnswerLocally))
+import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
+import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
-import Ecluse.Core.Server.Pipeline.Shared (jsonResponse, notFoundInMount)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
@@ -87,8 +86,8 @@ newTestEnv = do
     admission <- testServeAdmission
     newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
-{- | A test mount binding: the given prefix and router, npm's denial renderer, and
-__inert__ packument-serve dependencies (every upstream a closed port). A bound mount always
+{- | A test mount binding: the given prefix and router, and __inert__ packument-serve
+dependencies (every upstream a closed port). A bound mount always
 carries them, so these specs supply the fixture and simply do not drive the data plane: they
 exercise routing, the meta-routes, the prefix strip, and the publish path.
 -}
@@ -107,7 +106,6 @@ publishMountAt prefix router publishDeps =
         , bindingRouter = router
         , bindingPackumentDeps = inertPackumentDeps
         , bindingPublishDeps = publishDeps
-        , bindingRenderer = npmRenderer
         }
 
 {- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, so
@@ -163,8 +161,11 @@ fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) 
     -- different answers. It ignores the method (it names no write action), proving the
     -- web layer follows the injected router rather than a baked-in npm grammar.
     fakeRouter :: MountRouter
-    fakeRouter _method ["beep"] = AnswerLocally (const (jsonResponse status200 [] "{}"))
-    fakeRouter _method _ = AnswerLocally notFoundInMount
+    fakeRouter _method ["beep"] = RouteAction fakeContract (AnswerLocally (variableResponse status200 [] "{}"))
+    fakeRouter _method _ = npmNotFound
+
+    fakeContract :: ResponseContract (VariableResponse LByteString)
+    fakeContract = variableOpaqueContract "application/json" "The fake router's response."
 
 {- | The 'application' with __no mounts__: every path but the control-plane health
 probes matches no mount and is the neutral @404@.
@@ -358,7 +359,7 @@ spec = do
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
 
         with (publishAppWith basePublishDeps{pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}) $
-            it "answers a relay contract escape with the perimeter's mount-shaped 500 (not a torn session, not a 502)" $
+            it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw here is
                 -- an invariant break. The typed request perimeter must answer it:
                 -- the session survives with the neutral 500 -- not the 502 a
@@ -377,18 +378,22 @@ spec = do
                 -- edge -- the same gate the read paths apply.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 401
 
-    describe "the two response tiers (neutral above mounts, mount renderer within)" $
+    describe "the two response tiers (neutral above mounts, route contract within)" $
         with npmMountApp $ do
             it "renders an UNMOUNTED path as a neutral text/plain 404" $
                 -- No mount matches @/pypi/...@; there is no ecosystem to shape it, so
                 -- the body is the generic plain-text Not Found, not an npm error object.
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
-            it "renders an unrecognised IN-MOUNT path through the mount's npm renderer" $
+            it "renders an unrecognised IN-MOUNT path through npm's fallback contract" $
                 -- @/npm/is-odd/3.0.1@ is under the npm mount but not a recognised npm
                 -- path, so its 404 body is the npm {\"error\": …} object -- the mount's
                 -- surface, distinct from the neutral plain-text 404 above.
                 get "/npm/is-odd/3.0.1" `shouldRespondWith` "{\"error\":\"not found\"}"{matchStatus = 404}
+
+            it "derives a bodiless response for an unrecognised HEAD path" $
+                request methodHead "/npm/is-odd/3.0.1" [] ""
+                    `shouldRespondWith` ""{matchStatus = 404}
 
     describe "dispatch -- injected router (the routing boundary)" $
         -- Drive dispatch with a FAKE router (not npm's): the action a request takes
@@ -465,8 +470,10 @@ driveGuard handler = do
     let respond response = do
             modifyIORef' responses (<> [statusCode (responseStatus response)])
             pure ResponseReceived
-    outcome <- try (void (perimeterGuard (\fault -> modifyIORef' observed (<> [rqCause fault])) npmRenderer respond handler))
+    outcome <- try (void (perimeterGuard (\fault -> modifyIORef' observed (<> [rqCause fault])) respond fallback handler))
     (,,) <$> readIORef responses <*> readIORef observed <*> pure outcome
+  where
+    fallback = responseLBS status500 [] "internal server error"
 
 perimeterGuardSpec :: Spec
 perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ do

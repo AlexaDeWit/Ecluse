@@ -30,6 +30,9 @@ whole-artifact fetch ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'), bounded an
 buffered, is the separate mirroring concern, not this.
 -}
 module Ecluse.Core.Server.Stream (
+    -- * A typed relay responder
+    RelayResponder (..),
+
     -- * Streaming a response through
     streamUpstreamWhen,
 
@@ -45,10 +48,22 @@ import Data.ByteString.Builder (Builder, byteString)
 import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
-import Network.Wai (Response, ResponseReceived, responseLBS, responseStream)
+import Network.Wai (StreamingBody)
 import UnliftIO.Exception (finally, tryAny)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
+
+{- | The two ways an upstream relay can answer, parameterised by the route-scoped
+response value the caller sends. Keeping WAI construction out of this module lets a
+pipeline retain the upstream connection's callback lifetime without receiving an
+unrestricted WAI responder.
+-}
+data RelayResponder response = RelayResponder
+    { relayStreamResponse :: Status -> ResponseHeaders -> StreamingBody -> IO response
+    -- ^ Commit a status, headers, and bounded-memory streaming body.
+    , relayEmptyResponse :: Status -> ResponseHeaders -> IO response
+    -- ^ Commit the same response without a body (a @304@ or @HEAD@).
+    }
 
 {- | Stream an upstream response through __only when__ its status passes the
 @accept@ predicate, keeping a recoverable miss distinct from an unrecoverable
@@ -70,7 +85,7 @@ outcomes are deliberately kept apart:
 
 A passing 'isNotModified' (@304 Not Modified@) status is the __pass-through
 conditional-GET relay__: it is committed like any accepted status, but answered
-__bodiless__ ('responseLBS' over an empty body) rather than pumped, since a @304@
+__bodiless__ (through 'relayEmptyResponse') rather than pumped, since a @304@
 carries no body (RFC 9110 §15.4.5) -- the upstream body reader is never read. This is
 how a client validator relayed upstream that matches comes straight back as a @304@,
 the artifact never re-downloaded.
@@ -91,8 +106,8 @@ streamUpstreamWhen ::
     Request ->
     (Status -> Bool) ->
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
-    (Response -> IO ResponseReceived) ->
-    IO (Maybe ResponseReceived)
+    RelayResponder response ->
+    IO (Maybe response)
 streamUpstreamWhen manager request accept relay respond =
     -- The connection open is the recoverable phase: a failure here is a clean miss
     -- the caller may fall through on. Once a 2xx hands off to 'respond' the response
@@ -111,8 +126,8 @@ streamUpstreamWhen manager request accept relay respond =
                     -- A 304 carries no body: relay it bodiless rather than pumping (the
                     -- upstream body reader is never read), the pass-through conditional-GET
                     -- not-modified relay.
-                    Just <$> respond (responseLBS status headers "")
-                else Just <$> respond (responseStream status headers pump)
+                    Just <$> relayEmptyResponse respond status headers
+                else Just <$> relayStreamResponse respond status headers pump
       where
         upstreamStatus = responseStatus upstream
         pump = pumpBody (brRead (HTTP.responseBody upstream))
@@ -125,7 +140,7 @@ trigger).
 The @request@ must already carry the @HEAD@ method (the caller sets it), so the
 upstream sees a bodiless request too and replies with headers and no body. This
 mirrors 'streamUpstreamWhen''s hit\/miss split, but the committed phase answers with
-'responseLBS' over an __empty body__ rather than the streaming pump:
+'relayEmptyResponse' rather than the streaming pump:
 
 * __Recoverable miss__ -- the connection could not be opened, or the status fails
   @accept@; no response is committed, the connection is closed, and 'Nothing' is
@@ -144,8 +159,8 @@ probeUpstreamWhen ::
     Request ->
     (Status -> Bool) ->
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
-    (Response -> IO ResponseReceived) ->
-    IO (Maybe ResponseReceived)
+    RelayResponder response ->
+    IO (Maybe response)
 probeUpstreamWhen manager request accept relay respond =
     tryAny (responseOpen request manager) >>= \case
         Left _ -> pure Nothing
@@ -156,7 +171,7 @@ probeUpstreamWhen manager request accept relay respond =
         | otherwise = do
             (status, headers) <- relay upstreamStatus (responseHeaders upstream)
             -- A HEAD reply carries no body; the upstream body reader is never read.
-            Just <$> respond (responseLBS status headers "")
+            Just <$> relayEmptyResponse respond status headers
       where
         upstreamStatus = responseStatus upstream
 

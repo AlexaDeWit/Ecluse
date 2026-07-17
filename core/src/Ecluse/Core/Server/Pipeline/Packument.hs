@@ -72,6 +72,7 @@ served bytes get our __own ETag__, since a merged\/filtered body matches no sing
 upstream's.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
+    PackumentReplies (..),
     servePackument,
     headPackument,
 
@@ -88,8 +89,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (Severity (DebugS, InfoS), logFM, ls)
-import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
+import Network.HTTP.Types (ResponseHeaders, hContentLength)
+import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
 
@@ -122,7 +123,7 @@ import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
+    MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
     ServeRuntime (..),
     ctxMount,
@@ -149,27 +150,41 @@ import Ecluse.Core.Server.Pipeline.Origin (
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
-    MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     RetryAfter (RetryAfter),
     ServeDecision (Admit, Reject),
     Transience (WillResolve),
+    appendHelp,
     packumentStatus,
-    packumentStatusCode,
-    renderError,
     serveDecisionOf,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 
+{- | The route-owned ways the ecosystem-neutral packument pipeline may answer.
+
+The npm adapter supplies these constructors from its closed 'ResponseContract'. The
+pipeline receives no WAI responder, so every branch below must select one of these
+declared alternatives.
+-}
+data PackumentReplies response = PackumentReplies
+    { packumentOk :: ResponseHeaders -> LByteString -> response
+    , packumentNotModified :: ResponseHeaders -> response
+    , packumentUnauthorised :: ResponseHeaders -> Text -> response
+    , packumentForbidden :: ResponseHeaders -> Text -> response
+    , packumentInternal :: ResponseHeaders -> Text -> response
+    , packumentBadGateway :: ResponseHeaders -> Text -> response
+    , packumentUnavailable :: ResponseHeaders -> Text -> response
+    }
+
 {- | Serve a @GET \/{pkg}@ packument request end to end, over the request's
 'RequestCtx'.
 
-The mount's 'PackumentDeps' and error renderer are read from the matched
-'MountBinding' in context, not threaded as arguments. When the mount has no
+The mount's 'PackumentDeps' are read from the matched 'MountBinding' in context, not
+threaded as arguments. When the mount has no
 packument-serve dependencies wired, the route is recognised but not served -- a
 @501@ in the mount's surface -- rather than fabricating a result.
 
@@ -188,13 +203,14 @@ route is validated out -- dropped as untrusted for this request and logged -- so
 single misreporting upstream never denies a package another upstream serves; when
 that leaves __no__ valid origin, the request is a @502@ (a responding upstream
 returned an invalid response), distinct from a genuine absence. Every refusal -- the
-edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ -- is rendered through the
-mount's 'MountRenderer'.
+edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ -- is selected through the
+route's injected 'PackumentReplies'.
 -}
 servePackument ::
+    PackumentReplies response ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 servePackument = packumentWith PackumentFull
 
@@ -202,8 +218,9 @@ servePackument = packumentWith PackumentFull
 'servePackument' -- the same fetch, merge, filter, rule decision, and no-survivors
 status -- answered with the __identical status and headers__ as the @GET@ (the would-be
 merged body's @Content-Length@ and the own @ETag@ the conditional-request machinery
-computes), but with the body suppressed ('bodiless'), as HTTP semantics require of a
-@HEAD@ reply.
+computes), but with the body suppressed by the route's
+'Ecluse.Core.Server.Contract.bodilessContract', as HTTP semantics require of a @HEAD@
+reply.
 
 A packument body is assembled __locally__ (a metadata fetch plus the cross-upstream
 merge), so -- unlike the tarball @HEAD@ ('headTarball') -- answering it pumps __no
@@ -213,20 +230,20 @@ merged body is still materialised, to size it and compute its @ETag@; only the b
 are withheld from the reply.
 -}
 headPackument ::
+    PackumentReplies response ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-headPackument name request respond =
-    packumentWith PackumentHead name request (respond . bodiless)
+headPackument = packumentWith PackumentHead
 
 {- The packument serve mode threaded through the handler: a full @GET@ that serves the
 merged body, or a @HEAD@ that answers the identical status and headers with the body
 suppressed. It changes exactly one thing in the pipeline -- whether the @200@ success
 path stamps the would-be body's @Content-Length@ (a @HEAD@ does, so a client sees the
 framing a @GET@ would; a @GET@ leaves that to the serving layer, which frames the body
-it actually writes). The body itself is withheld uniformly by the 'bodiless' wrapper
-'headPackument' applies, and the gating is byte-for-byte identical between the two. -}
+it actually writes). The route contract withholds the body uniformly, and the gating is
+byte-for-byte identical between the two. -}
 data PackumentServe
     = -- A @GET@: serve the merged packument body.
       PackumentFull
@@ -238,37 +255,38 @@ data PackumentServe
 -- dependencies and serve in the given mode.
 packumentWith ::
     PackumentServe ->
+    PackumentReplies response ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-packumentWith mode name request respond = do
-    renderer <- asks (bindingRenderer . ctxMount)
+packumentWith mode replies name request respond = do
     deps <- asks (bindingPackumentDeps . ctxMount)
-    serveWithDeps mode renderer deps name request respond
+    serveWithDeps mode replies deps name request respond
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
 -- and answer -- the credential-authority and merge logic the module header
 -- describes. The request runtime is read from the request context. The
 -- 'PackumentServe' mode is threaded to the success path so a @HEAD@ stamps the
--- would-be body's @Content-Length@ (the 'bodiless' wrapper withholds the bytes).
+-- would-be body's @Content-Length@ (the route contract withholds the bytes).
 serveWithDeps ::
     PackumentServe ->
-    MountRenderer ->
+    PackumentReplies response ->
     PackumentDeps ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveWithDeps mode renderer deps name request respond
-    | not (edgeTokenMatches (pdInboundToken deps) (forwardedToken request)) = liftIO (respond (edgeUnauthorised renderer))
+serveWithDeps mode replies deps name request respond
+    | not (edgeTokenMatches (pdInboundToken deps) (forwardedToken request)) =
+        liftIO (respond (packumentUnauthorised replies [] "authentication required"))
     | otherwise = do
         rt <- asks ctxRuntime
-        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode renderer deps name request respond rt) >>= \case
+        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode replies deps name request respond rt) >>= \case
             Just received -> pure received
             Nothing -> liftIO $ do
                 mpServeDecision (srMetrics rt) Metric.Unavailable
-                respond (serveOverloaded renderer)
+                respond (packumentUnavailable replies [(hRetryAfter, "1")] "server is busy; retry later")
 
 {- Serve a packument once past the admission gate: fetch both origins, gate and merge
 them, then either answer the conditional serve or take the no-survivors terminal. Hoisted
@@ -276,14 +294,14 @@ to the module level, taking its serve context as parameters rather than closing 
 large @where@, so the request flow reads as a flat sequence rather than deep nesting. -}
 serveAdmittedPackument ::
     PackumentServe ->
-    MountRenderer ->
+    PackumentReplies response ->
     PackumentDeps ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     ServeRuntime ->
     Handler ResponseReceived
-serveAdmittedPackument mode renderer deps name request respond rt = do
+serveAdmittedPackument mode replies deps name request respond rt = do
     logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
     let metrics = srMetrics rt
         -- The client's bearer, scanned out of the headers once; the private-origin fetch
@@ -304,12 +322,12 @@ serveAdmittedPackument mode renderer deps name request respond rt = do
             liftIO (mpServeDecision metrics (packumentServeDecision decisions))
             liftIO (recordDenials metrics decisions)
             logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
-            liftIO (respond (noSurvivors renderer deps decisions))
+            liftIO (respond (noSurvivors replies deps decisions))
         -- Serve a plan that survived the divergence policy: record the admit, then answer
         -- the conditional request.
         serveResolved served = do
             liftIO (mpServeDecision metrics Metric.Admit)
-            answerPackumentConditional mode deps name request respond rt sources served
+            answerPackumentConditional mode replies deps name request respond rt sources served
     case packumentPlan sources of
         Nothing -> noServeableVersions
         Just plan -> do
@@ -324,24 +342,25 @@ and the plan, never the document rebuild, encode, or output hash. Hoisted to the
 level, its serve context passed in, rather than nested inside 'serveWithDeps'. -}
 answerPackumentConditional ::
     PackumentServe ->
+    PackumentReplies response ->
     PackumentDeps ->
     PackageName ->
     Request ->
-    (Response -> IO ResponseReceived) ->
+    (response -> IO ResponseReceived) ->
     ServeRuntime ->
     [Contribution] ->
     MergePlan ->
     Handler ResponseReceived
-answerPackumentConditional mode deps name request respond rt sources plan = do
+answerPackumentConditional mode replies deps name request respond rt sources plan = do
     let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
     case evaluateETag (requestHeaders request) etag of
         NotModified matched -> do
             logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-            liftIO (respond (notModifiedResponse matched))
+            liftIO (respond (packumentNotModified replies [etagHeader matched]))
         Modified fresh -> do
             logFM DebugS (ls ("serving packument for " <> renderPackageName name))
             bytes <- liftIO (servedBytes rt deps sources plan fresh)
-            liftIO (respond (packumentResponse mode fresh bytes))
+            liftIO (respond (packumentResponse replies mode fresh bytes))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -593,44 +612,31 @@ collectDecisions privResult pubResult publicExclusions =
 the derived 'ETag' the caller already evaluated the conditional against ('Modified' --
 a match never reaches here). The bytes come from 'resolveAssembled': strict, encoded
 once per content address, shared across every request whose inputs coincide. A
-'PackumentHead' additionally advertises the body's exact @Content-Length@ (the
-'bodiless' wrapper then withholds the bytes), free off the memoised bytes. -}
-packumentResponse :: PackumentServe -> ETag -> ByteString -> Response
-packumentResponse mode etag bytes = case mode of
+'PackumentHead' additionally advertises the body's exact @Content-Length@ (the route
+contract then withholds the bytes), free off the memoised bytes. -}
+packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
+packumentResponse replies mode etag bytes = case mode of
     PackumentFull ->
-        jsonResponse status200 [etagHeader etag] (LBS.fromStrict bytes)
+        packumentOk replies [etagHeader etag] (LBS.fromStrict bytes)
     PackumentHead ->
-        jsonResponse
-            status200
+        packumentOk
+            replies
             [etagHeader etag, (hContentLength, show (BS.length bytes))]
             (LBS.fromStrict bytes)
-
--- The bodiless conditional answer: the client's validator matched, so only the tag
--- travels. Identical between GET and HEAD (a 304 carries no body either way).
-notModifiedResponse :: ETag -> Response
-notModifiedResponse etag =
-    jsonResponse (mkStatus 304 "Not Modified") [etagHeader etag] ""
 
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
 exclusions, with a denial body collecting the reasons. Never a @404@ -- the package
 existed and its versions were withheld. -}
-noSurvivors :: MountRenderer -> PackumentDeps -> [ServeDecision] -> Response
-noSurvivors renderer deps decisions =
-    renderedResponse (toStatus status) (retryAfterHeader status) (renderError renderer (pdHelp deps) message)
+noSurvivors :: PackumentReplies response -> PackumentDeps -> [ServeDecision] -> response
+noSurvivors replies deps decisions = case status of
+    PackumentOk -> packumentInternal replies [] body
+    PackumentForbidden -> packumentForbidden replies [] body
+    PackumentUnavailable{} -> packumentUnavailable replies (retryAfterHeader status) body
+    PackumentBadGateway -> packumentBadGateway replies [] body
+    PackumentServerError -> packumentInternal replies [] body
   where
     status :: PackumentStatus
     status = packumentStatus decisions
-
-    toStatus :: PackumentStatus -> Status
-    toStatus s = mkStatus (packumentStatusCode s) (statusReason s)
-
-    statusReason :: PackumentStatus -> ByteString
-    statusReason = \case
-        PackumentOk -> "OK"
-        PackumentForbidden -> "Forbidden"
-        PackumentUnavailable{} -> "Service Unavailable"
-        PackumentBadGateway -> "Bad Gateway"
-        PackumentServerError -> "Internal Server Error"
 
     -- The collected denial reasons; an empty set (no versions at all) renders a
     -- deny-by-default message rather than an empty body.
@@ -638,6 +644,8 @@ noSurvivors renderer deps decisions =
     message = case mapMaybe rejectionText decisions of
         [] -> "no versions are available for this package"
         reasons -> T.intercalate "; " reasons
+
+    body = appendHelp (pdHelp deps) message
 
     rejectionText :: ServeDecision -> Maybe Text
     rejectionText = \case

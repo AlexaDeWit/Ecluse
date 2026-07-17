@@ -34,8 +34,13 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
-import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Registry.Npm.Route (
+    npmPackumentContract,
+    npmPackumentReplies,
+    npmRouter,
+    npmTarballContract,
+    npmTarballReplies,
+ )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
@@ -50,6 +55,7 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (ServeRuntime, srMetrics),
     runHandler,
  )
+import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
@@ -76,7 +82,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
             deps <- depsFor port
-            resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
+            resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -95,7 +101,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                             { pdPrivateBaseUrl = privateUrl
                             , pdTarballHostGate = tarballHostGate privateUrl (pdPublicBaseUrl baseDeps) (pdMirrorTarget baseDeps)
                             }
-                resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
+                resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
                 divergences >>= (`shouldBe` 1)
 
@@ -104,7 +110,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- mkRuntime metricsPort
         -- 'depsFor 1' points both origins at a closed port, so each fetch is refused.
         deps <- depsFor 1
-        resp <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
+        resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
 
@@ -115,9 +121,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             deps <- depsFor port
             resp <-
                 captureServe
+                    npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -129,7 +136,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
-        held <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith deps) (servePackument leftpad defaultRequest))
+        held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -140,9 +147,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmissionTuned 1 0 0
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor port
-            saturated <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith deps) (servePackument leftpad defaultRequest))
+            saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
-            admitted <- captureServe rt (mountWith deps) (servePackument leftpad defaultRequest)
+            admitted <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
 
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
@@ -153,9 +160,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         held <-
             withServeAdmission (srMetrics rt) admission $
                 captureServe
+                    npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -170,9 +178,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             held <-
                 withServeAdmission (srMetrics rt) admission $
                     captureServe
+                        npmTarballContract
                         rt
                         (mountWith privateDeps)
-                        (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
 {- | Run a serve handler over a request runtime and mount, capturing the 'Response' it
@@ -180,11 +189,11 @@ hands its continuation. The handler runs through the core 'runHandler' against a
 scribe-less @katip@ environment (its warnings have nowhere to go, which is what these
 tests want) and an empty initial context (no active span, so no @dd@).
 -}
-captureServe :: ServeRuntime -> MountBinding -> ((Response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
-captureServe rt binding mkHandler = do
+captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
+captureServe contract rt binding mkHandler = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     captured <- newIORef Nothing
-    let respond resp = writeIORef captured (Just resp) >> pure ResponseReceived
+    let respond value = writeIORef captured (Just (responseToWai contract value)) >> pure ResponseReceived
     _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)
     maybe (throwString "the handler produced no response") pure =<< readIORef captured
 
@@ -217,7 +226,6 @@ mountWith deps =
         , bindingRouter = npmRouter
         , bindingPackumentDeps = deps
         , bindingPublishDeps = Nothing
-        , bindingRenderer = npmRenderer
         }
 
 {- | Serve dependencies pointing the public origin at the in-process upstream on
