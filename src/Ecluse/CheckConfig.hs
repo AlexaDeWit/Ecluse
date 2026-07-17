@@ -46,7 +46,6 @@ import Ecluse.Config (
     resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
-import Ecluse.Core.Queue.Memory (MemoryQueueConfig (memQueueMaxDepth))
 import Ecluse.Rts (
     appliedRuntimePlan,
     currentRtsPosture,
@@ -89,18 +88,20 @@ runCheckConfig = do
         (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
         (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
         (budget, budgetLines) = resolveMemoryBudget (cfgCache env) (cfgLimits env) (cfgQueue env) effective admission
+    -- Backend selection precedes the budget's use, exactly as a boot orders it:
+    -- the in-memory depth is a memory tenant only the memory backend spends.
     runtimePlan <-
         either
             (refuseWith . renderErrs renderBootError)
             pure
-            (planMirrorRuntime (ambientAwsFromEnv envVars) (mbQueueMemoryMaxDepth budget) config)
+            (planMirrorRuntime (ambientAwsFromEnv envVars) config)
     traverse_ TIO.putStrLn $
         concat
             [ resolvedKeyProvenance envVars docBlob
             , renderEffectivePosture effective
             , [admissionLine, privateLine, publicLine]
             , budgetLines
-            , mirrorRuntimeLines runtimePlan
+            , mirrorRuntimeLines (mbQueueMemoryMaxDepth budget) runtimePlan
             , mountPostureLines config
             , map ("warning: " <>) (mountCollisionWarnings config)
             ]
@@ -116,12 +117,12 @@ runCheckConfig = do
         TIO.hPutStrLn stderr "configuration: refused"
         exitWith (ExitFailure 2)
 
-    mirrorRuntimeLines :: MirrorRuntimePlan -> [Text]
-    mirrorRuntimeLines = \case
+    mirrorRuntimeLines :: Int -> MirrorRuntimePlan -> [Text]
+    mirrorRuntimeLines memoryDepth = \case
         NoMirroring -> ["mirror runtime: disabled (no mount mirrors; no queue is built and no worker starts)"]
         MirrorWith (SqsBackend sqs) ->
             ["mirror queue: sqs, " <> sqsQueueUrl sqs <> " (region " <> sqsRegion sqs <> ")"]
-        MirrorWith (MemoryBackend memory) ->
-            [ "mirror queue: in-memory (depth " <> show (memQueueMaxDepth memory) <> ")"
+        MirrorWith MemoryBackend ->
+            [ "mirror queue: in-memory (depth " <> show memoryDepth <> ")"
             , "warning: " <> memoryQueueBootWarning
             ]

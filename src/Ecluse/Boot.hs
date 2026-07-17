@@ -116,7 +116,7 @@ import Ecluse.Config (
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Config.Resolve (secretEnvSpellings)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Queue.Memory (newBoundedInMemoryQueue)
+import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
@@ -288,19 +288,21 @@ withBootEnv action = do
                 , beRuntimePlan = runtimePlan
                 }
 
-{- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
-or the bounded in-memory backend. The in-memory arm first emits the loud boot warning
-('mirrorQueuePlanWarning' -- it is non-durable / best-effort) through the
+{- Build the config-selected mirror queue from its plan and the memory plan's queue
+depth: the durable AWS SQS backend, or the bounded in-memory backend. The depth is a
+memory tenant, so it is allocated after the backend selection and parametrises only
+this build (the SQS arm never spends it). The in-memory arm first emits the loud boot
+warning ('mirrorQueuePlanWarning' -- it is non-durable / best-effort) through the
 composition-root logger, then constructs the bounded queue with a drop callback that
 logs each rate-limited cap-overflow drop at a warning. (A drop /metric/ hooks in
 alongside the log once the @ecluse.mirror.*@ catalogue lands.) -}
-buildMirrorQueue :: LogEnv -> MirrorQueuePlan -> IO MirrorQueue
-buildMirrorQueue logEnv plan = do
+buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
+buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
     case plan of
         SqsBackend sqsConfig -> newSqsQueue logEnv mkRegistryUrl sqsConfig
-        MemoryBackend memoryConfig ->
-            newBoundedInMemoryQueue memoryConfig (logBootWarning logEnv . memoryQueueDropWarning)
+        MemoryBackend ->
+            newBoundedInMemoryQueue (defaultMemoryQueueConfig memoryDepth) (logBootWarning logEnv . memoryQueueDropWarning)
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
 module -- the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),

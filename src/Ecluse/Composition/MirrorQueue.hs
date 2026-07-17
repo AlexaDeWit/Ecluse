@@ -36,7 +36,6 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws (..))
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
-import Ecluse.Core.Queue.Memory (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
@@ -59,18 +58,21 @@ whether anything mirrors from the resolved mounts, and only then consult the que
 configuration ('planMirrorQueue'), so a serve-only deployment can never fail boot
 over queue variables it does not need.
 -}
-planMirrorRuntime :: AmbientAws -> Int -> Config -> Either [BootError] MirrorRuntimePlan
-planMirrorRuntime ambient memoryDepth config
+planMirrorRuntime :: AmbientAws -> Config -> Either [BootError] MirrorRuntimePlan
+planMirrorRuntime ambient config
     | noneMirror = Right NoMirroring
-    | otherwise = MirrorWith <$> planMirrorQueue ambient memoryDepth (configApp config)
+    | otherwise = MirrorWith <$> planMirrorQueue ambient (configApp config)
   where
     noneMirror = all (isNothing . regMirrorTarget . mountRegistries) (configMounts config)
 
 {- | Which mirror-queue backend the composition root will build, resolved from
 config: the durable AWS @sqs@ backend (with its 'SqsConfig'), or the bounded
-best-effort in-memory backend (with its 'MemoryQueueConfig'). The pure decision
-'planMirrorQueue' yields; the composition root pattern-matches it to make the one
-constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is due.
+best-effort in-memory backend. The pure decision 'planMirrorQueue' yields; the
+composition root pattern-matches it to make the one constructor call, and
+'mirrorQueuePlanWarning' tells it whether a boot warning is due. Selection needs
+no sizes: the in-memory backend's depth cap is a memory-plan tenant allocated
+__after__ this choice (only the memory backend spends heap on queued jobs), so it
+parametrises the build ('Ecluse.Boot.buildMirrorQueue'), never the plan.
 -}
 data MirrorQueuePlan
     = -- | The durable AWS SQS backend, built by @Ecluse.Runtime.Queue.Sqs.newSqsQueue@.
@@ -78,7 +80,7 @@ data MirrorQueuePlan
     | {- | The bounded in-memory backend, built by
       'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort -- boot warns.
       -}
-      MemoryBackend MemoryQueueConfig
+      MemoryBackend
     deriving stock (Eq, Show)
 
 {- | Select the mirror-queue backend from the queue URL's shape and the ambient SDK
@@ -97,7 +99,8 @@ resource names the GCP backend, which is recognised but not built, so it is a
 fail-loud 'QueueProviderUnavailable' rather than a silent fall-through, and any
 other shape is a fail-loud 'QueueUrlUnrecognised' naming the accepted forms. An
 __absent__ @ECLUSE_QUEUE__URL@ rolls over to the bounded in-memory 'MemoryBackend'
-carrying its depth cap: mirroring is demand-driven and self-healing (a job lost to
+(its depth cap is allocated by the memory plan after this selection, and
+parametrises only the build): mirroring is demand-driven and self-healing (a job lost to
 a restart re-enqueues on the next demand), so the rollover degrades durability,
 never safety, and the composition root emits the 'memoryQueueBootWarning' so it is
 never a silent surprise.
@@ -115,12 +118,12 @@ for the queue would let an S3-only override silently redirect the queue's traffi
 With no override, the SQS backend uses AWS's default endpoint and credential
 resolution.
 -}
-planMirrorQueue :: AmbientAws -> Int -> AppConfig -> Either [BootError] MirrorQueuePlan
-planMirrorQueue ambient memoryDepth env = case qsUrl (cfgQueue env) of
+planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
+planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
     -- No queue URL: the bounded in-memory queue, a graceful rollover (loudly
-    -- warned), never a boot failure -- there is nothing to misconfigure. The depth
-    -- cap arrives resolved (configured, or computed from the runtime posture).
-    Nothing -> Right (MemoryBackend (defaultMemoryQueueConfig memoryDepth))
+    -- warned), never a boot failure -- there is nothing to misconfigure. Its
+    -- depth cap is the memory plan's to allocate, after this selection.
+    Nothing -> Right MemoryBackend
     Just queueUrl ->
         let url = unUrl queueUrl
          in case nonBlank =<< ambientAwsEndpointUrlSqs ambient of
@@ -154,7 +157,7 @@ told plainly that the mirror is non-durable -- never a silent surprise.
 mirrorQueuePlanWarning :: MirrorQueuePlan -> Maybe Text
 mirrorQueuePlanWarning = \case
     SqsBackend _ -> Nothing
-    MemoryBackend _ -> Just memoryQueueBootWarning
+    MemoryBackend -> Just memoryQueueBootWarning
 
 {- | The boot warning emitted when mirroring rolls over to the in-memory queue (no
 @ECLUSE_QUEUE__URL@): it states plainly that the mirror is in-memory, non-durable,

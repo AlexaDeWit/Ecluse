@@ -213,6 +213,12 @@ runProxy bootEnv = do
         (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (rtServeMaxInFlight (cfgRuntime env)) capabilities
     logBootInfo logEnv admissionLine
     serveAdmission <- newServeAdmission serveMaxInFlight
+    -- Whether a mirror runtime exists at all, and which queue backend it rides,
+    -- decided from the URL's shape BEFORE any byte is budgeted: only the memory
+    -- backend spends heap on queued jobs, so the queue tenant must be conditional
+    -- on this selection, never allocated ahead of it.
+    runtimePlan <-
+        orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
     -- The memory budget: every byte-valued bound resolved as a share of the heap
     -- ceiling the runtime posture found (or its shipped fallback), each with its
     -- provenance line. The admission capacity above is its working-space divisor.
@@ -227,13 +233,6 @@ runProxy bootEnv = do
                 }
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
-    -- Whether a mirror runtime exists at all, then which queue backend it rides:
-    -- zero mirroring mounts is a serve-only deployment (no queue, no worker; the
-    -- queue configuration is not consulted), and with any mirroring mount the
-    -- backend selection applies exactly as before (the GCP arm is a fail-loud
-    -- "not built" boot error, never a silent fall-through).
-    runtimePlan <-
-        orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) (mbQueueMemoryMaxDepth budget) config)
     -- The private-upstream connection pool: an explicit override, else computed from the
     -- process file-descriptor limit (the pool's real ceiling, since each pooled
     -- connection is one descriptor). Sized for the un-admitted private-hit streaming
@@ -281,7 +280,7 @@ runProxy bootEnv = do
     -- inert queue, unreachable by construction (no mount enqueues, no worker polls).
     (queue, mirrorDrain) <- case runtimePlan of
         MirrorWith queuePlan -> do
-            backendQueue <- buildMirrorQueue logEnv queuePlan
+            backendQueue <- buildMirrorQueue logEnv (mbQueueMemoryMaxDepth budget) queuePlan
             (q, drainEnqueueBuffer) <-
                 bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
             pure (q, Just drainEnqueueBuffer)
