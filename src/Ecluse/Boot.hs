@@ -199,7 +199,9 @@ applySecretFileIndirection envVars = do
         let spelling = T.pack name
          in "ECLUSE_" `T.isPrefixOf` spelling && any (`T.isSuffixOf` spelling) secretFileSuffixes
 
-    baseVarOf = T.unpack . T.dropEnd (T.length "_FILE") . T.pack
+    -- Total even though the callers only pass matched names: an unmatched name
+    -- passes through rather than inventing a partial strip.
+    baseVarOf name = maybe name T.unpack (T.stripSuffix "_FILE" (T.pack name))
 
     -- The secret-typed keys, by their env-spelling tails; anything else keeps the
     -- strict no-secrets-in-config posture with no file-shaped side door.
