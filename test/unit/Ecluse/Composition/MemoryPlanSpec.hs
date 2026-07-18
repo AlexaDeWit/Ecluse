@@ -15,6 +15,9 @@ import Ecluse.Composition.MemoryPlan (
     MemoryPlan (..),
     PublishTenant (ptAggregateBytes),
     QueueTenantDemand (MemoryQueueTenant, MirroringWithoutMemoryQueue, NoQueueTenant),
+    attributeOverrideViolations,
+    overrideMinShedSum,
+    overrideSubstitutions,
     planCacheConfig,
     resolveMemoryPlan,
  )
@@ -116,6 +119,110 @@ spec = describe "resolveMemoryPlan" $ do
                 (plan, _) = resolve cache' bareLimits bareQueue Nothing (planWith (Just (256 * mib))) NoQueueTenant False
             mpOverrideViolations plan `shouldSatisfy` (not . null)
             mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+
+    describe "attributes a residual overshoot before refusing (issue #845)" $ do
+        it "boots, never refuses, on an explicit queue depth equal to the floor the ladder would compute" $ do
+            -- The traced regression: a 64 MiB pod overshoots and must boot with the
+            -- loud warning. Pinning queue.memoryMaxDepth to the very floor the shed
+            -- ladder reaches on its own adds no byte, so it must not flip the boot
+            -- into an exit-2 refusal that blames a pin contributing nothing.
+            let queue' = bareQueue{qsMemoryMaxDepth = Just 5000} -- the queue-depth floor
+                (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+                (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+            mpOverrideViolations pinned `shouldBe` []
+            mpDegradations pinned `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
+            -- The pin moved no tenant byte: the plan matches the override-free one.
+            mpQueueMemoryMaxDepth pinned `shouldBe` mpQueueMemoryMaxDepth free
+            mpQueueTenantBytes pinned `shouldBe` mpQueueTenantBytes free
+
+        it "never refuses on an explicit queue depth under a non-memory backend (the depth charges no heap)" $ do
+            -- Under a durable (or absent) queue backend queueCharge is identically
+            -- zero, so queue.memoryMaxDepth contributes to no overshoot whatever its
+            -- value; the too-small pod boots with its warning, unblamed.
+            let queue' = bareQueue{qsMemoryMaxDepth = Just 100000} -- the cap, deliberately large
+                (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MirroringWithoutMemoryQueue False
+            mpOverrideViolations plan `shouldBe` []
+            mpQueueTenantBytes plan `shouldBe` 0
+            mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
+
+        it "names only the contributing override when an innocent one is co-present" $ do
+            -- A 1 GiB cache on a 256 MiB pod genuinely cannot fit; a queue depth
+            -- pinned to the floor beside it contributes nothing and must not be
+            -- named, and the message must not claim it pushes the plan past bytes.
+            let cache' = bareCache{csMaxBytes = Just (1 * gib)}
+                queue' = bareQueue{qsMemoryMaxDepth = Just 5000}
+                (plan, _) = resolve cache' bareLimits queue' Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
+            mpOverrideViolations plan `shouldSatisfy` (not . null)
+            mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+            mpOverrideViolations plan `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+
+    describe "attributeOverrideViolations (the refusal decision, in isolation)" $ do
+        it "refuses on the joint check, naming the single culprit whose removal fits" $ do
+            -- The pinned plan overshoots by 40; with all pins out it fits; removing
+            -- the one pin fits. It is named, and the message reports only the 40
+            -- bytes past the ceiling that the pin is responsible for.
+            let violations = attributeOverrideViolations 1000 40 0 [("cache.maxBytes", 0)]
+            violations `shouldSatisfy` (not . null)
+            violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+            violations `shouldSatisfy` any (T.isInfixOf "40")
+            violations `shouldSatisfy` any (T.isInfixOf "override-free minimum fits")
+            -- The message no longer claims bytes the pins do not contribute.
+            violations `shouldNotSatisfy` any (T.isInfixOf "even after every computed tenant")
+
+        it "names only the pins whose individual removal flips the verdict" $ do
+            -- Removing the cache fits (0); removing the depth does not (12 over).
+            let violations = attributeOverrideViolations 1000 30 0 [("cache.maxBytes", 0), ("queue.memoryMaxDepth", 12)]
+            violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+            violations `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+
+        it "names all pins when none alone flips the verdict (they overshoot only jointly)" $ do
+            -- The override-free minimum fits, but neither single removal does (each
+            -- leaves 10 over): the pins overshoot only together, so blame both.
+            let violations = attributeOverrideViolations 1000 50 0 [("cache.maxBytes", 10), ("queue.memoryMaxDepth", 10)]
+            violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+            violations `shouldSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+
+        it "does not refuse when the override-free minimum also overshoots (the pod is too small)" $
+            -- freeOvershoot > 0: the shed ladder's degradation owns this, not a refusal.
+            attributeOverrideViolations 1000 60 25 [("cache.maxBytes", 40)] `shouldBe` []
+
+        it "does not refuse when the pinned plan already fits" $
+            attributeOverrideViolations 1000 0 0 [("cache.maxBytes", 0)] `shouldBe` []
+
+    describe "overrideMinShedSum (the substitution arithmetic, in isolation)" $ do
+        it "charges nothing extra for a queue depth pinned to the floor the ladder would compute" $ do
+            -- queue.memoryMaxDepth at the queue-depth floor (5000) is zero-delta.
+            let base = 100000000
+                atFloor = overrideMinShedSum base 26214400 False True (Nothing, Nothing, Nothing, Nothing, Just 5000)
+                unpinned = overrideMinShedSum base 26214400 False True (Nothing, Nothing, Nothing, Nothing, Nothing)
+            atFloor `shouldBe` unpinned
+
+        it "charges nothing for a queue depth under a non-memory backend (queueCharge is zero)" $ do
+            -- With no memory-backed queue the depth pin cannot move a byte, however large.
+            let base = 100000000
+                huge = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Just 100000)
+                unpinned = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Nothing)
+            huge `shouldBe` unpinned
+
+        it "charges an explicit cache its full value where a computed cache sheds to zero" $ do
+            -- cacheReclaimable is zero for an explicit cache: it adds its whole value.
+            let base = 100000000
+                withCache = overrideMinShedSum base 26214400 False False (Just 12345678, Nothing, Nothing, Nothing, Nothing)
+                without = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Nothing)
+            withCache - without `shouldBe` 12345678
+
+    describe "overrideSubstitutions (the per-pin substitution)" $ do
+        it "pairs each present override with the pin set that substitutes only it out" $
+            overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5)
+                `shouldBe` [ ("cache.maxBytes", (Nothing, Just 2, Just 3, Just 4, Just 5))
+                           , ("runtime.serveMaxInFlight", (Just 1, Nothing, Just 3, Just 4, Just 5))
+                           , ("limits.maxResponseBytes", (Just 1, Just 2, Nothing, Just 4, Just 5))
+                           , ("limits.maxRequestBytes", (Just 1, Just 2, Just 3, Nothing, Just 5))
+                           , ("queue.memoryMaxDepth", (Just 1, Just 2, Just 3, Just 4, Nothing))
+                           ]
+
+        it "yields no substitution for an absent override" $
+            map fst (overrideSubstitutions (Nothing, Just 2, Nothing, Nothing, Nothing)) `shouldBe` ["runtime.serveMaxInFlight"]
 
     it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
         -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
