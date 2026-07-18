@@ -66,6 +66,7 @@ module Ecluse.Runtime.Server (
 
     -- * Running the server
     runWarp,
+    raceServerAgainstLoop,
     probeApplication,
 
     -- * The typed request perimeter
@@ -97,6 +98,8 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.Timeout (timeout)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
+import UnliftIO (MonadUnliftIO)
+import UnliftIO.Async (race_)
 import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
@@ -421,10 +424,10 @@ serverMiddleware cfg =
 
 {- | Serve the proxy's HTTP front door: allocate the launch's live 'DrainSignal',
 build the 'Application' by handing the supplied builder a 'ServerConfig' whose
-'scDrain' is that signal, and start @warp@ on the config's port over the
-composition-root 'Env'. The 'ServerConfig' -- in particular its mount bindings
-('scMounts'), each a mount's complete ecosystem wiring -- is supplied by the
-composition root, which is where the served ecosystems are mounted (see @Ecluse@).
+'scDrain' is that signal, and start @warp@ on the config's port with it. The
+'ServerConfig' -- in particular its mount bindings ('scMounts'), each a mount's
+complete ecosystem wiring -- is supplied by the composition root, which is where the
+served ecosystems are mounted (see @Ecluse@).
 
 __Graceful shutdown.__ The fresh live 'DrainSignal' allocated per launch is wired into
 both the request path and the @warp@ shutdown handler: the 'Application' builder is
@@ -481,3 +484,20 @@ installShutdownHandler drain closeSocket =
     traverse_ install [sigTERM, sigINT]
   where
     install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
+
+{- | Race a server arm (the first argument) against a never-returning background loop
+(the second): the shutdown shape the single-process composition roots share -- the
+proxy racing its HTTP server against the mirror worker, and the pilot racing its probe
+server against the OSV export loop.
+
+Choosing 'race_' over 'concurrently_' is the shutdown invariant. The background loop
+never returns, so a 'concurrently_' would keep waiting on it after the server has
+gracefully drained and returned, leaving the surrounding telemetry and resource
+brackets un-unwound: no exporter flush, the process hanging until a second signal or
+the orchestrator's kill. 'race_' lets the server's graceful return cancel the loop and
+unwind those brackets (flush and exit cleanly), while a fault thrown by either arm
+still propagates ('race_' re-raises it) so a genuine failure fails the process up
+rather than being swallowed.
+-}
+raceServerAgainstLoop :: (MonadUnliftIO m) => m () -> m () -> m ()
+raceServerAgainstLoop = race_

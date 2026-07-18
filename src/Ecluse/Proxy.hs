@@ -341,18 +341,14 @@ two thin entry points calling 'runServer' \/ 'runWorker' -- no rearchitecting. T
 server's settings (its derived mount bindings and port) are supplied by the
 composition root and threaded to 'runServer'.
 
-They are 'race_'d, not 'concurrently_'d, and the choice is a shutdown invariant. The
-worker loop never returns, so a 'concurrently_' would keep waiting on it after the
-server has gracefully drained and returned, which in turn wedges the composition
-root's outer 'race_' and leaves the telemetry and 'Env' brackets un-unwound: no
-flush, the process hanging until a second signal or the orchestrator's kill. 'race_'
-lets the server's graceful return cancel the worker and unwind those brackets (flush
-and exit cleanly), while a fault thrown by either side still propagates ('race_'
-re-raises it) so a genuine failure fails the process up rather than being swallowed.
+The server is raced against the worker through
+'Ecluse.Runtime.Server.raceServerAgainstLoop' (see there for the shutdown invariant):
+the worker loop never returns, so the server's graceful return must cancel it rather
+than a 'concurrently_' wedging on it forever.
 -}
 runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
 runServices serverConfig policies env =
-    race_ (runServer serverConfig env) (runWorker policies env)
+    Server.raceServerAgainstLoop (runServer serverConfig env) (runWorker policies env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.

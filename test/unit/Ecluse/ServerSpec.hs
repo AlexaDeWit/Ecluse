@@ -17,7 +17,9 @@ import Network.Wai (
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Test.Hspec
 import Test.Hspec.Wai
-import UnliftIO.Exception (throwIO, try)
+import UnliftIO (timeout)
+import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (finally, throwIO, try)
 
 import Data.Time (addUTCTime, getCurrentTime)
 
@@ -48,6 +50,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     newDrainSignal,
     perimeterGuard,
+    raceServerAgainstLoop,
     runWarp,
  )
 import Ecluse.Runtime.Test.Support (newTestEnv)
@@ -203,6 +206,7 @@ spec :: Spec
 spec = do
     perimeterGuardSpec
     runWarpDrainWiringSpec
+    raceServerAgainstLoopSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
             it "answers /livez with 200" $
@@ -478,3 +482,39 @@ runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)
         isDraining drain `shouldReturn` False
         beginDrain drain
         isDraining drain `shouldReturn` True
+
+{- | A typed fault thrown from one arm of 'raceServerAgainstLoop', to assert the race
+re-raises it (fails the process up) rather than swallowing it.
+-}
+newtype RaceBoom = RaceBoom Text
+    deriving stock (Eq, Show)
+
+instance Exception RaceBoom
+
+{- | Pin the shutdown-race invariant 'raceServerAgainstLoop' carries (issue #842),
+distinguishing 'race_' from 'concurrently_' with no socket and no signal: the server
+arm's return must cancel the never-returning loop, and a fault from either arm must
+re-raise rather than being swallowed.
+-}
+raceServerAgainstLoopSpec :: Spec
+raceServerAgainstLoopSpec = describe "raceServerAgainstLoop -- shutdown-race invariant (issue #842)" $ do
+    it "returns when the server arm returns, cancelling the never-returning loop" $ do
+        -- The loop never returns on its own, so a `concurrently_` would keep waiting on
+        -- it after the server arm returned and this would time out. Under `race_` the
+        -- server's return cancels the loop, whose `finally` cleanup then runs.
+        cancelled <- newIORef False
+        let server = pass
+            loop = forever (threadDelay 1_000_000) `finally` writeIORef cancelled True
+        outcome <- timeout 2_000_000 (raceServerAgainstLoop server loop)
+        outcome `shouldBe` Just ()
+        readIORef cancelled `shouldReturn` True
+
+    it "re-raises a fault thrown by the server arm (fails the process up)" $ do
+        let server = throwIO (RaceBoom "server")
+            loop = forever (threadDelay 1_000_000)
+        raceServerAgainstLoop server loop `shouldThrow` (== RaceBoom "server")
+
+    it "re-raises a fault thrown by the loop arm (fails the process up)" $ do
+        let server = forever (threadDelay 1_000_000)
+            loop = throwIO (RaceBoom "loop")
+        raceServerAgainstLoop server loop `shouldThrow` (== RaceBoom "loop")
