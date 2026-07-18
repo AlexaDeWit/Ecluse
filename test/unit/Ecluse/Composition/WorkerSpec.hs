@@ -12,8 +12,9 @@ import Ecluse.Composition (PublishTarget, planMounts, planPublishTargets)
 import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Security (Limits (maxBodyBytes))
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdMinIntegrity))
-import Ecluse.Core.Worker (WorkerPolicy (wpMinIntegrity, wpNow))
+import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Rules (inertRuleDeps)
@@ -28,7 +29,7 @@ spec :: Spec
 spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)" $ do
     it "builds one bundle per served mount, keyed by its ecosystem" $ do
         (env, bindings, targets) <- composedFixtures
-        Map.keys (workerPoliciesFor env bindings targets) `shouldBe` [Npm]
+        Map.keys (workerPoliciesFor env bindings targets testArtifactCap) `shouldBe` [Npm]
 
     it "reuses the mount's own serve-side policy inputs on the bundle" $ do
         -- The floor (and every sibling input) is the mount's own 'PackumentDeps'
@@ -38,7 +39,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
-        case Map.lookup Npm (workerPoliciesFor env bindings targets) of
+        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 wpMinIntegrity policy `shouldBe` pdMinIntegrity deps
@@ -50,7 +51,21 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         -- mirror write to marry, so no half-wired bundle exists and a job for the
         -- ecosystem is fail-closed at the worker rather than publishing nowhere.
         (env, bindings, _) <- composedFixtures
-        Map.keys (workerPoliciesFor env bindings []) `shouldBe` []
+        Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
+
+    it "sizes the bundle's artifact fetch cap from the supplied plan value" $ do
+        -- The worker's per-artifact byte cap is threaded from the memory plan's
+        -- mirror-artifact tenant (issue #846), not a hard-coded constant: the value
+        -- the composition root passes is exactly the fetch bound each bundle carries.
+        (env, bindings, targets) <- composedFixtures
+        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+            Nothing -> expectationFailure "expected an npm bundle"
+            Just policy -> maxBodyBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
+
+-- A distinctive artifact fetch cap, so the thread-through assertion pins the exact
+-- value the composition root would pass rather than any incidental default.
+testArtifactCap :: Int
+testArtifactCap = 40 * 1024 * 1024
 
 -- The composed inputs the production boot path derives: the served bindings and
 -- publish targets from the static single-mount environment, and an Env over

@@ -35,6 +35,10 @@ limits:
   # only to override.
   # maxResponseBytes: 12582912
   # maxRequestBytes: 26214400
+  # The mirror worker's per-artifact fetch cap: also computed by the memory plan (the
+  # mirror-artifact tenant), sized so the transient publish envelope stays within the
+  # heap ceiling. Raising it needs headroom the plan will refuse to boot without.
+  # maxArtifactBytes: 536870912
 
 cache:
   ttl: 60

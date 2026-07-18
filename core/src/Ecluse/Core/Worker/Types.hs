@@ -131,6 +131,13 @@ data WorkerPolicy = WorkerPolicy
     job can only ever consult the capability keyed by its own ecosystem; a job
     whose ecosystem carries no bundle is fail-closed before any of this runs.
     -}
+    , wpArtifactLimits :: Limits
+    {- ^ The bounded-fetch budget for the artifact download
+    ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'): the composition root sets its
+    @maxBodyBytes@ from the memory plan's mirror-artifact tenant
+    ('Ecluse.Composition.MemoryPlan'), so the worker never buffers a tarball whose
+    transient publish envelope would breach the heap ceiling the plan partitions.
+    -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive
     age gate is deterministic under test.

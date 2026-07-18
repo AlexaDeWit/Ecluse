@@ -58,9 +58,9 @@ The worker records progress on two events (see
 __completed job__. The threshold must clear the larger of the two gaps. The idle
 gap is small -- a healthy idle worker completes a poll at least every SQS long-poll
 window (@sqsWaitSeconds@, ≤ 20s by default). The busy gap is the binding one: a
-single job can legitimately run a fetch and then a publish of the maximum 512 MiB
-artifact (the @workerArtifactLimits@ fetch cap), and each transfer is budgeted at the
-publish-visibility floor
+single job can legitimately run a fetch and then a publish of the largest artifact the
+memory plan's fetch cap admits (the mirror-artifact tenant, at most 512 MiB at its
+ceiling), and each transfer is budgeted at the publish-visibility floor
 ('Ecluse.Core.Worker.Job.workerPublishVisibilityBudget', ~300s for 512 MiB over a
 conservative ~2 MiB/s link). One healthy job therefore runs for up to about two such
 budgets before its heartbeat next advances.

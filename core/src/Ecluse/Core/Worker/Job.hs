@@ -46,7 +46,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
+import Ecluse.Core.Worker.Fetch (ArtifactFetchFault (ArtifactOverCap, ArtifactUnavailable), fetchArtifactBytes)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Types
 
@@ -338,9 +338,17 @@ readmittedDescriptor artifact digests =
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
-    fetched <- fetchArtifactBytes (wpBuildArtifactRequest policy) (jobArtifactUrl job)
+    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (wpBuildArtifactRequest policy) (jobArtifactUrl job)
     case fetched of
-        Left reason -> pure (Retried reason)
+        Left (ArtifactUnavailable reason) -> pure (Retried reason)
+        Left (ArtifactOverCap reason) -> do
+            -- The artifact deterministically exceeds the plan-sized byte cap, so a
+            -- redelivery would re-fetch the same over-cap bytes and fail identically:
+            -- drop it (acked) rather than churn it to the DLQ. Raising the cap needs a
+            -- larger pod or an explicit limits.maxArtifactBytes -- an operator decision,
+            -- not a retry.
+            logFM ErrorS (ls ("artifact exceeds the mirror byte cap, dropping (a redelivery cannot succeed): " <> reason))
+            pure (Dropped reason)
         Right bytes ->
             case verifyIntegrity (maHashes admitted) bytes of
                 IntegrityMismatch detail -> do
@@ -397,10 +405,11 @@ holdForLongPublish receipt = do
     pass
 
 {- | The visibility window one publish is given before its message could redeliver
-mid-write. Sized to comfortably cover a publish of the maximum artifact (the 512 MiB
-@workerArtifactLimits@ fetch cap): even over a slow mirror-target link (a conservative
-~2 MiB/s floor) that uploads in well under this, so a successful publish never
-redelivers mid-flight. A __failed__ publish does not wait this out -- the failure path
+mid-write. Sized to comfortably cover a publish of the largest artifact the memory
+plan's fetch cap admits (the mirror-artifact tenant, at most 512 MiB at its ceiling):
+even over a slow mirror-target link (a conservative ~2 MiB/s floor) that uploads in
+well under this, so a successful publish never redelivers mid-flight. A __failed__
+publish does not wait this out -- the failure path
 resets the message to visible at once (see @releaseForRetry@) -- so the generous hold
 costs nothing on the retry path; this is the background worker's correct trade (never
 interrupt a slow success; retry latency on failure does not matter).
