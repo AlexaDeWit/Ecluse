@@ -26,6 +26,7 @@ import Ecluse.Config (
     PolicyError,
     renderPolicyError,
  )
+import Ecluse.Config.Resolve qualified as Resolve
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | A reason the composition root refuses to start. Every case is a __fail-loud__
@@ -131,9 +132,9 @@ renderBootError = \case
         "memory plan refused: " <> T.intercalate "; " details
 
 {- | The full environment key of a mount-scoped setting
-(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it -- shared by the
-boot-error renderings above and the credential resolution that names missing keys
-("Ecluse.Composition.Credential").
+(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it: the
+'Ecosystem'-typed wrapper over the shared 'Resolve.mountEnvKey', used by the
+boot-error renderings above.
 -}
 mountEnvKey :: Ecosystem -> Text -> Text
-mountEnvKey eco key = "ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName eco) <> "__" <> key
+mountEnvKey eco = Resolve.mountEnvKey (ecosystemName eco)

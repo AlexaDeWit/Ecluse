@@ -13,6 +13,8 @@ module Ecluse.Config.Resolve (
     buildEnvAst,
     secretLeafKeys,
     secretEnvSpellings,
+    envSpellingOf,
+    mountEnvKey,
 ) where
 
 import Data.Aeson (Value (..), eitherDecodeStrict)
@@ -75,11 +77,26 @@ secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
 -- | 'secretLeafKeys' in their environment spelling (@authToken@ -> @AUTH_TOKEN@).
 secretEnvSpellings :: [Text]
 secretEnvSpellings = map envSpellingOf secretLeafKeys
+
+{- | The environment spelling of a camelCase document key (@authToken@ ->
+@AUTH_TOKEN@): the inverse of the camelCase reconstruction 'buildEnvAst' applies, so
+the key a boot error tells an operator to set is exactly the key the resolver reads.
+-}
+envSpellingOf :: Text -> Text
+envSpellingOf = T.toUpper . T.concatMap underscoreUpper
   where
-    envSpellingOf = T.toUpper . T.concatMap underscoreUpper
     underscoreUpper c
         | isUpper c = "_" <> T.singleton c
         | otherwise = T.singleton c
+
+{- | The full environment key of a mount-scoped setting
+(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), assembled from the mount's ecosystem name and
+the setting's already env-spelled suffix. The one home shared by the config-load
+errors ("Ecluse.Config.Types") and the boot-error renderings
+("Ecluse.Composition.BootError").
+-}
+mountEnvKey :: Text -> Text -> Text
+mountEnvKey ecosystem key = "ECLUSE_MOUNTS__" <> T.toUpper ecosystem <> "__" <> key
 
 envVarValue :: (Text, String) -> Value
 envVarValue (key, value) =
