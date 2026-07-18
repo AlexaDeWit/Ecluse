@@ -130,9 +130,10 @@ against:
 
 A @host@ that is not an IP literal (a DNS name) is __not__ blocked here:
 name-based targets are constrained by the 'isAllowedUpstreamHost' allowlist
-instead, and post-resolution IP filtering belongs to the resolving fetch layer,
-not this pure check. Both guards apply -- an allowlisted host that resolves to an
-internal literal is still caught when its address is tested here.
+instead. The resolve-to-internal class (an allowlisted name resolving to an
+internal address) is closed by the validating-TLS manager authenticating the
+dialled host ('Ecluse.Core.Security.Egress'), not by re-testing the resolved IP:
+this pure check blocks only an internal IP literal written into the host.
 -}
 isBlockedTarget :: [IPRange] -> Text -> Bool
 isBlockedTarget additionalRanges host =

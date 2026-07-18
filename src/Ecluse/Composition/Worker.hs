@@ -109,8 +109,9 @@ mirror write -- every decision input taken from the mount's __own__
 'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The
 metadata client is built through the same injected constructor the serve path uses
 ('pdNewMetadataClient', over the same shared manager 'srPublicManager' is wired
-to), anonymous (no client credential reaches the public origin), inheriting the
-resolved-IP SSRF recheck. Its own failure and dropped-entry logs are elided (the
+to), anonymous (no client credential reaches the public origin), gated by the host
+allowlist with certificate validation authenticating the dialled host. Its own
+failure and dropped-entry logs are elided (the
 worker logs its own re-evaluation outcome per job), while the upstream-fetch
 metrics still record through the shared instruments. -}
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> WorkerPolicy
