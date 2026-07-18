@@ -14,9 +14,12 @@ the body streams -- a use-after-free.
 Raw WAI avoids it by construction: 'Network.Wai.Application' is
 continuation-passing, so the upstream connection is opened explicitly with
 @responseOpen@ before the response is committed and closed with @responseClose@ run
-through @finally@ around the whole streamed relay. The connection then lives for
-exactly the duration of the streamed body and is closed on every path, only once
-Warp has returned @ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it through
+through @finally@ around the whole streamed relay. The open-to-@finally@ handoff is
+masked, so an async exception (the request timeout's kill, or Warp tearing the
+handler down on client disconnect) cannot strike between @responseOpen@ returning and
+@finally@ arming @responseClose@ and strand the connection. The connection then lives
+for exactly the duration of the streamed body and is closed on every path, even under
+cancellation, only once Warp has returned @ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it through
 the sink's bounded output buffer -- blocking on the socket send whenever it
 spills -- before pulling the next, so the proxy reads from upstream only as fast
 as the client drains, giving __constant memory regardless of artifact size__ with
@@ -49,7 +52,7 @@ import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose,
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
-import UnliftIO.Exception (finally, tryAny)
+import UnliftIO.Exception (finally, mask, tryAny)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
 
@@ -113,9 +116,16 @@ streamUpstreamWhen manager request accept relay respond =
     -- the caller may fall through on. Once a 2xx hands off to 'respond' the response
     -- is committed, so a body failure there is left to propagate (not caught into a
     -- 'Nothing'); the connection is closed on every path as the stream unwinds.
-    tryAny (responseOpen request manager) >>= \case
-        Left _ -> pure Nothing
-        Right upstream -> stream upstream `finally` responseClose upstream
+    --
+    -- The open-to-'finally' handoff runs masked so an async exception (the request
+    -- timeout's kill, or Warp tearing the handler down on client disconnect) cannot
+    -- strike between 'responseOpen' returning the connection and 'finally' arming
+    -- 'responseClose' over it, which would strand the connection. 'restore' keeps the
+    -- open and the pump interruptible; only the decision-and-attach handoff is pinned.
+    mask $ \restore ->
+        tryAny (restore (responseOpen request manager)) >>= \case
+            Left _ -> pure Nothing
+            Right upstream -> restore (stream upstream) `finally` responseClose upstream
   where
     stream upstream
         | not (accept upstreamStatus) = pure Nothing
@@ -162,9 +172,14 @@ probeUpstreamWhen ::
     RelayResponder response ->
     IO (Maybe response)
 probeUpstreamWhen manager request accept relay respond =
-    tryAny (responseOpen request manager) >>= \case
-        Left _ -> pure Nothing
-        Right upstream -> probe upstream `finally` responseClose upstream
+    -- Masked open-to-'finally' handoff, as in 'streamUpstreamWhen': an async exception
+    -- must not strike between 'responseOpen' returning and 'finally' arming
+    -- 'responseClose', which would strand the connection. 'restore' keeps the open (and
+    -- the bodiless probe) interruptible; only the decision-and-attach handoff is pinned.
+    mask $ \restore ->
+        tryAny (restore (responseOpen request manager)) >>= \case
+            Left _ -> pure Nothing
+            Right upstream -> restore (probe upstream) `finally` responseClose upstream
   where
     probe upstream
         | not (accept upstreamStatus) = pure Nothing
