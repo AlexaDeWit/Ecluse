@@ -20,7 +20,7 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
-import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
+import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Katip (Environment (..), initLogEnv, runKatipContextT)

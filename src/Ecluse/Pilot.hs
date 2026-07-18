@@ -23,14 +23,13 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
     AdvisoriesSettings (advBucket, advCompileInterval, advDataDir, advOsvExportBaseUrl),
     AppConfig (cfgAdvisories, cfgServer),
     Config (configApp),
     ServerSettings (srvPort),
  )
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl))
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Supervision (

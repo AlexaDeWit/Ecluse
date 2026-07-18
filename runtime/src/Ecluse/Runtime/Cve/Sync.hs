@@ -33,7 +33,9 @@ module Ecluse.Runtime.Cve.Sync (
     DbEtag (..),
     OsvDbFetchFault (..),
     OsvDbCapExceeded (..),
-    s3CveFetch,
+    S3CveSource,
+    newS3CveSource,
+    s3CveFetchFor,
     cappedAt,
 
     -- * One sync cycle
@@ -69,10 +71,11 @@ import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
 {- | The sync transport, as data: how to learn the remote artifact's current
 version and how to fetch its bytes. Injected so 'syncStep' is unit-testable
-without a network; the composition root supplies 's3CveFetch'.
+without a network; the composition root draws one from a 'newS3CveSource'.
 -}
 data CveFetch = CveFetch
     { fetchHeadEtag :: IO (Either OsvDbFetchFault (Maybe DbEtag))
@@ -310,10 +313,31 @@ loggedStep env eco notifyFirstSync lastSeen =
             -- stops: retrying identical bytes cannot end differently.
             pure (True, Just etag)
 
-{- | The real transport: S3 @HEAD@ for the ETag, bounded streaming @GET@ for
-the bytes, against one bucket and key. A @404@ on @HEAD@ is the honest
-@Right Nothing@ (not yet published); every other service or transport fault is
-the 'Left' value, classified into the core vocabulary at this edge.
+{- | An S3-backed advisory-fetch source: the @amazonka@ 'AWS.Env' is built once at
+'newS3CveSource' and captured, so 's3CveFetchFor' yields a 'CveFetch' per (bucket,
+object key, byte cap) without re-discovering credentials per mount. The runtime
+adapter that seals the SDK env behind the sync's transport, matching
+'Ecluse.Runtime.Queue.Sqs.newSqsQueue'; the composition shell never handles the env.
+-}
+newtype S3CveSource = S3CveSource
+    { s3CveFetchFor :: Text -> Text -> Int -> CveFetch
+    -- ^ A 'CveFetch' against one bucket, object key, and byte cap, over the captured env.
+    }
+
+{- | Build an 'S3CveSource', constructing the S3 @amazonka@ env once (honouring the
+pre-parsed endpoint override) and capturing it, so every ecosystem's 'CveFetch'
+shares one credential discovery.
+-}
+newS3CveSource :: Maybe (Bool, Text, Int) -> IO S3CveSource
+newS3CveSource mEndpoint = do
+    awsEnv <- buildS3Env mEndpoint
+    pure (S3CveSource (s3CveFetch awsEnv))
+
+{- | The real transport over the captured env: S3 @HEAD@ for the ETag, bounded
+streaming @GET@ for the bytes, against one bucket and key. Internal to the adapter,
+sealed by 'newS3CveSource'; a @404@ on @HEAD@ is the honest @Right Nothing@ (not yet
+published), and every other service or transport fault is the 'Left' value, classified
+into the core vocabulary at this edge.
 -}
 s3CveFetch :: AWS.Env -> Text -> Text -> Int -> CveFetch
 s3CveFetch awsEnv bucket key maxBytes =
@@ -360,7 +384,7 @@ isNotFound = \case
     _ -> False
 
 {- | A pass-through conduit that refuses to stream past the byte cap: the
-enforcement behind 's3CveFetch''s bounded download, where the declared content
+enforcement behind the source's bounded download, where the declared content
 length is only the fast-fail. A breach throws the confined 'OsvDbCapExceeded'
 (a conduit has no value channel of its own); the adapter boundary folds it into
 'OsvDbTooLarge'.

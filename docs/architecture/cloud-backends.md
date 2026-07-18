@@ -132,6 +132,13 @@ fields are functions (the Handle pattern), built by a per-backend smart construc
 smart constructor a concrete implementation, and its closure captures that backend's
 private state (an `amazonka` env, an HTTP manager).
 
+This construction seals SDK state uniformly, beyond the handles above: the advisory-sync
+S3 client builds its `amazonka` env once in its smart constructor (`newS3CveSource`) and
+captures it behind the injected `CveFetch` transport, just as `newCodeArtifactProvider`
+builds the CodeArtifact env internally. So no raw SDK env crosses a runtime boundary, and
+both `ecluse-core` and the `ecluse` composition shell carry no cloud SDK; only
+`ecluse-runtime` does.
+
 Backend choice is runtime, config-driven, single-binary: all adapters are compiled in,
 and one composition root reads the configured provider, calls the matching constructor,
 and stores the record in `Env`. Nothing downstream knows which backend it holds; it just
