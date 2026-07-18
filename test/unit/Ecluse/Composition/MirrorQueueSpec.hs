@@ -13,7 +13,6 @@ import Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (..),
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
-    parseEndpointUrl,
     planMirrorQueue,
     planMirrorRuntime,
  )
@@ -26,7 +25,6 @@ spec :: Spec
 spec = do
     mirrorRuntimeSpec
     mirrorQueueSpec
-    parseEndpointUrlSpec
 
 mirrorRuntimeSpec :: Spec
 mirrorRuntimeSpec = describe "planMirrorRuntime" $ do
@@ -143,14 +141,3 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
 
     withRegion :: Text -> AmbientAws
     withRegion r = noAmbient{ambientAwsRegion = Just r}
-
-parseEndpointUrlSpec :: Spec
-parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
-    it "parses http with explicit port" $ do
-        parseEndpointUrl "http://localhost:4566" `shouldBe` Just (False, "localhost", 4566)
-    it "parses https with implicit port" $ do
-        parseEndpointUrl "https://s3.amazonaws.com" `shouldBe` Just (True, "s3.amazonaws.com", 443)
-    it "parses http with implicit port" $ do
-        parseEndpointUrl "http://s3.amazonaws.com" `shouldBe` Just (False, "s3.amazonaws.com", 80)
-    it "rejects malformed URLs" $ do
-        parseEndpointUrl "not-a-url" `shouldBe` Nothing

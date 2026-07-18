@@ -183,9 +183,9 @@ appConfigFrom envVars doc = case loadConfig envVars doc of
     Right c -> pure (configApp c)
     Left e -> fail ("Config error: " <> show e)
 
--- 'Ecluse.Runtime.Pilot.Export.buildS3Env' discovers credentials from the process
--- environment; the plan only wires the transport (no request is made), so
--- dummies satisfy it.
+-- 'Ecluse.Runtime.Cve.Sync.newS3CveSource' builds the S3 env, which discovers
+-- credentials from the process environment; the plan only wires the transport (no
+-- request is made), so dummies satisfy it.
 setDummyAwsCredentials :: IO ()
 setDummyAwsCredentials = do
     setEnv "AWS_ACCESS_KEY_ID" "test"

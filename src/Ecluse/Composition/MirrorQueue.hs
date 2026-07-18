@@ -3,14 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The composition root's mirror-queue backend selection: the pure decision of
-which queue this binary builds, the boot warnings the choice warrants, and the
-endpoint-URL parsing the cloud backend's override needs.
+which queue this binary builds and the boot warnings the choice warrants.
 
 'planMirrorQueue' is the single place that knows which backends this binary can
 build; the composition root pattern-matches its 'MirrorQueuePlan' to make the one
 constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is
 due. Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run
-reports every missing input.
+reports every missing input. The SQS endpoint override is parsed by the shared
+'Ecluse.Config.Ambient.parseEndpointUrl'.
 -}
 module Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (..),
@@ -20,7 +20,6 @@ module Ecluse.Composition.MirrorQueue (
     mirrorQueuePlanWarning,
     memoryQueueBootWarning,
     memoryQueueDropWarning,
-    parseEndpointUrl,
 ) where
 
 import Data.Text qualified as T
@@ -34,9 +33,8 @@ import Ecluse.Config (
     regMirrorTarget,
     unUrl,
  )
-import Ecluse.Config.Ambient (AmbientAws (..))
+import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
-import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 
@@ -183,23 +181,3 @@ memoryQueueDropWarning dropped =
         <> show dropped
         <> " job(s) dropped so far. Each is re-mirrored on the next demand; raise "
         <> "ECLUSE_QUEUE__MEMORY_MAX_DEPTH to shed fewer under load."
-
-{- | Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
-flag and the default port (443\/80) when none is given; an absent scheme or a
-non-numeric port yields 'Nothing'. The @host[:port]@ authority is split by the
-shared bracket-aware 'Ecluse.Core.Security.splitHostPort', so a bracketed IPv6 literal
-(@[::1]:4566@) is split on its closing bracket, not on an inner colon, and the host
-is returned without brackets -- the same primitive the data-plane host extractor
-uses, so the two cannot drift on an authority edge case.
--}
-parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
-parseEndpointUrl raw = do
-    (secure, afterScheme) <-
-        ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
-    let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-    (hostText, portText) <- splitHostPort authority
-    host <- nonBlank hostText
-    port <- case T.stripPrefix ":" portText of
-        Nothing -> Just (if secure then 443 else 80)
-        Just digits -> readMaybe (toString digits)
-    pure (secure, host, port)

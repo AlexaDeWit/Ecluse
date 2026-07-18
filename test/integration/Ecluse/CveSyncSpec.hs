@@ -38,9 +38,8 @@ import UnliftIO.Concurrent (threadDelay)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
-import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv)
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv, parseEndpointUrl)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -57,8 +56,8 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
-import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
-import Ecluse.Runtime.Pilot.Export (buildS3Env)
+import Ecluse.Runtime.Aws.S3 (buildS3Env)
+import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
@@ -90,6 +89,7 @@ spec =
                             let ambient = ambientAwsFromEnv (s3EnvVars endpointUrl bucket)
                             awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
                             createBucketWithRetry awsEnv bucket 30
+                            cveSource <- newS3CveSource (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
 
                             -- One proxy wiring: the slot, the fast-lane policy over it,
                             -- and the sync task polling the (empty) bucket.
@@ -103,7 +103,7 @@ spec =
                                         }
                                 syncEnv =
                                     SyncEnv
-                                        { syncFetch = s3CveFetch awsEnv bucket "npm-osv-schema3.db" (512 * 1024 * 1024)
+                                        { syncFetch = s3CveFetchFor cveSource bucket "npm-osv-schema3.db" (512 * 1024 * 1024)
                                         , syncEcosystem = Npm
                                         , syncDbPath = dataDir <> "/npm-osv-schema3.db"
                                         , syncSlot = slot
@@ -136,7 +136,7 @@ spec =
                                 -- cap the published artifact's declared length
                                 -- oversteps fails fast, before any bytes sink, as
                                 -- the typed value on the 'CveFetch' channel.
-                                let cappedFetch = s3CveFetch awsEnv bucket "npm-osv-schema3.db" 16
+                                let cappedFetch = s3CveFetchFor cveSource bucket "npm-osv-schema3.db" 16
                                 fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
                                     `shouldReturn` Left (OsvDbTooLarge 16)
   where

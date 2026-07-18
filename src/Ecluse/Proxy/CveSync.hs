@@ -19,7 +19,6 @@ module Ecluse.Proxy.CveSync (
     cveSyncScheduleFor,
 ) where
 
-import Amazonka qualified as AWS
 import Data.Map.Strict qualified as Map
 import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
 import Katip.Monadic (runKatipContextT)
@@ -27,20 +26,18 @@ import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
 import System.IO.Error (IOError, catchIOError)
 
-import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
     AdvisoriesSettings (advBucket, advDataDir, advMaxDatabaseBytes, advPollInterval),
     AppConfig (cfgAdvisories, cfgMounts),
  )
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl))
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, s3CveFetch)
+import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, s3CveFetchFor)
 import Ecluse.Runtime.Log (moduleField)
-import Ecluse.Runtime.Pilot.Export (buildS3Env)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
 lookup borrows through that ecosystem's own slot when the sync plan carries
@@ -113,20 +110,21 @@ planCveSync logEnv ambient appCfg = case advBucket (cfgAdvisories appCfg) of
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
-        awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
+        cveSource <- newS3CveSource (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource bucket) (Map.keys (cfgMounts appCfg))
 
 -- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync
 -- environment against the ecosystem's stable object key and canonical on-disk
--- path under the OSV data dir.
-cveSyncHandleFor :: AppConfig -> AWS.Env -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg awsEnv bucket eco = do
+-- path under the OSV data dir. The S3 env is captured once in 'cveSource', so every
+-- ecosystem's transport shares one credential discovery.
+cveSyncHandleFor :: AppConfig -> S3CveSource -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg cveSource bucket eco = do
     slot <- newCveSlot
     ready <- newTVarIO False
     let key = osvDbFileName (ecosystemName eco)
         syncEnv =
             SyncEnv
-                { syncFetch = s3CveFetch awsEnv bucket (toText key) (advMaxDatabaseBytes (cfgAdvisories appCfg))
+                { syncFetch = s3CveFetchFor cveSource bucket (toText key) (advMaxDatabaseBytes (cfgAdvisories appCfg))
                 , syncEcosystem = eco
                 , syncDbPath = advDataDir (cfgAdvisories appCfg) </> key
                 , syncSlot = slot

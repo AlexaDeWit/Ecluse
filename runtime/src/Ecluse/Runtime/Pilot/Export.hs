@@ -6,17 +6,15 @@
 
 {- | The S3 upload adapter for the compiled OSV artifact.
 
-The amazonka-facing half of Pilot's export: build an S3-configured @amazonka@ env
-(honouring an optional custom endpoint override) and @PutObject@ a compiled
-@osv.db@ into the configured bucket. It takes a __pre-parsed__ endpoint tuple
-rather than the application config, so it is an ecosystem-agnostic cloud adapter
-with no dependency on the composition shell; the caller (the Pilot export loop, or
-the proxy's CVE-sync consumer for 'buildS3Env') resolves the endpoint from config
-and passes it down.
+The amazonka-facing half of Pilot's export: @PutObject@ a compiled @osv.db@ into the
+configured bucket over an S3 env built for an optional custom endpoint
+('Ecluse.Runtime.Aws.S3.buildS3Env'). It takes a __pre-parsed__ endpoint tuple rather
+than the application config, so it is an ecosystem-agnostic cloud adapter with no
+dependency on the composition shell; the Pilot export loop resolves the endpoint from
+config and passes it down.
 -}
 module Ecluse.Runtime.Pilot.Export (
     exportToS3,
-    buildS3Env,
 ) where
 
 import Conduit (MonadResource)
@@ -30,6 +28,7 @@ import UnliftIO.Exception (bracket, withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
@@ -73,21 +72,3 @@ exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
 
             katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" (elapsed - start)) $
                 logFM InfoS "S3 upload complete"
-
-{- | Build an @amazonka@ env for S3, applying an optional custom endpoint override
-(the pre-parsed @(secure, host, port)@). Shared by the Pilot export producer and the
-proxy's CVE-sync consumer, both of which resolve the override from configuration and
-pass the parsed tuple in.
--}
-buildS3Env :: Maybe (Bool, Text, Int) -> IO AWS.Env
-buildS3Env mEndpoint = do
-    env <- AWS.newEnv AWS.discover
-    pure $ case mEndpoint of
-        Just endpoint -> AWS.configureService (customS3Endpoint endpoint) env
-        Nothing -> env
-
-customS3Endpoint :: (Bool, Text, Int) -> AWS.Service
-customS3Endpoint (secure, host, port) =
-    (AWS.setEndpoint secure (encodeUtf8 host) port S3.defaultService)
-        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
-        }

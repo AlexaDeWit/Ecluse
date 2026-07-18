@@ -348,6 +348,7 @@ library ecluse-runtime
   hs-source-dirs:  runtime/src
   exposed-modules:
     Ecluse.Runtime.Aws.Fault
+    Ecluse.Runtime.Aws.S3
     Ecluse.Runtime.Credential.CodeArtifact
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Env
