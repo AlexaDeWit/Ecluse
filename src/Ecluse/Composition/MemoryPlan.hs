@@ -126,7 +126,7 @@ data MemoryPlan = MemoryPlan
     , mpMaxResponseBytes :: Int
     -- ^ The per-response wire cap @R@ carved from the material aggregate.
     , mpMaxRequestBytes :: Int
-    -- ^ The per-request (publish body) wire cap @Q@, the WAI size limit.
+    -- ^ The per-request (publish body) wire cap @Q@, enforced at the publish read site.
     , mpAdmissionCapacity :: Int
     -- ^ @max 1 (min A_cpu A_mem)@; the composition root builds admission from it.
     , mpShedCapabilities :: Maybe Int
