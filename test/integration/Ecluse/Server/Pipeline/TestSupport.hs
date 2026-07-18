@@ -29,44 +29,39 @@ import Network.Wai.Test (
     setPath,
  )
 
+import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
     queueTransportFault,
  )
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Env (Env (envQueue))
 import Ecluse.Runtime.Server (
-    MountBinding (..),
     application,
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha256Of, sriSha512Of)
+import Ecluse.Test.Package (sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture (publishedDaysAgo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Mount (consistentGateWith, npmServeDeps)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -568,29 +563,9 @@ deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
     prepared <- prepare inertRuleDeps policy
     pure
-        PackumentDeps
-            { pdPrivateBaseUrl = Just (localhost privatePort)
-            , pdPublicBaseUrl = localhost publicPort
-            , pdMountBaseUrl = "https://proxy.test"
-            , pdMirror = MirrorOnAdmit "https://mirror.test"
-            , pdRules = prepared
-            , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.test")
-            , pdLimits = defaultLimits
-            , pdInboundToken = mkSecret <$> inbound
-            , pdNow = pure now
-            , pdAdvisoryEtag = pure Nothing
-            , pdHelp = Nothing
-            , pdMinIntegrity = defaultMinIntegrity
-            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-            , pdDivergencePolicy = Warn
-            , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
-            , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
-            , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-            , pdAssemble = assembleMergedPackument
-            , -- The loopback egress former: these suites enqueue jobs whose artifact
-              -- URLs point at in-process http servers.
-              pdEgressUrl = Right . loopbackRegistryUrl
+        (npmServeDeps (Just (localhost privatePort)) (localhost publicPort) (MirrorOnAdmit "https://mirror.test") prepared (pure now))
+            { pdInboundToken = mkSecret <$> inbound
+            , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful prepared
@@ -605,26 +580,6 @@ depsWith effectful privatePort publicPort = do
 
 localhost :: Int -> Text
 localhost port = "http://localhost:" <> show port
-
-{- | Re-derive the precomputed tarball-host gate from a deps value's (possibly
-overridden) upstream URLs, so a test that record-updates @pdPrivateBaseUrl@,
-@pdPublicBaseUrl@, or @pdMirror@ keeps @pdTarballHostGate@ consistent. The gate is
-a cached projection of those three fields (the composition root builds it once), so a
-bare record update would leave it stale; the override harness applies this after any tweak.
--}
-consistentGate :: PackumentDeps -> PackumentDeps
-consistentGate = consistentGateWith []
-
-{- | 'consistentGate' with adapter-declared ecosystem artifact hosts, for a test that
-exercises the ecosystem-host equivalence (the PyPI files-host shape).
--}
-consistentGateWith :: [Text] -> PackumentDeps -> PackumentDeps
-consistentGateWith ecosystemHosts d =
-    d{pdTarballHostGate = tarballHostGate ecosystemHosts (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
-  where
-    mirrorUrlOf = \case
-        MirrorOnAdmit url -> Just url
-        NoMirrorWrite -> Nothing
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
 in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
@@ -676,15 +631,7 @@ withProxyEnvQueueDepsHosts queue privateUp publicUp inbound hostsOf tweakDeps k 
             env <- newTestEnvWithQueue queue manager
             baseDeps <- deps privatePort publicPort inbound
             let tweaked = tweakDeps baseDeps
-                cfg =
-                    mkServerConfig
-                        [ MountBinding
-                            { bindingPrefix = "npm" :| []
-                            , bindingRouter = npmRouter
-                            , bindingPackumentDeps = consistentGateWith (hostsOf tweaked) tweaked
-                            , bindingPublishDeps = Nothing
-                            }
-                        ]
+                cfg = mkServerConfig (maybeToList (mountBindingFor Npm (consistentGateWith (hostsOf tweaked) tweaked) Nothing))
             k (application cfg env) env publicPort
 
 {- | Run an assertion against a proxy over the two upstream doubles and the proxy's
@@ -728,15 +675,7 @@ withProxyEffectful effectful privateUp publicUp k = do
             manager <- newManager defaultManagerSettings
             env <- newTestEnvWithQueue queue manager
             effectfulDeps <- depsWith effectful privatePort publicPort
-            let cfg =
-                    mkServerConfig
-                        [ MountBinding
-                            { bindingPrefix = "npm" :| []
-                            , bindingRouter = npmRouter
-                            , bindingPackumentDeps = effectfulDeps
-                            , bindingPublishDeps = Nothing
-                            }
-                        ]
+            let cfg = mkServerConfig (maybeToList (mountBindingFor Npm effectfulDeps Nothing))
             k (application cfg env)
 
 {- | A @GET@ at the given path with no credential, driven through a WAI session: the

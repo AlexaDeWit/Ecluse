@@ -18,25 +18,20 @@ import TestContainers (Container)
 import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (runWorker)
+import Ecluse (mountBindingFor, runWorker)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue)
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SRI))
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Worker (WorkerPolicies)
@@ -48,13 +43,14 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of, unsafeHash)
+import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
@@ -129,7 +125,7 @@ withAwsProxy container queueName body =
                 env <- buildEnv queue
                 policies <- workerPoliciesAt mirrorUrl
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
-                let app = application (mkServerConfig [binding]) env
+                let app = application (mkServerConfig (maybeToList binding)) env
                 body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog}
 
 {- Build the SQS-backed mirror queue through the production composition root: create a
@@ -196,39 +192,15 @@ workerPoliciesAt mirrorUrl = do
 -- origin is the 404 stub (so every request misses to public), and the mirror target is
 -- the publish stub. The fixed clock and the week-long quarantine make the rule gate
 -- deterministic.
-mountBinding :: Text -> Text -> Text -> IO MountBinding
+mountBinding :: Text -> Text -> Text -> IO (Maybe MountBinding)
 mountBinding privateUrl publicUrl mirrorUrl = do
     prepared <- prepare inertRuleDeps admitOldEnough
     let deps =
-            PackumentDeps
-                { pdPrivateBaseUrl = Just privateUrl
-                , pdPublicBaseUrl = publicUrl
-                , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirror = MirrorOnAdmit mirrorUrl
-                , pdRules = prepared
-                , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just mirrorUrl)
-                , pdLimits = defaultLimits
-                , pdInboundToken = Nothing
-                , pdNow = pure fixedNow
-                , pdAdvisoryEtag = pure Nothing
-                , pdHelp = Nothing
-                , pdMinIntegrity = defaultMinIntegrity
-                , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-                , pdDivergencePolicy = Warn
-                , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
-                , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
-                , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-                , pdAssemble = assembleMergedPackument
+            (npmServeDeps (Just privateUrl) publicUrl (MirrorOnAdmit mirrorUrl) prepared (pure fixedNow))
+                { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }
-    pure
-        MountBinding
-            { bindingPrefix = "npm" :| []
-            , bindingRouter = npmRouter
-            , bindingPackumentDeps = deps
-            , bindingPublishDeps = Nothing
-            }
+    pure (mountBindingFor Npm deps Nothing)
 
 {- The public upstream: it answers any @.tgz@ path with the artifact bytes and every
 other path with the two-version packument, whose @dist.tarball@ names this same

@@ -27,11 +27,6 @@ import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route (
     npmPackumentContract,
     npmPackumentReplies,
@@ -41,13 +36,12 @@ import Ecluse.Core.Registry.Npm.Route (
  )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
-    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
+    MirrorServePlan (MirrorOnAdmit),
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
@@ -62,12 +56,13 @@ import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha512Of)
+import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (consistentGate, npmServeDeps)
 import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -95,12 +90,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 (metricsPort, divergences) <- recordingDivergenceMetricsPort
                 rt <- mkRuntime metricsPort
                 baseDeps <- depsFor publicPort
-                let privateUrl = "http://localhost:" <> show privatePort
-                    deps =
-                        baseDeps
-                            { pdPrivateBaseUrl = Just privateUrl
-                            , pdTarballHostGate = tarballHostGate [] (Just privateUrl) (pdPublicBaseUrl baseDeps) (mirrorUrlOf (pdMirror baseDeps))
-                            }
+                let deps = consistentGate baseDeps{pdPrivateBaseUrl = Just ("http://localhost:" <> show privatePort)}
                 resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
                 divergences >>= (`shouldBe` 1)
@@ -234,38 +224,12 @@ and the merge serves the public contribution). The loopback stubs are addressed 
 @localhost@ DNS name rather than a bare IP literal, so the internal-range block (which
 only recognises a literal) never fires on the artifact leg -- no opt-in is needed.
 -}
-
--- The mirror-target URL a serve plan carries, for rebuilding the host gate from a
--- deps value under record updates (the gate is a cached projection of the three).
-mirrorUrlOf :: MirrorServePlan -> Maybe Text
-mirrorUrlOf = \case
-    MirrorOnAdmit url -> Just url
-    NoMirrorWrite -> Nothing
-
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare inertRuleDeps allowPolicy
     pure
-        PackumentDeps
-            { pdPrivateBaseUrl = Just "http://localhost:1"
-            , pdPublicBaseUrl = "http://localhost:" <> show publicPort
-            , pdMountBaseUrl = "http://proxy.test"
-            , pdMirror = MirrorOnAdmit "http://mirror.test"
-            , pdRules = prepared
-            , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate [] (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (Just "http://mirror.test")
-            , pdLimits = defaultLimits
-            , pdInboundToken = Nothing
-            , pdNow = pure fixedNow
-            , pdAdvisoryEtag = pure Nothing
-            , pdHelp = Nothing
-            , pdMinIntegrity = defaultMinIntegrity
-            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-            , pdDivergencePolicy = Warn
-            , pdNewMetadataClient = \t p u c f1 f2 f3 l m t' s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig t' m s l)
-            , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
-            , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-            , pdAssemble = assembleMergedPackument
+        (npmServeDeps (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (MirrorOnAdmit "http://mirror.test") prepared (pure fixedNow))
+            { pdMountBaseUrl = "http://proxy.test"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
