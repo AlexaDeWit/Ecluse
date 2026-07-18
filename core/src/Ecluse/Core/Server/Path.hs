@@ -104,4 +104,4 @@ encodeComponent :: Text -> Text
 -- set is exactly the RFC 3986 unreserved set the contract above names. Path mode,
 -- which http-types recommends for path elements, additionally passes ':@&=+$,'
 -- through unencoded, which a component must not carry.
-encodeComponent c = decodeUtf8 (urlEncode True (encodeUtf8 c))
+encodeComponent = decodeUtf8 . urlEncode True . encodeUtf8
