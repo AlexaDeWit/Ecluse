@@ -30,8 +30,8 @@ limits:
   # are a pinned policy stance rather than a machine property.
   maxVersionCount: 100000
   maxNestingDepth: 64
-  # The byte-valued caps are computed at boot by the memory budget (a share of the
-  # resolved heap ceiling, clamped; the boot log names each decision). Set either
+  # The byte-valued caps are computed at boot by the memory plan (named tenants of
+  # the effective heap ceiling; the boot log names each decision). Set either
   # only to override.
   # maxResponseBytes: 12582912
   # maxRequestBytes: 26214400

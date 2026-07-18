@@ -184,15 +184,22 @@ fought: an explicit `-M` there is adopted, and a divergence surviving the re-lau
 a warning, never an abort. See the [Operator Manual](../../USAGE.md#operating-écluse) for the
 arithmetic.
 
-The resolved posture then seeds a second derivation, the **memory budget**: every byte-valued
-bound (the response and request caps, the metadata cache's byte and entry bounds, the in-memory
-mirror-queue depth) is computed as a documented share of the heap ceiling, over the resolved
-admission capacity, rather than pinned as a flat number. An explicit config value wins any
-bound; with no ceiling datapoint the shipped fallbacks apply; and each decision is boot-logged
-as a `memory budget:` line carrying the ceiling's own provenance, so the posture lines and the
-budget lines read as one story. The structural hostile-input counts (`limits.maxVersionCount`,
-`limits.maxNestingDepth`) stay pinned policy: they bound document shape, not bytes, and do not
-scale with RAM.
+The resolved posture then seeds a second derivation, the **memory plan**: the effective heap
+ceiling is partitioned between named tenants whose sum the ceiling bounds -- a runtime reserve,
+the metadata cache's one aggregate (split into per-store sub-budgets summing exactly to it), the
+materialisation working space (which bounds admission jointly with CPU through one shared
+wire-expansion model and sizes the response cap), the publish-body aggregate (only when a
+publication target is configured), the in-memory queue tenant (only when that backend was
+selected, which is why backend selection precedes the plan), and the fixed enqueue buffer. An
+explicit config value wins its own bound; with no ceiling datapoint the shipped fallbacks apply;
+and each decision is boot-logged as a `memory plan:` line carrying the ceiling's own provenance,
+so the posture lines and the plan lines read as one story. A pod too small for the tenants'
+floors sheds in a documented priority order (cache to zero, then admission and, under nursery
+pressure, the capability count, then the publish aggregate, then the queue depth), each step a
+loud warning, and always boots; only an explicit override that breaks the combined plan is
+refused, by the boot and `check-config` alike. The structural hostile-input counts
+(`limits.maxVersionCount`, `limits.maxNestingDepth`) stay pinned policy: they bound document
+shape, not bytes, and do not scale with RAM.
 
 The resolution is role-agnostic: cores and the heap ceiling derive from the container's limits,
 which bind the proxy, Pilot, and Dredger alike. Workload-shaped memory modelling is not

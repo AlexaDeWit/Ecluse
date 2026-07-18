@@ -130,7 +130,7 @@ boot errors. For each mount, in ecosystem order: its credential reference must
 resolve to an initialised provider, and its ecosystem must resolve to an adapter
 (through the injected resolver, which the mount's 'PackumentDeps' are built from).
 Errors aggregate across every mount. The 'Limits' arrive resolved (the byte cap
-from the memory budget, "Ecluse.Composition.MemoryBudget", married to the pinned
+from the memory plan, "Ecluse.Composition.MemoryPlan", married to the pinned
 structural counts) and are carried onto every mount's deps, so the data plane
 reads each metadata body bounded (security.md invariant 4).
 -}

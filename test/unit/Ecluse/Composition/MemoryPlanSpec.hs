@@ -5,7 +5,11 @@
 module Ecluse.Composition.MemoryPlanSpec (spec) where
 
 import Data.Text qualified as T
+import Hedgehog (assert, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (..),
@@ -112,6 +116,28 @@ spec = describe "resolveMemoryPlan" $ do
                 (plan, _) = resolve cache' bareLimits bareQueue Nothing (planWith (Just (256 * mib))) NoQueueTenant False
             mpOverrideViolations plan `shouldSatisfy` (not . null)
             mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+
+    describe "the combined invariant (property)" $
+        it "holds after the solver for every computed pod, or the plan names the irreducible overshoot" $
+            hedgehog $ do
+                h <- forAll (Gen.int (Range.linear (128 * mib) (64 * gib)))
+                caps <- forAll (Gen.int (Range.linear 1 64))
+                demand <- forAll (Gen.element [NoQueueTenant, MirroringWithoutMemoryQueue, MemoryQueueTenant])
+                pub <- forAll Gen.bool
+                let runtime = (planWith (Just h)){erpCapabilities = enforcedAxis caps}
+                    (plan, _) = resolveMemoryPlan bareCache bareLimits bareQueue Nothing runtime demand pub
+                -- Without explicit overrides the plan never refuses, always admits at
+                -- least one operation, and either fits the ceiling or says at its
+                -- loudest that even the irreducible minimum exceeds it.
+                mpOverrideViolations plan === []
+                assert (mpAdmissionCapacity plan >= 1)
+                assert
+                    ( tenantSum plan <= h
+                        || any (T.isInfixOf "irreducible minimum") (mpDegradations plan)
+                    )
+                -- The ladder's order: admission never sheds before the cache gave way.
+                when (any (T.isInfixOf "admission shed") (mpDegradations plan)) $
+                    assert (any (T.isInfixOf "cache aggregate shed") (mpDegradations plan))
 
     describe "planCacheConfig" $ do
         it "marries the TTL to the plan's aggregate, split summing exactly to it" $ do

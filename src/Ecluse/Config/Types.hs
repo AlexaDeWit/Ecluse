@@ -145,8 +145,8 @@ data QueueSettings = QueueSettings
     deriving stock (Eq, Show)
 
 {- | The @limits@ group: the hostile-input bounds. The structural counts are pinned
-policy defaults; the byte-valued caps are computed from the memory budget when
-unset ("Ecluse.Composition.MemoryBudget"), a configured value always winning.
+policy defaults; the byte-valued caps are computed from the memory plan when
+unset ("Ecluse.Composition.MemoryPlan"), a configured value always winning.
 -}
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int

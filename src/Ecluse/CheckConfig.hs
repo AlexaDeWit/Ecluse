@@ -7,7 +7,7 @@ print the whole resolved posture, without starting anything.
 
 The subcommand runs the same resolution chain the proxy boots through --
 'Ecluse.Config.loadConfig', the runtime plan, the admission and pool sizings, the
-memory budget, and the mirror-queue selection -- but applies none of it: no socket
+memory plan, and the mirror-queue selection -- but applies none of it: no socket
 opens, no capability count changes, no re-exec, no cloud call. Failures print the
 same aggregated reports a boot would log and exit @2@; a valid configuration
 prints per-key provenance and every resolver's decision lines and exits @0@, so an

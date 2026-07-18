@@ -5,7 +5,7 @@
 {- | The config-derived runtime sizings of the composition root: the serve-admission
 capacity, the two connection-pool sizes and the file-descriptor datapoint they are
 computed from, and the mirror-enqueue buffer tunables. (The byte-valued bounds are
-partitioned separately, from the heap ceiling: "Ecluse.Composition.MemoryBudget".)
+partitioned separately, from the heap ceiling: "Ecluse.Composition.MemoryPlan".)
 
 Each resolution is a pure function of the validated configuration (plus, for the
 pools, the process file-descriptor limit read once by 'openFileSoftLimit'): an

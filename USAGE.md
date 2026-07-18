@@ -243,7 +243,7 @@ file; only the secret-typed keys have this side door.
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend** (the same derivation as the mirror credential, so a backend/URL disagreement is unrepresentable). A real SQS queue URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, **region taken from the host** (no `AWS_REGION` needed); the URL is validated in full (https, single-label region, 12-digit account, exactly one queue segment, no query or fragment), and the canonical form carries no port, so an explicit port, `:443` included, is refused. A Pub/Sub topic resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot naming the accepted forms. **Unset with a mirroring mount ⇒ the bounded in-process queue**: a non-durable, best-effort mirror (fine for single-node, trial, or air-gapped deployments), warned loudly at boot. Never consulted for a serve-only deployment. |
-| `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Cap on in-process queue depth, computed at boot by the memory budget (a heap-ceiling share, clamped; `50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
+| `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Cap on in-process queue depth, computed at boot by the memory plan (the conditional queue tenant, allocated only when the in-memory backend was selected; `50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and rate-limit-logged; a dropped job re-mirrors on next demand, so it's safe. Positive integer. |
 | `AWS_REGION` | Depends | AWS backends only | Region for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (an emulator or VPC endpoint carries no region in its host; a real SQS queue URL carries its own), and for the S3 advisory client's ambient SDK resolution. **Never consulted for CodeArtifact**: the mint's region is parsed from the mirror-target host itself. Ambient AWS-SDK environment, read from the process environment directly, **not** a config-document key: `awsRegion:` in the document is rejected as unknown. |
 | `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Point at a local emulator (`ministack`) or VPC endpoint; setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, with `AWS_REGION` scoping it, and requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. Ambient, like `AWS_REGION`. |
 | `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can never silently redirect the queue. Ambient, like `AWS_REGION`. |
@@ -252,8 +252,8 @@ file; only the secret-typed keys have this side door.
 
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Computed at boot by the memory budget (a working-space share per admission slot, floored at 12 MiB so real packuments always fit) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before the request is refused. Computed at boot by the memory budget (a heap-ceiling share, clamped; 25 MiB with no ceiling datapoint) unless set. Positive integer. |
+| `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Computed at boot by the memory plan (the material tenant over the admission capacity, floored at 12 MiB so real packuments always fit) unless set. Positive integer. |
+| `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before the request is refused. Computed at boot by the memory plan (a publish-tenant share, clamped; 25 MiB with no ceiling datapoint; also the pessimistic weight a chunked publish reserves against the aggregate publish-body budget) unless set. Positive integer. |
 | `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
 | `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
 
@@ -262,8 +262,8 @@ file; only the secret-typed keys have this side door.
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_CACHE__TTL` | No | `60` | Seconds metadata is kept in the shared packument cache. |
-| `ECLUSE_CACHE__MAX_ENTRIES` | No | Memory budget | Maximum number of items the metadata cache will hold; computed at boot by the memory budget (tracking the byte bound at one slot per expected entry; `1024` with no ceiling datapoint) unless set. |
-| `ECLUSE_CACHE__MAX_BYTES` | No | Memory budget | Resident-byte budget for **each** of the metadata cache's stores (the full-packument store, the single-version store, and the assembled-representation store), so the worst-case total is three budgets. Computed at boot by the memory budget (a quarter of the heap ceiling, clamped; 256 MiB with no ceiling datapoint) unless set. |
+| `ECLUSE_CACHE__MAX_ENTRIES` | No | Memory budget | Maximum number of items the metadata cache will hold; computed at boot by the memory plan (tracking the cache aggregate at one slot per expected entry; `1024` with no ceiling datapoint) unless set. |
+| `ECLUSE_CACHE__MAX_BYTES` | No | Memory budget | The metadata cache's **one aggregate** resident-byte budget, split across its three stores (full-packument 60%, single-version 15%, assembled the remainder) so the sub-budgets sum exactly to it. Computed at boot by the memory plan (the cache tenant of the heap-ceiling partition; 256 MiB with no ceiling datapoint) unless set. On a pod too small for the tenants' floors the plan sheds this aggregate first, to zero if needed (a loud warning; the proxy serves uncached). |
 
 #### Integrity (`integrity.*`)
 
@@ -647,13 +647,21 @@ serve such a source, point it at the **private** upstream slot and loosen
     persistent errors throttle to a periodic heartbeat.
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience, not an
   install path. Use the public registry's website.
-- **The memory budget (byte-valued bounds).** Every byte-valued bound is a share of the resolved
-  heap ceiling rather than a flat guess: roughly half the ceiling is materialisation working space
-  (which sizes the per-response cap across the admission slots), a quarter is the metadata cache,
-  and the rest covers the in-memory mirror queue, buffered request bodies, and GC headroom. Each
-  decision is boot-logged as a `memory budget:` line with its provenance, an explicit config value
-  always wins, and with no ceiling datapoint the documented fallbacks apply (the values shown in
-  the tables above).
+- **The memory plan (byte-valued bounds).** Every byte-valued bound is a named tenant of one
+  partition of the effective heap ceiling, never an independent multiplier: a runtime reserve off
+  the top, then the metadata cache's one aggregate (split across its three stores, summing exactly
+  to it), the materialisation working space (which bounds the admission capacity jointly with CPU
+  and sizes the per-response cap), the publish-body aggregate (present only when a publication
+  target is configured), the in-memory queue tenant (only when that backend was selected), and
+  the fixed enqueue buffer -- their sum bounded by the ceiling. Each decision is boot-logged as a
+  `memory plan:` line with its provenance, an explicit config value always wins its own bound, and
+  with no ceiling datapoint the documented fallbacks apply (the values shown in the tables above).
+  A pod too small for the tenants' floors **degrades gracefully instead of refusing**: the plan
+  sheds, warning loudly per step, the cache first (to zero: the proxy serves uncached), then
+  admission toward one in-flight operation (and the capability count where the nursery is the
+  pressure), then the publish aggregate to one maximum request, then the queue depth to its floor;
+  the process always boots. Only an explicit override that breaks the combined plan refuses
+  (exit 2), from the boot and `check-config` alike.
 - **Runtime sizing (cores and memory).** Cores and the heap ceiling resolve at boot
   (config, else cgroup, else the runtime's own posture) and every decision is logged with its
   provenance; the resolution order, the whole-cores guidance, and the per-pod memory arithmetic

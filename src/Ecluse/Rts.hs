@@ -373,7 +373,7 @@ renderProvenance :: Provenance -> Text
 renderProvenance prov = " (" <> provenanceClause prov <> ")"
 
 {- | The provenance as a bare clause, for consumers composing their own lines
-(the memory budget's, beside this module's posture lines).
+(the memory plan's, beside this module's posture lines).
 -}
 provenanceClause :: Provenance -> Text
 provenanceClause = \case
@@ -434,7 +434,7 @@ never loops and never aborts over tuning.
 
 The returned plan is the __effective__ one: the live posture is re-read after the
 apply attempt and reconciled with the desire, so every downstream sizing (the
-admission capacity, the memory budget) computes from what the RTS actually runs
+admission capacity, the memory plan) computes from what the RTS actually runs
 with. An axis the apply failed to enforce is warned per axis, naming desired and
 observed.
 -}
@@ -456,7 +456,7 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
     -- here on success) and reconcile it with the desire: the effective plan is the
     -- datapoint every downstream sizing computes from at the composition root --
     -- admission from the live capabilities ("Ecluse.Composition.Sizing"), the byte
-    -- bounds from the effective ceiling ("Ecluse.Composition.MemoryBudget").
+    -- bounds from the effective ceiling ("Ecluse.Composition.MemoryPlan").
     applied <- currentRtsPosture
     let effective = reconcileRuntimePlan cgroup plan applied
     traverse_ logInfo (renderEffectivePosture effective)

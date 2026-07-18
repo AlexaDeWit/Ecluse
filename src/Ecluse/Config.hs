@@ -289,7 +289,7 @@ sameRegistry a b = strip a == strip b
 rendered value (secret-typed keys redacted), and the layer that supplied it
 (environment > document > default, mirroring the merge precedence). Derived and
 computed values are deliberately absent: they are not configuration, and their
-resolvers log their own provenance lines (the runtime posture, the memory budget,
+resolvers log their own provenance lines (the runtime posture, the memory plan,
 the queue selection). Renders nothing if the layers fail to parse; callers dump
 provenance only after a successful 'loadConfig'.
 -}

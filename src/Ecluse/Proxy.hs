@@ -282,7 +282,7 @@ runProxy bootEnv = do
                     MirrorWith _ -> heartbeatHealthyNow heartbeat
                     NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
-                , -- The request-body cap, resolved by the memory budget (configured
+                , -- The request-body cap, resolved by the memory plan (configured
                   -- or a share of the heap ceiling).
                   scSizeLimit = RequestSizeLimit (fromIntegral (mpMaxRequestBytes plan))
                 }

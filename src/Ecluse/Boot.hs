@@ -151,7 +151,7 @@ data BootEnv = BootEnv
     -}
     , beRuntimePlan :: EffectiveRuntimePlan
     {- ^ The resolved runtime posture (capabilities and heap ceiling, each with its
-    provenance), the datapoint the downstream sizings and the memory budget
+    provenance), the datapoint the downstream sizings and the memory plan
     compute from.
     -}
     }
