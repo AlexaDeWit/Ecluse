@@ -165,7 +165,7 @@ withWeightedAdmission obs wa weight action =
         gate <- atomically (doorDecision wa weight)
         case gate of
             Refused -> shed
-            Admitted -> admitted restore
+            Admitted -> admitted restore (pure ())
             Queued -> do
                 deadline <- liftIO (registerDelay (waWaitMicros wa))
                 -- The wait runs masked, not restored: a blocked retry is still
@@ -176,7 +176,10 @@ withWeightedAdmission obs wa weight action =
                 acquired <-
                     atomically (acquireOrExpire wa weight deadline)
                         `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
-                if acquired then liftIO (onQueued obs) >> admitted restore else shed
+                -- The queued record runs through 'admitted', after the in-flight
+                -- increment and under the release 'finally', so a throwing observer
+                -- releases the held weight instead of leaking it (see 'admitted').
+                if acquired then admitted restore (onQueued obs) else shed
   where
     shed = liftIO (onShed obs) $> Nothing
 
@@ -186,8 +189,13 @@ withWeightedAdmission obs wa weight action =
     -- ran would still run 'release' via 'finally', decrementing a gauge that was never
     -- incremented and drifting it negative. 'restore' therefore wraps only the
     -- interruptible run.
-    admitted restore =
-        Just <$> ((liftIO (onInFlightDelta obs weight) >> restore action) `UE.finally` release)
+    --
+    -- 'afterArm' runs in that same masked, release-protected step, after the increment:
+    -- the queued path passes 'onQueued' here (the door path passes nothing) so a
+    -- throwing queued observer releases the held weight rather than leaking it, and,
+    -- running after the increment, can never decrement a gauge that was not raised.
+    admitted restore afterArm =
+        Just <$> ((liftIO (onInFlightDelta obs weight >> afterArm) >> restore action) `UE.finally` release)
 
     -- Publish the gauge decrement before waking a waiter. Returning capacity first
     -- would let that waiter publish its increment while the departing holder was
