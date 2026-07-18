@@ -60,6 +60,11 @@ spec = do
             encodeComponent "a/b" `shouldBe` "a%2Fb"
         it "percent-encodes the URL-reserved query, fragment, and sub-delimiter characters" $
             encodeComponent "a?b#c;d" `shouldBe` "a%3Fb%23c%3Bd"
+        it "percent-encodes the RFC 3986 sub-delimiters !'()* (guarding against any widening of the query-safe set)" $
+            -- These bytes are the ones an upstream widening of http-types' unreserved
+            -- set could silently start passing through; pinning them keeps the module's
+            -- "percent-encodes every other byte" contract honest.
+            encodeComponent "a!b'c(d)e*f" `shouldBe` "a%21b%27c%28d%29e%2Af"
         it "percent-encodes a space" $
             encodeComponent "a b" `shouldBe` "a%20b"
         it "percent-encodes a leading '@' (the scope sigil is added structurally, never within a component)" $
