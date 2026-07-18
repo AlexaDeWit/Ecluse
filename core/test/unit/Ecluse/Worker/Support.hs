@@ -69,6 +69,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried),
+    WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
     WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
@@ -300,8 +301,16 @@ ecosystem -- the foreign-bundle decoy pins -- observes exactly what it wired.
 -}
 withWiredRuntime :: MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
 withWiredRuntime queue policies metricsPort body = do
-    manager <- newManager defaultManagerSettings
     heartbeat <- newWorkerHeartbeat
+    withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body
+
+{- | 'withWiredRuntime' over a __caller-supplied__ heartbeat, so a test can observe
+the heartbeat a mid-batch step (a publish, an ack) reads while the loop runs. The
+plain 'withWiredRuntime' is this over a fresh one.
+-}
+withWiredRuntimeHeartbeat :: WorkerHeartbeat -> MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
+withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body = do
+    manager <- newManager defaultManagerSettings
     body
         WorkerRuntime
             { wrQueue = queue

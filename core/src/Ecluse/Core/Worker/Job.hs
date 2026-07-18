@@ -15,6 +15,7 @@ module Ecluse.Core.Worker.Job (
     JobOutcome (..),
     processJob,
     processBatch,
+    workerPublishVisibilityBudget,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -53,9 +54,17 @@ import Ecluse.Core.Worker.Types
 visibility budget rather than competing with its batch-mates for it. A batch is at
 most the queue's configured batch size (≤ 10), so sequential processing is a
 deliberate throughput-vs-budget choice, not a scaling bottleneck.
+
+The liveness heartbeat advances after __each__ completed job, not once for the whole
+batch, so the @\/livez@ staleness bound
+('Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter') need only cover one job's
+worst case rather than a whole sequential batch of large-artifact publishes: a
+healthy worker mid-batch is not mistaken for a stalled one.
 -}
 processBatch :: [QueueMessage] -> WorkerM ()
-processBatch = traverse_ processMessage
+processBatch = traverse_ $ \message -> do
+    processMessage message
+    recordWorkerProgress
 
 -- Process one message: run the job, and ack on any terminal outcome (success, or a
 -- non-retryable drop). A transient failure leaves the message un-acked so the queue
@@ -384,19 +393,25 @@ holdForLongPublish :: ReceiptHandle -> WorkerM ()
 holdForLongPublish receipt = do
     queue <- asks wrQueue
     -- The fault channel is a value; a failed extend is the swallowed 'Left'.
-    _ <- liftIO (extendVisibility queue receipt extendBy)
+    _ <- liftIO (extendVisibility queue receipt workerPublishVisibilityBudget)
     pass
-  where
-    -- The window one publish is given before the message could redeliver mid-write.
-    -- Sized to comfortably cover a publish of the maximum artifact ('workerArtifactLimits',
-    -- 512 MiB): even over a slow mirror-target link (a conservative ~2 MiB/s floor)
-    -- that uploads in well under 300s, so a successful publish never redelivers
-    -- mid-flight. A *failed* publish does not wait this out -- the failure path resets
-    -- the message to visible at once (see 'releaseForRetry') -- so the generous hold
-    -- costs nothing on the retry path; this is the background worker's correct trade
-    -- (never interrupt a slow success; retry latency on failure does not matter).
-    extendBy :: Seconds
-    extendBy = Seconds 300
+
+{- | The visibility window one publish is given before its message could redeliver
+mid-write. Sized to comfortably cover a publish of the maximum artifact (the 512 MiB
+@workerArtifactLimits@ fetch cap): even over a slow mirror-target link (a conservative
+~2 MiB/s floor) that uploads in well under this, so a successful publish never
+redelivers mid-flight. A __failed__ publish does not wait this out -- the failure path
+resets the message to visible at once (see @releaseForRetry@) -- so the generous hold
+costs nothing on the retry path; this is the background worker's correct trade (never
+interrupt a slow success; retry latency on failure does not matter).
+
+The liveness staleness bound ('Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter')
+is sized to exceed a fetch and a publish of this budget, so a healthy worker
+mid-publish is never read as stalled; @Ecluse.Worker.LivenessSpec@ pins that
+relationship so the two constants cannot drift apart.
+-}
+workerPublishVisibilityBudget :: Seconds
+workerPublishVisibilityBudget = Seconds 300
 
 -- Reset a received message to immediately visible, so a failed publish redelivers at
 -- once rather than waiting out the long success-path hold ('holdForLongPublish'). A

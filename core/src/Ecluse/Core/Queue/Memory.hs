@@ -53,7 +53,7 @@ data MemoryQueueConfig = MemoryQueueConfig
 
 {- | A 'MemoryQueueConfig' for a given depth cap with the idle-poll window at its
 production default -- @20s@, mirroring the SQS long-poll cadence
-(the SQS backend's @defaultSqsConfig@) and comfortably under the worker's @120s@
+(the SQS backend's @defaultSqsConfig@) and comfortably under the worker's
 heartbeat-staleness budget ('Ecluse.Core.Worker.workerHeartbeatStaleAfter'), so an idle
 'receive' returns a healthy empty poll long before @\/livez@ would flag the loop
 stalled. The depth cap stays the operator-tunable knob; the poll window is a fixed
@@ -67,10 +67,11 @@ defaultMemoryQueueConfig maxDepth =
         }
 
 {- | The most jobs one 'receive' delivers from the bounded in-memory backend. Held
-at the SQS batch cap so the worker -- which processes a batch __sequentially__ and
-advances its liveness heartbeat once per poll -- sees the same bounded batch shape
-regardless of backend, rather than one poll returning a whole cold-cache burst and
-starving the heartbeat past its staleness window.
+at the SQS batch cap so the worker -- which processes a batch __sequentially__ --
+sees the same bounded batch shape regardless of backend, rather than one poll
+returning a whole cold-cache burst. The worker advances its liveness heartbeat after
+each __completed job__ (not once per poll), so this cap bounds per-poll work and
+memory, and is no longer the heartbeat's protection against a long batch.
 -}
 memoryQueueBatchSize :: Int
 memoryQueueBatchSize = 10
@@ -110,9 +111,10 @@ That admits two deliberate departures from the cloud backends' contract:
 'receive' is a __bounded long-poll__: it waits up to 'memQueuePollWaitMicros' for a
 job, then drains up to 'memoryQueueBatchSize' without blocking, or returns @[]@ when
 the window lapses -- the in-process analogue of the cloud long-poll. The bound is
-load-bearing: the worker advances its liveness heartbeat only when 'receive' returns
-(an empty poll is a healthy idle), so an idle 'receive' that blocked forever would
-let the heartbeat go stale and @\/livez@ flag the loop stalled. The wait is the
+load-bearing: on an idle queue the worker advances its liveness heartbeat only when
+'receive' returns (an empty poll is a healthy idle; a busy worker also beats after
+each completed job), so an idle 'receive' that blocked forever would let the
+heartbeat go stale and @\/livez@ flag the loop stalled. The wait is the
 @timeout@-over-@atomically@ idiom rather than @registerDelay@ so it works on the
 non-threaded RTS too; an interrupted poll aborts the STM transaction, consuming
 nothing.
