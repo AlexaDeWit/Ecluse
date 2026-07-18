@@ -72,7 +72,7 @@ import Ecluse.Core.Worker (
     WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
+    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
     WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
