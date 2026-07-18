@@ -8,7 +8,7 @@ unallocated, while depth-bounding every value it walks.
 
 A whole-document decode (@aeson@'s @eitherDecodeStrict@) builds a 'Value' for /every/ member of a
 large object. When a caller needs only a few members out of a multi-megabyte document, that decode
-dominates the cost. This engine walks the registry's own JSON token stream (@aeson@'s
+dominates the cost. This engine walks a document's JSON token stream (@aeson@'s
 @Data.Aeson.Decoding@, no new dependency) and materialises a 'Value' only for the picked members,
 skipping the rest without allocating them. The win is on the /parse/, not the fetch: the full bytes
 are still read, but they are parsed selectively, @O(picked)@ work and residency rather than @O(N)@.

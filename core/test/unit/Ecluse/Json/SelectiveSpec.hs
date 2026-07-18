@@ -36,6 +36,12 @@ findInRecordSpec = describe "findInRecord" $ do
     it "materialises the first occurrence of a duplicate key, not a later one" $
         findTop 5 "a" "{\"a\":1,\"a\":2}" `shouldBe` Right (Just (Number 1), 2)
 
+    it "refuses a malformed later duplicate of the target, despite a valid first occurrence" $
+        findTop 5 "a" "{\"a\":1,\"a\":x}" `shouldBe` Left SelectiveUndecodable
+
+    it "refuses an over-deep later duplicate of the target, despite a valid first occurrence" $
+        findTop 1 "a" "{\"a\":1,\"a\":[[1]]}" `shouldBe` Left SelectiveTooDeeplyNested
+
     it "counts every entry scanned, duplicates included (the raw count)" $
         findTop 5 "a" "{\"a\":1,\"b\":2,\"a\":3}" `shouldBe` Right (Just (Number 1), 3)
 
