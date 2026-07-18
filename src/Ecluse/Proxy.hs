@@ -108,18 +108,16 @@ import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     PublishTenant (ptAggregateBytes),
     planCacheConfig,
-    queueTenantDemand,
-    resolveMemoryPlan,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
+import Ecluse.Composition.Plan (resolveMemoryPlanFor)
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime, cfgServer),
+    AppConfig (cfgCache, cfgLimits, cfgRuntime, cfgServer),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
-    MountConfig (mntPublicationTarget),
-    RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
+    RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
     mountPostureLines,
  )
@@ -224,16 +222,7 @@ runProxy bootEnv = do
     -- ceiling, with admission bounded jointly by CPU and the material share.
     -- Shed-ladder steps are loud warnings and the process boots regardless; only
     -- an explicit override breaking the combined invariant refuses.
-    let publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts env))
-        (plan, planLines) =
-            resolveMemoryPlan
-                (cfgCache env)
-                (cfgLimits env)
-                (cfgQueue env)
-                (rtServeMaxInFlight (cfgRuntime env))
-                (beRuntimePlan bootEnv)
-                (queueTenantDemand runtimePlan)
-                publishConfigured
+    let (plan, planLines) = resolveMemoryPlanFor env (beRuntimePlan bootEnv) runtimePlan
     traverse_ (logBootInfo logEnv) planLines
     traverse_ (logBootWarning logEnv) (mpDegradations plan)
     unless (null (mpOverrideViolations plan)) $
