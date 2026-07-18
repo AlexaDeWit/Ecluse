@@ -28,14 +28,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
-    CodeExecSignal (NoCodeOnInstall),
     Hash,
     HashAlg (SRI),
     PackageDetails (..),
     PackageName,
-    Trust (Untrusted),
     mkPackageName,
  )
 import Ecluse.Core.Queue (
@@ -82,7 +78,8 @@ import Ecluse.Core.Worker (
     newWorkerHeartbeat,
     runWorkerM,
  )
-import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash)
+import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validBlake2b, validMd5, validSha1, validSha256, validSha256Sri)
+import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 
@@ -164,21 +161,22 @@ case-folding comparison would wrongly admit it.
 caseVariantSri :: Text
 caseVariantSri = "sha512-" <> T.toUpper (fromMaybe "" (T.stripPrefix "sha512-" trueSri))
 
-{- | A well-formed SHA-1 digest that does NOT match 'tarballBytes' (it is sha1 of the
-empty string) -- the mismatch fixture, distinct from a malformed one.
+{- | The canonical empty-input SHA-1 fixture ('Ecluse.Test.Package.validSha1'), used here as
+a well-formed digest that does not match 'tarballBytes': the mismatch fixture, distinct
+from a malformed one.
 -}
 wrongSha1 :: Text
-wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+wrongSha1 = validSha1
 
--- Well-formed digests of the EMPTY input (not of 'tarballBytes'), so each is a real digest
--- of its algorithm that does not match the fetched bytes. 'someMd5' feeds the still-uncomputable
--- MD5 arm (fail-closed); the others are the now-computable algorithms' tamper fixtures (a real,
--- well-formed digest the worker recomputes and finds does not match).
+-- The canonical empty-input digest fixtures ('Ecluse.Test.Package'), used here as well-formed
+-- digests that do not match 'tarballBytes'. 'someMd5' feeds the still-uncomputable MD5 arm
+-- (fail-closed); the others are the now-computable algorithms' tamper fixtures the worker
+-- recomputes and finds do not match.
 someBlake2b, someSha256, someMd5, someSha256Sri :: Text
-someBlake2b = "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
-someSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-someMd5 = "d41d8cd98f00b204e9800998ecf8427e"
-someSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+someBlake2b = validBlake2b
+someSha256 = validSha256
+someMd5 = validMd5
+someSha256Sri = validSha256Sri
 
 -- | A fixed reference instant for the heartbeat-staleness assertions.
 epoch :: UTCTime
@@ -398,15 +396,9 @@ faithful, immutable-version posture); a tamper case swaps this set through
 -}
 sampleArtifact :: Artifact
 sampleArtifact =
-    Artifact
-        { artFilename = "thing-1.0.0.tgz"
-        , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
-        , artKind = Tarball
+    Package.sampleArtifact
+        { artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
         , artHashes = [unsafeHash SRI trueSri]
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
         }
 
 {- | A minimal projected version snapshot. The injected rules ignore its contents, so only
@@ -414,17 +406,7 @@ its validity matters; it stands in for what the shared single-version fetch woul
 -}
 sampleDetails :: PackageName -> Version -> PackageDetails
 sampleDetails name version =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = version
-        , pkgPublishedAt = Nothing
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
-        , pkgLicenses = []
-        , pkgPublisher = Nothing
-        }
+    (Package.sampleDetails name version){pkgArtifacts = sampleArtifact :| []}
 
 {- | A resolver that always reports the version present (projected), so the worker runs the
 rules over its 'PackageDetails'.
