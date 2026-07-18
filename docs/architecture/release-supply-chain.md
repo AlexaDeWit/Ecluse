@@ -38,6 +38,10 @@ amd64 or arm64 automatically. There is no moving pointer, so pin deployments by 
 (`ghcr.io/alexadewit/ecluse@sha256:…`, the index digest), which is the stronger posture
 regardless. Each version's digest is published in its GitHub Release.
 
+### Publishing the capability manifest
+
+The OpenAPI [capability manifest](web-layer.md#capability-manifest) is regenerated at publish time, never committed. `task docs-site` (and `task site`) run the `openapi-gen` executable, which walks the route records to write `openapi.json`, then render it into a static Redoc page under `./_site` for GitHub Pages. The Redoc bundle is vendored and hash-pinned (the `mermaidJs` `fetchurl` pattern), so the site build needs no Node. Output is deterministic (pinned key ordering, fixed base URLs), so a regeneration is a reviewable diff. There is no `GET /openapi.json` route on the running proxy.
+
 ## Multi-architecture image
 
 `ecluse:X.Y.Z` is an OCI index over a `linux/amd64` and a `linux/arm64` image, so a consumer

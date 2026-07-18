@@ -37,12 +37,24 @@ executable (`app/Main.hs`) is a thin multicall router for the `proxy`, `pilot`, 
 roles, plus `check-config`, which resolves the configuration and prints the posture without
 booting anything.
 
+## The stack at a glance
+
+Écluse is Haskell (GHC 9.10), built and pinned through Nix flakes; `ecluse.cabal` and
+`flake.lock` are the dependency authority. The server is raw WAI on `warp`, chosen for
+direct control over routing and memory-bounded streaming rather than a web framework. The
+data plane is `http-client`; JSON is `aeson`, with owned schemas codec-derived via
+`autodocodec` so the wire format and the documented schema cannot drift. Cloud integration
+is AWS today (`amazonka`: SQS mirror queue, CodeArtifact token mint, STS workload identity,
+S3 advisory storage), with GCP on the roadmap. Observability is opt-in OpenTelemetry over
+OTLP. Tests run `hspec` and `hedgehog`, with cloud integration against emulators and no
+real credentials.
+
 ## System overview
 
 A single Écluse binary runs the HTTP server and an in-process mirror worker over a shared,
 handle-based `Env`. The data plane (metadata and artifact bytes) is `http-client`; the
 control plane (queue, token mint) sits behind the
-[`MirrorQueue`](architecture/cloud-backends.md#queue-abstraction) and
+[`MirrorQueue`](architecture/cloud-backends.md#cloud-backends) and
 [`CredentialProvider`](architecture/cloud-backends.md#credential-provider) handles. Solid edges are
 synchronous request-path, dotted are best-effort or asynchronous.
 
@@ -146,7 +158,6 @@ flowchart TD
 | [Fault model](architecture/fault-model.md) | Failures as typed values, the confined-exception pattern, the two outer edges, and the disposition vocabulary. |
 | [Threat model](https://ecluse-proxy.com/threat-model.html) | The STRIDE register, generated from the Threat Dragon model (`threat-modelling/ecluse.json`); the single source of truth for the system's threats. |
 | [Observability](architecture/observability.md) | Opt-in OpenTelemetry/OTLP tracing and metrics; Datadog optional. |
-| [Technology stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
 | [Release and supply-chain operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (provenance + SBOM), and CVE and freshness scanning. |
 
 ## Out of scope

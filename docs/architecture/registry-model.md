@@ -363,8 +363,8 @@ and never transport.
 The effectful operations return plain `IO`, not `App`: an implementation closes over its own state and
 never imports the proxy's `Env` / `App`, so backends stay decoupled from the core. Each reports
 failures as a typed value (`FetchFault` on a read, `PublishFault` on the mirror write), so no fault
-rides up as an exception and a caller's retry-vs-drop decision is total at the call site. See
-[Technology stack → the effect model](technology-stack.md#key-decisions). Nothing above the registry
+rides up as an exception and a caller's retry-vs-drop decision is total at the call site.
+Nothing above the registry
 layer imports registry-specific types: the core operates only on `PackageInfo` and `PackageDetails`
 (see [The internal domain model](#the-internal-domain-model)), and an adapter projects its wire format into these.
 The packument projection takes the route-requested `PackageName` as a validation input (see
