@@ -212,17 +212,14 @@ spec = describe "resolveMemoryPlan" $ do
             withCache - without `shouldBe` 12345678
 
     describe "overrideSubstitutions (the per-pin substitution)" $ do
-        it "pairs each present override with the pin set that substitutes only it out" $ do
-            let subs = overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5)
-            map fst subs
-                `shouldBe` [ "cache.maxBytes"
-                           , "runtime.serveMaxInFlight"
-                           , "limits.maxResponseBytes"
-                           , "limits.maxRequestBytes"
-                           , "queue.memoryMaxDepth"
+        it "pairs each present override with the pin set that substitutes only it out" $
+            overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5)
+                `shouldBe` [ ("cache.maxBytes", (Nothing, Just 2, Just 3, Just 4, Just 5))
+                           , ("runtime.serveMaxInFlight", (Just 1, Nothing, Just 3, Just 4, Just 5))
+                           , ("limits.maxResponseBytes", (Just 1, Just 2, Nothing, Just 4, Just 5))
+                           , ("limits.maxRequestBytes", (Just 1, Just 2, Just 3, Nothing, Just 5))
+                           , ("queue.memoryMaxDepth", (Just 1, Just 2, Just 3, Just 4, Nothing))
                            ]
-            lookup "queue.memoryMaxDepth" subs `shouldBe` Just (Just 1, Just 2, Just 3, Just 4, Nothing)
-            lookup "cache.maxBytes" subs `shouldBe` Just (Nothing, Just 2, Just 3, Just 4, Just 5)
 
         it "yields no substitution for an absent override" $
             map fst (overrideSubstitutions (Nothing, Just 2, Nothing, Nothing, Nothing)) `shouldBe` ["runtime.serveMaxInFlight"]
