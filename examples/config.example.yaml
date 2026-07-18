@@ -1,0 +1,26 @@
+# An operator config document, mounted at /etc/ecluse/config.yaml (or wherever
+# ECLUSE_CONFIG points). Everything here overrides the embedded defaults key by
+# key, and ECLUSE_* environment variables override this file the same way
+# (ECLUSE_CACHE__TTL spells cache.ttl). The document earns its keep for the two
+# structured surfaces, mounts and rules; a simple deployment can use environment
+# variables alone. Secrets never go in this file: use the environment (or the
+# *_FILE indirection).
+#
+# The embedded defaults (config/default.yaml inside the repository) are the full
+# schema reference: every computed or derived key appears there commented out,
+# with the derivation that applies while it stays unset.
+
+server:
+  publicUrl: https://registry.example.com # required once any mount is active
+
+mounts:
+  npm:
+    # Declaring mirrorTarget is what makes the mount mirrored; omit it (and keep
+    # privateUpstream, or neither) for a serve-only mount.
+    privateUpstream: https://your-registry.example.com/npm/
+    mirrorTarget: https://your-registry.example.com/npm/
+
+rules:
+  # Tighten the shipped week-long quarantine to two weeks.
+  min-age:
+    ageSeconds: 1209600

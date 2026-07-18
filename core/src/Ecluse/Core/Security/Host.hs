@@ -37,8 +37,7 @@ module Ecluse.Core.Security.Host (
     parseIpLiteral,
     parseBlockedRange,
 
-    -- * Tarball-host policy
-    TarballHostPolicy (..),
+    -- * Tarball-host gate
     Origin (..),
     tarballHostAllowed,
     TarballHostGate (..),
@@ -152,7 +151,7 @@ against:
 * __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) -- the private-network IPv6 analogue,
   which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@;
 * every range in @additionalRanges@, the operator-configured extension of this
-  fixed set (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) -- a deployment's own internal
+  fixed set (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) -- a deployment's own internal
   space this module cannot know about in advance.
 
 A @host@ that is not an IP literal (a DNS name) is __not__ blocked here:
@@ -183,7 +182,7 @@ well-known prefix @64:ff9b::\/96@ (RFC 6052), and the NAT64 local-use prefix
 cannot be enumerated here: it is operator-chosen from the operator's own unicast
 space, so nothing in the address marks it as an embedding. An operator whose
 fabric translates under such a prefix extends the block with @additionalRanges@
-(@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) instead.
+(@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) instead.
 -}
 isBlockedIP :: [IPRange] -> IP -> Bool
 isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
@@ -221,7 +220,7 @@ blockedRanges =
     , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
     ]
 
-{- | Parse one operator-configured @ECLUSE_ADDITIONAL_BLOCKED_RANGES@ entry (a
+{- | Parse one operator-configured @ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@ entry (a
 single CIDR, e.g. @"203.0.113.0\/24"@ or @"2001:db8::\/32"@) into an 'IPRange', or
 'Nothing' for anything malformed.
 
@@ -616,32 +615,6 @@ isHex t = not (T.null t) && T.all isHexDigit t
   where
     isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])
 
-{- | Whether a tarball may be fetched from a host that differs from the upstream
-that served the packument.
-
-An upstream's @dist.tarball@ is server-chosen data (see
-@docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
-compromised or hostile upstream can name __any__ host as the artifact location.
-This policy bounds the axis of that risk the host allowlist leaves open: /where/ the
-bytes are fetched. Even an allowlisted-but-/different/ host is a wider fetch surface than
-the packument's own source, and the safe reading of the allowlist is "same source unless
-told otherwise".
--}
-data TarballHostPolicy
-    = {- | The secure default: a tarball is fetched only from the __same__ authority
-      (host and port) that served the packument; a @dist.tarball@ on any other host,
-      or on the same host at a different port, is refused, even one otherwise on
-      the allowlist.
-      -}
-      SameHostAsPackument
-    | {- | The opt-in: a tarball may be fetched from __any allowlisted__ @host:port@
-      pair (for a registry that legitimately serves artifacts from a separate
-      CDN\/files host). This widens the fetch surface to the whole allowlist; it
-      never escapes it or the internal-range block.
-      -}
-      AnyAllowlistedHost
-    deriving stock (Eq, Show)
-
 {- | The trust of the origin a @dist.tarball@ is being served from: the
 operator-configured private upstream is 'TrustedOrigin', and the public upstream,
 together with every artifact location an attacker could influence, is 'UntrustedOrigin'.
@@ -669,21 +642,23 @@ answer is the conjunction of three independent checks and over-blocking is the
 fail-safe:
 
 * the target must be on the @host:port@ allowlist (@allowed@), as every outbound
-  target is: a @dist.tarball@ authority off the allowlist is refused regardless of
-  policy;
+  target is: a @dist.tarball@ authority off the allowlist is refused outright;
 * its host must not be an internal-address literal (the fixed range set plus the
   operator-configured @additionalBlockedRanges@), the cheap pure defence-in-depth,
   but a 'TrustedOrigin' is __exempt__ from this clause (see 'Origin'); and
-* under 'SameHostAsPackument' (the secure default) it must additionally __equal__
-  the packument origin's authority, host and port both, so a tarball on a
-  /different/ host, or on the same host at a different port, is refused even when
-  that pair is allowlisted. Under 'AnyAllowlistedHost' that last clause is relaxed,
-  leaving only the allowlist and (origin-aware) internal-range checks -- the port
-  dimension stays closed there too, since the allowlist authorises pairs.
+* it must __equal__ the packument origin's authority, host and port both -- an
+  upstream's @dist.tarball@ is server-chosen data (see
+  @docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
+  tarball on a /different/ host, or on the same host at a different port, is
+  refused even when that pair is allowlisted. The one equivalence is the
+  ecosystem's own canonical artifact hosts (@ecosystemHosts@, adapter-declared:
+  npm has none, PyPI's is @files.pythonhosted.org@): a host the ecosystem serves
+  artifact bytes from __by design__ passes the same-authority clause, while
+  staying allowlist-gated and internal-range-gated like any other target.
 
 The allowlist and same-authority clauses gate __both__ origins identically; only the
 internal-range clause is origin-aware, so a 'TrustedOrigin' is never let past its own
-allowlisted authority or onto a /different/ one than its metadata under the default.
+allowlisted authority or onto a /different/ one than its metadata.
 
 Hosts are compared by their canonical key (case-folded, and for an IP-literal the
 single canonical literal; see 'canonicalHostKey'), as the host guards are; ports
@@ -695,8 +670,9 @@ was fetched from; only its equality to the target matters, so it need not itself
 be re-validated here: it was already gated when the packument was fetched.
 -}
 tarballHostAllowed ::
+    -- | The ecosystem's canonical artifact authorities, same-host-equivalent.
+    AllowedHostPorts ->
     Origin ->
-    TarballHostPolicy ->
     -- | The @host:port@ allowlist (the same one every outbound fetch is gated by).
     AllowedHostPorts ->
     {- | The operator-configured ranges extending the fixed internal-range block
@@ -708,14 +684,12 @@ tarballHostAllowed ::
     -- | The authority of the candidate @dist.tarball@, when one could be extracted.
     Maybe HostPort ->
     Bool
-tarballHostAllowed origin policy allowed additionalBlockedRanges packumentOrigin tarballTarget =
+tarballHostAllowed ecosystemHosts origin allowed additionalBlockedRanges packumentOrigin tarballTarget =
     case (packumentOrigin, tarballTarget) of
         (Just packument, Just target) ->
             isAllowedUpstreamHost allowed target
                 && internalRangeOk target
-                && case policy of
-                    SameHostAsPackument -> sameAuthority target packument
-                    AnyAllowlistedHost -> True
+                && (sameAuthority target packument || isAllowedUpstreamHost ecosystemHosts target)
         -- No comparable authority on either side authorises nothing (fail closed).
         _ -> False
   where
@@ -749,9 +723,16 @@ dynamic public @dist.tarball@, still parsed at the call site.
 data TarballHostGate = TarballHostGate
     { thgAllowlist :: AllowedHostPorts
     {- ^ The canonicalised @host:port@ allowlist of the mount's configured upstreams
-    (public, private, and mirror target) -- the same set every outbound fetch is gated
-    against (security.md invariant 2). An upstream URL that writes no port contributes
-    its host at 443.
+    (public, private, and mirror target) plus the ecosystem's canonical artifact
+    hosts -- the same set every outbound fetch is gated against (security.md
+    invariant 2). An upstream URL that writes no port contributes its host at 443.
+    -}
+    , thgEcosystemHosts :: AllowedHostPorts
+    {- ^ The ecosystem's canonical artifact authorities (the adapter supplies them;
+    npm has none, PyPI's is @files.pythonhosted.org@): hosts the ecosystem serves
+    artifact bytes from __by design__, the one same-host equivalence
+    'tarballHostAllowed' grants. Also folded into 'thgAllowlist', and still
+    internal-range-gated like any target.
     -}
     , thgPrivateHostPort :: Maybe HostPort
     {- ^ The private upstream's authority, extracted once; 'Nothing' when the configured
@@ -762,23 +743,30 @@ data TarballHostGate = TarballHostGate
     }
     deriving stock (Eq, Show)
 
-{- | Build the 'TarballHostGate' from a mount's private, public, and mirror-target
-upstream URLs: the allowlist is the canonicalised set of their @host:port@ pairs, and
-the private and public authorities are each extracted once with 'hostPortAddress'.
+{- | Build the 'TarballHostGate' from the ecosystem's canonical artifact hosts
+(empty for an ecosystem, like npm, that serves artifacts from its registry host) and a
+mount's private, public, and mirror-target upstream URLs: the allowlist is the
+canonicalised set of their @host:port@ pairs, and the private and public authorities
+are each extracted once with 'hostPortAddress'.
 Called once per mount at the composition root (and by test fixtures); the result is
 carried on the serve dependencies so the per-request gate reads fields rather than
 re-parsing URLs. A URL from which no authority extracts contributes no allowlist entry
 and leaves its reference authority 'Nothing', so a misconfigured upstream authorises
-nothing rather than something unintended.
+nothing rather than something unintended; an __absent__ private upstream or mirror
+target (a serve-only mount) composes identically, contributing nothing.
 -}
-tarballHostGate :: Text -> Text -> Text -> TarballHostGate
-tarballHostGate privateUrl publicUrl mirrorUrl =
+tarballHostGate :: [Text] -> Maybe Text -> Text -> Maybe Text -> TarballHostGate
+tarballHostGate ecosystemHostUrls privateUrl publicUrl mirrorUrl =
     TarballHostGate
         { thgAllowlist =
-            allowedHostPorts (Set.fromList (catMaybes [privateHostPort, publicHostPort, hostPortAddress mirrorUrl]))
+            allowedHostPorts
+                ( Set.fromList
+                    (catMaybes ([privateHostPort, publicHostPort, hostPortAddress =<< mirrorUrl] <> map hostPortAddress ecosystemHostUrls))
+                )
+        , thgEcosystemHosts = allowedHostPorts (Set.fromList (mapMaybe hostPortAddress ecosystemHostUrls))
         , thgPrivateHostPort = privateHostPort
         , thgPublicHostPort = publicHostPort
         }
   where
-    privateHostPort = hostPortAddress privateUrl
+    privateHostPort = hostPortAddress =<< privateUrl
     publicHostPort = hostPortAddress publicUrl

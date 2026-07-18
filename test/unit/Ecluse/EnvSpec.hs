@@ -14,7 +14,7 @@ import Ecluse (mountBindingFor, runServer, runWorker)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
-import Ecluse.Core.Server.Cache (CacheConfig (..), MetadataCache, newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (..), MetadataCache, StoreBudget (..), newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newEnvWithAdmission, newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
@@ -44,9 +44,12 @@ testCacheConfig :: CacheConfig
 testCacheConfig =
     CacheConfig
         { cacheTtl = 60
-        , cacheMaxEntries = 1024
-        , cacheMaxBytes = 256 * 1024 * 1024
+        , cacheFullBudget = budget
+        , cacheVersionBudget = budget
+        , cacheAssembledBudget = budget
         }
+  where
+    budget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 256 * 1024 * 1024}
 
 -- | A metadata cache on the local test config (touches no network).
 newTestCache :: IO MetadataCache

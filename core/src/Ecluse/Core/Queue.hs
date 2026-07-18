@@ -43,8 +43,8 @@ handle's contract reflects that:
 
 This module provides the handle, its payload types, and the building blocks a
 backend implementation reaches for; the STM-backed bounded, best-effort
-__production backend__ behind @ECLUSE_QUEUE_BACKEND=memory@ lives in
-"Ecluse.Core.Queue.Memory".
+__production backend__ mirroring rolls over to when no @ECLUSE_QUEUE__URL@ is set
+lives in "Ecluse.Core.Queue.Memory".
 
 It also provides 'newEnqueueBuffer', a __bounded producer-side hand-off buffer__
 wrapped in front of any backend so the serve path's 'enqueue' completes in
@@ -54,6 +54,7 @@ backend off the request path.
 module Ecluse.Core.Queue (
     -- * Queue handle
     MirrorQueue (..),
+    noMirrorQueue,
 
     -- * Faults
     QueueFault (..),
@@ -84,7 +85,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, rea
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause, TransportFault (TransportFault))
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault (TransportFault), transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -254,6 +255,25 @@ data MirrorQueue = MirrorQueue
     is absorbed silently by the caller.
     -}
     }
+
+{- | The inert queue a deployment with zero mirroring mounts carries, so the
+composition-root 'Env' keeps its total shape without a backend. It is unreachable
+by construction (no serve path enqueues on a mount that never mirrors, and no
+worker runs to poll it); reached anyway, 'enqueue' is a typed, counted refusal --
+never a crash -- and 'receive' is the empty healthy poll.
+-}
+noMirrorQueue :: MirrorQueue
+noMirrorQueue =
+    MirrorQueue
+        { enqueue = \_ -> pure (Left inertFault)
+        , receive = pure (Right [])
+        , ack = \_ -> pure (Right ())
+        , extendVisibility = \_ _ -> pure (Right ())
+        }
+  where
+    inertFault =
+        queueTransportFault
+            (transportFault TransportProtocol "no mount mirrors, so no mirror queue is built")
 
 {- | Hand a job to a bounded queue within the caller's transaction: write it when
 there is room, or drop it at the cap (drop-newest) and return the incremented

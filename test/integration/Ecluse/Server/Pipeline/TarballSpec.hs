@@ -9,8 +9,7 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -63,7 +62,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        let breakPrivate d = d{pdPrivateBaseUrl = ""}
+        let breakPrivate d = d{pdPrivateBaseUrl = Just ""}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -105,6 +104,20 @@ tarballSpec = describe "artifact (tarball) path" $ do
                                , "thing-1.0.0.tgz"
                                )
                            ]
+
+    it "serve-only mount: streams the admitted public artifact and enqueues nothing (NoMirrorWrite)" $ do
+        -- The same private-miss-to-public-admit flow as above, on a mount that never
+        -- mirrors: the gate and the stream are identical, and the queue stays empty
+        -- (the discriminant is the absent capability, so no producer span or enqueue
+        -- metric fires either).
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMirror = NoMirrorWrite}) $ \app env _publicPort -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+            drainJobs env `shouldReturn` []
 
     it "rejects a too-new version with 403 and enqueues nothing (policy denial)" $ do
         privateUp <- privateArtifactMiss
@@ -267,7 +280,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "refuses a cross-host public dist.tarball under the SameHostAsPackument default (403, no fetch)" $ do
+    it "refuses a cross-host public dist.tarball (403, no fetch)" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
@@ -277,33 +290,20 @@ tarballSpec = describe "artifact (tarball) path" $ do
             seenAuth publicUp `shouldReturn` [Nothing]
             drainJobs env `shouldReturn` []
 
-    it "serves a cross-host public dist.tarball under AnyAllowlistedHost when the host is allowlisted" $ do
+    it "serves a cross-host public dist.tarball when the host is a declared ecosystem artifact host" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
         -- The double advertises its dist.tarball on cross.localhost at its own
         -- runtime port, so the tarball authority is cross.localhost:<publicPort>.
-        -- The allowlist gates host:port pairs, so the entry must name that real
-        -- port: derive it from the public base URL (which already carries it)
-        -- rather than a hardcoded placeholder.
-        let relax d =
-                d
-                    { pdTarballHostPolicy = AnyAllowlistedHost
-                    , pdMirrorTarget = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
-                    }
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
+        -- Declare that authority as the adapter's ecosystem artifact host (the PyPI
+        -- files-host shape), derived from the public base URL (which already carries
+        -- the real port) rather than a hardcoded placeholder.
+        let crossBase d = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
+        withProxyEnvQueueDepsHosts queue privateUp publicUp Nothing (\d -> [crossBase d]) id $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
-
-    it "refuses a cross-host public dist.tarball under AnyAllowlistedHost when the host is off the allowlist" $ do
-        privateUp <- privateArtifactMiss
-        publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
-        queue <- newTestMemoryQueue
-        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost}
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
-            resp <- getTarball "1.0.0" Nothing app
-            status resp `shouldBe` 403
 
     it "404s a requested filename absent from the version's artifacts (selection by filename)" $ do
         privateUp <- privateArtifactMiss
@@ -342,7 +342,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" (pdPrivateBaseUrl d)}
+        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" <$> pdPrivateBaseUrl d}
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app

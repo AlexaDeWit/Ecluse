@@ -16,9 +16,14 @@ its own are layered here:
   the __least-recently-used__ entries until the incoming value fits within both the
   resident-byte budget and the entry-count bound. Recency keeps a re-accessed hot
   head resident under pressure while shedding the one-shot tail; the byte budget
-  bounds memory more faithfully than a count alone. The incoming value is always
-  admitted (the per-value ceiling is the caller's concern, an upstream body cap,
-  never this budget).
+  bounds memory more faithfully than a count alone. A value whose weight alone
+  exceeds the byte budget is __passed through uncached__: the caller still serves
+  it (the per-value ceiling is the caller's concern, an upstream body cap), but
+  nothing resident is evicted to make room that cannot exist, and the store's
+  budget genuinely bounds its residency. Inserts serialise on a per-store lock so
+  two leaders' evict-then-insert sequences cannot interleave past the budget;
+  the lock is post-fetch cold path only, and a leader publishes its marker
+  __before__ inserting, so no follower ever blocks on it.
 
 * __Single-flight.__ @cache@'s own @fetchWithCache@ is lookup-then-fetch in plain
   'IO', so two concurrent misses would both fetch. 'resolveSingleFlight' instead
@@ -57,6 +62,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
 import UnliftIO.Exception (SomeAsyncException, mask, throwIO)
+import UnliftIO.MVar (withMVar)
 
 import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -95,6 +101,12 @@ data SingleFlight e k v = SingleFlight
     {- ^ The store's logical access clock, bumped to issue each entry's recency stamp on
     insert and on every hit.
     -}
+    , sfInsertLock :: MVar ()
+    {- ^ Serialises the purge\/evict\/insert sequence: without it two different-key
+    leaders can both read the pre-insert resident sum and both admit, landing the
+    store past its byte budget. Held only on the post-fetch cold path (never by a
+    hit or a follower), and never inside an STM transaction.
+    -}
     , sfInFlight :: TVar (Map k (TMVar (FlightOutcome e v)))
     {- ^ Entries currently being fetched, so concurrent misses coalesce onto one
     fetch rather than each launching their own. The marker carries the leader's
@@ -124,6 +136,7 @@ newSingleFlight ttl maxEntries maxBytes weigh = do
     store <- Cache.newCache (Just (toTimeSpec ttl))
     clock <- newIORef 0
     inFlight <- newTVarIO Map.empty
+    insertLock <- newMVar ()
     pure
         SingleFlight
             { sfStore = store
@@ -131,6 +144,7 @@ newSingleFlight ttl maxEntries maxBytes weigh = do
             , sfMaxBytes = max 1 maxBytes
             , sfWeigh = weigh
             , sfClock = clock
+            , sfInsertLock = insertLock
             , sfInFlight = inFlight
             }
 
@@ -212,7 +226,9 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
             (outcome, occupancy) <- guardInFlight id (orphan marker) (atomically deregister) $ do
                 fetched <- restore (afterClaim >> fetch)
                 atomically (putTMVar marker (either FlightFault FlightValue fetched))
-                inserted <- traverse (insertBounded sf key) (rightToMaybe fetched)
+                -- The join collapses "nothing fetched" and "fetched but oversized,
+                -- served uncached" into one no-insert outcome for the telemetry.
+                inserted <- join <$> traverse (insertBounded sf key) (rightToMaybe fetched)
                 pure (fetched, inserted)
             -- The leader inserted, so refresh the occupancy gauges (a follower never does).
             traverse_ recordInsert occupancy
@@ -226,20 +242,27 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
 {- | Insert a freshly fetched value into a store, enforcing the resident-byte budget and the
 entry-count bound. Expired entries are purged first (the cheap reclaim); then the
 least-recently-used entries are evicted until the incoming value fits within both bounds,
-and the value is inserted with its estimated weight and a fresh recency stamp. The incoming
-value is __always admitted__: a single value larger than the whole budget becomes the sole
-resident rather than being refused (the per-value ceiling is the caller's body cap, not this
-budget). Returns the store's occupancy after the insert, for the residency telemetry.
+and the value is inserted with its estimated weight and a fresh recency stamp. A value
+whose weight alone exceeds the byte budget is __not retained__: 'Nothing' is returned,
+nothing resident is evicted (room that cannot exist is not made), and the caller serves
+the value uncached -- so the budget genuinely bounds the store's residency, and one
+pathological document can never flush it. The whole purge\/evict\/insert sequence runs
+under the store's insert lock, so two different-key leaders cannot both read the
+pre-insert resident sum and both admit past the budget. Returns the store's occupancy
+after a retaining insert, for the residency telemetry.
 -}
-insertBounded :: (Hashable k) => SingleFlight e k v -> k -> v -> IO CacheOccupancy
-insertBounded sf key value = do
-    Cache.purgeExpired (sfStore sf)
-    let weight = sfWeigh sf value
-    evictToBudget sf weight
-    stamp <- nextStamp sf
-    stampRef <- newIORef stamp
-    Cache.insert (sfStore sf) key (Weighted{wValue = value, wWeight = weight, wStamp = stampRef})
-    occupancyOf sf
+insertBounded :: (Hashable k) => SingleFlight e k v -> k -> v -> IO (Maybe CacheOccupancy)
+insertBounded sf key value
+    | weight > sfMaxBytes sf = pure Nothing
+    | otherwise = withMVar (sfInsertLock sf) $ \() -> do
+        Cache.purgeExpired (sfStore sf)
+        evictToBudget sf weight
+        stamp <- nextStamp sf
+        stampRef <- newIORef stamp
+        Cache.insert (sfStore sf) key (Weighted{wValue = value, wWeight = weight, wStamp = stampRef})
+        Just <$> occupancyOf sf
+  where
+    weight = sfWeigh sf value
 
 {- | Evict least-recently-used entries until an incoming value of the given weight would fit
 within both the resident-byte budget and the entry-count bound, or the store is empty. The

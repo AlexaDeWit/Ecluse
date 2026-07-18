@@ -35,12 +35,13 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
-import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
+import Ecluse.Core.Worker (heartbeatHealthyNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
@@ -127,25 +128,32 @@ publishMountApp = publishAppWith basePublishDeps
 
 {- | The base first-party publish dependencies the publish tests build on: an @\@acme@
 scope allow-list and a publication target at an unconnectable port (so an in-scope
-publish reaches the relay and fails to connect -- a @502@).
+publish reaches the relay and fails to connect -- a @502@). A function over the
+body-byte budget: the aggregate admission is allocated per application
+('publishAppWith'), so the pure fixture cannot carry it.
 -}
-basePublishDeps :: PublishDeps
-basePublishDeps =
+basePublishDeps :: ByteAdmission -> PublishDeps
+basePublishDeps bodyBudget =
     PublishDeps
         { pubTargetUrl = "http://127.0.0.1:1" -- an unconnectable port
         , pubScopes = [mkScope "acme"]
         , pubStaticToken = Nothing
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits
+        , pubBodyBudget = bodyBudget
+        , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
         , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
         , pubCanonicaliseName = rightToMaybe . Project.projectName
         }
 
--- | The 'application' under a single @\/npm@ mount carrying the given publish deps.
-publishAppWith :: PublishDeps -> IO Application
-publishAppWith deps =
-    application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just deps)]) <$> newTestEnv
+{- | The 'application' under a single @\/npm@ mount carrying the given publish deps,
+handed a generously-sized body-byte budget these routing tests never contend on.
+-}
+publishAppWith :: (ByteAdmission -> PublishDeps) -> IO Application
+publishAppWith mkDeps = do
+    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+    application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv
 
 {- | The 'application' under a single @\/npm@ mount whose router is a __fake__ (not
 npm's), proving dispatch follows the binding's router rather than any hardwired
@@ -202,7 +210,10 @@ stalledWorkerApp = do
     -- A poll older than the staleness threshold: the loop has not advanced its
     -- heartbeat within the window, so liveness must read it as stalled.
     recordPoll (envWorkerHeartbeat env) (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
-    pure (application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) env)
+    -- The composition root folds the heartbeat into /livez only when a worker
+    -- runs; this fixture models that mirrored-deployment wiring explicitly.
+    let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatHealthyNow (envWorkerHeartbeat env)}
+    pure (application cfg env)
 
 {- | A header matcher that passes only when the response carries __no__
 @Connection@ header -- the not-draining expectation, the complement of the
@@ -358,7 +369,7 @@ spec = do
                 -- reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
 
-        with (publishAppWith basePublishDeps{pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}) $
+        with (publishAppWith (\b -> (basePublishDeps b){pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw here is
                 -- an invariant break. The typed request perimeter must answer it:
@@ -366,13 +377,13 @@ spec = do
                 -- classified relay fault renders, and not a session abort.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
 
-        with (publishAppWith basePublishDeps{pubTargetUrl = ""}) $
+        with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = ""})) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
                 -- An empty target URL cannot form a request, a configuration fault rather
                 -- than a transient outage, so the publish is a 500 (not a 502).
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
 
-        with (publishAppWith basePublishDeps{pubInboundToken = Just (mkSecret "edge-token")}) $ do
+        with (publishAppWith (\b -> (basePublishDeps b){pubInboundToken = Just (mkSecret "edge-token")})) $ do
             it "401s a publish that fails the edge token gate (before the scope guard)" $
                 -- With an edge token configured, a publish carrying none is rejected at the
                 -- edge -- the same gate the read paths apply.

@@ -170,7 +170,7 @@ telemetryScenarios = do
     -- #325(a) -- OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry -- OTLP off, no collector (#325)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout -- no collector needed" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- It still writes structured JSONL to its stdout/stderr (docker captures
@@ -283,7 +283,7 @@ publishScenarios = do
                 -- absence below is attributable to the refusal, not a stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
-                -- A name outside ECLUSE_PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
+                -- A name outside ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW is refused with a 403 BEFORE the relay, so npm
                 -- exits non-zero and the publication target never receives it. The absence is a
                 -- sound proof of refused-before-write *because* the harness configures Verdaccio
                 -- to accept anonymous publishes: had the document reached the target it would

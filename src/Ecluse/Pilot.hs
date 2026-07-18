@@ -25,9 +25,12 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (
-    AppConfig (cfgAwsEndpointUrl, cfgCveSyncInterval, cfgOsvDataDir, cfgOsvExportBaseUrl, cfgPort, cfgVulnerabilityDatabaseBucket),
+    AdvisoriesSettings (advBucket, advCompileInterval, advDataDir, advOsvExportBaseUrl),
+    AppConfig (cfgAdvisories, cfgServer),
     Config (configApp),
+    ServerSettings (srvPort),
  )
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl))
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Supervision (
@@ -54,13 +57,13 @@ probes, while it concurrently runs the OSV export loop.
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
     let logEnv = beLogEnv bootEnv
-        port = cfgPort (beConfig bootEnv)
+        port = srvPort (cfgServer (beConfig bootEnv))
         cfg = (mkServerConfig []){scPort = port}
 
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
         concurrently_
-            (runExportLoop (beTelemetry bootEnv) (beConfigFull bootEnv))
+            (runExportLoop (beTelemetry bootEnv) (beAmbient bootEnv) (beConfigFull bootEnv))
             (liftIO $ runWarp cfg (pilotApplication cfg))
 
 {- | The Pilot steady-state export loop: compile the npm OSV artifact and upload it
@@ -74,11 +77,11 @@ here (a failed export is retried; there is no per-cycle wiring fault to fail up
 on), and the backoff is pinned at the sync interval on both ends, so a failing
 export retries at exactly the cadence a succeeding one repeats at.
 -}
-runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Config -> m ()
-runExportLoop telemetry config = do
+runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> Config -> m ()
+runExportLoop telemetry ambient config = do
     let appCfg = configApp config
-        intervalMicros = (round (cfgCveSyncInterval appCfg) :: Int) * 1000000
-    case cfgVulnerabilityDatabaseBucket appCfg of
+        intervalMicros = (round (advCompileInterval (cfgAdvisories appCfg)) :: Int) * 1000000
+    case advBucket (cfgAdvisories appCfg) of
         Nothing -> do
             logFM InfoS "No S3 bucket configured for OSV database export; export loop disabled."
             forever $ threadDelay (24 * 60 * 60 * 1000000)
@@ -92,15 +95,15 @@ runExportLoop telemetry config = do
                         , spBackoff = BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros}
                         }
                 $ do
-                    runResourceT (exportNpm telemetry appCfg bucketName)
+                    runResourceT (exportNpm telemetry ambient appCfg bucketName)
                     threadDelay intervalMicros
 
 -- | Compile the npm OSV artifact and upload it to the given bucket: one full cycle.
-exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
-exportNpm telemetry appCfg bucketName = do
+exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
+exportNpm telemetry ambient appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
-    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (cfgOsvDataDir appCfg) "npm" (osvExportUrl (cfgOsvExportBaseUrl appCfg) "npm")
-    exportToS3 (telemetryTracerProvider telemetry) (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucketName dbPath
+    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (advOsvExportBaseUrl (cfgAdvisories appCfg)) "npm")
+    exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucketName dbPath
 
 {- | Options for the one-shot 'runPilotCompile' mode: which ecosystem's export
 to compile, where to fetch it from, and where the artifact lands.
@@ -140,14 +143,14 @@ writes the artifact into the requested directory, then uploads it when
 parsed propagates as an exception, so the process exits non-zero, which makes
 the command safe to script and to schedule.
 -}
-runPilotCompile :: LogEnv -> Telemetry -> AppConfig -> PilotCompileOptions -> IO FilePath
-runPilotCompile logEnv telemetry appCfg opts = do
-    let url = fromMaybe (osvExportUrl (cfgOsvExportBaseUrl appCfg) (pcoEcosystem opts)) (pcoSource opts)
+runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
+runPilotCompile logEnv telemetry ambient appCfg opts = do
+    let url = fromMaybe (osvExportUrl (advOsvExportBaseUrl (cfgAdvisories appCfg)) (pcoEcosystem opts)) (pcoSource opts)
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
         runResourceT $ do
             dbFile <- compileOsvToSqlite (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
             when (pcoUpload opts) $
-                case cfgVulnerabilityDatabaseBucket appCfg of
+                case advBucket (cfgAdvisories appCfg) of
                     Nothing -> throwIO PilotUploadUnconfigured
-                    Just bucket -> exportToS3 (telemetryTracerProvider telemetry) (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl) bucket dbFile
+                    Just bucket -> exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucket dbFile
             pure dbFile

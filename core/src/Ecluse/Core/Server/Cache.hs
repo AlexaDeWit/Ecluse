@@ -61,11 +61,12 @@ every store by the shared machinery ("Ecluse.Core.Server.Cache.Store"):
   its resident footprint (a heavy packument, parsed plus raw, costs many times its
   wire size) and a last-access stamp bumped on every hit. An insert first purges
   expired entries, then evicts the __least-recently-used__ entries until the incoming
-  entry fits within both a resident-byte budget ('cacheMaxBytes') and an entry count
-  ('cacheMaxEntries'). Recency keeps a re-accessed hot head resident under pressure
+  entry fits within both its store's resident-byte budget and entry count
+  ('StoreBudget'). Recency keeps a re-accessed hot head resident under pressure
   while shedding the one-shot tail; the byte budget bounds memory more faithfully
-  than a count alone. The incoming entry is always admitted (the per-entry ceiling is
-  the upstream body cap, not this budget).
+  than a count alone. An entry whose estimated footprint alone exceeds its store's
+  byte budget is __served without being retained__ (nothing resident is evicted to
+  make impossible room), so one pathological document can never flush a store.
 
 * __Single-flight.__ @cache@'s own @fetchWithCache@ is lookup-then-fetch in plain
   'IO', so two concurrent misses would both fetch. 'resolveMetadata' instead
@@ -94,9 +95,12 @@ cannot materialise a whole packument into the shared full cache. The serve path'
 single-version read consults the warm full-packument store __read-only__ first (a
 packument @GET@ followed by its tarball gate still collapses to one upstream call),
 and only falls back to leading its own selective fetch into the version store when
-the full entry is cold. Both stores enforce the resident-byte budget, and each
-reports its own residency gauge: the full-packument store under
-@ecluse.metadata_cache.resident_bytes@ and the single-version store under
+the full entry is cold. Each store enforces its __own named sub-budget__
+('StoreBudget'): the three sub-budgets are carved from one cache aggregate at the
+composition root and sum to it, so the aggregate holds by arithmetic while each
+class's eviction stays isolated (a version-store flood can never evict the full
+store's hot head). Each reports its own residency gauge: the full-packument store
+under @ecluse.metadata_cache.resident_bytes@ and the single-version store under
 @ecluse.metadata_cache.version.resident_bytes@. The hit\/miss counter and the
 entry-count occupancy gauge stay about the full-packument store.
 
@@ -118,6 +122,7 @@ Residency gauge: @ecluse.metadata_cache.assembled.resident_bytes@.
 module Ecluse.Core.Server.Cache (
     -- * Configuration
     CacheConfig (..),
+    StoreBudget (..),
 
     -- * The cache handle
     MetadataCache,
@@ -165,6 +170,7 @@ import Ecluse.Core.Server.Cache.Store (
     newSingleFlight,
     resolveSingleFlight,
  )
+import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (
     MetricsPort,
     mpAssembledCacheResidentBytes,
@@ -175,26 +181,38 @@ import Ecluse.Core.Telemetry.Record (
  )
 import Ecluse.Core.Version (Version, renderVersion)
 
+{- | One store's bounds: the entry count and the resident-byte budget it keeps its
+held entries under before it evicts. Each entry is weighted by an estimate of its
+resident footprint, and an insert past the byte budget evicts the
+least-recently-used entries until the budget holds -- bounding memory more
+faithfully than the entry count alone.
+-}
+data StoreBudget = StoreBudget
+    { sbMaxEntries :: Int
+    -- ^ The maximum number of distinct entries held; an insert past this evicts.
+    , sbMaxBytes :: Int
+    -- ^ The resident-byte budget the held entries are kept under.
+    }
+    deriving stock (Eq, Show)
+
 {- | The metadata cache's tunables, sourced from configuration: how long a parsed
-packument stays fresh, how many distinct @(source, package)@ entries the cache holds,
-and the resident-byte budget it keeps the held entries under before it evicts.
+packument stays fresh, and each store's own 'StoreBudget'. The three sub-budgets
+are carved from one cache aggregate at the composition root
+(@Ecluse.Composition.MemoryBudget.budgetCacheConfig@) and __sum to it__, so the
+cache's total resident bytes are bounded by the aggregate while each class's
+eviction pressure stays its own.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
     {- ^ How long a cached 'CacheEntry' is served before it is re-fetched. Short
     by design: brief staleness is benign, and conditional-GET revalidates.
     -}
-    , cacheMaxEntries :: Int
-    {- ^ The maximum number of distinct @(source, package)@ entries held; an insert
-    past this evicts.
-    -}
-    , cacheMaxBytes :: Int
-    {- ^ The resident-byte budget the held entries are kept under. Each entry is
-    weighted by an estimate of its resident footprint, and an insert past this evicts
-    the least-recently-used entries until the budget holds. A heavy packument (the
-    parsed view plus its raw document) costs many times its wire size, so this bounds
-    memory more faithfully than the entry count alone.
-    -}
+    , cacheFullBudget :: StoreBudget
+    -- ^ The full-packument store's bounds, keyed by @(source, package)@.
+    , cacheVersionBudget :: StoreBudget
+    -- ^ The single-version store's bounds (small, flat-weighted entries).
+    , cacheAssembledBudget :: StoreBudget
+    -- ^ The assembled-representation store's bounds (exact strict-bytes weights).
     }
     deriving stock (Eq, Show)
 
@@ -252,18 +270,12 @@ weighVersion = \case
     Just _ -> versionEntryBytes
     Nothing -> negativeEntryBytes
 
--- Scale a raw document's encoded byte length to an estimated resident footprint. The factor
--- is 7.5 (applied as a halved integer to stay in 'Int' arithmetic): it sits at the high end
--- of the measured resident-to-encoded ratio, so the estimate upper-bounds resident bytes and
--- the budget never under-counts (leaner documents are over-estimated, which only over-evicts).
+-- Scale a raw document's encoded byte length to an estimated resident footprint,
+-- through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel"),
+-- so this weigher and the composition root's memory plan can never drift on the
+-- expansion factor.
 weighEncodedBytes :: Int64 -> Int
-weighEncodedBytes encodedLen = fromIntegral (encodedLen * residentRatioNumerator `div` residentRatioDenominator)
-
-residentRatioNumerator :: Int64
-residentRatioNumerator = 15
-
-residentRatioDenominator :: Int64
-residentRatioDenominator = 2
+weighEncodedBytes = expandWireBytes . fromIntegral
 
 -- The flat resident estimate for a present single-version entry (one bounded manifest) and
 -- for a cached determined absence (a small negative entry).
@@ -351,18 +363,19 @@ data MetadataCache = MetadataCache
     }
 
 {- | Build a metadata cache from its configuration: the full-packument store, the
-single-version store, and the assembled-representation store, each over the same TTL
-and size bound.
+single-version store, and the assembled-representation store, each over the same
+TTL but sized from its __own__ sub-budget (the three used to share one bound,
+which tripled the intended cache footprint in the worst case).
 -}
 newMetadataCache :: CacheConfig -> IO MetadataCache
 newMetadataCache cfg =
     MetadataCache
-        <$> newStore weighCacheEntry
-        <*> newStore weighVersion
-        <*> newStore weighAssembled
+        <$> newStore (cacheFullBudget cfg) weighCacheEntry
+        <*> newStore (cacheVersionBudget cfg) weighVersion
+        <*> newStore (cacheAssembledBudget cfg) weighAssembled
   where
-    newStore :: (v -> Int) -> IO (SingleFlight e k v)
-    newStore = newSingleFlight (cacheTtl cfg) (cacheMaxEntries cfg) (cacheMaxBytes cfg)
+    newStore :: StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
+    newStore budget = newSingleFlight (cacheTtl cfg) (sbMaxEntries budget) (sbMaxBytes budget)
 
 {- | Resolve a package's metadata from one upstream 'Source', reusing the cache and
 collapsing concurrent misses.

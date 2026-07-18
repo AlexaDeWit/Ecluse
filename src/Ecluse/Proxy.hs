@@ -87,7 +87,7 @@ module Ecluse.Proxy (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import GHC.Conc (getNumCapabilities)
+import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, runKatipContextT, sl)
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -98,21 +98,34 @@ import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot
 import Ecluse.Composition (
+    PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
     planMounts,
     planPublishTargets,
  )
-import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
-import Ecluse.Composition.MirrorQueue (planMirrorQueue)
+import Ecluse.Composition.MemoryPlan (
+    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    PublishTenant (ptAggregateBytes),
+    planCacheConfig,
+    queueTenantDemand,
+    resolveMemoryPlan,
+ )
+import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
-    AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
+    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime, cfgServer),
+    LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
+    MountConfig (mntPublicationTarget),
+    RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
+    ServerSettings (srvPort, srvShutdownDrainTimeout),
+    mountPostureLines,
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
+import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, noMirrorQueue, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,
@@ -120,7 +133,9 @@ import Ecluse.Core.Registry.Adapter (
     adapterServe,
     serveRouter,
  )
+import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
 import Ecluse.Core.Server.Admission (newServeAdmission)
+import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Supervision (
@@ -131,11 +146,11 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Core.Worker (WorkerPolicies, runWorkerM, workerLoop)
+import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (RequestSizeLimit), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort, scSizeLimit), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -156,7 +171,7 @@ adapter, a credential reference that does not resolve, or a mirror-queue backend
 not built in this binary), aggregating the failures so a single run reports them
 all. On success, build the handles (the shared HTTP @Manager@, the config-selected
 mirror queue, the metadata cache, the logger, the process-global credential
-provider, and the telemetry substrate, off unless @ECLUSE_TELEMETRY@ enables it)
+provider, and the telemetry substrate, off unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enables it)
 into an 'Env', derive the served mount bindings, then run the server and the mirror
 worker __concurrently__ over that single 'Env' ('runServer' and 'runWorker').
 Bracketing the 'Env' (and the telemetry providers) for the lifetime of both tears
@@ -191,61 +206,111 @@ runProxy bootEnv = do
     -- independent so one ecosystem's missing artifact never holds back
     -- another's. Without a bucket the map is empty: rules abstain and
     -- readiness is ungated.
-    cveSyncPlan <- planCveSync logEnv env
+    cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
-    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
-    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
-    -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
-    -- "not built" boot error, never a silent fall-through); the resulting plan is
-    -- handed to the one queue-construction site below.
-    queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
     -- The effective admission capacity: explicit config, else computed from the
-    -- post-runtime-posture capability count, logged with its provenance beside the
-    -- runtime lines. This bounds metadata materialisation only; the private manager's
-    -- pool is sized independently below, since a trusted tarball hit streams outside
-    -- admission (see 'Composition.resolvePrivateConnections' and issue #634).
-    capabilities <- getNumCapabilities
-    let (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (cfgServeMaxInFlight env) capabilities
-    logBootInfo logEnv admissionLine
-    serveAdmission <- newServeAdmission serveMaxInFlight
+    -- effective (post-apply, observed) capability count, logged with its provenance
+    -- beside the runtime lines. This bounds metadata materialisation only; the
+    -- private manager's pool is sized independently below, since a trusted tarball
+    -- hit streams outside admission (see 'Composition.resolvePrivateConnections'
+    -- and issue #634).
+    -- Whether a mirror runtime exists at all, and which queue backend it rides,
+    -- decided from the URL's shape BEFORE any byte is budgeted: only the memory
+    -- backend spends heap on queued jobs, so the queue tenant must be conditional
+    -- on this selection, never allocated ahead of it.
+    runtimePlan <-
+        orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
+    -- The memory plan: the named tenants partitioned from the effective heap
+    -- ceiling, with admission bounded jointly by CPU and the material share.
+    -- Shed-ladder steps are loud warnings and the process boots regardless; only
+    -- an explicit override breaking the combined invariant refuses.
+    let publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts env))
+        (plan, planLines) =
+            resolveMemoryPlan
+                (cfgCache env)
+                (cfgLimits env)
+                (cfgQueue env)
+                (rtServeMaxInFlight (cfgRuntime env))
+                (beRuntimePlan bootEnv)
+                (queueTenantDemand runtimePlan)
+                publishConfigured
+    traverse_ (logBootInfo logEnv) planLines
+    traverse_ (logBootWarning logEnv) (mpDegradations plan)
+    unless (null (mpOverrideViolations plan)) $
+        orExit (T.unlines . map renderBootError) (Left [MemoryPlanOverrideUnsafe (mpOverrideViolations plan)])
+    -- Where the plan shed the capability count (the nursery was the pressure),
+    -- apply it in-process before the parallel machinery spins up.
+    whenJust (mpShedCapabilities plan) setNumCapabilities
+    serveAdmission <- newServeAdmission (mpAdmissionCapacity plan)
+    -- The publish-body byte discipline, present exactly when a publication
+    -- target is configured (the plan's tenant derives from the same predicate):
+    -- one process-wide aggregate shared by every publishing mount.
+    publishBudget <- forM (mpPublishTenant plan) $ \tenant -> do
+        bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
+        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes plan}
+    let limits =
+            Limits
+                { maxBodyBytes = mpMaxResponseBytes plan
+                , maxVersionCount = limMaxVersionCount (cfgLimits env)
+                , maxNestingDepth = limMaxNestingDepth (cfgLimits env)
+                }
+    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
+    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- The private-upstream connection pool: an explicit override, else computed from the
     -- process file-descriptor limit (the pool's real ceiling, since each pooled
     -- connection is one descriptor). Sized for the un-admitted private-hit streaming
     -- fan-out, not the admission capacity.
     fdLimit <- Composition.openFileSoftLimit
-    let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (cfgPrivateConnectionsPerHost env) fdLimit
+    let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (rtPrivateConnectionsPerHost (cfgRuntime env)) fdLimit
     logBootInfo logEnv privateConnectionsLine
     -- The public pool: an explicit override, else computed from the same
     -- file-descriptor datapoint at half the private share. The onboarding
     -- fail-over's artifact streams and the worker's back-fill fetches ride this
     -- manager without coalescing, so its retention must cover that transient
     -- fan-out, not only the admission-bounded metadata misses.
-    let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (cfgPublicConnectionsPerHost env) fdLimit
+    let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (rtPublicConnectionsPerHost (cfgRuntime env)) fdLimit
     logBootInfo logEnv publicConnectionsLine
+    heartbeat <- newWorkerHeartbeat
     let serverConfig =
             (mkServerConfig bindings)
-                { scPort = cfgPort env
-                , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
+                { scPort = srvPort (cfgServer env)
+                , scDrainTimeout = ShutdownDrainTimeout (srvShutdownDrainTimeout (cfgServer env))
                 , scCheckReady = cveSyncReady cveSyncPlan
+                , -- Fold the worker heartbeat into /livez exactly when a worker will
+                  -- run; a serve-only deployment's liveness is the listener alone.
+                  scCheckLive = case runtimePlan of
+                    MirrorWith _ -> heartbeatHealthyNow heartbeat
+                    NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
+                , -- The request-body cap, resolved by the memory plan (configured
+                  -- or a share of the heap ceiling).
+                  scSizeLimit = RequestSizeLimit (fromIntegral (mpMaxRequestBytes plan))
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
-    -- The config-selected mirror queue, built once here (the single constructor
-    -- call) from the validated plan: the durable AWS SQS backend, or the bounded
-    -- in-memory backend -- which first emits a loud boot warning (it is
-    -- non-durable / best-effort) and logs each rate-limited cap-overflow drop.
-    backendQueue <- buildMirrorQueue logEnv queuePlan
-    -- Decouple the serve path from the backend's own enqueue latency: what Env
-    -- captures is the buffered hand-off (an STM write), and the drain loop below --
-    -- raced against the services -- delivers to the backend (an SQS round trip on
-    -- that backend) off the request path, where it would otherwise hold the served
-    -- connection's turn.
-    (queue, drainEnqueueBuffer) <-
-        bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
-    metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
-    heartbeat <- newWorkerHeartbeat
+    -- One posture line per mount: mirrored (and where the back-fill lands) or
+    -- serve-only. The mode is derived from the declared endpoints, so this is the
+    -- loud surface a dropped mirrorTarget shows up on.
+    traverse_ (logBootInfo logEnv) (mountPostureLines config)
+    -- The mirror runtime's queue, or nothing at all. Under MirrorWith the
+    -- config-selected backend is built once here (the single constructor call) --
+    -- the durable AWS SQS backend, or the bounded in-memory backend, which first
+    -- emits a loud boot warning (it is non-durable / best-effort) -- and wrapped in
+    -- the buffered hand-off that decouples the serve path from the backend's own
+    -- enqueue latency (the drain loop below, raced against the services, delivers
+    -- off the request path). Under NoMirroring nothing is built: Env carries the
+    -- inert queue, unreachable by construction (no mount enqueues, no worker polls).
+    (queue, mirrorDrain) <- case runtimePlan of
+        MirrorWith queuePlan -> do
+            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth plan) queuePlan
+            (q, drainEnqueueBuffer) <-
+                bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
+            pure (q, Just drainEnqueueBuffer)
+        NoMirroring -> do
+            logBootInfo logEnv "mirror runtime disabled: no mount mirrors, so no queue is built and no worker starts"
+            pure (noMirrorQueue, Nothing)
+    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
 
     -- Two data-plane managers, one per origin. Both are the standard validating TLS
     -- manager: registry egress is https-only by construction (a non-https endpoint
@@ -281,10 +346,21 @@ runProxy bootEnv = do
         -- ('Ecluse.Composition.Worker.workerPoliciesFor') over the served mounts,
         -- the resolved publish targets, and the adapter registry, so a future
         -- worker-only binary reuses the same function rather than re-deriving
-        -- this wiring.
-        race_
-            (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
-            (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
+        -- this wiring. With no mirror runtime there is no worker arm and no drain
+        -- loop, only the server (and the sync tasks when a bucket is configured;
+        -- racing the server against an EMPTY task list would cancel it instantly,
+        -- so the no-task shape runs the server alone).
+        case mirrorDrain of
+            Just drainEnqueueBuffer ->
+                race_
+                    (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
+                    (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
+            Nothing
+                | null syncTasks -> runServer serverConfig builtEnv
+                | otherwise ->
+                    race_
+                        (runServer serverConfig builtEnv)
+                        (mapConcurrently_ id syncTasks)
 
 {- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
 failures are logged rate-limited ('enqueueReportWorthy') and each counts an enqueue

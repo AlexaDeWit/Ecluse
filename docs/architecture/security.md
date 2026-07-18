@@ -81,7 +81,7 @@ not here.
    is non-supported. Behind the host allowlist (invariant 2), a cheap literal
    internal-range block stays as a second gate on the `dist.tarball` host; the trusted
    private origin is exempt from it, since a private registry may live on an internal
-   address. The fixed range set is extensible with `ECLUSE_ADDITIONAL_BLOCKED_RANGES`
+   address. The fixed range set is extensible with `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES`
    (comma-separated CIDRs, applied to every mount, fails closed at boot on a malformed
    entry); it only widens the block, with no knob to narrow it.
 4. **Parsed upstream responses are bounded**, maximum body size, version count, and JSON
@@ -96,8 +96,8 @@ not here.
    failure; the merge then serves the best-effort union of whatever resolved within budget.
    The body-size cap precedes the decode, so the document reaching the depth check is
    already size-bounded, and the depth check bounds its traversal cost. The ceilings are
-   operator-tunable with secure defaults (`ECLUSE_MAX_RESPONSE_BYTES` /
-   `ECLUSE_MAX_VERSION_COUNT` / `ECLUSE_MAX_NESTING_DEPTH`; see
+   operator-tunable with secure defaults (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES` /
+   `ECLUSE_LIMITS__MAX_VERSION_COUNT` / `ECLUSE_LIMITS__MAX_NESTING_DEPTH`; see
    [Response bounds](configuration.md#response-bounds)). Artifacts stream with constant
    memory and are not subject to the body-size bound; the inbound client→proxy
    request-body cap is the separate `sizeLimitMiddleware`.
@@ -107,7 +107,7 @@ not here.
    differ only in how far they may move:
 
    - The public (untrusted) floor is a hard SHA-256 boundary
-     (`ECLUSE_MIN_PUBLIC_INTEGRITY`, default SHA-256). It may be raised to
+     (`ECLUSE_INTEGRITY__MIN_PUBLIC`, default SHA-256). It may be raised to
      `sha384`/`sha512`/`blake2b` but never lowered below SHA-256: a sub-floor or unknown
      value is [rejected at config load](configuration.md#public-integrity-floor), never
      clamped, and no configuration accepts a sub-SHA-256 digest from an untrusted public
@@ -117,7 +117,7 @@ not here.
      a client never sees a version it could not verify. SHA-1 and MD5 have practical
      collisions, so a match cannot prove the bytes were not substituted.
    - The trusted (private) floor carries the same SHA-256 default
-     (`ECLUSE_MIN_TRUSTED_INTEGRITY`, default SHA-256), so a SHA-1-only or hashless private
+     (`ECLUSE_INTEGRITY__MIN_TRUSTED`, default SHA-256), so a SHA-1-only or hashless private
      version is dropped exactly as a public one is. But it is operator-loosenable below
      SHA-256 (down to `sha1`/`md5`) for a legacy private mirror, where trust in the
      operator's own vetted source substitutes for cryptographic strength. That is the only
@@ -232,10 +232,10 @@ internal-range block):
 | Outbound connection | Trust | Manager / client | Host allowlist + literal internal-range block |
 |---|---|---|---|
 | Public-upstream **packument** fetch | Untrusted | `envManager` (untrusted) | **Yes** |
-| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (untrusted) | **Yes** (plus the tarball-host policy) |
+| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (untrusted) | **Yes** (plus the tarball-host gate) |
 | Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (untrusted) | **Yes** |
 | Private-upstream **packument** fetch | Trusted | `envPrivateManager` (trusted) | **No** |
-| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
+| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host gate still apply (trivially satisfied) |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (trusted) | **No** |
 | **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (trusted) | **No**, the destination is configuration (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No**, the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
@@ -257,7 +257,7 @@ The private origin's tarball is the one subtlety: the
 [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
 is served over the trusted manager and is exempt from the literal internal-range block as a
 `TrustedOrigin`, so a private registry on an internal https address serves its same-host
-tarball. The URL is on the private base host, so the host allowlist and same-host policy
+tarball. The URL is on the private base host, so the host allowlist and same-host gate
 are satisfied by construction. It is part of the trusted private origin, not an untrusted
 download.
 
@@ -282,13 +282,13 @@ their own requests outside `withToken`, a noted follow-up.
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
-(`ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) constrains which package names may be published; it
+(`ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`) constrains which package names may be published; it
 is not authentication and does not verify who is publishing. So if a deployment sets
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, substituting Écluse's own credential for a
 publisher who forwards none, the composition root refuses to boot without a verifiable
 inbound edge (`PublishStaticCredentialNeedsEdge`). That makes "static publish credential +
 open edge", which would let any unauthenticated client publish under the operator's
-credential within the allowed scopes, unrepresentable. `ECLUSE_AUTH_TOKEN` is the verifiable
+credential within the allowed scopes, unrepresentable. `ECLUSE_SERVER__AUTH_TOKEN` is the verifiable
 edge Écluse checks today; an external layer (API gateway, mTLS service mesh, `NetworkPolicy`)
 is defence-in-depth but cannot substitute for it, since Écluse can only verify its own edge.
 Pure passthrough (no static token) carries no such floor: the publisher's forwarded token is
@@ -343,13 +343,13 @@ three-registry topology, CodeArtifact over VPC endpoints). The threats and dispo
 in the [register](https://ecluse-proxy.com/threat-model.html); this is the
 assumptions framing.
 
-**Edge access is an operator concern** (register threat #3). `ECLUSE_AUTH_TOKEN` is off by
+**Edge access is an operator concern** (register threat #3). `ECLUSE_SERVER__AUTH_TOKEN` is off by
 default; who may reach the proxy is delegated to the deployment's access edge, which must
 hold east-west as well as north-south (an ingress-only allow-list that leaves pod-to-pod
 traffic open is the usual gap). Passthrough softens this: a caller with no forwarded token
 gets no private read or publish, so an edge breach exposes only the public-gated view plus
 the untrusted-egress and DoS surface, never private packages. (A static publication token
-requires `ECLUSE_AUTH_TOKEN`, enforced at boot:
+requires `ECLUSE_SERVER__AUTH_TOKEN`, enforced at boot:
 [a static publish credential is fail-closed](#a-static-publish-credential-is-fail-closed).)
 The planned trusted-edge-identity mode must require a verifiable binding to the edge (mutual
 TLS, or a shared secret / HMAC on the assertion), an [unrepresentable unsafe
@@ -365,7 +365,8 @@ and the token-stripping boundary and the
 [no-redirect-with-credential invariant](#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)
 (register threat #4) are load-bearing because real caller credentials cross them.
 
-**The mirror-target write token is the one standing credential Écluse holds** and its
+**The mirror-target write token is the one standing credential a mirrored deployment
+holds** (a serve-only deployment holds none) and its
 sharpest privilege, since it writes the trusted store: scope it write-only, prefer
 container-role minting over a static secret, minimise its TTL. The mirror queue is part of
 the same trust boundary: a job is unauthenticated and directs the worker to
@@ -395,22 +396,22 @@ configure.
 egress guards follow that principle, made concrete for the tarball path:
 
 - **`dist.tarball` host, disallow-by-default (public leg).** The public serve leg fetches
-  each tarball from its authoritative `dist.tarball`, but gates where: by default only the
+  each tarball from its authoritative `dist.tarball`, but gates where: only the
   same allowlisted upstream authority that served the packument, host and port compared
   as a pair, refusing a `dist.tarball` on a different host, or on the same host at a
   different port, even if otherwise allowlisted
-  (`Ecluse.Core.Security.tarballHostAllowed` with `SameHostAsPackument`, applied in
+  (`Ecluse.Core.Security.tarballHostAllowed`, applied in
   `Ecluse.Core.Server.Pipeline`). A packument origin with no written port is port 443,
   as every portless authority is. A cross-authority `dist.tarball` is refused with a
   `403` before any fetch. (The private leg never consults `dist.tarball`; its same-host
-  conventional read satisfies the gate by construction.) An operator whose registry
-  serves tarballs from a separate CDN opts in with
-  `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST`, accepting the wider fetch surface.
-  The override never escapes the `host:port` allowlist or https-only: an allowlisted
-  cross-host tarball is still dialled https-only with certificate validation, and a
-  literal internal-address host is still refused (invariant 3). See
+  conventional read satisfies the gate by construction.) The one same-host equivalence
+  is the ecosystem's own canonical artifact hosts, declared on its adapter (npm has
+  none; PyPI's is `files.pythonhosted.org`) -- never an operator knob, so the fetch
+  surface cannot be widened by configuration. An ecosystem host never escapes the
+  `host:port` allowlist or https-only: it is still dialled https-only with certificate
+  validation, and a literal internal-address host is still refused (invariant 3). See
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
 The internal-range block (invariant 3) runs the opposite direction: no knob narrows it (a
 literal internal address is always refused on an untrusted origin, the trusted private
-origin aside), only `ECLUSE_ADDITIONAL_BLOCKED_RANGES` widens it.
+origin aside), only `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` widens it.

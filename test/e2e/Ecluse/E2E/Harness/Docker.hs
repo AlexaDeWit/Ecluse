@@ -222,7 +222,7 @@ withE2EWith cfg action gdp = do
                 -- URL's host (here ministack's own `localhost:4566`) is immaterial.
                 let queueName = "ecluse-e2e-queue-" <> T.pack sfx
                 queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
-                -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
+                -- Pick the host port up front so ECLUSE_SERVER__PUBLIC_URL (which makes the proxy
                 -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before the
                 -- container starts -- the assigned port is only readable after.
                 proxyPort <- freeHostPort
@@ -261,15 +261,15 @@ queue URL created in ministack. The real SQS backend is pointed at ministack thr
 the production @AWS_ENDPOINT_URL_SQS@ override and signs with the standard
 @AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
 legs and the mirror target point at the stub containers by their network aliases.
-@ECLUSE_PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
+@ECLUSE_SERVER__PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
 served @dist.tarball@ is rewritten to an absolute URL npm can fetch.
 -}
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
-    [ ("ECLUSE_PORT", "4873")
-    , -- ECLUSE_PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
+    [ ("ECLUSE_SERVER__PORT", "4873")
+    , -- ECLUSE_SERVER__PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
       -- rewriting), not a registry-egress target, so it stays http on host loopback.
-      ("ECLUSE_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
+      ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction: the upstream and mirror
       -- stubs are served over TLS (an nginx terminator with the test cert), and the proxy
       -- image's trust store is extended with the test CA via SSL_CERT_FILE below, the
@@ -279,15 +279,14 @@ proxyEnv hostPort queueUrl =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    , ("ECLUSE_QUEUE_BACKEND", "sqs")
-    , ("ECLUSE_QUEUE_URL", queueUrl)
+    , ("ECLUSE_QUEUE__URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
       -- alias; the dummy keys sign the request the emulator does not validate.
       ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
-    , ("ECLUSE_LOG_FORMAT", "json")
+    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire.
       -- We must also explicitly disable 'min-age' from the opinionated default policy,
       -- otherwise it will block the e2e test's freshly-created test packages.
@@ -435,7 +434,7 @@ collector's presence differs.
 -}
 otlpCollectorEnv :: [(Text, Text)]
 otlpCollectorEnv =
-    [ ("ECLUSE_TELEMETRY", "on")
+    [ ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
     , ("OTEL_EXPORTER_OTLP_ENDPOINT", collectorOtlpEndpoint)
     ]
         <> telemetryExportTuning
@@ -456,7 +455,7 @@ collector. The resolver projects these onto @service.name@\/@deployment.environm
 -}
 datadogCollectorEnv :: [(Text, Text)]
 datadogCollectorEnv =
-    [ ("ECLUSE_TELEMETRY", "on")
+    [ ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
     , ("DD_SERVICE", ddTagService)
     , ("DD_ENV", ddTagEnv)
     , ("DD_VERSION", ddTagVersion)
@@ -600,7 +599,7 @@ exitOk (code, _, _) = code == ExitSuccess
 
 {- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned,
 release it. The brief window before docker rebinds it is a tolerable race for a
-loopback test. Picked up front so ECLUSE_PUBLIC_URL can name it before boot.
+loopback test. Picked up front so ECLUSE_SERVER__PUBLIC_URL can name it before boot.
 -}
 freeHostPort :: IO Int
 freeHostPort =

@@ -24,7 +24,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn), parseDivergencePolicy)
+import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Runtime.Log (parseLogFormat)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
@@ -36,36 +36,34 @@ mountConfigParser :: KeyMap.KeyMap Value -> Parser MountConfig
 mountConfigParser o = do
     rejectUnknownKeys "mount" acceptedMountKeys o
     MountConfig
-        <$> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
+        <$> o .:? "enabled"
+        <*> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
         <*> (o .: "publicUpstream" >>= parseRegistryUrl)
         <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-        <*> o .: "respectUpstreamTarballHost"
-        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
+        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse (parseCodeArtifactDuration "mirrorCodeArtifactTokenDuration"))
         <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
-        <*> (o .:? "publishScopes" .!= String "" >>= parseScopes)
+        <*> (o .:? "publishAllow" .!= String "" >>= parseScopes)
+        <*> (o .:? "minTrustedIntegrity" >>= traverse (parseEnum parseMinTrustedIntegrity "minTrustedIntegrity"))
+        <*> (o .:? "divergencePolicy" >>= traverse (parseEnum parseDivergencePolicy "divergencePolicy"))
         <*> o .:? "rules" .!= RulePatch Map.empty
 
 acceptedMountKeys :: [Key.Key]
 acceptedMountKeys =
-    [ "privateUpstream"
+    [ "enabled"
+    , "privateUpstream"
     , "publicUpstream"
     , "mirrorTarget"
     , "mirrorTargetToken"
-    , "respectUpstreamTarballHost"
     , "mirrorCodeArtifactTokenDuration"
     , "publicationTarget"
     , "publicationTargetToken"
-    , "publishScopes"
+    , "publishAllow"
+    , "minTrustedIntegrity"
+    , "divergencePolicy"
     , "rules"
     ]
-
-parseDuration :: Value -> Parser Natural
-parseDuration (String t) = case readMaybe (T.unpack t) :: Maybe Natural of
-    Just n -> pure n
-    Nothing -> fail ("invalid duration: " <> T.unpack t)
-parseDuration v = parseJSON v
 
 parseScopes :: Value -> Parser [Scope]
 parseScopes = withText "Scopes" $ \t ->
@@ -80,84 +78,115 @@ appConfigParser :: KeyMap.KeyMap Value -> Parser AppConfig
 appConfigParser o = do
     rejectUnknownKeys "document" acceptedDocumentKeys o
     AppConfig
-        <$> o .: "port"
+        <$> (groupOf "server" o >>= serverParser)
+        <*> (groupOf "queue" o >>= queueParser)
+        <*> (groupOf "limits" o >>= limitsParser)
+        <*> (groupOf "cache" o >>= cacheParser)
+        <*> (groupOf "integrity" o >>= integrityParser)
+        <*> (groupOf "egress" o >>= egressParser)
+        <*> (groupOf "advisories" o >>= advisoriesParser)
+        <*> (groupOf "runtime" o >>= runtimeParser)
+        <*> (groupOf "observability" o >>= observabilityParser)
         <*> (o .:? "mounts" .!= mempty >>= parseMounts)
-        <*> (o .: "queueBackend" >>= parseEnum parseQueueBackend "queueBackend")
-        <*> (o .:? "queueUrl" >>= traverse parseUrl)
-        <*> o .: "queueMemoryMaxDepth"
-        <*> o .:? "awsRegion"
-        <*> o .:? "awsEndpointUrlSqs"
-        <*> o .:? "awsEndpointUrl"
-        <*> o .:? "googleProject"
+
+-- An absent group reads as empty (its required keys, pinned in the embedded
+-- defaults, are then reported missing by its own parser).
+groupOf :: Key.Key -> KeyMap.KeyMap Value -> Parser (KeyMap.KeyMap Value)
+groupOf key o = case KeyMap.lookup key o of
+    Nothing -> pure KeyMap.empty
+    Just v -> case v of
+        Object g -> pure g
+        other -> fail (Key.toString key <> " must be an object, but encountered " <> valueKind other)
+
+serverParser :: KeyMap.KeyMap Value -> Parser ServerSettings
+serverParser o = do
+    rejectUnknownKeys "server" ["port", "publicUrl", "authToken", "helpMessage", "shutdownDrainTimeout"] o
+    ServerSettings
+        <$> (o .: "port" >>= parsePort "server.port")
+        <*> (o .:? "publicUrl" >>= traverse (parseHttpUrl "server.publicUrl"))
         <*> (o .:? "authToken" >>= traverse parseSecret)
         <*> o .:? "helpMessage"
-        <*> (o .: "cveSyncInterval" >>= parseDelaySeconds "cveSyncInterval")
-        <*> o .: "shutdownDrainTimeout"
-        <*> (o .:? "cores" >>= traverse (parsePositiveInt "cores"))
-        <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
-        <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "serveMaxInFlight"))
-        <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "publicConnectionsPerHost"))
-        <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "privateConnectionsPerHost"))
-        <*> (o .: "cacheTtl" >>= parseSeconds)
-        <*> o .: "cacheMaxEntries"
-        <*> o .: "cacheMaxBytes"
-        <*> o .: "maxResponseBytes"
-        <*> o .: "maxVersionCount"
-        <*> o .: "maxNestingDepth"
-        <*> (o .: "logFormat" >>= parseEnum parseLogFormat "logFormat")
-        <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "telemetry")
-        <*> (o .:? "publicUrl" >>= traverse parseUrl)
-        <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
-        <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
-        <*> (o .:? "divergencePolicy" >>= maybe (pure Warn) (parseEnum parseDivergencePolicy "divergencePolicy"))
-        <*> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
-        <*> (o .:? "osvDataDir" .!= "data/osv")
-        <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
-        <*> o .:? "vulnerabilityDatabaseBucket"
-        <*> (o .: "cveDbPollInterval" >>= parseDelaySeconds "cveDbPollInterval")
-        <*> (o .: "maxOsvDbBytes" >>= parsePositiveInt "maxOsvDbBytes")
+        <*> (o .: "shutdownDrainTimeout" >>= parsePositiveInt "server.shutdownDrainTimeout")
+
+queueParser :: KeyMap.KeyMap Value -> Parser QueueSettings
+queueParser o = do
+    rejectUnknownKeys "queue" ["url", "memoryMaxDepth"] o
+    QueueSettings
+        <$> (o .:? "url" >>= traverse parseUrl)
+        <*> (o .:? "memoryMaxDepth" >>= traverse (parsePositiveInt "queue.memoryMaxDepth"))
+
+limitsParser :: KeyMap.KeyMap Value -> Parser LimitsSettings
+limitsParser o = do
+    rejectUnknownKeys "limits" ["maxResponseBytes", "maxVersionCount", "maxNestingDepth", "maxRequestBytes"] o
+    LimitsSettings
+        <$> (o .:? "maxResponseBytes" >>= traverse (parsePositiveInt "limits.maxResponseBytes"))
+        <*> (o .: "maxVersionCount" >>= parsePositiveInt "limits.maxVersionCount")
+        <*> (o .: "maxNestingDepth" >>= parsePositiveInt "limits.maxNestingDepth")
+        <*> (o .:? "maxRequestBytes" >>= traverse (parsePositiveInt "limits.maxRequestBytes"))
+
+cacheParser :: KeyMap.KeyMap Value -> Parser CacheSettings
+cacheParser o = do
+    rejectUnknownKeys "cache" ["ttl", "maxEntries", "maxBytes"] o
+    CacheSettings
+        <$> (o .: "ttl" >>= parseSeconds)
+        <*> (o .:? "maxEntries" >>= traverse (parsePositiveInt "cache.maxEntries"))
+        <*> (o .:? "maxBytes" >>= traverse (parsePositiveInt "cache.maxBytes"))
+
+integrityParser :: KeyMap.KeyMap Value -> Parser IntegritySettings
+integrityParser o = do
+    rejectUnknownKeys "integrity" ["minPublic", "minTrusted", "divergencePolicy"] o
+    IntegritySettings
+        <$> (o .: "minPublic" >>= parseEnum parseMinIntegrity "integrity.minPublic")
+        <*> (o .: "minTrusted" >>= parseEnum parseMinTrustedIntegrity "integrity.minTrusted")
+        <*> (o .: "divergencePolicy" >>= parseEnum parseDivergencePolicy "integrity.divergencePolicy")
+
+egressParser :: KeyMap.KeyMap Value -> Parser EgressSettings
+egressParser o = do
+    rejectUnknownKeys "egress" ["additionalBlockedRanges"] o
+    EgressSettings
+        <$> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
+
+advisoriesParser :: KeyMap.KeyMap Value -> Parser AdvisoriesSettings
+advisoriesParser o = do
+    rejectUnknownKeys "advisories" ["bucket", "pollInterval", "compileInterval", "dataDir", "osvExportBaseUrl", "maxDatabaseBytes"] o
+    AdvisoriesSettings
+        <$> o .:? "bucket"
+        <*> (o .: "pollInterval" >>= parseDelaySeconds "advisories.pollInterval")
+        <*> (o .: "compileInterval" >>= parseDelaySeconds "advisories.compileInterval")
+        <*> o .: "dataDir"
+        <*> o .: "osvExportBaseUrl"
+        <*> (o .: "maxDatabaseBytes" >>= parsePositiveInt "advisories.maxDatabaseBytes")
+
+runtimeParser :: KeyMap.KeyMap Value -> Parser RuntimeSettings
+runtimeParser o = do
+    rejectUnknownKeys "runtime" ["cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost"] o
+    RuntimeSettings
+        <$> (o .:? "cores" >>= traverse (parsePositiveInt "runtime.cores"))
+        <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "runtime.maxHeapBytes"))
+        <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "runtime.serveMaxInFlight"))
+        <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "runtime.publicConnectionsPerHost"))
+        <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "runtime.privateConnectionsPerHost"))
+
+observabilityParser :: KeyMap.KeyMap Value -> Parser ObservabilitySettings
+observabilityParser o = do
+    rejectUnknownKeys "observability" ["logFormat", "telemetry"] o
+    ObservabilitySettings
+        <$> (o .: "logFormat" >>= parseEnum parseLogFormat "observability.logFormat")
+        <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "observability.telemetry")
 
 acceptedDocumentKeys :: [Key.Key]
 acceptedDocumentKeys =
-    [ "port"
+    [ "server"
+    , "queue"
+    , "limits"
+    , "cache"
+    , "integrity"
+    , "egress"
+    , "advisories"
+    , "runtime"
+    , "observability"
     , "mounts"
-    , "queueBackend"
-    , "queueUrl"
-    , "queueMemoryMaxDepth"
-    , "awsRegion"
-    , "awsEndpointUrlSqs"
-    , "awsEndpointUrl"
-    , "awsAccessKeyId"
-    , "awsSecretAccessKey"
-    , "googleProject"
-    , "authToken"
-    , "helpMessage"
-    , "cveSyncInterval"
-    , "shutdownDrainTimeout"
-    , "cores"
-    , "maxHeapBytes"
-    , "serveMaxInFlight"
-    , "publicConnectionsPerHost"
-    , "privateConnectionsPerHost"
-    , "cacheTtl"
-    , "cacheMaxEntries"
-    , "cacheMaxBytes"
-    , "maxResponseBytes"
-    , "maxVersionCount"
-    , "maxNestingDepth"
-    , "logFormat"
-    , "telemetry"
-    , "publicUrl"
-    , "minPublicIntegrity"
-    , "minTrustedIntegrity"
-    , "divergencePolicy"
-    , "additionalBlockedRanges"
     , "rules"
-    , "osvDataDir"
-    , "osvExportBaseUrl"
-    , "vulnerabilityDatabaseBucket"
-    , "cveDbPollInterval"
-    , "maxOsvDbBytes"
     ]
 
 {- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem

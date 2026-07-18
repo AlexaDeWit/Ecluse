@@ -126,6 +126,8 @@ data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
     , mServeAdmissionQueued :: Counter Int64
+    , mPublishBodyInFlightBytes :: UpDownCounter Int64
+    , mPublishBodyShed :: Counter Int64
     , mMergeDivergence :: Counter Int64
     , mRuleDenials :: Counter Int64
     , mRuleEvalDuration :: Histogram
@@ -165,6 +167,8 @@ newMetrics telemetry = do
         <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
         <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
         <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
+        <*> upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
+        <*> counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
         <*> counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
         <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
         <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
@@ -222,6 +226,8 @@ metricsPortOf m =
         { mpServeDecision = recordServeDecision m
         , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
+        , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
+        , mpPublishBodyShed = addOne (mPublishBodyShed m) []
         , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m

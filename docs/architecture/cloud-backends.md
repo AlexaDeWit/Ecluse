@@ -59,24 +59,24 @@ is acceptable since the rules are deterministic for a given version.
 pattern). Instead of building separate binaries for the proxy server, the OSV
 ingestion pipeline (`pilot`), and the registry cleanup worker (`dredger`),
 `app/Main.hs` acts as a CLI router that runs a sub-system per invocation command
-(`ecluse serve`, `ecluse pilot`, `ecluse dredger`).
+(`ecluse proxy`, `ecluse pilot`, `ecluse dredger`).
 
 This pattern is a deliberate architectural and security decision:
 
-1. **Config and rule synchronisation.** Because `pilot`, `dredger`, and `serve`
+1. **Config and rule synchronisation.** Because `pilot`, `dredger`, and `proxy`
    are the same binary parsing the same configuration file, they share the exact
    same runtime state (the same `Env` and config models). A manual package
-   revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is respected by
+   revocation rule (`DenyByIdentity`) configured in the config document is respected by
    the dredger (to purge it) and the proxy (to block it), so the two never drift.
 2. **First-party scope protection.** By sharing the configuration, the dredger is
-   aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes)
+   aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` (internal first-party scopes)
    the proxy routes to the publication target. The dredger unconditionally excludes
    those scopes from its purge routines, so it never deletes first-party packages.
 3. **Collapsed-registry mitigation.** If an operator collapses the mirror target
    and the publication target onto a single shared registry, the dredger detects
    this and refuses to boot. That hard failure keeps the dredger from treating
    first-party packages (which might fall outside the explicit
-   `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) as stale public ones and deleting them.
+   `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`) as stale public ones and deleting them.
 4. **Deployment simplicity.** The operator deploys the same versioned Docker image
    for all three components, changing only the container command and the IAM role.
 
@@ -86,7 +86,8 @@ pilot) and network-egress bounds (zero ingress for the dredger) are applied
 per-container. Even though the proxy *contains* the pilot code, it has neither the
 IAM permissions nor the CLI invocation to run it.
 
-The **mirror worker** runs in the `ecluse serve` process as a supervised concurrent
+The **mirror worker** exists only when a mount mirrors (a serve-only deployment starts
+no worker and builds no queue). It runs in the `ecluse proxy` process as a supervised concurrent
 thread (`async` / `unliftio`), not a separate service: worker load is front-loaded (a
 cold mirror back-fills heavily for a few days, then settles), so an extra deployable is
 not yet worth it. It carries its own health/liveness surface (a consume-loop heartbeat /
@@ -192,7 +193,11 @@ so it is built once at the composition root, not per mount. A mount names which
 configured provider its strategy draws on. In the common deployment those references
 collapse to one identity: the same container role writes the mirror target and (under
 `service`) reads the private upstream. A multi-cloud process holds one provider per
-cloud, with `AWS_REGION` / `ECLUSE_GOOGLE_PROJECT` scoping likewise process-global. A
+cloud; region scoping is per destination, parsed from the URL each mechanism serves
+(the CodeArtifact mint's region from the mirror-target host, the SQS backend's from
+the queue URL's host; the ambient `AWS_REGION` matters only under an
+`AWS_ENDPOINT_URL_SQS` override, whose endpoint carries no region), and a GCP project
+scope arrives with the Pub/Sub backend, deriving from its topic resource the same way. A
 mount naming a credential source with no initialised provider fails at boot (aggregated
 with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),

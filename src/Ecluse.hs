@@ -106,6 +106,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
+import Ecluse.CheckConfig (runCheckConfig)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
 import Ecluse.Pilot
@@ -114,18 +115,24 @@ import Ecluse.Proxy
 run :: IO ()
 run = do
     cmd <- execCLI
-    outcome <- superviseProcess (withBootEnv (dispatch cmd))
-    case outcome of
-        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
-        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
-        _ -> pass
-    exitWith (exitCodeFor outcome)
+    case cmd of
+        -- check-config validates and prints without booting anything, and owns
+        -- its own exit codes (0 valid, 2 refused): no services, no supervision.
+        RunCheckConfig -> runCheckConfig
+        serviceCmd -> do
+            outcome <- superviseProcess (withBootEnv (dispatch serviceCmd))
+            case outcome of
+                ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
+                RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
+                _ -> pass
+            exitWith (exitCodeFor outcome)
   where
     dispatch cmd bootEnv = case cmd of
         RunProxy -> runProxy bootEnv
         RunPilot -> runPilot bootEnv
-        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beConfig bootEnv) opts)
+        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
         RunDredger -> runDredger bootEnv
+        RunCheckConfig -> pass
 
 {- | How one whole service run ended: the typed outer perimeter of the process,
 each constructor owning one exit code ('exitCodeFor') so an orchestrator reads

@@ -211,7 +211,7 @@ listing.
 The merge never consults this: 'mergePackuments' always records the divergence and lets
 the trusted copy win, and 'applyDivergencePolicy' is a separate projection the serve
 layer runs over the finished plan. That keeps the merge a pure, policy-free function and
-leaves the availability-vs-strictness trade with the operator (@ECLUSE_DIVERGENCE_POLICY@).
+leaves the availability-vs-strictness trade with the operator (@ECLUSE_INTEGRITY__DIVERGENCE_POLICY@).
 -}
 data DivergencePolicy
     = {- | Serve the trusted (winning) copy and rely on the divergence signal alone (the
@@ -226,7 +226,7 @@ data DivergencePolicy
       FailClosed
     deriving stock (Eq, Ord, Show)
 
-{- | Parse an operator-supplied divergence policy (the @ECLUSE_DIVERGENCE_POLICY@ value):
+{- | Parse an operator-supplied divergence policy (the @ECLUSE_INTEGRITY__DIVERGENCE_POLICY@ value):
 @warn@ or @fail-closed@, case-insensitively and tolerant of @fail_closed@\/@failclosed@
 spellings. Any other value is a 'Left' naming the offending input.
 -}

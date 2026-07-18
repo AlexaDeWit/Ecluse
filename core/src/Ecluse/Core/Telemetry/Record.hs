@@ -60,6 +60,12 @@ data MetricsPort = MetricsPort
     -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpServeAdmissionQueued :: IO ()
     -- ^ Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+    , mpPublishBodyInFlightBytes :: Int -> IO ()
+    {- ^ Record a change (the reserved weight, positive or negative) in bytes held
+    for buffered publish bodies (@ecluse.publish.body.in_flight_bytes@).
+    -}
+    , mpPublishBodyShed :: IO ()
+    -- ^ Record one publish shed at the body-byte budget (@ecluse.publish.body.shed@).
     , mpMergeDivergence :: IO ()
     {- ^ Record one cross-upstream integrity divergence detected in the packument merge
     (@ecluse.registry.merge.divergence@) -- incremented once per contradicting version.

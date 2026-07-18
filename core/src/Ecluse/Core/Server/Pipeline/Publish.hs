@@ -23,8 +23,8 @@ import Data.ByteString.Lazy qualified as LBS
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502)
-import Network.Wai (Request, ResponseReceived, consumeRequestBodyStrict)
+import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502, status503)
+import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, consumeRequestBodyStrict, requestBodyLength)
 
 import Ecluse.Core.Package (
     PackageName,
@@ -33,11 +33,12 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
+import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPublishDeps),
     PublishDeps (..),
-    ServeRuntime (srPrivateManager),
+    ServeRuntime (srMetrics, srPrivateManager),
     ctxMount,
     ctxRuntime,
  )
@@ -83,32 +84,46 @@ publishWithDeps replies deps name request respond
         liftIO (respond (outOfScope replies deps name))
     | otherwise = do
         rt <- asks ctxRuntime
-        -- The body is bounded by the client→proxy request-size cap (the size-limit
-        -- middleware), read here only after the scope guard has admitted the name, so a
-        -- refused publish never even buffers its (potentially large, base64-tarball)
-        -- body.
-        body <- liftIO (consumeRequestBodyStrict request)
-        -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
-        -- guard authorised the URL-path name, but the publish document carries its own
-        -- declared identity, so a crafted body could otherwise write a name the guard never
-        -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
-        -- URL-path name, so the identity authorised is provably the identity written.
-        case bodyNameDisagreement (pubCanonicaliseName deps) name body of
-            Just declared -> liftIO (respond (bodyNameMismatch replies deps name declared))
-            -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
-            -- publish builder ('relayPublishDocument') puts it on the wire as a strict
-            -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
-            -- the client→proxy request-size cap.
-            Nothing -> do
-                -- The relay reports its failures as the typed
-                -- 'PublishRelayFault' value, so the render below is a total
-                -- match -- nothing caught, and residue is the perimeter's.
-                outcome <- liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body))
-                liftIO (respond (renderRelay replies deps outcome))
+        -- The whole buffered-body residency -- read, name check, relay -- runs
+        -- inside the aggregate byte-admission, acquired only after the edge gate
+        -- and the scope guard admitted the request, so a refused publish reserves
+        -- nothing. The weight is the declared Content-Length; a chunked body
+        -- declares nothing and reserves the per-request cap pessimistically, so
+        -- the reservation always covers what the size-limit middleware will let
+        -- the read buffer. Exhaustion sheds with the read path's vocabulary: a
+        -- brief in-process wait, then a 503 with the same Retry-After hint.
+        outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $ do
+            -- The body is bounded by the client→proxy request-size cap (the size-limit
+            -- middleware), read here only after the scope guard has admitted the name, so a
+            -- refused publish never even buffers its (potentially large, base64-tarball)
+            -- body.
+            body <- liftIO (consumeRequestBodyStrict request)
+            -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
+            -- guard authorised the URL-path name, but the publish document carries its own
+            -- declared identity, so a crafted body could otherwise write a name the guard never
+            -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
+            -- URL-path name, so the identity authorised is provably the identity written.
+            case bodyNameDisagreement (pubCanonicaliseName deps) name body of
+                Just declared -> pure (bodyNameMismatch replies deps name declared)
+                -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
+                -- publish builder ('relayPublishDocument') puts it on the wire as a strict
+                -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
+                -- the client→proxy request-size cap.
+                Nothing ->
+                    -- The relay reports its failures as the typed
+                    -- 'PublishRelayFault' value, so the render below is a total
+                    -- match -- nothing caught, and residue is the perimeter's.
+                    renderRelay replies deps
+                        <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body))
+        liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
     -- The publisher's bearer, scanned out of the headers once: the edge gate
     -- compares it and the relay forwards it (falling back to the static token).
     clientToken = forwardedToken request
+
+    bodyWeight = case requestBodyLength request of
+        KnownLength n -> fromIntegral n
+        ChunkedBody -> pubMaxRequestBytes deps
 
 {- Whether a package name falls within the configured publish-scope allow-list -- the
 anti-shadowing guard. A __scoped__ name is admitted iff its scope is one of the
@@ -139,6 +154,13 @@ renderRelay replies deps = \case
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
     Left (RelayBoundExceeded _limit) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
+
+-- A @503@ for a publish shed at the aggregate body-byte budget: server capacity,
+-- not client rate (so not a @429@), with the same brief-wait-then-shed timing and
+-- @Retry-After@ hint as the read path's admission.
+bodyBudgetShed :: PublishReplies response -> PublishDeps -> response
+bodyBudgetShed replies deps =
+    publishError replies status503 [(hRetryAfter, "1")] (appendHelp (pubHelp deps) "the server is at its publish-body capacity; retry shortly")
 
 -- A @405@ for a publish on a mount with no publication target configured: the
 -- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@

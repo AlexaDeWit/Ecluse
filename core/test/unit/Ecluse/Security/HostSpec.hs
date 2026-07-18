@@ -19,7 +19,6 @@ import Ecluse.Core.Security (
     AllowedHostPorts,
     HostPort (HostPort, hpHost),
     Origin (TrustedOrigin, UntrustedOrigin),
-    TarballHostPolicy (..),
     allowedHostPorts,
     hostAddress,
     hostPortAddress,
@@ -30,6 +29,9 @@ import Ecluse.Core.Security (
     parseIpLiteral,
     splitHostPort,
     tarballHostAllowed,
+    tarballHostGate,
+    thgAllowlist,
+    thgEcosystemHosts,
  )
 
 {- | The raw configured upstream authorities (lower-/mixed-case on purpose), before
@@ -64,6 +66,7 @@ spec = do
     splitHostPortSpec
     ssrfGateSpec
     tarballHostPolicySpec
+    ecosystemHostSpec
     allowedHostPortsSpec
     propertiesSpec
     parseBlockedRangeSpec
@@ -657,138 +660,119 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
         (passesGate <$> hostPortAddress "http://169.254.169.254/latest/meta-data/")
             `shouldBe` Just False
 
-{- | The @dist.tarball@ host policy: under the secure default a tarball is fetched
-only from the same authority (host and port) that served the packument; the opt-in
-relaxes that to any allowlisted @host:port@ pair. Neither ever escapes the
-allowlist; the internal-range block is __origin-aware__ -- the untrusted origin is
-gated by it (subject to the per-host opt-in), the trusted private origin exempt
-from it (mirroring the connection layer's unguarded manager, security.md
-invariant 3). The deny paths are exercised hardest, since under-blocking on the
-untrusted origin is a vulnerability.
+{- | The @dist.tarball@ host gate: a tarball is fetched only from the same
+authority (host and port) that served the packument, the ecosystem's own declared
+artifact hosts being the sole equivalence (see the ecosystem spec below). Nothing
+ever escapes the allowlist; the internal-range block is __origin-aware__ -- the
+untrusted origin is gated by it, the trusted private origin exempt from it
+(mirroring the connection layer's unguarded manager, security.md invariant 3).
+The deny paths are exercised hardest, since under-blocking on the untrusted
+origin is a vulnerability.
 -}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
     let noOptIn = []
+        noEco = allowedHostPorts Set.empty
         -- Two allowlisted upstreams: the packument source and a separate CDN.
         allow = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hp "cdn.npmjs.org"])
         -- The untrusted public origin: the internal-range block applies (the existing
-        -- policy/allowlist/internal-range coverage is over this origin).
-        same policy packument target = tarballHostAllowed UntrustedOrigin policy allow noOptIn (Just packument) (Just target)
+        -- allowlist/internal-range coverage is over this origin).
+        same packument target = tarballHostAllowed noEco UntrustedOrigin allow noOptIn (Just packument) (Just target)
         -- A short alias: packument origin fixed to the npm registry on 443.
-        decide policy = same policy (hp "registry.npmjs.org")
+        decide = same (hp "registry.npmjs.org")
 
-    describe "SameHostAsPackument (the secure default)" $ do
+    describe "the same-authority clause (unconditional)" $ do
         it "admits a tarball on the same authority that served the packument" $
-            decide SameHostAsPackument (hp "registry.npmjs.org") `shouldBe` True
+            decide (hp "registry.npmjs.org") `shouldBe` True
         it "refuses a tarball on a different host, even one on the allowlist" $
-            -- The crux of the default: an allowlisted-but-different CDN is refused.
-            decide SameHostAsPackument (hp "cdn.npmjs.org") `shouldBe` False
+            -- The crux of the gate: an allowlisted-but-different CDN is refused;
+            -- only an adapter-declared ecosystem host is same-host-equivalent.
+            decide (hp "cdn.npmjs.org") `shouldBe` False
         it "refuses a tarball on a host not on the allowlist" $
-            decide SameHostAsPackument (hp "evil.example.com") `shouldBe` False
+            decide (hp "evil.example.com") `shouldBe` False
         it "matches the same-host clause case-insensitively (DNS is)" $
-            decide SameHostAsPackument (hp "Registry.NPMJS.org") `shouldBe` True
+            decide (hp "Registry.NPMJS.org") `shouldBe` True
         it "refuses an empty tarball host" $
-            decide SameHostAsPackument (HostPort "" 443) `shouldBe` False
+            decide (HostPort "" 443) `shouldBe` False
         it "refuses a look-alike suffix of the packument host" $
             -- registry.npmjs.org.evil.com is neither allowlisted nor equal.
-            decide SameHostAsPackument (hp "registry.npmjs.org.evil.com") `shouldBe` False
-
-    describe "AnyAllowlistedHost (the opt-in)" $ do
-        it "admits a tarball on a different but allowlisted host" $
-            decide AnyAllowlistedHost (hp "cdn.npmjs.org") `shouldBe` True
-        it "still admits a tarball on the same authority" $
-            decide AnyAllowlistedHost (hp "registry.npmjs.org") `shouldBe` True
-        it "still refuses a tarball on a host not on the allowlist" $
-            -- The opt-in relaxes which allowlisted pair, never the allowlist itself.
-            decide AnyAllowlistedHost (hp "evil.example.com") `shouldBe` False
+            decide (hp "registry.npmjs.org.evil.com") `shouldBe` False
 
     describe "the port dimension (the gate authorises host and port as a pair)" $ do
-        it "refuses a nonstandard-port dist.tarball under the default when the entry carries no port" $
+        it "refuses a nonstandard-port dist.tarball when the entry carries no port" $
             -- The #779 vector: dist.tarball = https://registry.npmjs.org:9443/...
             -- after a packument from https://registry.npmjs.org. The :9443 must
             -- reach both the allowlist and the same-authority clause, not be
             -- discarded before them.
-            decide SameHostAsPackument (hpAt "registry.npmjs.org" 9443) `shouldBe` False
-        it "refuses a nonstandard-port dist.tarball under the opt-in too" $
-            same AnyAllowlistedHost (hp "registry.npmjs.org") (hpAt "cdn.npmjs.org" 9443) `shouldBe` False
+            decide (hpAt "registry.npmjs.org" 9443) `shouldBe` False
         it "refuses a port mismatch between packument origin and tarball even with both pairs allowlisted" $
             -- Same host, both pairs allowlisted: the same-authority clause still
             -- refuses, because the origin dialled 443 and the tarball names 9443.
             let bothPorts = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hpAt "registry.npmjs.org" 9443])
-             in tarballHostAllowed UntrustedOrigin SameHostAsPackument bothPorts noOptIn (Just (hp "registry.npmjs.org")) (Just (hpAt "registry.npmjs.org" 9443))
+             in tarballHostAllowed noEco UntrustedOrigin bothPorts noOptIn (Just (hp "registry.npmjs.org")) (Just (hpAt "registry.npmjs.org" 9443))
                     `shouldBe` False
         it "admits a nonstandard-port tarball when the origin and the entry both name that pair" $
             -- An operator whose upstream lives on a nonstandard port states the
             -- pair explicitly; the origin dialled it and the entry authorises it.
             let at9443 = allowedHostPorts (Set.singleton (hpAt "registry.internal.example.com" 9443))
-             in tarballHostAllowed UntrustedOrigin SameHostAsPackument at9443 noOptIn (Just (hpAt "registry.internal.example.com" 9443)) (Just (hpAt "registry.internal.example.com" 9443))
+             in tarballHostAllowed noEco UntrustedOrigin at9443 noOptIn (Just (hpAt "registry.internal.example.com" 9443)) (Just (hpAt "registry.internal.example.com" 9443))
                     `shouldBe` True
-        it "admits a cross-host tarball under the opt-in only at its allowlisted pair" $ do
-            let withCdnPort = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hpAt "cdn.npmjs.org" 8443])
-                cdnAt port = tarballHostAllowed UntrustedOrigin AnyAllowlistedHost withCdnPort noOptIn (Just (hp "registry.npmjs.org")) (Just (hpAt "cdn.npmjs.org" port))
-            cdnAt 8443 `shouldBe` True
-            cdnAt 9443 `shouldBe` False
         it "refuses an unextractable tarball authority (fail closed)" $
-            tarballHostAllowed UntrustedOrigin SameHostAsPackument allow noOptIn (Just (hp "registry.npmjs.org")) Nothing
+            tarballHostAllowed noEco UntrustedOrigin allow noOptIn (Just (hp "registry.npmjs.org")) Nothing
                 `shouldBe` False
         it "refuses an unextractable packument origin (fail closed)" $
-            tarballHostAllowed UntrustedOrigin SameHostAsPackument allow noOptIn Nothing (Just (hp "registry.npmjs.org"))
+            tarballHostAllowed noEco UntrustedOrigin allow noOptIn Nothing (Just (hp "registry.npmjs.org"))
                 `shouldBe` False
 
-    describe "the internal-range block beats either policy (untrusted origin)" $ do
+    describe "the internal-range block beats the other clauses (untrusted origin)" $ do
         it "refuses an internal literal even when it equals the packument authority" $
             -- An operator could (mis)configure an internal upstream host; the
-            -- internal block still vetoes a tarball pointed at it under the
-            -- default. The allowlist must carry the literal for this to even reach
-            -- the block clause.
+            -- internal block still vetoes a tarball pointed at it. The allowlist
+            -- must carry the literal for this to even reach the block clause.
             let allowInternal = allowedHostPorts (Set.singleton (hp "169.254.169.254"))
-             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "169.254.169.254")) (Just (hp "169.254.169.254"))
-                    `shouldBe` False
-        it "refuses an allowlisted internal literal under the opt-in too" $
-            let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
-             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal noOptIn (Just (hp "registry.npmjs.org")) (Just (hp "10.0.0.5"))
+             in tarballHostAllowed noEco UntrustedOrigin allowInternal noOptIn (Just (hp "169.254.169.254")) (Just (hp "169.254.169.254"))
                     `shouldBe` False
         it "refuses an internal literal regardless of its port (the block classifies the host alone)" $
             -- The port never launders an internal address: 10.0.0.5:8443 is as
             -- internal as 10.0.0.5.
             let allowInternal = allowedHostPorts (Set.singleton (hpAt "10.0.0.5" 8443))
-             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hpAt "10.0.0.5" 8443)) (Just (hpAt "10.0.0.5" 8443))
+             in tarballHostAllowed noEco UntrustedOrigin allowInternal noOptIn (Just (hpAt "10.0.0.5" 8443)) (Just (hpAt "10.0.0.5" 8443))
                     `shouldBe` False
         it "still blocks a host matched only by an operator-configured additional range" $
             let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
-             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal ["10.0.0.5/32"] (Just (hp "registry.npmjs.org")) (Just (hp "10.0.0.5"))
+             in tarballHostAllowed noEco UntrustedOrigin allowInternal ["10.0.0.5/32"] (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                     `shouldBe` False
 
     describe "the trusted private origin is exempt from the internal-range block" $ do
         -- The trusted origin mirrors the connection layer's unguarded manager
         -- (security.md invariant 3): a private registry may legitimately live on an
-        -- internal address, so its same-host dist.tarball is admitted with no opt-in --
-        -- where the untrusted origin would be refused. The allowlist and same-authority
+        -- internal address, so its same-host dist.tarball is admitted -- where the
+        -- untrusted origin would be refused. The allowlist and same-authority
         -- clauses still gate it, so the exemption never widens past its own pair.
         let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
-        it "admits a same-authority internal-literal tarball with no opt-in (where untrusted is refused)" $ do
-            tarballHostAllowed TrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
+        it "admits a same-authority internal-literal tarball (where untrusted is refused)" $ do
+            tarballHostAllowed noEco TrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                 `shouldBe` True
             -- The same inputs on the untrusted origin are refused by the internal block.
-            tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
+            tarballHostAllowed noEco UntrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                 `shouldBe` False
         it "still refuses a trusted tarball off the host allowlist (allowlist not relaxed)" $
             -- The exemption is the internal-range clause only; an off-allowlist host is
             -- still refused, so the trusted origin cannot be steered onto an arbitrary host.
-            tarballHostAllowed TrustedOrigin AnyAllowlistedHost allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "192.168.0.9"))
+            tarballHostAllowed noEco TrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "192.168.0.9"))
                 `shouldBe` False
-        it "still refuses a cross-host trusted tarball under the secure default (same-host not relaxed)" $
-            -- Two allowlisted internal hosts; under SameHostAsPackument the trusted
-            -- origin's tarball must still equal its packument authority, so a different
-            -- (allowlisted, internal) host is refused.
+        it "still refuses a cross-host trusted tarball (same-host not relaxed)" $
+            -- Two allowlisted internal hosts; the trusted origin's tarball must
+            -- still equal its packument authority, so a different (allowlisted,
+            -- internal) host is refused.
             let bothAllowed = allowedHostPorts (Set.fromList [hp "10.0.0.5", hp "10.0.0.6"])
-             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.6"))
+             in tarballHostAllowed noEco TrustedOrigin bothAllowed noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.6"))
                     `shouldBe` False
-        it "still refuses a trusted port mismatch under the secure default (the pair must match)" $
+        it "still refuses a trusted port mismatch (the pair must match)" $
             -- The trusted exemption never opens the port dimension: a trusted
             -- upstream's tarball on another port of its own host is refused.
             let bothPorts = allowedHostPorts (Set.fromList [hp "10.0.0.5", hpAt "10.0.0.5" 8443])
-             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothPorts noOptIn (Just (hp "10.0.0.5")) (Just (hpAt "10.0.0.5" 8443))
+             in tarballHostAllowed noEco TrustedOrigin bothPorts noOptIn (Just (hp "10.0.0.5")) (Just (hpAt "10.0.0.5" 8443))
                     `shouldBe` False
 
 allowedHostPortsSpec :: Spec
@@ -933,7 +917,7 @@ parseIpLiteralSpec = describe "parseIpLiteral" $ do
         void (parseIpLiteral "1::2::3") `shouldBe` Nothing
 
 {- | 'parseBlockedRange' is the total decoder the config layer relies on for
-@ECLUSE_ADDITIONAL_BLOCKED_RANGES@: a malformed entry must yield 'Nothing' (so the
+@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@: a malformed entry must yield 'Nothing' (so the
 decoder can fail the boot closed) rather than throwing, unlike the module's own
 compile-time 'IPRange' literals.
 -}
@@ -955,3 +939,53 @@ parseBlockedRangeSpec = describe "parseBlockedRange" $ do
         parseBlockedRange "not-a-range" `shouldBe` Nothing
     it "returns Nothing for the empty string" $
         parseBlockedRange "" `shouldBe` Nothing
+
+{- Coverage of the ecosystem-host equivalence ('tarballHostAllowed'): an
+ecosystem's canonical artifact host (PyPI's files host) is same-host-equivalent
+under the secure default, while every other gate dimension (allowlist,
+internal-range block, the policy for non-ecosystem hosts) is unchanged.
+-}
+ecosystemHostSpec :: Spec
+ecosystemHostSpec = describe "tarballHostAllowed (ecosystem artifact hosts)" $ do
+    let noOptIn = []
+        filesHost = hp "files.pythonhosted.org"
+        ecoHosts = allowedHostPorts (Set.fromList [filesHost])
+        noEcoHosts = allowedHostPorts Set.empty
+        -- The gate builder folds ecosystem hosts into the allowlist; mirror that here.
+        allow = allowedHostPorts (Set.fromList [hp "pypi.org", filesHost])
+        decide ecos target = tarballHostAllowed ecos UntrustedOrigin allow noOptIn (Just (hp "pypi.org")) (Just target)
+
+    it "admits the ecosystem's canonical artifact host as same-host-equivalent" $
+        decide ecoHosts filesHost `shouldBe` True
+
+    it "still refuses a cross-host target that is not an ecosystem host" $
+        decide ecoHosts (hp "cdn.evil.example") `shouldBe` False
+
+    it "changes nothing with no ecosystem hosts (npm's shape): cross-host stays refused" $
+        decide noEcoHosts filesHost `shouldBe` False
+
+    it "still requires the ecosystem host to be allowlisted (fail closed off-list)" $ do
+        let allowWithoutFiles = allowedHostPorts (Set.fromList [hp "pypi.org"])
+        tarballHostAllowed ecoHosts UntrustedOrigin allowWithoutFiles noOptIn (Just (hp "pypi.org")) (Just filesHost)
+            `shouldBe` False
+
+    it "admits an ecosystem-host tarball only at its allowlisted pair (the port dimension holds)" $ do
+        let filesAt8443 = hpAt "files.pythonhosted.org" 8443
+            ecoAt = allowedHostPorts (Set.fromList [filesAt8443])
+            allowAt = allowedHostPorts (Set.fromList [hp "pypi.org", filesAt8443])
+            filesPort port = tarballHostAllowed ecoAt UntrustedOrigin allowAt noOptIn (Just (hp "pypi.org")) (Just (hpAt "files.pythonhosted.org" port))
+        filesPort 8443 `shouldBe` True
+        filesPort 9443 `shouldBe` False
+
+    it "still blocks an internal-range ecosystem host on the untrusted origin" $ do
+        let internal = hp "10.0.0.5"
+            ecoInternal = allowedHostPorts (Set.fromList [internal])
+            allowInternal = allowedHostPorts (Set.fromList [hp "pypi.org", internal])
+        tarballHostAllowed ecoInternal UntrustedOrigin allowInternal noOptIn (Just (hp "pypi.org")) (Just internal)
+            `shouldBe` False
+
+    it "gate builder: ecosystem hosts enter the allowlist and the ecosystem set" $ do
+        let gate = tarballHostGate ["https://files.pythonhosted.org"] Nothing "https://pypi.org" Nothing
+        isAllowedUpstreamHost (thgAllowlist gate) filesHost `shouldBe` True
+        isAllowedUpstreamHost (thgEcosystemHosts gate) filesHost `shouldBe` True
+        isAllowedUpstreamHost (thgEcosystemHosts gate) (hp "pypi.org") `shouldBe` False

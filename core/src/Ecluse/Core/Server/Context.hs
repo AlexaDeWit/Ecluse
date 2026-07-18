@@ -32,6 +32,7 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
+    MirrorServePlan (..),
     tarballHostHonoured,
 
     -- * Publish-serve dependencies
@@ -73,9 +74,10 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, TarballHostPolicy, tarballHostAllowed, thgAllowlist)
+import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
+import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -130,32 +132,52 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
+{- | Whether an admitted public artifact is enqueued for the demand-driven mirror, and
+where that write lands. The discriminant is an absent capability, not a no-op handle:
+a serve-only mount opens no mirror producer span and emits no enqueue metric, so the
+telemetry never claims work that cannot happen.
+-}
+data MirrorServePlan
+    = {- | Enqueue admitted public artifacts for publication to this mirror-target
+      endpoint (the mount's declared destination; the worker resolves its publish
+      capability from the same configuration).
+      -}
+      MirrorOnAdmit Text
+    | {- | Serve-only: admitted public artifacts stream to the client and are never
+      mirrored anywhere. Every artifact stays on the gated public leg.
+      -}
+      NoMirrorWrite
+    deriving stock (Eq, Show)
+
 {- | The per-mount inputs the serve handlers need beyond the request runtime
-'ServeRuntime': the two upstream endpoints, the mount's externally-visible base URL,
-the mirror-target endpoint, its resolved rule policy, the edge auth token, the
+'ServeRuntime': the upstream endpoints, the mount's externally-visible base URL,
+the mirror serve plan, its resolved rule policy, the edge auth token, the
 wall-clock source, and the operator help message.
 
 These are a mount-level concern, resolved at the composition root (a separate
 concern) and carried on the mount's 'MountBinding'; a handler reads exactly what it
 needs to decide and serve from the 'RequestCtx' it runs in. Both the packument and
 the tarball paths share these deps -- the tarball path additionally gates one
-version and enqueues a mirror job to 'pdMirrorTarget' -- so the name is retained for
-continuity rather than narrowed to one route.
+version and, under 'MirrorOnAdmit', enqueues a mirror job -- so the name is retained
+for continuity rather than narrowed to one route.
 -}
 data PackumentDeps = PackumentDeps
-    { pdPrivateBaseUrl :: Text
-    -- ^ The private upstream base URL; under @passthrough@, reads forward the client's credential.
+    { pdPrivateBaseUrl :: Maybe Text
+    {- ^ The private upstream base URL; under @passthrough@, reads forward the
+    client's credential. 'Nothing' when the mount has no private upstream (a
+    serve-only pure public gate): the private leg is structurally absent, never
+    fetched, and a tarball request is a clean private miss straight to the public leg.
+    -}
     , pdPublicBaseUrl :: Text
     -- ^ The public upstream base URL; reads are anonymous (no client credential).
     , pdMountBaseUrl :: Text
     {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
     URLs are rewritten so artifacts are fetched back through the gate.
     -}
-    , pdMirrorTarget :: Text
-    {- ^ The mount's mirror-target endpoint -- where the demand-driven mirror worker
-    publishes an approved artifact. Carried on the enqueued
-    'Ecluse.Core.Queue.MirrorJob' as its publish destination; the serve path never reads
-    or writes it itself.
+    , pdMirror :: MirrorServePlan
+    {- ^ Whether an admitted public artifact is enqueued for the demand-driven
+    mirror, and the declared destination when it is ('MirrorOnAdmit'); a
+    serve-only mount carries 'NoMirrorWrite' and never enqueues.
     -}
     , pdRules :: [PreparedRule]
     {- ^ The mount's resolved rule set as the engine's prepared runtime rules
@@ -163,15 +185,8 @@ data PackumentDeps = PackumentDeps
     built-in rules run directly; an effectful rule carries a resilience policy. The
     composition root 'prepare's it (and logs its boot order) once.
     -}
-    , pdTarballHostPolicy :: TarballHostPolicy
-    {- ^ Whether a tarball may be fetched from a @dist.tarball@ host that differs
-    from the upstream that served the packument
-    ('Ecluse.Core.Security.SameHostAsPackument' by default, the secure reading of the
-    host allowlist; relaxed to 'Ecluse.Core.Security.AnyAllowlistedHost' by
-    @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@).
-    -}
     , pdAdditionalBlockedRanges :: [IPRange]
-    {- ^ The operator-configured ranges (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) extending the
+    {- ^ The operator-configured ranges (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) extending the
     fixed literal internal-range block when gating an honoured artifact location
     ('Ecluse.Core.Security.tarballHostAllowed'), the cheap pure defence-in-depth that
     complements the host allowlist. Empty by default.
@@ -185,14 +200,14 @@ data PackumentDeps = PackumentDeps
     request (only the dynamic public @dist.tarball@ authority is parsed per request).
 
     __Invariant__: this is a cached projection of 'pdPrivateBaseUrl', 'pdPublicBaseUrl',
-    and 'pdMirrorTarget'; whoever changes one of those after construction must re-derive
+    and 'pdMirror'; whoever changes one of those after construction must re-derive
     it via 'Ecluse.Core.Security.tarballHostGate' or the gate goes stale. The composition
     root builds the deps once, so production never does; a test that record-updates a URL
     field must rebuild the gate (the serve-path test harness does this centrally).
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and
-    decode (@ECLUSE_MAX_RESPONSE_BYTES@\/@ECLUSE_MAX_VERSION_COUNT@\/@ECLUSE_MAX_NESTING_DEPTH@):
+    decode (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@\/@ECLUSE_LIMITS__MAX_VERSION_COUNT@\/@ECLUSE_LIMITS__MAX_NESTING_DEPTH@):
     the body-size, version-count, and JSON-nesting ceilings of
     'Ecluse.Core.Security.Limits'. The data plane reads the metadata body through
     'Ecluse.Core.Security.boundedRead' against @maxBodyBytes@, checks
@@ -202,7 +217,7 @@ data PackumentDeps = PackumentDeps
     upstream document is refused, never partially served (security.md invariant 4).
     -}
     , pdInboundToken :: Maybe Secret
-    {- ^ The optional inbound token a client must present (@ECLUSE_AUTH_TOKEN@);
+    {- ^ The optional inbound token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@);
     'Nothing' leaves the edge open (the network layer guards it).
     -}
     , pdNow :: IO UTCTime
@@ -220,7 +235,7 @@ data PackumentDeps = PackumentDeps
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
     {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest must
-    meet to be admitted (the global @ECLUSE_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256).
+    meet to be admitted (the global @ECLUSE_INTEGRITY__MIN_PUBLIC@ floor, default SHA-256).
     The public gate refuses a version whose strongest digest is below this; it is
     __hard-floored at SHA-256__ and never lowerable (see "Ecluse.Core.Package.Integrity").
     The trusted private path consults 'pdMinTrustedIntegrity' instead.
@@ -229,7 +244,7 @@ data PackumentDeps = PackumentDeps
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
     , pdDivergencePolicy :: DivergencePolicy
     {- ^ What to do with a served version a cross-upstream integrity divergence was
-    detected on (@ECLUSE_DIVERGENCE_POLICY@, default 'Ecluse.Core.Package.Merge.Warn').
+    detected on (@ECLUSE_INTEGRITY__DIVERGENCE_POLICY@, default 'Ecluse.Core.Package.Merge.Warn').
     The signal (the @WARNING@ log and the @ecluse.registry.merge.divergence@ counter)
     fires regardless; this only decides whether the contested version is additionally
     withheld from the served listing ('Ecluse.Core.Package.Merge.FailClosed').
@@ -275,13 +290,11 @@ data PackumentDeps = PackumentDeps
     }
 
 {- | Whether an artifact's @dist.tarball@ authority may be fetched, given the
-origin's trust, the mount's tarball-host policy, and the authority that served the
-packument it came from. Connects the pure
-'Ecluse.Core.Security.tarballHostAllowed' to a mount's configured policy fields:
-the tarball's @host:port@ pair must be on the upstream allowlist and -- under the
-secure-default 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the
-packument origin's pair; the opt-in 'Ecluse.Core.Security.AnyAllowlistedHost'
-relaxes that last clause to any allowlisted pair.
+origin's trust and the authority that served the packument it came from. Connects
+the pure 'Ecluse.Core.Security.tarballHostAllowed' to a mount's precomputed gate:
+the tarball's @host:port@ pair must be on the upstream allowlist and equal to the
+packument origin's pair, the ecosystem's own declared artifact hosts being the one
+same-host equivalence.
 
 The literal internal-range block is __origin-aware__: an
 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
@@ -291,7 +304,7 @@ exempt, since a private registry may legitimately live on an internal address
 (security.md invariant 3). The allowlist and same-authority clauses still gate the
 trusted origin identically.
 
-This is the __one__ composition of the host gate over a mount's policy: the serve
+This is the __one__ composition of the host gate over a mount's inputs: the serve
 pipeline applies it before its public artifact fetch, and the composition root
 closes it (against the public upstream authority) into the mirror worker's
 re-evaluation bundle, so the ingest-time host check can never drift from the
@@ -304,8 +317,8 @@ call site.
 tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
     tarballHostAllowed
+        (thgEcosystemHosts (pdTarballHostGate deps))
         origin
-        (pdTarballHostPolicy deps)
         (thgAllowlist (pdTarballHostGate deps))
         (pdAdditionalBlockedRanges deps)
 
@@ -334,7 +347,8 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubScopes :: [Scope]
-    {- ^ The configured publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) -- the
+    {- ^ The configured publish allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@;
+    for npm, a list of scopes) -- the
     anti-shadowing guard. A publish whose package name is not within one of these
     scopes is refused __before any upstream write__, so a client cannot publish a name
     that shadows an existing public package (a dependency-confusion vector). Never
@@ -347,12 +361,22 @@ data PublishDeps = PublishDeps
     common path.
     -}
     , pubInboundToken :: Maybe Secret
-    {- ^ The optional inbound edge token a client must present (@ECLUSE_AUTH_TOKEN@),
+    {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),
     the same gate the read paths apply; 'Nothing' leaves the edge open.
     -}
     , pubLimits :: Limits
     {- ^ The response-bound budget enforced on the publication target's response,
     carried for symmetry with the read paths.
+    -}
+    , pubBodyBudget :: ByteAdmission
+    {- ^ The process-wide aggregate byte-admission buffered publish bodies are
+    reserved against __before__ the body is read, shared by every mount; sized
+    from the memory plan's publish tenant. Exhaustion sheds (503), exactly as the
+    unit-slot admission does on the read path.
+    -}
+    , pubMaxRequestBytes :: Int
+    {- ^ The per-request body cap (the WAI size limit), the pessimistic weight a
+    chunked body (no declared length) reserves.
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.

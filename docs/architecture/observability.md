@@ -20,7 +20,7 @@ The substrate is built: self-aligning configuration (`Ecluse.Telemetry`,
 with the runtime instruments (`Ecluse.Telemetry.Instruments`), and the logs↔traces `dd`
 correlation (`Ecluse.Telemetry.Correlation` over the `dd` object in `Ecluse.Log`). It
 slots into the web layer's [middleware stack](web-layer.md#middleware-and-helper-libraries).
-Everything stays inert when `ECLUSE_TELEMETRY` is unset: the SDK is not initialised, no
+Everything stays inert when `ECLUSE_OBSERVABILITY__TELEMETRY` is unset: the SDK is not initialised, no
 spans open, and the instruments are built on the no-op meter, so an emit is a discarded
 measurement, not a branch.
 
@@ -190,7 +190,7 @@ consumes. Each line carries a `dd` object for correlation and unified service ta
 (`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`, or `DD_SERVICE`/`DD_ENV`/`DD_VERSION`),
 so logs and traces share one identity.
 
-Switch format with `ECLUSE_LOG_FORMAT`: `json` (the JSONL above, in-container default) or
+Switch format with `ECLUSE_OBSERVABILITY__LOG_FORMAT`: `json` (the JSONL above, in-container default) or
 `console` (human-readable, for development).
 
 **Correlation gotcha.** `dd.trace_id`/`dd.span_id` must be in the id format Datadog
@@ -263,7 +263,7 @@ stdout.
 ## Configuration
 
 Telemetry uses the standard `OTEL_*` variables (read by `hs-opentelemetry`) plus a few
-`PROXY_*` ones; see [Configuration](configuration.md). With `ECLUSE_TELEMETRY` unset,
+`ECLUSE_*` ones; see [Configuration](configuration.md). With `ECLUSE_OBSERVABILITY__TELEMETRY` unset,
 nothing is wired and no telemetry is emitted.
 
 **Self-aligning configuration.** An operator may set either dialect: `DD_*` or `OTEL_*`.
@@ -294,7 +294,7 @@ are unchanged.
 
 | Variable | Purpose |
 |---|---|
-| `ECLUSE_TELEMETRY` | Master switch (`off` by default, telemetry is opt-in). |
+| `ECLUSE_OBSERVABILITY__TELEMETRY` | Master switch (`off` by default, telemetry is opt-in). |
 | `OTEL_SERVICE_NAME` / `DD_SERVICE` | Service identity (`ecluse`); also `dd.service`. `DD_SERVICE` wins. |
 | `OTEL_RESOURCE_ATTRIBUTES` / `DD_ENV` / `DD_VERSION` | `deployment.environment`, `service.version` (feed `dd.env`/`dd.version`). `DD_*` win. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `DD_AGENT_HOST` | OTLP receiver, a Collector or the Datadog Agent (`http://$(HOST_IP):4318`). `DD_AGENT_HOST` wins (as `:4318`). |
@@ -302,7 +302,7 @@ are unchanged.
 | `OTEL_TRACES_SAMPLER` / `…_ARG` | SDK sampler, default always-on; ratio lever for non-Datadog backends. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Out-of-band auth for a remote collector/Agent (read by the SDK, never by Écluse). |
 | `OTEL_METRICS_EXPORTER` | `otlp` (default). `prometheus` is recognised but the scrape endpoint is **deferred**. |
-| `ECLUSE_LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
+| `ECLUSE_OBSERVABILITY__LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
 
 ## Verifying it, smoke-test plan
 

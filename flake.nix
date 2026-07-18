@@ -423,7 +423,7 @@
             contents = [ ecluseBin pkgs.cacert ];
             config = {
               Entrypoint = [ "${ecluseBin}/bin/ecluse" ];
-              ExposedPorts = { "4873/tcp" = { }; }; # default ECLUSE_PORT
+              ExposedPorts = { "8080/tcp" = { }; }; # default ECLUSE_SERVER__PORT
               User = "65532:65532"; # nonroot, distroless convention
               Env = [
                 # A distroless image has no system trust store, so tls/x509-system

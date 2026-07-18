@@ -109,7 +109,7 @@ data Env = Env
     , envTelemetry :: Telemetry
     {- ^ The OpenTelemetry handle (see "Ecluse.Runtime.Telemetry"): the tracer and meter
     providers spans and metrics are emitted through, or -- by default, with
-    @ECLUSE_TELEMETRY@ unset -- the inert no-op that emits nothing. Its provider
+    @ECLUSE_OBSERVABILITY__TELEMETRY@ unset -- the inert no-op that emits nothing. Its provider
     lifecycle is bracketed by the composition root that supplies it.
     -}
     , envMetrics :: Metrics

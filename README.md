@@ -89,7 +89,7 @@ See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.m
 ## Versioning
 
 Écluse follows [semantic versioning](https://semver.org) against the operator-facing
-contract (the `PROXY_*` configuration and the proxy's behaviour), not the Haskell module
+contract (the `ECLUSE_*` configuration and the proxy's behaviour), not the Haskell module
 API. The version lives in `ecluse.cabal`'s `version:` field; the image, git, and release
 tags derive from it. While it's `0.y.z` the contract is unstable: pin an exact version by
 digest and expect breaking changes. [`VERSIONING.md`](VERSIONING.md) is the full policy.
@@ -119,5 +119,7 @@ DCO sign-off; participation is governed by the [Code of Conduct](CODE_OF_CONDUCT
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit and integration tests                                                                                               |
+| `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
+| `examples/` | Quickstart: a Compose file with serve-only and mirrored profiles, `.env.example`, `config.example.yaml`                  |
 | `docs/`     | Architecture and design documents                                                                                        |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |

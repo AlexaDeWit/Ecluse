@@ -11,9 +11,12 @@ module Ecluse.Config.Parser (
     valueKind,
     rejectUnknownKeys,
     parseUrl,
+    parseHttpUrl,
+    parsePort,
+    parseCodeArtifactDuration,
 ) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, withText)
@@ -70,7 +73,7 @@ valueKind = \case
 
 rejectUnknownKeys :: String -> [Key.Key] -> KeyMap.KeyMap Value -> Parser ()
 rejectUnknownKeys context accepted o =
-    let isUnknown k = k `notElem` accepted && not ("aws" `T.isPrefixOf` Key.toText k)
+    let isUnknown k = k `notElem` accepted
      in case filter isUnknown (KeyMap.keys o) of
             [] -> pure ()
             unknown ->
@@ -86,3 +89,45 @@ parseUrl = withText "Url" $ \t ->
     case mkUrl t of
         Right u -> pure u
         Left e -> fail (T.unpack e)
+
+{- | An @http(s)@ URL Écluse itself serves or rewrites against (the public URL):
+the scheme must be http or https (http stays legal for loopback development
+deployments), and the authority must be dialable by the same extraction the egress
+gate authorises ('hostPortAddress'), so a value that cannot name a real listener is
+refused at load instead of surfacing as rewritten artifact URLs no client can fetch.
+-}
+parseHttpUrl :: String -> Value -> Parser Url
+parseHttpUrl field = \case
+    String t
+        | not (any (`T.isPrefixOf` T.strip t) ["http://", "https://"]) ->
+            fail (field <> " must be an http:// or https:// URL (got " <> T.unpack t <> ")")
+        | isNothing (hostPortAddress (T.strip t)) ->
+            fail
+                ( field
+                    <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                    <> T.unpack t
+                    <> ")"
+                )
+        | otherwise -> either (fail . T.unpack) pure (mkUrl t)
+    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+
+-- | A listener port: 0..65535, where 0 asks the OS for an ephemeral port.
+parsePort :: String -> Int -> Parser Int
+parsePort field value
+    | value >= 0 && value <= 65535 = pure value
+    | otherwise = fail (field <> " must be a port in 0..65535 (0 = OS-assigned), got " <> show value)
+
+{- | A CodeArtifact authorisation-token duration in seconds, bounded to the range
+the service accepts (900..43200); an out-of-range value would only fail later, at
+the first mint, with the mirror queue already accepting work.
+-}
+parseCodeArtifactDuration :: String -> Value -> Parser Natural
+parseCodeArtifactDuration field v = do
+    n <- case v of
+        String t -> case readMaybe (T.unpack t) :: Maybe Natural of
+            Just parsed -> pure parsed
+            Nothing -> fail (field <> ": invalid duration: " <> T.unpack t)
+        other -> parseJSON other
+    if n >= 900 && n <= 43200
+        then pure n
+        else fail (field <> " must be a duration in seconds within 900..43200, got " <> show n)

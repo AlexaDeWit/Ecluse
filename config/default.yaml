@@ -1,56 +1,105 @@
-# Production default settings
-port: 8080
-queueBackend: sqs # default to sqs for production, switch to memory for local dev if desired
-queueMemoryMaxDepth: 50000
-cveSyncInterval: 3600
-# How often the proxy polls object storage for a fresh advisory database (a cheap
-# ETag HEAD). Deliberately independent of, and much more frequent than, Pilot's
-# cveSyncInterval: matching them would nearly double the worst-case advisory age.
-cveDbPollInterval: 60
-# Refuse to download an advisory database larger than this many bytes (512 MiB).
-maxOsvDbBytes: 536870912
-shutdownDrainTimeout: 30
-# serveMaxInFlight is deliberately NOT pinned here: omitted, it is computed at boot
-# from the resolved capability count (max(8, 4 x capabilities); see
-# Ecluse.Composition.resolveServeAdmission). Set it (or ECLUSE_SERVE_MAX_IN_FLIGHT)
-# only to override the computed default. privateConnectionsPerHost is likewise NOT
-# pinned: omitted, the private-upstream connection pool is computed at boot from the
-# process file-descriptor limit (a quarter of RLIMIT_NOFILE, clamped to 64..4096; see
-# Ecluse.Composition.resolvePrivateConnections), sized for the un-admitted private-hit
-# streaming fan-out rather than the admission capacity. Set
-# ECLUSE_PRIVATE_CONNECTIONS_PER_HOST only to override it.
-cacheTtl: 60
-cacheMaxEntries: 1024
-cacheMaxBytes: 268435456
-maxResponseBytes: 12582912
-maxVersionCount: 100000
-maxNestingDepth: 64
-logFormat: json
-telemetry: "off"
-minPublicIntegrity: sha256
-minTrustedIntegrity: sha256
-# What to do when the public and private copies of a version contradict on a shared
-# integrity algorithm (threat #11). Both policies log a WARNING and increment the
-# ecluse.registry.merge.divergence counter; the trusted copy always wins the bytes.
-#   warn        - serve the trusted copy and rely on the alarm (default)
-#   fail-closed - additionally withhold the contested version from the served listing
-divergencePolicy: warn
-osvDataDir: "data/osv"
-# Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
-# (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it;
-# a new URL must never require a new Ecluse binary.
-osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
+# The defaults Écluse boots from, embedded in the binary. Your config document and
+# ECLUSE_* environment variables override it key by key (defaults < document <
+# environment; ECLUSE_CACHE__TTL spells cache.ttl). Commented keys are INACTIVE:
+# they document the schema, and each names the computed or derived default that
+# applies while it stays unset. Secrets belong in environment variables, never here.
+
+server:
+  port: 8080
+  # The proxy's own externally-reachable base URL, which served tarball URLs are
+  # rewritten against. Required as soon as any mount is active.
+  # publicUrl: https://registry.example.com
+  # Set via ECLUSE_SERVER__AUTH_TOKEN (a secret): clients must then present it.
+  # authToken:
+  # A note appended to client-facing error bodies, e.g. where to ask for access.
+  # helpMessage: Contact platform engineering for access
+  shutdownDrainTimeout: 30
+
+# The mirror queue, consulted only when a mount mirrors. The backend is derived
+# from url's shape: an SQS queue URL (https://sqs.{region}.amazonaws.com/...)
+# selects the durable SQS backend with its region taken from the host; a Pub/Sub
+# topic resource (projects/{p}/topics/{t}) names the GCP backend (not yet built).
+# Unset, mirroring runs on the bounded in-memory queue: non-durable, best-effort,
+# warned loudly at boot; fine for a single node or a trial.
+# queue:
+#   url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
+#   memoryMaxDepth: 50000   # unset, computed from the runtime posture
+
+limits:
+  # Structural hostile-input bounds: they bound document shape, not bytes, so they
+  # are a pinned policy stance rather than a machine property.
+  maxVersionCount: 100000
+  maxNestingDepth: 64
+  # The byte-valued caps are computed at boot by the memory plan (named tenants of
+  # the effective heap ceiling; the boot log names each decision). Set either
+  # only to override.
+  # maxResponseBytes: 12582912
+  # maxRequestBytes: 26214400
+
+cache:
+  ttl: 60
+  # Both bounds are computed at boot from the resolved heap ceiling (a clamped
+  # fraction; the boot log names each decision). Set either only to override.
+  # maxEntries: 1024
+  # maxBytes: 268435456
+
+integrity:
+  minPublic: sha256
+  minTrusted: sha256 # refinable per mount: mounts.<ecosystem>.minTrustedIntegrity
+  # What to do when the public and private copies of a version contradict on a shared
+  # integrity algorithm (threat #11). Both policies log a WARNING and increment the
+  # ecluse.registry.merge.divergence counter; the trusted copy always wins the bytes.
+  #   warn        - serve the trusted copy and rely on the alarm (default)
+  #   fail-closed - additionally withhold the contested version from the served listing
+  divergencePolicy: warn # refinable per mount: mounts.<ecosystem>.divergencePolicy
+
+# Extra CIDR ranges denied registry egress, on top of the built-in internal-range
+# blocklist (comma-separated).
+# egress:
+#   additionalBlockedRanges: "100.64.0.0/10,198.18.0.0/15"
+
+advisories:
+  # How often the proxy polls object storage for a fresh advisory database (a cheap
+  # ETag HEAD). Deliberately independent of, and much more frequent than, Pilot's
+  # compileInterval: matching them would nearly double the worst-case advisory age.
+  pollInterval: 60
+  # Pilot only: how often it recompiles and re-exports the advisory artifacts.
+  compileInterval: 3600
+  dataDir: "data/osv"
+  # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
+  # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it;
+  # a new URL must never require a new Ecluse binary.
+  osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
+  # Refuse to download an advisory database larger than this many bytes (512 MiB).
+  maxDatabaseBytes: 536870912
+  # The object-storage bucket the compiled advisory database syncs from; unset, the
+  # advisory stack is off and the advisory-dependent rules abstain.
+  # bucket: my-advisory-bucket
+
+# Process sizing. Every key is computed at boot from the container's cgroup limits,
+# the RTS posture, and the file-descriptor budget, and each decision is boot-logged
+# with its provenance. Set a key only to override the computed value.
+# runtime:
+#   cores: 4
+#   maxHeapBytes: 1073741824
+#   serveMaxInFlight: 128
+#   publicConnectionsPerHost: 64
+#   privateConnectionsPerHost: 256
+
+observability:
+  logFormat: json
+  telemetry: "off"
 
 mounts:
+  # Dormant per-ecosystem templates: a mount activates only when your document or
+  # environment declares any key under it (enabled: true alone suffices for the
+  # serve-only pure public gate; declaring mirrorTarget is what makes it mirrored).
   npm:
     publicUpstream: https://registry.npmjs.org
-    respectUpstreamTarballHost: false
   pypi:
     publicUpstream: https://pypi.org
-    respectUpstreamTarballHost: false
   rubygems:
     publicUpstream: https://rubygems.org
-    respectUpstreamTarballHost: false
 
 rules:
   min-age:
@@ -59,8 +108,7 @@ rules:
     ageSeconds: 604800
   # The remediation fast lane: a version a synced advisory names as its exact fix
   # is admitted ahead of the min-age quarantine. With no advisory database
-  # configured (no vulnerabilityDatabaseBucket) it abstains and only the
-  # quarantine governs.
+  # configured (no advisories.bucket) it abstains and only the quarantine governs.
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150

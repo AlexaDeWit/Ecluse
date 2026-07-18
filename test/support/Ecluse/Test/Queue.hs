@@ -5,7 +5,7 @@
 {- | The production in-memory mirror queue, configured for tests.
 
 Suites that need a 'MirrorQueue' assemble the same bounded backend the
-composition root selects for @ECLUSE_QUEUE_BACKEND=memory@
+composition root rolls over to when no @ECLUSE_QUEUE__URL@ is set
 ('Ecluse.Core.Queue.Memory.newBoundedInMemoryQueue'), with test-sized knobs
 rather than the production ones:
 

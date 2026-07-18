@@ -9,13 +9,19 @@ import Test.Hspec
 
 import Ecluse.Rts (
     CgroupLimits (CgroupLimits, cgCpuCores, cgMemoryMaxBytes),
+    EffectiveRuntimePlan (erpCapabilities, erpMaxHeapBytes),
     Provenance (FromCgroup, FromConfig, FromRts),
     RtsPosture (..),
     RuntimePlan (planCapabilities, planMaxHeapBytes),
+    appliedRuntimePlan,
+    axEnforced,
     deriveMaxHeapBytes,
+    effectiveCapabilities,
+    effectiveHeapCeiling,
     parseCpuMax,
     parseMemoryMax,
-    renderRuntimePosture,
+    reconcileRuntimePlan,
+    renderEffectivePosture,
     requiredRtsFlags,
     resolveRuntimePlan,
  )
@@ -26,6 +32,7 @@ spec = describe "Ecluse.Runtime (runtime posture resolution)" $ do
     resolutionSpec
     derivationSpec
     flagsSpec
+    reconcileSpec
     renderSpec
 
 -- A live posture to resolve against: the shipped defaults on a 4-core box with
@@ -153,22 +160,76 @@ flagsSpec = describe "requiredRtsFlags" $ do
         let plan = resolveRuntimePlan Nothing Nothing noCgroup unpinned
         requiredRtsFlags unpinned plan `shouldBe` []
 
+reconcileSpec :: Spec
+reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
+    it "reads an exactly-applied plan as enforced on both axes" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
+            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            applied = unpinned{rpCapabilities = 2, rpMaxHeapBytes = Just derived}
+            effective = reconcileRuntimePlan cgroup plan applied
+        axEnforced (erpCapabilities effective) `shouldBe` True
+        axEnforced (erpMaxHeapBytes effective) `shouldBe` True
+        effectiveCapabilities effective `shouldBe` (2, FromCgroup)
+        effectiveHeapCeiling effective `shouldBe` (Just derived, FromCgroup)
+
+    it "keeps an unenforced desired ceiling as the sizing datapoint (the cgroup backstops it)" $ do
+        -- Partial application: the capability change took, the -M did not.
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
+            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            partial = unpinned{rpCapabilities = 2}
+            effective = reconcileRuntimePlan cgroup plan partial
+        axEnforced (erpMaxHeapBytes effective) `shouldBe` False
+        effectiveHeapCeiling effective `shouldBe` (Just derived, FromCgroup)
+
+    it "takes the tighter observed ceiling when an operator GHCRTS binds below the plan" $ do
+        let plan = resolveRuntimePlan Nothing (Just (400 * mib)) noCgroup unpinned
+            live = unpinned{rpMaxHeapBytes = Just (300 * mib)}
+            effective = reconcileRuntimePlan noCgroup plan live
+        axEnforced (erpMaxHeapBytes effective) `shouldBe` False
+        effectiveHeapCeiling effective `shouldBe` (Just (300 * mib), FromRts)
+
+    it "budgets from the live capability count when the desired one never took" $ do
+        -- The re-exec failure shape: neither flag applied. Parallelism budgets
+        -- must track what the RTS actually runs with, provenance degraded to
+        -- the RTS's own.
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
+            effective = reconcileRuntimePlan cgroup plan unpinned
+        axEnforced (erpCapabilities effective) `shouldBe` False
+        effectiveCapabilities effective `shouldBe` (4, FromRts)
+
+    it "predicts a successful application (appliedRuntimePlan): both axes enforced at the desire" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
+            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            effective = appliedRuntimePlan cgroup plan unpinned
+        effectiveCapabilities effective `shouldBe` (2, FromCgroup)
+        effectiveHeapCeiling effective `shouldBe` (Just derived, FromCgroup)
+
 renderSpec :: Spec
-renderSpec = describe "renderRuntimePosture" $ do
+renderSpec = describe "renderEffectivePosture" $ do
     it "names each decision with its provenance" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
-            rendered = renderRuntimePosture plan unpinned
+            rendered = renderEffectivePosture (appliedRuntimePlan cgroup plan unpinned)
         rendered `shouldSatisfy` any (\l -> "capabilities 2" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
         rendered `shouldSatisfy` any (\l -> "max heap" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
         rendered `shouldSatisfy` any ("allocation area 64 MiB/capability" `T.isInfixOf`)
 
     it "says the heap is unbounded when nothing granted a ceiling" $ do
         let plan = resolveRuntimePlan Nothing Nothing noCgroup unpinned
-        renderRuntimePosture plan unpinned
+        renderEffectivePosture (appliedRuntimePlan noCgroup plan unpinned)
             `shouldSatisfy` any ("max heap unbounded" `T.isInfixOf`)
 
     it "renders a config-pinned posture as such" $ do
         let plan = resolveRuntimePlan (Just 2) (Just (400 * mib)) noCgroup unpinned
-        renderRuntimePosture plan unpinned
+        renderEffectivePosture (appliedRuntimePlan noCgroup plan unpinned)
             `shouldSatisfy` any (\l -> "capabilities 2" `T.isInfixOf` l && "from config" `T.isInfixOf` l)
+
+    it "renders the observed, not the desired, side of an unenforced capability axis" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Nothing}
+            plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
+            rendered = renderEffectivePosture (reconcileRuntimePlan cgroup plan unpinned)
+        rendered `shouldSatisfy` any (\l -> "capabilities 4" `T.isInfixOf` l && "as the RTS resolved it" `T.isInfixOf` l)

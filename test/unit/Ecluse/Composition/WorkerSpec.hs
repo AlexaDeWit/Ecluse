@@ -11,7 +11,7 @@ import Test.Hspec
 
 import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget, planMounts, planPublishTargets)
-import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars)
+import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -66,7 +66,7 @@ composedFixtures = do
     config <- expectConfig staticEnvVars Nothing
     providers <- expectProviders config
     bindings <-
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets providers config)

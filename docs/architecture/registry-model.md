@@ -4,18 +4,23 @@
 
 ## Registry roles
 
-The proxy is configured with **four registry roles**, two reads and two writes, configured
+The proxy is configured with **up to four registry roles**, two reads and two writes, configured
 separately. Several may map to one physical registry; collapsing them is the simplest setup, but
 the recommended topology keeps first-party and public-derived stores separate and unions them at
 the registry level (see
 [Registry-level composition](#registry-level-composition-the-recommended-topology)). A single
-shared registry is the degenerate floor, not the goal.
+shared registry is the degenerate floor, not the goal. A **serve-only** mount (one that
+declares no mirror target; see
+[Configuration](configuration.md#configuration)) runs on the read roles alone: the mirror
+target is absent, the private upstream optional (absent too on the pure public gate), and
+the full rules gate applies unchanged; the trade is that every artifact stays on the gated
+public leg rather than retiring onto the private read.
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | Authoritative, already-vetted source. A tarball is served by a conventional stable read at `{base}/{pkg}/-/{file}`, no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A packument's versions are trusted and merged with the gated public set (see [Packument merge](#packument-merge-across-upstreams)). |
-| **Public upstream** | Source of versions not yet in the private upstream; everything from here is rules-gated. For a tarball it is the fallback on a private miss; for a packument it is fetched alongside the private upstream and merged in. |
-| **Mirror target** | Where approved public packages are written after passing rules. May be the private upstream, but is recommended to be a distinct store unioned into the private-upstream read path, so public-derived inventory stays separable from first-party. |
+| **Private upstream** | Authoritative, already-vetted source. A tarball is served by a conventional stable read at `{base}/{pkg}/-/{file}`, no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A packument's versions are trusted and merged with the gated public set (see [Packument merge](#packument-merge-across-upstreams)). Optional on a serve-only mount. |
+| **Public upstream** | Source of versions not yet in the private upstream; everything from here is rules-gated. For a tarball it is the fallback on a private miss; for a packument it is fetched alongside the private upstream and merged in. The only required role: the pure public gate serves from it alone. |
+| **Mirror target** | Where approved public packages are written after passing rules. Declaring one is what makes a mount mirrored; absent, the mount is serve-only and never writes. May be the private upstream, but is recommended to be a distinct store unioned into the private-upstream read path, so public-derived inventory stays separable from first-party. |
 | **Publication target** | Where client-published first-party packages are written (`npm publish` through the proxy). The write counterpart to the private read role; recommended to be a distinct first-party store unioned into the read path. Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
 ### Credential flow and authority
@@ -30,10 +35,12 @@ behaviour:
 - **Public upstream (read/fallback)**: queried anonymously under every strategy; the client's
   credential is never forwarded here. If a public mirror itself needs auth, that is Écluse's own
   configured credential, never the client's.
-- **Mirror target (write)**: always Écluse's own `CredentialProvider` token. Often the same
-  registry as the private upstream, so its URL defaults to `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`
-  when unset, but the write credential is selected explicitly (it does not fold with the URL): the
-  client reads it, Écluse writes it.
+- **Mirror target (write)**: always Écluse's own `CredentialProvider` token, derived from the
+  mirror-target URL (see
+  [Configuration](configuration.md#outbound-registry-credentials)). Often the same registry as
+  the private upstream, declared under its own key even then (the write's destination is never
+  implied from another endpoint, and declaring it is what makes the mount mirrored): the client
+  reads it, Écluse writes it.
 - **Publication target (write)**: the client's own forwarded credential (`passthrough`); Écluse
   substitutes no identity and mints no token here.
 
@@ -64,8 +71,8 @@ mediates the publish the same way it mediates reads.
   content, and credential from the mirror write (the mirror target is *proxy*-written with
   approved public packages through the worker's per-ecosystem publish capability).
 - **Anti-shadowing guard (the load-bearing control).** A publish is refused unless its package
-  name falls within the operator's configured publish scope allow-list (the MVP mechanism; e.g.
-  `@acme/*`). This stops a client publishing a name that shadows an existing public package, a
+  name falls within the operator's configured publish allow-list (`publishAllow`, in the
+  ecosystem's native form; for npm, scopes such as `@acme`). This stops a client publishing a name that shadows an existing public package, a
   dependency-confusion vector. The guard holds a guard-name ≡ write-name ≡ body-name invariant: the
   scope check keys on the URL-path name, and because the npm publish document carries its own
   declared identity (`_id`, top-level `name`, every `versions[].name`) that a target may key the
@@ -114,7 +121,10 @@ opt-in mode.
 The **public leg** honours the authoritative upstream location, the `dist.tarball` the gated
 version declares, fetched at exactly that URL rather than a reconstructed `/-/` path, so Écluse can
 front a public registry serving artifacts from a separate host (the PyPI-files-host shape) or a
-signed CDN URL. That location is gated, not trusted: the host allowlist and tarball-host policy
+signed CDN URL. An ecosystem whose registry serves artifact bytes from a canonical separate host
+__by design__ declares those hosts on its adapter, and the same-host gate admits them (still
+allowlist- and internal-range-gated); there is no operator knob to widen the fetch surface.
+That location is gated, not trusted: the host allowlist and same-host gate
 bound where it may be fetched, https-only egress with certificate validation authenticates the
 host, and a legacy `http` tarball is upgraded (same host) or dropped (see
 [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
@@ -148,7 +158,7 @@ order-independent; only the positional labels track input order.
   ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged (a
   `WARNING` naming the package, the contradicting versions, and their digests) and metered
   (`ecluse.registry.merge.divergence`), never silently reconciled. Whether the contested version is
-  additionally withheld from the served listing is the operator's `ECLUSE_DIVERGENCE_POLICY`:
+  additionally withheld from the served listing is the operator's `ECLUSE_INTEGRITY__DIVERGENCE_POLICY`:
   `warn` (the default) serves the trusted copy and relies on the alarm; `fail-closed` drops the
   contested version from the listing (dropping any `dist-tag`, including `latest`, that pointed at
   it). The algorithm compared
@@ -163,7 +173,7 @@ order-independent; only the positional labels track input order.
   trust contexts, and on the public artifact path the gate `403`s it as `MissingIntegrity` or
   `BelowIntegrityFloor`. The exception is the private tarball serve leg, a conventional stable read
   with no serve-time floor (its bytes stay client- and worker-verified). The floors
-  (`ECLUSE_MIN_PUBLIC_INTEGRITY`, hard-floored at SHA-256; `ECLUSE_MIN_TRUSTED_INTEGRITY`,
+  (`ECLUSE_INTEGRITY__MIN_PUBLIC`, hard-floored at SHA-256; `ECLUSE_INTEGRITY__MIN_TRUSTED`,
   loosenable below it) are detailed under
   [Configuration](configuration.md#public-integrity-floor); this is
   [security invariant 5](security.md#invariants).
@@ -275,6 +285,13 @@ after which that artifact never takes the public leg again. So the public leg's 
 for onboarding experience, not steady-state capacity, and optimisations must respect this ordering:
 trading private-hit (hot-path) work to speed the public fail-over is a regression against the
 design.
+
+A **serve-only** mount opts out of the V's back-fill: with no mirror target there is no
+worker promotion, so the public leg is permanent rather than transient. That is the openly
+accepted trade of the low-effort onboarding shape: slower installs at scale, egress that
+never retires, availability coupled to the public registry, and no mirrored copy surviving
+an upstream yank; the security gate itself is identical. Declaring a `mirrorTarget` later
+upgrades the mount in place; clients change nothing.
 
 Registry-level composition is the recommended way to get that separation but not the only one:
 Écluse's own merge gives the same correctness to operators who cannot compose at the registry level,

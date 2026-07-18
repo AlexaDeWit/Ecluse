@@ -53,11 +53,11 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Env (Env (envQueue), newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (
@@ -616,14 +616,13 @@ deps privatePort publicPort inbound = do
     prepared <- prepare inertRuleDeps policy
     pure
         PackumentDeps
-            { pdPrivateBaseUrl = localhost privatePort
+            { pdPrivateBaseUrl = Just (localhost privatePort)
             , pdPublicBaseUrl = localhost publicPort
             , pdMountBaseUrl = "https://proxy.test"
-            , pdMirrorTarget = "https://mirror.test"
+            , pdMirror = MirrorOnAdmit "https://mirror.test"
             , pdRules = prepared
-            , pdTarballHostPolicy = SameHostAsPackument
             , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.test"
+            , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.test")
             , pdLimits = defaultLimits
             , pdInboundToken = mkSecret <$> inbound
             , pdNow = pure now
@@ -656,13 +655,23 @@ localhost port = "http://localhost:" <> show port
 
 {- | Re-derive the precomputed tarball-host gate from a deps value's (possibly
 overridden) upstream URLs, so a test that record-updates @pdPrivateBaseUrl@,
-@pdPublicBaseUrl@, or @pdMirrorTarget@ keeps @pdTarballHostGate@ consistent. The gate is
-a cached projection of those three URLs (the composition root builds it once), so a bare
-record update would leave it stale; the override harness applies this after any tweak.
+@pdPublicBaseUrl@, or @pdMirror@ keeps @pdTarballHostGate@ consistent. The gate is
+a cached projection of those three fields (the composition root builds it once), so a
+bare record update would leave it stale; the override harness applies this after any tweak.
 -}
 consistentGate :: PackumentDeps -> PackumentDeps
-consistentGate d =
-    d{pdTarballHostGate = tarballHostGate (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (pdMirrorTarget d)}
+consistentGate = consistentGateWith []
+
+{- | 'consistentGate' with adapter-declared ecosystem artifact hosts, for a test that
+exercises the ecosystem-host equivalence (the PyPI files-host shape).
+-}
+consistentGateWith :: [Text] -> PackumentDeps -> PackumentDeps
+consistentGateWith ecosystemHosts d =
+    d{pdTarballHostGate = tarballHostGate ecosystemHosts (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
+  where
+    mirrorUrlOf = \case
+        MirrorOnAdmit url -> Just url
+        NoMirrorWrite -> Nothing
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
 in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
@@ -692,18 +701,34 @@ withProxyEnvQueueDeps ::
     Maybe Text ->
     (PackumentDeps -> PackumentDeps) ->
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
-withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
+withProxyEnvQueueDeps queue privateUp publicUp inbound =
+    withProxyEnvQueueDepsHosts queue privateUp publicUp inbound (const [])
+
+{- | Like 'withProxyEnvQueueDeps', but the re-derived tarball-host gate additionally
+declares ecosystem artifact hosts, computed from the tweaked deps so a host can carry
+an upstream double's ephemeral runtime port.
+-}
+withProxyEnvQueueDepsHosts ::
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (PackumentDeps -> [Text]) ->
+    (PackumentDeps -> PackumentDeps) ->
+    (forall a. (Application -> Env -> Int -> IO a) -> IO a)
+withProxyEnvQueueDepsHosts queue privateUp publicUp inbound hostsOf tweakDeps k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
             env <- newTestEnvWithQueue queue manager
             baseDeps <- deps privatePort publicPort inbound
-            let cfg =
+            let tweaked = tweakDeps baseDeps
+                cfg =
                     mkServerConfig
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
-                            , bindingPackumentDeps = consistentGate (tweakDeps baseDeps)
+                            , bindingPackumentDeps = consistentGateWith (hostsOf tweaked) tweaked
                             , bindingPublishDeps = Nothing
                             }
                         ]

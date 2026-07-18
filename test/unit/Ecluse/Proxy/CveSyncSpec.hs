@@ -31,6 +31,7 @@ import UnliftIO.Exception (throwIO, throwString)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
@@ -47,7 +48,7 @@ spec = do
         it "plans nothing without a configured advisory bucket" $ do
             cfg <- appConfigFrom [] Nothing
             logEnv <- quietLogEnv
-            plan <- planCveSync logEnv cfg
+            plan <- planCveSync logEnv (ambientAwsFromEnv []) cfg
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
@@ -61,12 +62,12 @@ spec = do
                 writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
                 cfg <-
                     appConfigFrom
-                        [ ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", "advisories")
-                        , ("ECLUSE_OSV_DATA_DIR", dataDir)
+                        [ ("ECLUSE_ADVISORIES__BUCKET", "advisories")
+                        , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- quietLogEnv
-                plan <- planCveSync logEnv cfg
+                plan <- planCveSync logEnv (ambientAwsFromEnv []) cfg
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
@@ -135,7 +136,7 @@ spec = do
 
     describe "cveSyncScheduleFor" $
         it "converts the configured poll interval to microseconds over the shipped burst" $ do
-            cfg <- appConfigFrom [("ECLUSE_CVE_DB_POLL_INTERVAL", "90")] Nothing
+            cfg <- appConfigFrom [("ECLUSE_ADVISORIES__POLL_INTERVAL", "90")] Nothing
             let schedule = cveSyncScheduleFor cfg
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
@@ -183,10 +184,10 @@ setDummyAwsCredentials = do
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =
-    "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\
+    "{\"server\":{\"publicUrl\":\"https://registry.example.test\"},\
+    \\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
-    \\"respectUpstreamTarballHost\":false,\
     \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}}}"
 
 -- | A non-'IO' exception, to prove the sweep no longer swallows every fault.

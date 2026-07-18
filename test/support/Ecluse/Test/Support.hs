@@ -30,7 +30,7 @@ supportLinkageSpec =
 {- | A generously-bounded serve admission for suites whose subject is unrelated to
 overload: the capacity is set far above any test's concurrent in-flight load, so
 admission admits every request and never sheds. It stands in for the process-wide
-bounded admission the boot path sizes from @PROXY_SERVE_MAX_IN_FLIGHT@.
+bounded admission the boot path sizes from @ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT@.
 -}
 testServeAdmission :: IO ServeAdmission
 testServeAdmission = newServeAdmission 1_000_000

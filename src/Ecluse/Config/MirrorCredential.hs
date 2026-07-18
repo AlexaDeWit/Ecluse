@@ -20,6 +20,7 @@ and a CodeArtifact target that also carries a static token.
 module Ecluse.Config.MirrorCredential (
     resolveMirrorCredential,
     parseCodeArtifactHost,
+    isAccountId,
 ) where
 
 import Data.Char (isDigit)
@@ -88,6 +89,8 @@ parseCodeArtifactHost host =
             pure (domain, owner, region)
         _ -> Nothing
 
--- Whether a value is a 12-digit AWS account id.
+{- | Whether a value is a 12-digit AWS account id (shared with the SQS queue-URL
+shape validation in "Ecluse.Config.QueueTarget").
+-}
 isAccountId :: Text -> Bool
 isAccountId t = T.compareLength t 12 == EQ && T.all isDigit t

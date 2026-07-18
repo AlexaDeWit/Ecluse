@@ -44,7 +44,8 @@ import Network.HTTP.Types.Status (statusCode)
 import Network.Wai.Test qualified as WaiTest
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
-import Ecluse.Config (AppConfig (cfgAwsEndpointUrl), Config (configApp), loadConfig)
+import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -56,10 +57,10 @@ import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestB
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
@@ -93,7 +94,8 @@ spec =
                             appCfg <-
                                 either (fail . ("CveSyncSpec fixture env: " <>) . show) (pure . configApp) $
                                     loadConfig (s3EnvVars endpointUrl bucket) Nothing
-                            awsEnv <- buildS3Env (cfgAwsEndpointUrl appCfg >>= parseEndpointUrl)
+                            let ambient = ambientAwsFromEnv (s3EnvVars endpointUrl bucket)
+                            awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
                             createBucketWithRetry awsEnv bucket 30
 
                             -- One proxy wiring: the slot, the fast-lane policy over it,
@@ -130,7 +132,7 @@ spec =
                                 -- (compile the corpus, then upload via exportToS3); the
                                 -- running task's next poll verifies and swaps it in. No
                                 -- restart, no new config.
-                                publishViaPilot appCfg CorpusV1
+                                publishViaPilot ambient appCfg CorpusV1
 
                                 -- Phase 2: the identical request is admitted, and the
                                 -- served document carries the fixed version.
@@ -151,10 +153,11 @@ spec =
 -- credential keys, the required upstream, and the vulnerability bucket.
 s3EnvVars :: Text -> Text -> [(String, String)]
 s3EnvVars endpointUrl bucket =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "test-token")
-    , ("ECLUSE_VULNERABILITY_DATABASE_BUCKET", toString bucket)
+    , ("ECLUSE_ADVISORIES__BUCKET", toString bucket)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL", toString endpointUrl)
     , ("AWS_ACCESS_KEY_ID", "test")
@@ -177,8 +180,8 @@ createBucketWithRetry awsEnv bucket attempts =
 -- direct PutObject. The compile output lands in its own temp dir, distinct from the
 -- proxy's sync data dir, mirroring the separate-disk Pilot and proxy roles. The
 -- upload target (bucket and endpoint) is read from the same 'AppConfig' the proxy booted.
-publishViaPilot :: AppConfig -> CorpusVersion -> IO ()
-publishViaPilot appCfg v = do
+publishViaPilot :: AmbientAws -> AppConfig -> CorpusVersion -> IO ()
+publishViaPilot ambient appCfg v = do
     zipBytes <- osvCorpusZip v
     logEnv <- newTestLogEnv
     withStub status200 zipBytes $ \stub ->
@@ -187,6 +190,7 @@ publishViaPilot appCfg v = do
                 runPilotCompile
                     logEnv
                     telemetryDisabled
+                    ambient
                     appCfg
                     PilotCompileOptions
                         { pcoEcosystem = "npm"
@@ -210,14 +214,13 @@ proxyApp ruleDeps privateUrl publicUrl = do
     env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
     let deps =
             PackumentDeps
-                { pdPrivateBaseUrl = privateUrl
+                { pdPrivateBaseUrl = Just privateUrl
                 , pdPublicBaseUrl = publicUrl
                 , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirrorTarget = privateUrl
+                , pdMirror = MirrorOnAdmit privateUrl
                 , pdRules = prepared
-                , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate privateUrl publicUrl privateUrl
+                , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just privateUrl)
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow

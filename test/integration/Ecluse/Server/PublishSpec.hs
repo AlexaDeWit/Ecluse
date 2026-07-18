@@ -25,6 +25,8 @@ import Network.Wai.Test (
     srequest,
  )
 import Test.Hspec
+import UnliftIO (async, wait)
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
@@ -32,6 +34,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
@@ -95,25 +98,29 @@ allow-list, the publication target at the given loopback port, and the given sta
 fallback credential (used only when a client sends none). The default model is
 passthrough -- the client's own token -- so 'pubStaticToken' is usually 'Nothing'.
 -}
-publishDepsAt :: Int -> Maybe Secret -> PublishDeps
-publishDepsAt targetPort staticToken =
+publishDepsAt :: Int -> Maybe Secret -> ByteAdmission -> PublishDeps
+publishDepsAt targetPort staticToken bodyBudget =
     PublishDeps
         { pubTargetUrl = "http://127.0.0.1:" <> show targetPort
         , pubScopes = [mkScope "acme"]
         , pubStaticToken = staticToken
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits
+        , pubBodyBudget = bodyBudget
+        , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
         , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
         , pubCanonicaliseName = rightToMaybe . Project.projectName
         }
 
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps
-('Nothing' leaves the publish path off -- a @405@).
+('Nothing' leaves the publish path off -- a @405@), each application over its own
+generously-sized body-byte budget these relay tests never contend on.
 -}
-proxyWith :: Maybe PublishDeps -> IO Application
-proxyWith publishDeps = do
+proxyWith :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
+proxyWith mkPublishDeps = do
     env <- newTestEnv
+    publishDeps <- forM mkPublishDeps (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024))
     let cfg =
             mkServerConfig
                 [ MountBinding
@@ -168,6 +175,43 @@ mismatchedVersionNameBody =
 
 spec :: Spec
 spec = describe "first-party publish path → publication target (S52)" $ do
+    it "503s a publish shed at the aggregate body-byte budget while the capacity is held" $ do
+        -- A target that parks the first publish mid-relay while it holds the whole
+        -- budget; with a zero waiter room the second publish sheds at the door
+        -- (server capacity, the read path's vocabulary), and the first completes
+        -- normally once released.
+        gate <- newEmptyMVar
+        arrived <- newIORef (0 :: Int)
+        let blockingApp req respond = do
+                _ <- consumeRequestBodyStrict req
+                modifyIORef' arrived (+ 1)
+                takeMVar gate
+                respond (responseLBS (mkStatus 201 "OK") [(hContentType, "application/json")] "{}")
+        testWithApplication (pure blockingApp) $ \targetPort -> do
+            env <- newTestEnv
+            tightBudget <- newByteAdmissionTuned 1 0 50_000
+            let cfg =
+                    mkServerConfig
+                        [ MountBinding
+                            { bindingPrefix = "npm" :| []
+                            , bindingRouter = npmRouter
+                            , bindingPackumentDeps = inertPackumentDeps
+                            , bindingPublishDeps = Just (publishDepsAt targetPort Nothing tightBudget)
+                            }
+                        ]
+                app = application cfg env
+            firstPublish <- async (putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app)
+            -- Wait until the first publish holds the budget (its body reached the
+            -- parked target), so the second genuinely contends.
+            let awaitHold (n :: Int) = do
+                    held <- readIORef arrived
+                    when (held == 0 && n > 0) (threadDelay 10_000 >> awaitHold (n - 1))
+            awaitHold 500
+            secondPublish <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
+            status secondPublish `shouldBe` 503
+            putMVar gate ()
+            wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
+
     it "relays an in-scope publish with the publisher's forwarded credential and returns the target's response" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))

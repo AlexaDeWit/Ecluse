@@ -63,6 +63,9 @@ npmAdapter =
             AdapterArtifact
                 { artifactByFile = \_ _ baseUrl token -> NpmRequest.artifactRequestByFile baseUrl token
                 , artifactByUrl = \_ _ baseUrl token -> NpmRequest.artifactRequestByUrl baseUrl token
+                , -- npm serves tarball bytes from the registry host itself; there is
+                  -- no canonical separate files host to admit.
+                  artifactHosts = []
                 }
         , adapterPublish =
             AdapterPublish

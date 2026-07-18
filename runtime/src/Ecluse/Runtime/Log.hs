@@ -17,7 +17,7 @@ to -- and chooses its on-the-wire shape:
 * __'ConsoleLog'__ writes the human-readable bracketed form for local development.
 
 A 'LogEnv' built here carries no colour codes even on a terminal, so a captured
-JSON line is always valid JSON. The selected format is parsed from @ECLUSE_LOG_FORMAT@
+JSON line is always valid JSON. The selected format is parsed from @ECLUSE_OBSERVABILITY__LOG_FORMAT@
 at the configuration boundary (@Ecluse.Config@) and the resulting 'LogEnv' is held
 in the composition root ("Ecluse.Runtime.Env").
 
@@ -96,7 +96,7 @@ data LogFormat
     deriving stock (Eq, Show)
 
 -- The wire vocabulary of a 'LogFormat': the single source both 'parseWire' and
--- 'renderWire' derive from for this type.
+-- the accepted-set message derive from for this type.
 instance WireVocab LogFormat where
     wireKind = "log format"
     wireTable =

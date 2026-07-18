@@ -146,10 +146,12 @@ library ecluse-core
     Ecluse.Core.Server.Cache
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics
@@ -258,15 +260,19 @@ library
     Ecluse.Composition
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
+    Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.Sizing
     Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
+    Ecluse.CheckConfig
     Ecluse.Config.Aeson
+    Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig
     Ecluse.Config.MirrorCredential
     Ecluse.Config.Parser
+    Ecluse.Config.QueueTarget
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
     Ecluse.Config.Types
@@ -571,6 +577,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.Pipeline.InternalSpec
     Ecluse.Server.Pipeline.TarballSpec
     Ecluse.Server.Pipeline.PackumentSpec
+    Ecluse.Server.Admission.BytesSpec
     Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
@@ -655,13 +662,17 @@ test-suite ecluse-unit
     Ecluse.CLISpec
     Ecluse.Composition.BootErrorSpec
     Ecluse.Composition.CredentialSpec
+    Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
+    Ecluse.Config.AmbientSpec
+    Ecluse.Config.DocCoverageSpec
     Ecluse.Config.MirrorCredentialSpec
+    Ecluse.Config.QueueTargetSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec

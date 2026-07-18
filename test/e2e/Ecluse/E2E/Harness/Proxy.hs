@@ -75,7 +75,7 @@ proxyPut e2e path = do
     pure (statusCode (responseStatus resp))
 
 {- | The proxy container's combined stdout+stderr as docker has captured it so far -- the
-JSONL stream the proxy writes (@ECLUSE_LOG_FORMAT=json@), so a test can assert the proxy
+JSONL stream the proxy writes (@ECLUSE_OBSERVABILITY__LOG_FORMAT=json@), so a test can assert the proxy
 logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
 -}
 proxyContainerLogs :: E2E -> IO Text

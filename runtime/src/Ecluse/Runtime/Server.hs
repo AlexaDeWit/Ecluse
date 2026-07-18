@@ -113,8 +113,7 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
-import Ecluse.Core.Worker (heartbeatHealthyNow)
-import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
+import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, serveRuntimeOf)
 import Ecluse.Runtime.Server.Drain (
     DrainSignal,
     ShutdownDrainTimeout (..),
@@ -177,6 +176,13 @@ data ServerConfig = ServerConfig
     absent advisory database only ever abstains into deny-by-default; this
     gates what a load balancer routes, not whether the process answers.
     -}
+    , scCheckLive :: IO Bool
+    {- ^ The liveness check @\/livez@ answers from, beyond the listener itself.
+    The composition root wires the mirror worker's consume-loop heartbeat here
+    exactly when a worker runs (a mirroring deployment); the 'mkServerConfig'
+    default is @'pure' True@ (the listener alone), so a serve-only deployment
+    can never go unhealthy over a worker it never started.
+    -}
     , scOnException :: Maybe Request -> SomeException -> IO ()
     {- ^ @warp@'s exception hook, fired for a fault that escapes to the server
     itself: a post-commit teardown the request perimeter rethrew, or a fault in
@@ -205,6 +211,7 @@ mkServerConfig mounts =
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
         , scCheckReady = pure True
+        , scCheckLive = pure True
         , scOnException = \_ _ -> pass
         }
 
@@ -246,7 +253,7 @@ dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case matchMount (requestMethod request) (scMounts cfg) (pathInfo request) of
         Just (binding, action) -> serve env binding action request respond
-        Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
+        Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg) request respond
 
 {- Carry out the action the matched mount's router named.
 

@@ -5,38 +5,18 @@
 module Ecluse.Composition.SizingSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime)
 import Network.HTTP.Client (ManagerSettings (managerConnCount), defaultManagerSettings)
 import Test.Hspec
 
 import Ecluse.Composition.Sizing (
-    cacheConfigFor,
     connectionPoolSettings,
     resolvePrivateConnections,
     resolvePublicConnections,
     resolveServeAdmission,
  )
-import Ecluse.Composition.Support (expectEnv, staticEnvVars)
-import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries, cacheTtl))
 
 spec :: Spec
-spec = do
-    cacheConfigSpec
-    connectionPoolSpec
-
-cacheConfigSpec :: Spec
-cacheConfigSpec = describe "cacheConfigFor" $
-    it "maps the env cache tunables onto the metadata CacheConfig" $ do
-        env <-
-            expectEnv
-                ( ("ECLUSE_CACHE_TTL", "45")
-                    : ("ECLUSE_CACHE_MAX_ENTRIES", "256")
-                    : ("ECLUSE_CACHE_MAX_BYTES", "1048576")
-                    : staticEnvVars
-                )
-        cacheTtl (cacheConfigFor env) `shouldBe` (45 :: NominalDiffTime)
-        cacheMaxEntries (cacheConfigFor env) `shouldBe` 256
-        cacheMaxBytes (cacheConfigFor env) `shouldBe` 1048576
+spec = connectionPoolSpec
 
 connectionPoolSpec :: Spec
 connectionPoolSpec = do

@@ -28,6 +28,7 @@ import Ecluse (runWorker)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue)
 import Ecluse.Config (Config (configApp), loadConfig)
+import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
@@ -41,10 +42,10 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
     endpointFor,
@@ -147,22 +148,24 @@ configDrivenQueue container queueName = do
     let endpoint = endpointFor container
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
-    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
+    let ambient = ambientAwsFromEnv (sqsEnvVars queueUrl endpointUrl)
+    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue ambient env)
     logEnv <- newTestLogEnv
     case plan of
         -- The wire decode's egress former: the loopback dev former, since this
         -- suite's artifact URLs are in-process http servers.
         SqsBackend sqsConfig -> newSqsQueue logEnv (Right . loopbackRegistryUrl) sqsConfig{sqsWaitSeconds = 1}
-        MemoryBackend _ -> fail "AwsEndToEndSpec fixture: expected the SQS backend, got the in-memory one"
+        MemoryBackend -> fail "AwsEndToEndSpec fixture: expected the SQS backend, got the in-memory one"
 
 -- The environment layer the released image would run with to target a ministack SQS:
 -- the standard endpoint override and credential keys, plus the required upstreams.
 sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "test-token")
-    , ("ECLUSE_QUEUE_URL", toString queueUrl)
+    , ("ECLUSE_QUEUE__URL", toString queueUrl)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
     , ("AWS_ACCESS_KEY_ID", "test")
@@ -207,14 +210,13 @@ mountBinding privateUrl publicUrl mirrorUrl = do
     prepared <- prepare inertRuleDeps admitOldEnough
     let deps =
             PackumentDeps
-                { pdPrivateBaseUrl = privateUrl
+                { pdPrivateBaseUrl = Just privateUrl
                 , pdPublicBaseUrl = publicUrl
                 , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirrorTarget = mirrorUrl
+                , pdMirror = MirrorOnAdmit mirrorUrl
                 , pdRules = prepared
-                , pdTarballHostPolicy = SameHostAsPackument
                 , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate privateUrl publicUrl mirrorUrl
+                , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just mirrorUrl)
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow

@@ -9,39 +9,12 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (QueueBackend (..), mkUrl, parseQueueBackend, unUrl)
-import Ecluse.Core.Wire (parseWire, renderWire)
+import Ecluse.Config.Types (mkUrl, unUrl)
 
 spec :: Spec
 spec = do
-    backendSpec
     urlSpec
     policyErrorRenderSpec
-
-backendSpec :: Spec
-backendSpec = describe "backend selection" $ do
-    describe "QueueBackend" $ do
-        it "round-trips each backend through parse/render" $ do
-            parseWire "sqs" `shouldBe` Right SqsQueue
-            parseWire "pubsub" `shouldBe` Right PubSubQueue
-            parseWire "memory" `shouldBe` Right MemoryQueue
-            renderWire SqsQueue `shouldBe` "sqs"
-            renderWire PubSubQueue `shouldBe` "pubsub"
-            renderWire MemoryQueue `shouldBe` "memory"
-        it "rejects an unknown name, naming the accepted set" $
-            (parseWire "kafka" :: Either Text QueueBackend)
-                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
-
-    describe "parseQueueBackend" $ do
-        it "parses sqs to SqsQueue" $
-            parseQueueBackend "sqs" `shouldBe` Right SqsQueue
-        it "parses memory to MemoryQueue" $
-            parseQueueBackend "memory" `shouldBe` Right MemoryQueue
-        it "parses pubsub to PubSubQueue" $
-            parseQueueBackend "pubsub" `shouldBe` Right PubSubQueue
-        it "rejects unknown backends" $
-            parseQueueBackend "kafka"
-                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
 
 urlSpec :: Spec
 urlSpec = describe "Url" $ do

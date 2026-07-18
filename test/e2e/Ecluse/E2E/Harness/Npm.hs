@@ -195,14 +195,14 @@ over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@ -- so only the scen
 ask for it see a publication target, and the base topology keeps the implicit
 publish→@405@ default. The target is Verdaccio, the same registry the base topology reads
 as the private upstream (@mirror@), so a published package is then readable back over the
-private leg. @ECLUSE_PUBLISH_SCOPES@ is the anti-shadowing allow-list, required once a target is
+private leg. @ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW@ is the anti-shadowing allow-list, required once a target is
 set. The publish is __passthrough__: the relay forwards the client's own bearer (the
 project @.npmrc@\'s 'publishAuthToken'), so no static publication-target token is configured.
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
     [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", publishScope)
+    , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", publishScope)
     ]
 
 -- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'

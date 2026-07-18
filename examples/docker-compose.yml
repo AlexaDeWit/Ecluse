@@ -1,0 +1,50 @@
+# Écluse quickstart, two postures behind Compose profiles:
+#
+#   docker compose --profile gate up      # serve-only pure public gate (two variables)
+#   docker compose --profile mirror up    # mirrored deployment (endpoints + write token)
+#
+# Copy .env.example to .env and fill it in first. Pin the image by digest: the
+# registry publishes immutable version tags and no `latest`
+# (see docs/architecture/release-supply-chain.md).
+#
+# The gate profile trades simplicity for a permanent public leg: every artifact
+# streams through the gated public upstream on every install, egress never
+# shrinks, availability stays coupled to the public registry, and no mirrored
+# copy survives an upstream yank. It is the two-variable way to evaluate the
+# policy gate; the mirror profile is the production posture.
+
+services:
+  ecluse-gate:
+    profiles: ["gate"]
+    image: "${ECLUSE_IMAGE:?pin ghcr.io/alexadewit/ecluse by digest in .env}"
+    command: ["proxy"]
+    environment:
+      ECLUSE_MOUNTS__NPM__ENABLED: "true"
+      ECLUSE_SERVER__PUBLIC_URL: "${ECLUSE_SERVER__PUBLIC_URL:?the URL clients reach the proxy on}"
+    ports:
+      - "4873:8080"
+
+  ecluse-mirror:
+    profiles: ["mirror"]
+    image: "${ECLUSE_IMAGE:?pin ghcr.io/alexadewit/ecluse by digest in .env}"
+    command: ["proxy"]
+    environment:
+      ECLUSE_SERVER__PUBLIC_URL: "${ECLUSE_SERVER__PUBLIC_URL:?the URL clients reach the proxy on}"
+      ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM: "${ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM:?the vetted registry the mirror reads back through}"
+      ECLUSE_MOUNTS__NPM__MIRROR_TARGET: "${ECLUSE_MOUNTS__NPM__MIRROR_TARGET:?declaring this is what makes the mount mirrored}"
+      # The mirror-write token arrives through the *_FILE indirection so it never
+      # enters the environment; Compose mounts it as a secret file. A CodeArtifact
+      # target mints its own token instead: drop both the secret and this variable.
+      ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE: /run/secrets/mirror_target_token
+      # With no ECLUSE_QUEUE__URL, mirroring rides the bounded in-memory queue
+      # (non-durable, best-effort; loudly warned at boot). Point it at a real SQS
+      # queue URL for a durable production mirror:
+      # ECLUSE_QUEUE__URL: "https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror"
+    secrets:
+      - mirror_target_token
+    ports:
+      - "4873:8080"
+
+secrets:
+  mirror_target_token:
+    file: ./secrets/mirror_target_token

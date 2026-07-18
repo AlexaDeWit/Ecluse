@@ -8,10 +8,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
-import Ecluse.Config (
-    PolicyError (UnknownRuleType),
-    QueueBackend (..),
- )
+import Ecluse.Config (PolicyError (UnknownRuleType))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 
 spec :: Spec
@@ -21,13 +18,17 @@ spec = describe "renderBootError" $
         renderBootError (MissingAdapter PyPI) `shouldSatisfy` infixed "no adapter"
         renderBootError (UnresolvedCredential Npm)
             `shouldSatisfy` infixed "mirror-write credential"
-        renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
+        renderBootError (QueueProviderUnavailable "pubsub") `shouldSatisfy` infixed "not available"
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
-        renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "ECLUSE_QUEUE_URL"
+        renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
+        -- The unrecognised-shape render names the value and the accepted forms.
+        renderBootError (QueueUrlUnrecognised "https://queue.example.test/q")
+            `shouldSatisfy` infixed "https://queue.example.test/q"
+        renderBootError (QueueUrlUnrecognised "x") `shouldSatisfy` infixed "projects/{project}/topics/{topic}"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
         -- The mint-failure render makes the transient-vs-permanent distinction legible.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
-        renderBootError (PublishScopesMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES"
+        renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
   where
     infixed :: Text -> Text -> Bool

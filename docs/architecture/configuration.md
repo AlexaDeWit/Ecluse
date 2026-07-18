@@ -11,11 +11,15 @@
 
 Configuration has two layers: environment variables for process-level and secret values, and
 a structured config document for the two things too expressive for flat env vars, the **rule
-policy** and the **mount map**.
+policy** and the **mount map**. The document schema is grouped by concern (`server`, `queue`,
+`limits`, `cache`, `integrity`, `egress`, `advisories`, `runtime`, `observability`, plus
+`mounts` and `rules`), and the environment spellings mirror the groups mechanically
+(`ECLUSE_SERVER__PORT` is `server.port`), so a key's home says what it governs on either
+surface.
 
 The rule policy earns the document its keep: a set of rules with per-rule precedence and value
 overrides, layered over a built-in default (see [Rule policy](#rule-policy)). Mounts are
-comparatively flat, three registry endpoints and a queue backend under a prefix
+comparatively flat, a few registry endpoints and their per-mount refinements under a prefix
 [derived from the ecosystem](web-layer.md#multi-ecosystem-mounts), so the single-ecosystem
 environment variables (below) desugar to a one-entry mount map, and the common launch case (one npm
 mount on the default policy) needs no document at all. Multi-ecosystem deployments (see
@@ -28,20 +32,30 @@ diffable, the expected form once the rule policy is non-trivial.
 A mount serves only when the operator declares it. The shipped defaults carry a dormant
 template per ecosystem (the canonical public upstream),
 and any operator-supplied key under `mounts.<ecosystem>`, in the document or through the
-`ECLUSE_MOUNTS__*` variables, activates that mount. An active mount must define its private
-upstream and declare its mirror target: a declared-but-incomplete mount is a boot error naming
-each missing key, never a
-mount that silently vanishes from service, and a mount the operator never mentions stays
-off without ceremony. The mirror target is explicit even when it equals the private upstream:
-activation implies a mirror write (there are no serve-only mounts), so the write's destination
-is always the operator's own stated intent, never implied from another endpoint. Declaring the
+`ECLUSE_MOUNTS__*` variables, activates that mount; a mount the operator never mentions
+stays off without ceremony. The `enabled` key is itself a declaration, so
+`mounts.<ecosystem>.enabled: true` alone activates a mount against its template public
+upstream (the serve-only pure public gate needs nothing else), and `enabled: false`
+switches a mount off without removing its other keys.
+
+Whether an active mount **mirrors** is derived from its declared endpoints: a
+`mirrorTarget` makes the mount mirrored, and its private upstream is then required (the
+mirror must be readable back through it: a mirrored mount without one is a boot error
+naming the key, never a mount that silently vanishes from service). An absent
+`mirrorTarget` makes the mount **serve-only**: it never writes anywhere, its private
+upstream is optional (present, the two origins still merge; absent, the mount is the
+pure public gate), and every admitted public artifact stays on the gated public leg. A
+mirror-write setting left on a serve-only mount (`mirrorTargetToken`,
+`mirrorCodeArtifactTokenDuration`) is refused per key rather than silently ignored,
+and the boot log names each mount's resolved posture, so an unintentionally dropped
+`mirrorTarget` is visible at the very next start-up. Declaring the
 public upstream explicitly as well is the recommended
 posture; endpoints of one mount that resolve to the same registry are each logged as a
 boot warning (a mirror target declared equal to the private upstream included), since a
 shared store narrows provenance separation and what maintenance tooling can safely do
 (see [USAGE → Deviating from the Golden Path](../../USAGE.md#deviating-from-the-golden-path)).
 
-Secrets never live in the structured config. Tokens (`ECLUSE_AUTH_TOKEN`, per-endpoint
+Secrets never live in the structured config. Tokens (`ECLUSE_SERVER__AUTH_TOKEN`, per-endpoint
 registry tokens) are always environment variables; cloud-managed registries derive short-lived
 tokens from ambient cloud credentials (see
 [Outbound registry credentials](#outbound-registry-credentials)).
@@ -71,11 +85,12 @@ by Écluse.
 
 ### Outbound registry credentials
 
-Écluse always holds a credential to write the mirror target, and, depending on the mount's
-[credential strategy](access-model.md), may also hold one to read the private upstream. The
-mirror write is distinct from the reads: under the default `passthrough` the private upstream
+A **mirrored** mount always holds a credential to write its mirror target, and, depending on the
+mount's [credential strategy](access-model.md), may also hold one to read the private upstream.
+The mirror write is distinct from the reads: under the default `passthrough` the private upstream
 carries no Écluse credential, while the mirror write runs on the async worker under Écluse's own
-identity.
+identity. A serve-only mount never writes, so it holds no standing write credential at all; a
+deployment with zero mirrored mounts mints nothing.
 
 The mirror-write credential is **derived from the mirror-target URL**, so it is always the
 credential that endpoint dictates and can never be paired with an endpoint it was not minted for.
@@ -122,17 +137,17 @@ request-body cap. Artifacts stream with constant memory and are not subject to t
 bound.
 
 Each bound is a strictly positive integer (a non-positive value is rejected at startup). The
-ceilings are layered: `ECLUSE_MAX_RESPONSE_BYTES` (default 12 MiB; the largest packuments seen
+ceilings are layered: `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` (default 12 MiB; the largest packuments seen
 today are ~4 MiB) is the primary, pre-decode bound, applied as the body streams before aeson
 decodes it, so parse spend is fixed and a hostile body is aborted mid-stream.
-`ECLUSE_MAX_VERSION_COUNT`, checked after the packument is projected, is a defence-in-depth
-backstop on per-version work; `ECLUSE_MAX_NESTING_DEPTH` bounds document nesting. See the
+`ECLUSE_LIMITS__MAX_VERSION_COUNT`, checked after the packument is projected, is a defence-in-depth
+backstop on per-version work; `ECLUSE_LIMITS__MAX_NESTING_DEPTH` bounds document nesting. See the
 [Operator Manual](../../USAGE.md#environment-variables).
 
 ### Aggregate serve capacity
 
 Per-response ceilings do not bound aggregate residency when many clients resolve different
-packages concurrently. Écluse therefore admits at most `ECLUSE_SERVE_MAX_IN_FLIGHT` metadata
+packages concurrently. Écluse therefore admits at most `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT` metadata
 materialisations process-wide (a whole packument request, or the public-metadata gate after a
 private tarball miss). The default is computed at boot as `max(8, 10 x capabilities)`; the
 multiplier is empirical (a slot is held across every upstream leg plus GC and scheduling delay,
@@ -146,14 +161,14 @@ backpressure); admission protects resident metadata structures, not download cou
 The public and private connection pools are independently configurable and default to a share
 of the process file-descriptor limit, the private pool taking the larger share because a
 trusted tarball hit streams outside admission (its demand is the inbound hit fan-out, not the
-admission capacity). `ECLUSE_PRIVATE_CONNECTIONS_PER_HOST` (default a quarter of the FD limit,
+admission capacity). `ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST` (default a quarter of the FD limit,
 clamped 64-4096) sizes the private pool; http-client's pool bound governs keep-alive retention,
 not concurrency. See
 [Web Layer → serve admission and upstream pools](web-layer.md#serve-admission-and-upstream-pools).
 
 ### Runtime sizing: cores and heap ceiling
 
-`ECLUSE_CORES` and `ECLUSE_MAX_HEAP_BYTES` are the first-class surface for the process's runtime
+`ECLUSE_RUNTIME__CORES` and `ECLUSE_RUNTIME__MAX_HEAP_BYTES` are the first-class surface for the process's runtime
 posture; anything omitted is derived from the container's cgroup (v2) in the `automaxprocs`
 style, and with no cgroup limit the GHC runtime's own resolution (its defaults plus any operator
 `GHCRTS`) stands. Resolution is per knob, strongest first: config, then cgroup, then runtime.
@@ -169,6 +184,23 @@ fought: an explicit `-M` there is adopted, and a divergence surviving the re-lau
 a warning, never an abort. See the [Operator Manual](../../USAGE.md#operating-écluse) for the
 arithmetic.
 
+The resolved posture then seeds a second derivation, the **memory plan**: the effective heap
+ceiling is partitioned between named tenants whose sum the ceiling bounds -- a runtime reserve,
+the metadata cache's one aggregate (split into per-store sub-budgets summing exactly to it), the
+materialisation working space (which bounds admission jointly with CPU through one shared
+wire-expansion model and sizes the response cap), the publish-body aggregate (only when a
+publication target is configured), the in-memory queue tenant (only when that backend was
+selected, which is why backend selection precedes the plan), and the fixed enqueue buffer. An
+explicit config value wins its own bound; with no ceiling datapoint the shipped fallbacks apply;
+and each decision is boot-logged as a `memory plan:` line carrying the ceiling's own provenance,
+so the posture lines and the plan lines read as one story. A pod too small for the tenants'
+floors sheds in a documented priority order (cache to zero, then admission and, under nursery
+pressure, the capability count, then the publish aggregate, then the queue depth), each step a
+loud warning, and always boots; only an explicit override that breaks the combined plan is
+refused, by the boot and `check-config` alike. The structural hostile-input counts
+(`limits.maxVersionCount`, `limits.maxNestingDepth`) stay pinned policy: they bound document
+shape, not bytes, and do not scale with RAM.
+
 The resolution is role-agnostic: cores and the heap ceiling derive from the container's limits,
 which bind the proxy, Pilot, and Dredger alike. Workload-shaped memory modelling is not
 universalised: the shipped allocation-area tuning is the proxy serve path's profile, while Pilot
@@ -182,7 +214,7 @@ least one integrity digest whose algorithm meets the public integrity floor
 ([invariant 5](security.md#invariants)). SHA-1 and MD5 have practical collisions, so a match on
 one cannot prove an artifact was not substituted; a public version whose strongest digest is
 below the floor is refused (`403`) and filtered from the served listing.
-`ECLUSE_MIN_PUBLIC_INTEGRITY` sets it. It may be raised as cryptanalysis ages an algorithm but
+`ECLUSE_INTEGRITY__MIN_PUBLIC` sets it. It may be raised as cryptanalysis ages an algorithm but
 is hard-floored at SHA-256: a value below it or an unknown name is a configuration error
 rejected at load, never silently clamped, and there is no escape-hatch to accept a sub-SHA-256
 digest from a public upstream. See the [Operator Manual](../../USAGE.md#environment-variables)
@@ -191,8 +223,9 @@ for supported algorithms.
 ### Trusted integrity floor
 
 A trusted (private) upstream's version is served only if its selected artifact meets the trusted
-integrity floor ([invariant 5](security.md#invariants)). `ECLUSE_MIN_TRUSTED_INTEGRITY` sets it
-and defaults to `sha256`, the same secure default as the public floor, so by default a
+integrity floor ([invariant 5](security.md#invariants)). `ECLUSE_INTEGRITY__MIN_TRUSTED` sets it globally (a mount may refine it with
+`mounts.<ecosystem>.minTrustedIntegrity`, so one legacy registry's loosening never
+leaks onto a neighbouring mount) and it defaults to `sha256`, the same secure default as the public floor, so by default a
 SHA-1-only or hashless private version is dropped (filtered from the listing, and a private miss
 on the artifact path falls through to the public origin). Unlike the public floor it is
 loosenable below SHA-256 for a legacy private mirror, where trust in the operator's vetted source
@@ -208,8 +241,8 @@ disagree), that is the supply-chain tampering Écluse exists to
 catch ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11); see
 [Packument merge](registry-model.md#packument-merge-across-upstreams)). The trusted copy always
 wins the bytes, and the divergence is always logged (a `WARNING`) and metered
-(`ecluse.registry.merge.divergence`). `ECLUSE_DIVERGENCE_POLICY` decides what else happens to the
-contested version: `warn` (the default) serves the trusted copy and relies on the alarm;
+(`ecluse.registry.merge.divergence`). `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` decides what else happens to the
+contested version (per mount, `mounts.<ecosystem>.divergencePolicy` refines it): `warn` (the default) serves the trusted copy and relies on the alarm;
 `fail-closed` additionally withholds the contested version from the served listing, so a resolver
 pinned to that exact version fails to resolve it rather than receive a contested copy. Fail-closed
 trades availability for strictness and drops any `dist-tag` (including `latest`) that pointed at the
@@ -305,22 +338,32 @@ vars) so one run reports every issue. Unknown is an error, not a silent skip:
 - Merge references must resolve. A `rules` entry that neither names a known default nor supplies
   a complete new rule (a typo'd default name, an `"enabled": false` against a non-existent rule,
   a patch missing the `type` it needs to stand alone) is rejected.
-- A declared mount must be complete. Any operator-supplied key under `mounts.<ecosystem>`
-  activates that mount, and an active mount without a `privateUpstream` or without an explicit
-  `mirrorTarget` is rejected at boot,
-  naming the mount and each missing key (every incomplete mount in one report); the shipped
-  per-ecosystem templates alone never activate anything.
+- A declared mount must be coherent with its derived mode. Any operator-supplied key under
+  `mounts.<ecosystem>` activates that mount (the shipped per-ecosystem templates alone never
+  activate anything; `enabled: false` deactivates a declared one). A **mirrored** mount (one
+  declaring a `mirrorTarget`) without a `privateUpstream` is rejected at boot naming the key
+  (every incomplete mount in one report). A **serve-only** mount (no `mirrorTarget`) carrying a
+  mirror-write setting (`mirrorTargetToken`, `mirrorCodeArtifactTokenDuration`) is rejected per
+  offending key, never silently ignored.
 - The mirror-write credential must resolve. It is derived from the mirror-target URL: a
   non-CodeArtifact target with no static write token, or a CodeArtifact target that also carries a
   static token, is rejected at load; and a CodeArtifact target whose ambient cloud identity cannot
   mint an initial token is rejected at boot. A `service` mount with no read provider is likewise
   rejected. Credential providers are [process-global](cloud-backends.md#credential-provider).
 - A static publish credential requires a verifiable edge:
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` set without `ECLUSE_AUTH_TOKEN` is rejected at
+  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` set without `ECLUSE_SERVER__AUTH_TOKEN` is rejected at
   boot (`PublishStaticCredentialNeedsEdge`), since a static credential makes Écluse publish under
   its own identity and an open edge would let any unauthenticated client publish under it.
 
 A bad config is a loud, immediate startup failure, never a quietly mis-enforced policy.
+
+The same validation is available without a boot: `ecluse check-config` runs the full resolution
+chain (the config load, the runtime plan, the sizing and memory-budget resolvers, the
+mirror-queue selection) and prints every decision without starting anything, exiting `0` on a
+valid configuration and `2` with the same aggregated report a boot would log. A successful run
+also prints one provenance line per resolved key (environment > document > default, secrets
+redacted); the boot logs the identical dump, so the effective configuration and where each value
+came from is always readable from the start-up lines.
 
 ## Client authentication
 
@@ -333,9 +376,9 @@ the client's credential is never sent to the public upstream.
 Edge authentication is optional; the full rationale is in
 [access-model](access-model.md#edge-authentication). The modes:
 
-1. Open, `ECLUSE_AUTH_TOKEN` unset. Any client can reach the proxy; access control is delegated
+1. Open, `ECLUSE_SERVER__AUTH_TOKEN` unset. Any client can reach the proxy; access control is delegated
    to the network layer (VPC, service mesh).
-2. Static token, `ECLUSE_AUTH_TOKEN` set. Clients present it as `Bearer <token>` in
+2. Static token, `ECLUSE_SERVER__AUTH_TOKEN` set. Clients present it as `Bearer <token>` in
    `Authorization` or as `_authToken` in `.npmrc`. Standard npm tooling supports this.
 3. Trusted edge identity, a fronting proxy / cloud IAP / service mesh asserts a verified
    identity Écluse trusts, honoured only over a verifiable binding to that edge (mutual TLS, or a

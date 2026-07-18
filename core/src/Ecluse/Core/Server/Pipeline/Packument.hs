@@ -595,12 +595,16 @@ collectDecisions privResult pubResult publicExclusions =
         OriginResolved _ -> []
         OriginUnresolved -> [neededUpstreamUnavailable]
         OriginNameMismatch -> [upstreamInvalidDecision]
+        -- An unconfigured private leg (a serve-only pure gate) is not an outage:
+        -- nothing was needed, so nothing is unavailable.
+        OriginAbsent -> []
 
     publicMismatch :: OriginResult -> [ServeDecision]
     publicMismatch = \case
         OriginNameMismatch -> [upstreamInvalidDecision]
         OriginResolved _ -> []
         OriginUnresolved -> []
+        OriginAbsent -> []
 
     neededUpstreamUnavailable :: ServeDecision
     neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")

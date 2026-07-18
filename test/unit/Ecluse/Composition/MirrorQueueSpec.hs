@@ -10,89 +10,93 @@ import Test.Hspec
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (..),
+    MirrorRuntimePlan (..),
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
     parseEndpointUrl,
     planMirrorQueue,
+    planMirrorRuntime,
  )
-import Ecluse.Composition.Support (expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
-import Ecluse.Config (AppConfig, QueueBackend (..))
-import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig)
+import Ecluse.Composition.Support (expectConfig, expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
+import Ecluse.Config (AppConfig)
+import Ecluse.Config.Ambient (AmbientAws (..))
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 
 spec :: Spec
 spec = do
+    mirrorRuntimeSpec
     mirrorQueueSpec
     parseEndpointUrlSpec
 
+mirrorRuntimeSpec :: Spec
+mirrorRuntimeSpec = describe "planMirrorRuntime" $ do
+    it "plans no mirror runtime when no mount mirrors (queue variables never consulted)" $ do
+        -- The serve-only deployment boots with no ECLUSE_QUEUE__URL and no
+        -- AWS_REGION: the queue selection never runs.
+        cfg <- expectConfig [("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")] Nothing
+        planMirrorRuntime noAmbient' cfg `shouldBe` Right NoMirroring
+
+    it "delegates to the queue selection when a mount mirrors, surfacing its errors" $ do
+        -- The same shape failure as planMirrorQueue: the mirroring mount is what
+        -- makes the queue configuration load-bearing.
+        cfg <- expectConfig (overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars) Nothing
+        planMirrorRuntime noAmbient' cfg `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
+
+    it "plans the SQS backend from the queue URL alone when a mount mirrors (no AWS_REGION)" $ do
+        cfg <- expectConfig staticEnvVars Nothing
+        case planMirrorRuntime noAmbient' cfg of
+            Right (MirrorWith (SqsBackend _)) -> pass
+            other -> expectationFailure ("expected an SQS mirror runtime, got: " <> show other)
+
+    it "rolls a mirroring mount with no queue URL over to the in-memory queue" $ do
+        cfg <- expectConfig (withoutQueueUrl staticEnvVars) Nothing
+        planMirrorRuntime noAmbient' cfg `shouldBe` Right (MirrorWith MemoryBackend)
+  where
+    noAmbient' :: AmbientAws
+    noAmbient' = AmbientAws Nothing Nothing Nothing
+
 mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do
-    it "selects the SQS backend from the configured queue URL and region" $ do
-        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
-        cfg <- expectSqsBackend env
-        sqsQueueUrl cfg `shouldBe` "https://sqs.example.test/q"
+    it "selects the SQS backend from the queue URL's shape, region from the host (no AWS_REGION)" $ do
+        env <- expectEnv staticEnvVars
+        cfg <- expectSqsBackend noAmbient env
+        sqsQueueUrl cfg `shouldBe` "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
         sqsRegion cfg `shouldBe` "us-east-1"
 
-    it "fails fast when the SQS backend has no AWS_REGION" $ do
-        -- AWS_REGION is required for the AWS queue; absent, the backend cannot be
-        -- region-scoped, so it is a loud boot failure rather than a silent default.
-        env <- expectEnv staticEnvVars
-        planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
-
-    it "treats a blank AWS_REGION as missing" $ do
-        env <- expectEnv (("AWS_REGION", "   ") : staticEnvVars)
-        planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
-
-    it "fails fast when the SQS backend has no ECLUSE_QUEUE_URL" $ do
-        -- ECLUSE_QUEUE_URL is optional at the env layer but required for sqs here: the
-        -- jobs need a queue to be sent to, so an absent one is a fail-loud boot error.
-        env <- expectEnv (("AWS_REGION", "us-east-1") : withoutQueueUrl staticEnvVars)
-        planMirrorQueue env `shouldBe` Left [QueueUrlMissing SqsQueue]
-
-    it "aggregates a missing region and a missing queue URL under sqs in one report" $ do
+    it "rolls an absent ECLUSE_QUEUE__URL over to the bounded in-memory queue" $ do
+        -- Graceful rollover, never a boot failure: mirroring is demand-driven and
+        -- self-healing, so the missing URL degrades durability, not safety. The
+        -- depth cap is the memory plan's tenant, allocated after this selection.
         env <- expectEnv (withoutQueueUrl staticEnvVars)
-        planMirrorQueue env `shouldBe` Left [QueueRegionMissing, QueueUrlMissing SqsQueue]
+        planMirrorQueue noAmbient env `shouldBe` Right MemoryBackend
 
-    it "refuses the GCP pubsub backend as not built in this binary (no silent fallback)" $ do
-        -- The pubsub arm is recognised by config (S03) but has no backend compiled in;
-        -- it must route to a clear "not built" error, never quietly to a different queue.
-        env <- expectEnv (("AWS_REGION", "us-east-1") : overrideEnv "ECLUSE_QUEUE_BACKEND" "pubsub" staticEnvVars)
-        planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
+    it "refuses a Pub/Sub topic resource as not built in this binary (no silent fallback)" $ do
+        -- The topic shape names the GCP backend, which has no implementation
+        -- compiled in; it must route to a clear "not built" error, never quietly
+        -- to a different queue.
+        env <- expectEnv (overrideEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror" staticEnvVars)
+        planMirrorQueue noAmbient env `shouldBe` Left [QueueProviderUnavailable "pubsub"]
 
-    it "selects the bounded in-memory backend with the configured cap (no AWS_REGION or ECLUSE_QUEUE_URL needed)" $ do
-        -- The memory backend is an explicit operator choice that needs no cloud queue:
-        -- it carries only its depth cap, and neither AWS_REGION nor ECLUSE_QUEUE_URL is
-        -- consulted, so it resolves cleanly with both absent.
-        env <-
-            expectEnv
-                ( overrideEnv "ECLUSE_QUEUE_BACKEND" "memory" $
-                    ("ECLUSE_QUEUE_MEMORY_MAX_DEPTH", "1234") : withoutQueueUrl staticEnvVars
-                )
-        planMirrorQueue env `shouldBe` Right (MemoryBackend (defaultMemoryQueueConfig 1234))
+    it "refuses a queue URL whose shape names no backend" $ do
+        env <- expectEnv (overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars)
+        planMirrorQueue noAmbient env `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
 
-    it "defaults the in-memory backend's cap when ECLUSE_QUEUE_MEMORY_MAX_DEPTH is unset" $ do
-        env <- expectEnv (overrideEnv "ECLUSE_QUEUE_BACKEND" "memory" staticEnvVars)
-        planMirrorQueue env `shouldBe` Right (MemoryBackend (defaultMemoryQueueConfig 50000))
-
-    it "warns loudly on selecting the in-memory backend, and not on the durable SQS one" $ do
-        -- AC3: selecting memory emits a loud non-durable/best-effort boot warning;
-        -- a durable backend warrants none. The composition root logs the Just.
-        memEnv <- expectEnv (overrideEnv "ECLUSE_QUEUE_BACKEND" "memory" staticEnvVars)
-        sqsEnv <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
-        (mirrorQueuePlanWarning <$> planMirrorQueue memEnv) `shouldBe` Right (Just memoryQueueBootWarning)
-        (mirrorQueuePlanWarning <$> planMirrorQueue sqsEnv) `shouldBe` Right Nothing
+    it "warns loudly on the in-memory rollover, and not on the durable SQS backend" $ do
+        memEnv <- expectEnv (withoutQueueUrl staticEnvVars)
+        sqsEnv <- expectEnv staticEnvVars
+        (mirrorQueuePlanWarning <$> planMirrorQueue noAmbient memEnv) `shouldBe` Right (Just memoryQueueBootWarning)
+        (mirrorQueuePlanWarning <$> planMirrorQueue noAmbient sqsEnv) `shouldBe` Right Nothing
         -- The warning names the load-bearing caveats so an operator cannot miss them.
         memoryQueueBootWarning `shouldSatisfy` ("NON-DURABLE" `T.isInfixOf`)
         memoryQueueBootWarning `shouldSatisfy` ("BEST-EFFORT" `T.isInfixOf`)
 
-    it "honours the AWS-standard SQS endpoint override (AWS_ENDPOINT_URL_SQS)" $ do
-        env <-
-            expectEnv
-                ( ("AWS_REGION", "us-east-1")
-                    : ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
-                    : staticEnvVars
-                )
-        cfg <- expectSqsBackend env
+    it "forces the SQS interpretation under AWS_ENDPOINT_URL_SQS, however the URL is shaped" $ do
+        -- The emulator path: a ministack queue URL matches no public shape by
+        -- design, so the override picks the backend and AWS_REGION scopes it.
+        env <- expectEnv (overrideEnv "ECLUSE_QUEUE__URL" "http://ministack:4566/000000000000/mirror" staticEnvVars)
+        cfg <- expectSqsBackend (withRegion "us-east-1"){ambientAwsEndpointUrlSqs = Just "http://localhost:4566"} env
+        sqsQueueUrl cfg `shouldBe` "http://ministack:4566/000000000000/mirror"
+        sqsRegion cfg `shouldBe` "us-east-1"
         case sqsEndpoint cfg of
             Just ep -> do
                 endpointSecure ep `shouldBe` False
@@ -100,21 +104,45 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                 endpointPort ep `shouldBe` 4566
             Nothing -> expectationFailure "expected the endpoint override to resolve"
 
+    it "fails fast when the endpoint override is set with no AWS_REGION" $ do
+        -- An emulator or VPC endpoint does not carry a region in its host, so the
+        -- ambient region is required exactly (and only) here.
+        env <- expectEnv staticEnvVars
+        planMirrorQueue noAmbient{ambientAwsEndpointUrlSqs = Just "http://localhost:4566"} env
+            `shouldBe` Left [QueueRegionMissing]
+
+    it "treats a blank AWS_REGION under the endpoint override as missing" $ do
+        env <- expectEnv staticEnvVars
+        planMirrorQueue (withRegion "   "){ambientAwsEndpointUrlSqs = Just "http://localhost:4566"} env
+            `shouldBe` Left [QueueRegionMissing]
+
     it "uses AWS default resolution (no endpoint) when no override is set" $ do
-        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
-        cfg <- expectSqsBackend env
+        env <- expectEnv staticEnvVars
+        cfg <- expectSqsBackend noAmbient env
         sqsEndpoint cfg `shouldBe` Nothing
 
     it "fails fast on a malformed SQS endpoint override" $ do
-        env <- expectEnv (("AWS_REGION", "us-east-1") : ("AWS_ENDPOINT_URL_SQS", "not-a-url") : staticEnvVars)
-        planMirrorQueue env `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
+        env <- expectEnv staticEnvVars
+        planMirrorQueue (withRegion "us-east-1"){ambientAwsEndpointUrlSqs = Just "not-a-url"} env
+            `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
+
+    it "aggregates a missing region and a malformed override in one report" $ do
+        env <- expectEnv staticEnvVars
+        planMirrorQueue noAmbient{ambientAwsEndpointUrlSqs = Just "not-a-url"} env
+            `shouldBe` Left [QueueRegionMissing, QueueEndpointMalformed "not-a-url"]
   where
     -- Resolve the SQS config from a plan that must select the SQS backend, failing
     -- the example with the actual plan / boot errors otherwise.
-    expectSqsBackend :: AppConfig -> IO SqsConfig
-    expectSqsBackend env = case planMirrorQueue env of
+    expectSqsBackend :: AmbientAws -> AppConfig -> IO SqsConfig
+    expectSqsBackend ambient env = case planMirrorQueue ambient env of
         Right (SqsBackend cfg) -> pure cfg
         other -> fail ("expected an SQS mirror-queue plan, got: " <> show other)
+
+    noAmbient :: AmbientAws
+    noAmbient = AmbientAws Nothing Nothing Nothing
+
+    withRegion :: Text -> AmbientAws
+    withRegion r = noAmbient{ambientAwsRegion = Just r}
 
 parseEndpointUrlSpec :: Spec
 parseEndpointUrlSpec = describe "parseEndpointUrl" $ do

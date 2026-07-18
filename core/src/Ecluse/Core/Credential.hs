@@ -75,7 +75,7 @@ newtype Secret = Secret Text
 'BA.constEq' compares every byte regardless of where the inputs first diverge,
 so a near-miss token cannot be distinguished from a far-miss one by how long the
 comparison takes. This is the security property the whole type exists to make
-unmissable: the @ECLUSE_AUTH_TOKEN@ edge gate compares the client's bearer token
+unmissable: the @ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares the client's bearer token
 against the configured one through this instance, and a short-circuiting compare
 there would leak the secret's prefix length to a remote attacker.
 -}
