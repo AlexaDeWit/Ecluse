@@ -22,11 +22,26 @@ local pages = {
   ["USAGE.md"]             = "usage.html",
   ["SECURITY.md"]          = "security.html",
   ["docs/architecture.md"] = "architecture.html",
+  ["docs/architecture/registry-model.md"] = "architecture/registry-model.html",
+  ["docs/architecture/rules-engine.md"] = "architecture/rules-engine.html",
+  ["docs/architecture/web-layer.md"] = "architecture/web-layer.html",
+  ["docs/architecture/security.md"] = "architecture/security.html",
+  ["docs/architecture/access-model.md"] = "architecture/access-model.html",
+  ["docs/architecture/fault-model.md"] = "architecture/fault-model.html",
+  ["docs/architecture/observability.md"] = "architecture/observability.html",
+  ["docs/architecture/cloud-backends.md"] = "architecture/cloud-backends.html",
+  ["docs/architecture/technology-stack.md"] = "architecture/technology-stack.html",
+  ["docs/architecture/release-supply-chain.md"] = "architecture/release-supply-chain.html",
+  ["docs/architecture/configuration.md"] = "architecture/configuration.html",
 }
 
 local blob = "https://github.com/AlexaDeWit/Ecluse/blob/main/"
 
 local base = ""
+
+-- Directory prefix ("../" per level) of the page being rendered, so a page
+-- under architecture/ emits links that resolve from its own location.
+local prefix = ""
 
 -- Join a relative target onto the doc's base directory and collapse `.` and `..`
 -- segments, yielding the repo-root-relative path the pages map and the GitHub
@@ -56,7 +71,7 @@ local function rewrite(el)
   local own = target:match("^https://ecluse%-proxy%.com/(.*)$")
   if own then
     if own == "" or own:match("^#") then own = "index.html" .. own end
-    el.target = own
+    el.target = prefix .. own
     return el
   end
   -- Leave other external URLs and same-page fragments alone.
@@ -67,7 +82,7 @@ local function rewrite(el)
   local resolved = resolve(path)
   local mapped = pages[resolved]
   if mapped then
-    el.target = mapped .. anchor
+    el.target = prefix .. mapped .. anchor
   else
     el.target = blob .. resolved .. anchor
   end
@@ -81,6 +96,9 @@ return {
     Meta = function(m)
       if m["link-base"] then
         base = pandoc.utils.stringify(m["link-base"])
+      end
+      if m["prefix"] then
+        prefix = pandoc.utils.stringify(m["prefix"])
       end
     end,
   },

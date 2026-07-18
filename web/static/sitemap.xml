@@ -4,6 +4,17 @@
   <url><loc>https://ecluse-proxy.com/motivation.html</loc></url>
   <url><loc>https://ecluse-proxy.com/alternatives.html</loc></url>
   <url><loc>https://ecluse-proxy.com/architecture.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/registry-model.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/rules-engine.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/web-layer.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/security.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/access-model.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/fault-model.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/observability.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/cloud-backends.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/technology-stack.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/release-supply-chain.html</loc></url>
+  <url><loc>https://ecluse-proxy.com/architecture/configuration.html</loc></url>
   <url><loc>https://ecluse-proxy.com/usage.html</loc></url>
   <url><loc>https://ecluse-proxy.com/security.html</loc></url>
   <url><loc>https://ecluse-proxy.com/threat-model.html</loc></url>

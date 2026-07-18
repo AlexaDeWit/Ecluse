@@ -6,7 +6,7 @@
     <title>$title$ | Écluse</title>
     <meta name="description" content="$description$" />
     <link rel="canonical" href="$canonical-url$" />
-    <link rel="icon" href="favicon-32.png" sizes="32x32" />
+    <link rel="icon" href="$prefix$favicon-32.png" sizes="32x32" />
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content="Écluse" />
     <meta property="og:url" content="$canonical-url$" />
@@ -17,7 +17,7 @@
     <meta property="og:image:height" content="640" />
     <meta property="og:image:alt" content="Écluse: a canal-lock section with a barge of shipping containers waiting in the chamber." />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="$prefix$style.css" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -34,15 +34,16 @@ $endif$
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="index.html"><img src="logo.svg" alt="" height="28" /> Écluse</a>
+      <a class="brand" href="$prefix$index.html"><img src="$prefix$logo.svg" alt="" height="28" /> Écluse</a>
       <nav>
-        <a href="index.html">Home</a>
-        <a href="motivation.html">Why</a>
-        <a href="alternatives.html">Alternatives</a>
-        <a href="architecture.html">Design</a>
-        <a href="usage.html">Operating</a>
-        <a href="security.html">Security</a>
-        <a href="api/index.html">API</a>
+        <a href="$prefix$index.html">Home</a>
+        <a href="$prefix$motivation.html">Why</a>
+        <a href="$prefix$alternatives.html">Alternatives</a>
+        <a href="$prefix$architecture.html">Design</a>
+        <a href="$prefix$usage.html">Operating</a>
+        <a href="$prefix$security.html">Security</a>
+        <a href="$prefix$threat-model.html">Threat model</a>
+        <a href="$prefix$api/index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
       </nav>
     </header>
@@ -52,8 +53,8 @@ $body$
     <footer class="site-footer">
       <p>
         <a href="https://github.com/AlexaDeWit/Ecluse">Source repository</a> &middot;
-        <a href="api/index.html">API reference (Haddock)</a> &middot;
-        <a href="threat-model.html">Threat model</a> &middot;
+        <a href="$prefix$api/index.html">API reference (Haddock)</a> &middot;
+        <a href="$prefix$threat-model.html">Threat model</a> &middot;
         rendered from the repository's Markdown with <a href="https://pandoc.org">pandoc</a>.
       </p>
       <p>Écluse is free and open source &middot; pre-launch, under active development.</p>
@@ -64,7 +65,7 @@ $body$
       (the flake's `mermaidJs`, copied to _site/vendor by `make site`). No external
       runtime dependency.
     -->
-    <script src="vendor/mermaid.min.js"></script>
+    <script src="$prefix$vendor/mermaid.min.js"></script>
     <script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
   </body>
 </html>
