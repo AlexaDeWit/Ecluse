@@ -24,12 +24,12 @@ import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Katip (Environment (Environment), KatipContextT, LogEnv, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
+import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Test (SResponse (simpleBody), defaultRequest, request, runSession, setPath)
+import Network.Wai.Test (SResponse (simpleBody))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (tryAny)
@@ -40,8 +40,6 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
-import Network.HTTP.Types.Status (statusCode)
-import Network.Wai.Test qualified as WaiTest
 
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
@@ -61,13 +59,14 @@ import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
-import Ecluse.Integration.Ministack (endpointFor, withMinistack)
+import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -122,7 +121,7 @@ spec =
                                 -- The fix is too young for the quarantine and the fast
                                 -- lane can only abstain, so the packument has no
                                 -- survivors: a 403 whose audit body names both causes.
-                                denied <- getThrough app "/npm/corpus-vuln"
+                                denied <- getPath "/npm/corpus-vuln" app
                                 status denied `shouldBe` 403
                                 let deniedBody = decodeUtf8 (simpleBody denied) :: Text
                                 deniedBody `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
@@ -183,7 +182,7 @@ createBucketWithRetry awsEnv bucket attempts =
 publishViaPilot :: AmbientAws -> AppConfig -> CorpusVersion -> IO ()
 publishViaPilot ambient appCfg v = do
     zipBytes <- osvCorpusZip v
-    logEnv <- newTestLogEnv
+    logEnv <- quietLogEnv
     withStub status200 zipBytes $ \stub ->
         withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
             void $
@@ -207,7 +206,7 @@ proxyApp ruleDeps privateUrl publicUrl = do
     prepared <- prepare ruleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
     manager <- newManager defaultManagerSettings
     metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- newTestLogEnv
+    logEnv <- quietLogEnv
     heartbeat <- newWorkerHeartbeat
     queue <- newTestMemoryQueue
     admission <- testServeAdmission
@@ -250,7 +249,7 @@ before the fixed clock, so the quarantine alone always denies it and only the
 fast lane can admit it.
 -}
 withPublicUpstream :: (Text -> IO a) -> IO a
-withPublicUpstream k = testWithApplication (pure app) (k . loopbackUrl)
+withPublicUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
     app _req respond = respond (responseLBS status200 [] (encode packument))
@@ -263,7 +262,7 @@ no-survivors outcome on the policy arm (403), which is the phase-1 control this
 test pins.
 -}
 withPrivateUpstream :: (Text -> IO a) -> IO a
-withPrivateUpstream k = testWithApplication (pure app) (k . loopbackUrl)
+withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
     app _req respond =
@@ -312,15 +311,6 @@ sha512Integrity = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy artifa
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 20) 0
 
-loopbackUrl :: Int -> Text
-loopbackUrl port = "http://localhost:" <> show port
-
-getThrough :: Application -> ByteString -> IO SResponse
-getThrough app path = runSession (request (setPath defaultRequest path)) app
-
-status :: SResponse -> Int
-status = statusCode . WaiTest.simpleStatus
-
 -- Poll the same request until the packument is served (the swap landed), bounded
 -- so a broken sync fails the test rather than hanging it.
 awaitAdmitted :: Application -> ByteString -> IO SResponse
@@ -328,15 +318,12 @@ awaitAdmitted app path = go (150 :: Int)
   where
     go 0 = fail "the artifact never swapped in: the request was still denied after the patience window"
     go n = do
-        resp <- getThrough app path
+        resp <- getPath path app
         if status resp == 200
             then pure resp
             else threadDelay 100_000 >> go (n - 1)
 
-newTestLogEnv :: IO LogEnv
-newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
-
 runQuiet :: KatipContextT IO a -> IO a
 runQuiet action = do
-    logEnv <- newTestLogEnv
+    logEnv <- quietLogEnv
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action

@@ -146,10 +146,10 @@ default that does not stall a test on an empty poll.
 defaultQueueOptions :: QueueOptions
 defaultQueueOptions = QueueOptions{qoVisibilityTimeout = Seconds 30, qoWaitSeconds = 2}
 
-{- | A scribe-free 'LogEnv' for wiring an SQS 'MirrorQueue' in the integration
-suite: the backend now takes a logger for its poison-message drop line, and these
-specs do not assert on it, so a no-output environment satisfies the dependency
-without cluttering the run.
+{- | A scribe-free 'LogEnv' for the integration suite: layers that need a logger (an
+SQS backend's poison-message drop line, a booted proxy) take this where the spec does
+not assert on the log, so a no-output environment satisfies the dependency without
+cluttering the run.
 -}
 quietLogEnv :: IO LogEnv
 quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
