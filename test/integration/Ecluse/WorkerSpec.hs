@@ -4,7 +4,6 @@
 
 module Ecluse.WorkerSpec (spec) where
 
-
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status201, status409, status503)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
