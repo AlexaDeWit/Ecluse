@@ -11,6 +11,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Data.List.NonEmpty qualified as NE
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     MirrorArtifact (..),
@@ -128,7 +129,7 @@ Forcing the message exercises the error-construction path.
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
-    Left (PublishTransport detail) -> Just detail
+    Left (PublishTransport fault) -> Just (tfDetail fault)
     Left (PublishUrlUnformable _) -> Nothing
     Right _ -> Nothing
 

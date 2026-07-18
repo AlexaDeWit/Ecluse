@@ -136,9 +136,9 @@ data MirrorPublish = MirrorPublish
 {- | Marry a protocol codec to the shared transport against one mirror-target
 endpoint. The transport executes what the codec forms: it mints the bearer per
 call, runs the request over the trusted manager, folds a thrown transport failure
-into the typed channel ('classifyTransport' on the probe's read; the rendered
-'PublishTransport' arm on the write), reads the probe's body bounded, and hands
-the write's status answer to the codec's own outcome classification.
+into the typed channel ('classifyTransport' on both the probe's read and the
+write), reads the probe's body bounded, and hands the write's status answer to the
+codec's own outcome classification.
 -}
 newMirrorPublish :: MirrorTransport -> Text -> PublishCodec -> MirrorPublish
 newMirrorPublish transport targetUrl codec =
@@ -164,7 +164,8 @@ probeMetadata transport targetUrl codec name = do
 
 -- Execute the codec's publish over the transport: mint, form, PUT the whole
 -- document, and let the codec classify the status answer; a thrown transport
--- failure is folded into the retryable 'PublishTransport' value.
+-- failure is folded through the shared 'classifyTransport' into the retryable
+-- 'PublishTransport' value, exactly as the probe folds its own.
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name version artifact bytes = do
     token <- ptMintToken transport
@@ -172,8 +173,7 @@ publishArtifact transport targetUrl codec name version artifact bytes = do
         Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
         Right request ->
             try (httpLbs request (ptManager transport)) <&> \case
-                Left (err :: HttpException) ->
-                    Left (PublishTransport ("publish transport failure: " <> show err))
+                Left (err :: HttpException) -> Left (PublishTransport (classifyTransport err))
                 Right response -> pcPublishOutcome codec (statusCode (responseStatus response))
 
 -- Read a response body chunk-by-chunk against the budget, returning the whole
