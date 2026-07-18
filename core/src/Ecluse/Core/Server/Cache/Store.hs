@@ -49,8 +49,9 @@ module Ecluse.Core.Server.Cache.Store (
     -- * Resolution
     resolveSingleFlight,
 
-    -- * Read-only views
+    -- * Reads
     lookupStore,
+    lookupStoreTouching,
 
     -- * Occupancy
     CacheOccupancy (..),
@@ -166,11 +167,12 @@ A claimed slot is __always eventually filled and de-registered__ even under an a
 exception in the claim → runner window: the claim commits under a 'mask' and the run is
 handed straight to 'Ecluse.Core.InFlight.guardInFlight', which frees the slot on every exit
 and hands the orphaning error to any waiting follower (closing the single-flight orphan
-window); an async orphan re-resolves, a synchronous one re-raises (the fetch is total, so
-that arm is the invariant channel, not an outcome). A follower's own wait stays
-interruptible. The result is inserted __before__ the slot is de-registered, so a caller
-arriving the instant the fetch returns becomes a follower rather than re-leading a
-redundant fetch.
+window); an async orphan re-resolves __under @restore@__ (so the retried fetch and its
+parse stay cancellable, never masked, and the already-recorded miss is not counted again),
+a synchronous one re-raises (the fetch is total, so that arm is the invariant channel, not
+an outcome). A follower's own wait stays interruptible. The result is inserted __before__
+the slot is de-registered, so a caller arriving the instant the fetch returns becomes a
+follower rather than re-leading a redundant fetch.
 -}
 resolveSingleFlight ::
     (Hashable k, Ord k) =>
@@ -206,9 +208,16 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
                 FlightFault fault -> pure (Left fault)
                 FlightOrphaned err -> case fromException err of
                     Just (_ :: SomeAsyncException) ->
-                        -- The leader was killed (e.g. by a client disconnect). We must
-                        -- re-evaluate the single-flight decision rather than dying with it.
-                        resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch
+                        -- Leader cancelled (e.g. a client disconnect): re-resolve rather than
+                        -- die with it, under the outer @restore@. A bare recursion re-enters
+                        -- under this @mask@, so its inner @mask@ would hand back a @restore@ to
+                        -- 'MaskedInterruptible' and the whole retried fetch and its CPU-bound
+                        -- parse would run masked; @restore@ unmasks first, so the retry's own
+                        -- mask restores to unmasked and the fetch stays cancellable.
+                        -- @recordRequest@ is silenced on the retry: this caller's miss was
+                        -- counted above, so one logical miss stays one 'Metric.Miss' across any
+                        -- number of orphan retries.
+                        restore (resolveSingleFlight afterClaim (const pass) recordInsert sf key fetch)
                     -- A leader that escaped synchronously broke the fetch's total
                     -- contract: an invariant break, re-raised as-is for the outer
                     -- boundary rather than laundered into the typed channel.
@@ -318,6 +327,18 @@ serve path).
 -}
 lookupStore :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
 lookupStore sf key = fmap wValue <$> Cache.lookup (sfStore sf) key
+
+{- | Look up a key's stored value like 'lookupStore', but __bump the entry's recency__ on a
+hit: the serve path's read, so an entry read through it stays resident under the
+least-recently-used eviction rather than ageing out in insert order. It is the same
+'Cache.lookup' 'lookupStore' runs, followed by the same 'touch' a 'Hit' takes, so a read
+here and a hit through 'resolveSingleFlight' age an entry identically. Still never fetches
+and never collapses; a 'Nothing' is a miss or an expired entry. The bump is a plain 'IORef'
+write (never STM), so a read does not contend with a concurrent resolution.
+-}
+lookupStoreTouching :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
+lookupStoreTouching sf key =
+    Cache.lookup (sfStore sf) key >>= traverse (\weighted -> wValue weighted <$ touch sf weighted)
 
 -- The outcome of the one atomic resolve decision: a fresh hit (carrying the weighted entry
 -- so the caller can bump its recency), follow an in-flight fetch, or lead a new one.

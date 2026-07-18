@@ -15,9 +15,11 @@ import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
     lookupStore,
+    lookupStoreTouching,
     newSingleFlight,
     resolveSingleFlight,
  )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 -- | The typed failure the fetches in these cases report through the store's channel.
 data StoreFault = StoreFault
@@ -62,6 +64,13 @@ resolve = resolveSingleFlight (pure ()) (const pass) (const pass)
 -- | As 'resolve', threading the single-flight claim → fetch-runner handoff hook.
 resolveWith :: IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
 resolveWith afterClaim = resolveSingleFlight afterClaim (const pass) (const pass)
+
+{- | As 'resolveWith', but recording each request's hit\/miss result (newest first), so a
+case can assert how many times the request counter fired across an orphan-driven retry.
+-}
+resolveWithRequests :: IORef [Metric.CacheResult] -> IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
+resolveWithRequests seen afterClaim =
+    resolveSingleFlight afterClaim (\r -> atomicModifyIORef' seen (\rs -> (r : rs, ()))) (const pass)
 
 {- | The success-path adapter: these cases drive the store with fetches that cannot
 fail, so the wrapper lifts them into the typed channel and a 'Left' is a test bug
@@ -258,6 +267,41 @@ spec = do
                 Just (recovered, n) -> do
                     recovered `shouldBe` "raw"
                     n `shouldBe` 2 -- the cancelled fetch and the recovering re-lead, no caching of the failure
+        it "counts one miss per logical resolution even when a cancelled leader forces the follower to re-resolve" $ do
+            -- The orphan retry (a follower re-resolving after the leader was cancelled at
+            -- the claim handoff) must not double-count. The leader records its miss on
+            -- claiming, the follower records its own on coalescing, and the follower's
+            -- retry -- which re-leads the freed slot -- records nothing further. So the
+            -- request counter fires exactly twice: once for the leader, once for the
+            -- follower, never a third for the retry. Before the fix the masked recursion
+            -- re-ran the counter and a third miss appeared.
+            result <- timeout 5_000_000 $ do
+                sf <- roomyStore
+                seen <- newIORef []
+                calls <- newIORef (0 :: Int)
+                reached <- newEmptyMVar
+                release <- newEmptyMVar
+                armed <- newIORef True -- only the first (cancelled) leader parks
+                let fetch = Right <$> countingFetch calls "raw"
+                    afterClaim = do
+                        wasArmed <- atomicModifyIORef' armed (False,)
+                        when wasArmed $ do
+                            putMVar reached () -- claimed the slot; parked at the handoff
+                            takeMVar release -- block interruptibly so the cancel lands here
+                leader <- async (resolveWithRequests seen afterClaim sf "wedge" fetch)
+                takeMVar reached
+                follower <- async (try (resolveWithRequests seen (pure ()) sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
+                threadDelay 30000 -- give the follower time to register on the marker
+                cancel leader -- cancel in the handoff window; the follower must re-resolve
+                recovered <- wait follower
+                recorded <- readIORef seen
+                pure (recovered, recorded)
+            case result of
+                Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
+                Just (Left _, _) -> expectationFailure "follower failed instead of recovering"
+                Just (Right recovered, recorded) -> do
+                    recovered `shouldBe` Right "raw" -- the follower recovered by re-leading
+                    recorded `shouldBe` [Metric.Miss, Metric.Miss] -- leader + follower, never a third for the retry
     describe "the entry-count bound" $ do
         it "never exceeds the configured maximum entry count" $ do
             seen <- newIORef Nothing
@@ -301,6 +345,38 @@ spec = do
                 resolveOk sf ("cold-" <> show i) (pure "raw")
             lookupStore sf "hot" `shouldReturn` Just "raw"
             lookupStore sf "cold-1" `shouldReturn` Nothing
+
+    describe "read recency -- the touching vs read-only views" $ do
+        it "a touching read bumps recency, so eviction sheds an untouched entry, not the touched one" $ do
+            -- A store holding exactly two flat entries. Insert "old" then "recent";
+            -- read "old" through the *touching* view (bumping its recency); then insert
+            -- "new", which must evict one entry. Under least-recently-used eviction the
+            -- untouched "recent" goes and the touched "old" stays -- the inverse of the
+            -- insert-order (FIFO) victim, which would be "old". This pins the read-side
+            -- recency bump the hybrid serve path relies on.
+            sf <- newStore 60 2 (100 * flatWeight)
+            _ <- resolveOk sf "old" (pure "raw")
+            _ <- resolveOk sf "recent" (pure "raw")
+            lookupStoreTouching sf "old" `shouldReturn` Just "raw"
+            _ <- resolveOk sf "new" (pure "raw")
+            lookupStore sf "old" `shouldReturn` Just "raw"
+            lookupStore sf "recent" `shouldReturn` Nothing
+            lookupStore sf "new" `shouldReturn` Just "raw"
+
+        it "a read-only lookup leaves recency unchanged, so the insert-order-oldest entry still evicts" $ do
+            -- The inspection view must not perturb recency: reading "old" through the
+            -- read-only 'lookupStore' does not save it, so the insert-order-oldest entry
+            -- is still the eviction victim. This is the contract the eviction cases rely
+            -- on to inspect a store without changing what they measure, and the exact
+            -- inverse of the touching case above.
+            sf <- newStore 60 2 (100 * flatWeight)
+            _ <- resolveOk sf "old" (pure "raw")
+            _ <- resolveOk sf "recent" (pure "raw")
+            lookupStore sf "old" `shouldReturn` Just "raw"
+            _ <- resolveOk sf "new" (pure "raw")
+            lookupStore sf "old" `shouldReturn` Nothing
+            lookupStore sf "recent" `shouldReturn` Just "raw"
+            lookupStore sf "new" `shouldReturn` Just "raw"
 
     describe "the oversized pass-through" $ do
         it "serves a value larger than the whole byte budget without retaining it" $ do

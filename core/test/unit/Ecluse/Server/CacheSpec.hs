@@ -367,3 +367,33 @@ spec = do
                 pass
             total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
             total `shouldSatisfy` (<= fullBytes + versionBytes + assembledBytes)
+
+    describe "cachedVersion -- read recency" $
+        it "a cachedVersion read bumps the version entry's recency, so a re-read entry survives eviction (LRU, not FIFO)" $ do
+            -- The single-version store's only steady-state read is cachedVersion: a hit
+            -- there short-circuits the hybrid path before resolveVersion's own recency
+            -- bump, so this read must bump recency or a warm version entry ages out in
+            -- insert order. Hold two version entries; re-read the first through
+            -- cachedVersion (bumping it); insert a third, forcing one eviction. Under
+            -- least-recently-used the untouched second entry goes and the re-read first
+            -- stays -- the inverse of the insert-order (FIFO) victim, which would be the
+            -- first.
+            c <-
+                newMetadataCache
+                    CacheConfig
+                        { cacheTtl = 60
+                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
+                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        }
+            let name = pkg "recency"
+                v n = mkVersion Npm (show (n :: Int) <> ".0.0")
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right Nothing))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right Nothing))
+            -- Re-read v1 through the serve-path accessor: bumps its recency, so v2 is coldest.
+            _ <- Cache.cachedVersion c publicSource name (v 1)
+            -- Insert v3, evicting the least-recently-used entry.
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right Nothing))
+            -- v1 (re-read) survived; v2 (untouched, inserted after v1) was evicted.
+            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just Nothing
+            Cache.cachedVersion c publicSource name (v 2) `shouldReturn` Nothing
