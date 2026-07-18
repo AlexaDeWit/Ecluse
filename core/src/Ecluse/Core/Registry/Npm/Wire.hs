@@ -14,8 +14,8 @@ two apart is what keeps the lenient\/faithful handle clean.
 
 The shapes here are reverse-engineered from live captures of
 @registry.npmjs.org@; the authoritative reference (with real bodies) is
-@docs\/research\/reverse-engineering\/npm.md@ (§4 full packument, §5 abbreviated,
-§7 @dist@, §11 type model, §3 errors).
+@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §11 type
+model, §3 errors).
 
 == Lenient on input
 
@@ -52,10 +52,8 @@ the documented reality:
 The fields the rules engine and the serving path actually need are captured
 precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
 notice, the whole 'vmScripts' map (so the full form's install-script presence
-can be /derived/ -- the full manifest has no @hasInstallScript@ key), the
-'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@), and the full
-packument's 'pkmtTime' map (the source of truth for publish age, which the
-abbreviated form drops).
+can be /derived/ -- the full manifest has no @hasInstallScript@ key), and the
+'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@).
 
 Only the decode path (@FromJSON@) is modelled here.
 -}
@@ -73,10 +71,6 @@ module Ecluse.Core.Registry.Npm.Wire (
     -- * Per-version manifest
     VersionManifest (..),
 
-    -- * Packuments
-    Packument (..),
-    AbbreviatedPackument (..),
-
     -- * Errors
     ErrorResponse (..),
     ErrorBody (..),
@@ -93,8 +87,6 @@ import Data.Aeson (
  )
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Parser, parseMaybe)
-import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime)
 
 {- | A person associated with a package -- an author, maintainer, contributor, or
 the per-version publisher (@_npmUser@).
@@ -292,8 +284,8 @@ lenientSignatures o = do
 {- | A single version's manifest -- the per-version object that is essentially
 the package's @package.json@ at publish time plus registry-injected fields. It
 appears three ways on the wire and this one type decodes all of them: embedded in
-a full 'Packument' (@versions[v]@), embedded in an 'AbbreviatedPackument' (a
-trimmed subset of the same shape), and standalone (@GET \/{pkg}\/{version}@).
+a full packument's @versions[v]@ object, embedded in an abbreviated packument's
+trimmed subset of the same shape, and standalone (@GET \/{pkg}\/{version}@).
 
 Only the fields Écluse's rules and serving need are modelled; everything else is
 ignored (see the module header). The two rule-decisive optionals deserve note:
@@ -306,8 +298,8 @@ ignored (see the module header). The two rule-decisive optionals deserve note:
   (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
   is a domain-projection concern, not this layer's.
 
-The publish timestamp is __not__ here -- it lives in the packument's
-'pkmtTime' map, not the manifest (see §8 of the protocol reference).
+The publish timestamp is __not__ here -- it lives in the packument's @time@ map,
+not the manifest (see §8 of the protocol reference).
 -}
 data VersionManifest = VersionManifest
     { vmName :: Text
@@ -364,113 +356,6 @@ deprecatedNotice = \case
     Just (String message) -> Just message
     Just (Bool True) -> Just ""
     _ -> Nothing
-
-{- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
-version key to 'Value', then keep only the entries that parse as a 'VersionManifest',
-dropping any that do not. A version whose manifest is missing or malformed in a
-required field (no @dist@\/@tarball@, an unusable @name@\/@version@) is __dropped__
-rather than failing the whole packument, so one poisoned version cannot deny the
-others. An absent @versions@ is the empty map; a @versions@ that is not an object at
-all still fails the decode (the document is not a usable packument). -}
-lenientVersionMap :: Object -> Parser (Map Text VersionManifest)
-lenientVersionMap o = do
-    raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
-    pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not decode
-
-{- | The __full__ packument: @GET \/{pkg}@ with @Accept: application\/json@ (or
-no @Accept@). One document describing the package and __every__ published
-version.
-
-The field that earns the full form its place in the pipeline is 'pkmtTime': the
-map of publish timestamps (@created@, @modified@, and one per version), the
-source of truth for publish age that age-based rules need. The abbreviated form
-(§5) drops it, keeping only a top-level @modified@. Package-level
-@description@\/@license@\/@author@ are hoisted from the @latest@ version for
-convenience; the authoritative copy is the per-version one in 'pkmtVersions'.
-
-@_attachments@ is intentionally not modelled -- it is populated only on the
-publish document, not on reads.
--}
-data Packument = Packument
-    { pkmtName :: Text
-    -- ^ The package name (may be @"\@scope\/name"@).
-    , pkmtDistTags :: Map Text Text
-    -- ^ The @dist-tags@ map (tag to version); __always__ includes @"latest"@.
-    , pkmtVersions :: Map Text VersionManifest
-    {- ^ Every published version that decodes, keyed by its exact version string. A
-    version whose manifest is malformed in a required field is __dropped__ (see
-    'lenientVersionMap'), so one poisoned version never denies the rest.
-    -}
-    , pkmtTime :: Map Text UTCTime
-    {- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
-    version key. The source of truth for publish age.
-    -}
-    , pkmtMaintainers :: [Person]
-    -- ^ Current package maintainers; empty when absent.
-    , pkmtDescription :: Maybe Text
-    -- ^ Package description (hoisted from @latest@).
-    , pkmtHomepage :: Maybe Text
-    -- ^ Homepage URL, if given.
-    , pkmtRepository :: Maybe Repository
-    -- ^ SCM location, if given (string or object; see 'Repository').
-    , pkmtBugs :: Maybe Bugs
-    -- ^ Issue tracker, if given (string or object; see 'Bugs').
-    , pkmtLicense :: Maybe License
-    -- ^ Package-level license, if given (string or object; see 'License').
-    , pkmtKeywords :: [Text]
-    -- ^ Search keywords; empty when absent.
-    }
-    deriving stock (Eq, Show)
-
-instance FromJSON Packument where
-    parseJSON = withObject "Packument" $ \o ->
-        Packument
-            <$> o .: "name"
-            <*> o .:? "dist-tags" .!= mempty
-            <*> lenientVersionMap o
-            <*> o .:? "time" .!= mempty
-            <*> o .:? "maintainers" .!= []
-            <*> o .:? "description"
-            <*> o .:? "homepage"
-            <*> o .:? "repository"
-            <*> o .:? "bugs"
-            <*> o .:? "license"
-            <*> o .:? "keywords" .!= []
-
-{- | The __abbreviated__ packument: @GET \/{pkg}@ with
-@Accept: application\/vnd.npm.install-v1+json@. The install-optimised view and
-the one the proxy treats as primary.
-
-It carries exactly four top-level fields. Notably the full @time@ map is dropped
-(only a top-level 'apkmtModified' remains), so publish-age rules need the full
-'Packument'. Its 'apkmtVersions' manifests are the trimmed subset of
-'VersionManifest' -- the same type, with the install-only fields populated
-(including the abbreviated-only 'vmHasInstallScript').
--}
-data AbbreviatedPackument = AbbreviatedPackument
-    { apkmtName :: Text
-    -- ^ The package name.
-    , apkmtModified :: UTCTime
-    {- ^ Equivalent to the full form's @time.modified@; the only timestamp the
-    abbreviated form carries.
-    -}
-    , apkmtDistTags :: Map Text Text
-    -- ^ The @dist-tags@ map (tag to version), as in the full form.
-    , apkmtVersions :: Map Text VersionManifest
-    {- ^ Every published version that decodes (abbreviated subset of fields), keyed
-    by exact version string. As in the full form, a version whose manifest is
-    malformed in a required field is __dropped__ (see 'lenientVersionMap').
-    -}
-    }
-    deriving stock (Eq, Show)
-
-instance FromJSON AbbreviatedPackument where
-    parseJSON = withObject "AbbreviatedPackument" $ \o ->
-        AbbreviatedPackument
-            <$> o .: "name"
-            <*> o .: "modified"
-            <*> o .:? "dist-tags" .!= mempty
-            <*> lenientVersionMap o
 
 {- | An npm error body.
 

@@ -45,6 +45,7 @@ module Ecluse.Test.RegistryCapture (
 import Control.Exception (try)
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
+import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (
@@ -58,7 +59,9 @@ import Network.HTTP.Client (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
-import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
+import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Npm.Project (parseVersionList)
+import Ecluse.Core.Version (unVersion)
 import Ecluse.Test.Registry.Pypi.Wire qualified as Pypi
 import Ecluse.Test.Registry.Rubygems.Wire qualified as Rubygems
 
@@ -153,15 +156,17 @@ fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
 {- | Extract a registry response's published version strings through each
-ecosystem's __canonical__ wire decoder -- the npm packument
-('Ecluse.Core.Registry.Npm.Wire.Packument'), the PyPI project JSON
-('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
+ecosystem's __canonical__ wire decoder -- npm through the production version-list
+extractor ('Ecluse.Core.Registry.Npm.Project.parseVersionList'), the PyPI project
+JSON ('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
 ('Ecluse.Test.Registry.Rubygems.Wire.VersionListing') -- rather than re-parsing the
-JSON here. 'Nothing' if the body does not decode for that ecosystem.
+JSON here. Routing npm through the production decoder keeps the version-oracle
+differential honest: it compares what the serve path actually decodes, not a parallel
+decoder. 'Nothing' if the body does not decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
-    Npm -> Map.keys . pkmtVersions <$> decode' body
+    Npm -> rightToMaybe (map unVersion <$> parseVersionList (RegistryResponse (BSL.toStrict body)))
     PyPI -> Pypi.projectVersions <$> decode' body
     RubyGems -> Rubygems.listingVersions <$> decode' body
   where

@@ -20,8 +20,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific, scientific)
-import Data.Time (UTCTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Hedgehog (PropertyT, annotateShow, forAll)
 import Hedgehog qualified as H
@@ -34,21 +32,18 @@ import Ecluse.Core.Registry.Npm.Wire
 
 {- | Decoding tests for the npm wire types. Every fixture under
 @core\/test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
-in @docs\/research\/reverse-engineering\/npm.md@ (§4 full packument, §5
-abbreviated, §6 manifest, §3 errors). The suite is pure and offline -- it never
-touches the network; protocol drift is surfaced separately by the non-gating
-smoke suite.
+in @docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §3 errors).
+The suite is pure and offline -- it never touches the network; protocol drift is
+surfaced separately by the non-gating smoke suite.
 
 The cases pin down the two things the decoders promise: __faithful__ capture of
 the rule-decisive fields (@hasInstallScript@, @deprecated@, the @dist@ integrity
-triple, the @time@ map, the @scripts@ map) and __lenient__ input handling
-(string-or-object @license@\/@person@\/@bugs@\/@repository@, the bare-string 404,
-and ignored unknown keys).
+triple, the @scripts@ map) and __lenient__ input handling (string-or-object
+@license@\/@person@\/@bugs@\/@repository@, the bare-string 404, and ignored unknown
+keys).
 -}
 spec :: Spec
 spec = do
-    abbreviatedPackumentSpec
-    fullPackumentSpec
     versionManifestSpec
     distSpec
     advisoryFieldLeniencySpec
@@ -56,123 +51,6 @@ spec = do
     errorResponseSpec
     jsonListSpec
     totalitySpec
-
-abbreviatedPackumentSpec :: Spec
-abbreviatedPackumentSpec = describe "AbbreviatedPackument" $ do
-    it "decodes the is-odd abbreviated packument" $ do
-        pk <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
-        apkmtName pk `shouldBe` "is-odd"
-        Map.lookup "latest" (apkmtDistTags pk) `shouldBe` Just "3.0.1"
-        Map.keys (apkmtVersions pk) `shouldBe` ["3.0.1"]
-
-    it "captures the abbreviated-only hasInstallScript flag (core-js)" $ do
-        pk <- decodeFixture @AbbreviatedPackument "core-js.abbreviated.json"
-        vmHasInstallScript <$> Map.lookup "3.49.0" (apkmtVersions pk)
-            `shouldBe` Just (Just True)
-
-    it "leaves hasInstallScript absent when not declared (is-odd)" $ do
-        pk <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
-        vmHasInstallScript <$> Map.lookup "3.0.1" (apkmtVersions pk)
-            `shouldBe` Just Nothing
-
-    it "decodes a scoped package name verbatim (@babel/code-frame)" $ do
-        pk <- decodeFixture @AbbreviatedPackument "babel-code-frame.abbreviated.json"
-        apkmtName pk `shouldBe` "@babel/code-frame"
-        vmName <$> Map.lookup "7.0.0" (apkmtVersions pk)
-            `shouldBe` Just "@babel/code-frame"
-
-    it "parses the top-level modified timestamp" $ do
-        pk <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
-        expected <- readUTC "2026-04-14T14:26:11.557Z"
-        apkmtModified pk `shouldBe` expected
-
-    it "decodes the same abbreviated-packument bytes to equal whole records" $ do
-        -- Whole-record determinism check, exercising the derived Eq over the
-        -- entire AbbreviatedPackument rather than a single selector.
-        a <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
-        b <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
-        a `shouldBe` b
-
-    it "drops a version broken in a required field, keeping the healthy one" $ do
-        -- The abbreviated form degrades element-wise too: 2.0.0 carries no dist
-        -- (a required field), so it is dropped while 1.0.0 still decodes.
-        pk <-
-            decodeOrFail @AbbreviatedPackument
-                "{\"name\":\"mix\",\"modified\":\"2026-01-01T00:00:00.000Z\"\
-                \,\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
-                \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix-1.0.0.tgz\"}},\
-                \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\"}}}"
-        Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0"]
-
-fullPackumentSpec :: Spec
-fullPackumentSpec = describe "Packument (full)" $ do
-    it "decodes the is-odd full packument" $ do
-        pk <- decodeFixture @Packument "is-odd.full.json"
-        pkmtName pk `shouldBe` "is-odd"
-        Map.lookup "latest" (pkmtDistTags pk) `shouldBe` Just "3.0.1"
-        Map.keys (pkmtVersions pk) `shouldBe` ["3.0.1"]
-
-    it "captures the time map including per-version publish timestamps" $ do
-        pk <- decodeFixture @Packument "is-odd.full.json"
-        -- The per-version timestamp is the source of truth for publish age.
-        published <- readUTC "2018-05-31T20:04:53.306Z"
-        created <- readUTC "2015-02-24T05:53:13.392Z"
-        Map.lookup "3.0.1" (pkmtTime pk) `shouldBe` Just published
-        Map.lookup "created" (pkmtTime pk) `shouldBe` Just created
-
-    it "ignores unknown top-level and manifest keys" $ do
-        -- The fixture carries readme/readmeFilename/_rev at the top level and a
-        -- `verb` tool-config block plus `gitHead` inside the manifest. A lenient
-        -- decoder must not choke on any of them.
-        pk <- decodeFixture @Packument "is-odd.full.json"
-        pkmtName pk `shouldBe` "is-odd"
-
-    it "captures the scripts map from an embedded full manifest" $ do
-        pk <- decodeFixture @Packument "is-odd.full.json"
-        vmScripts <$> Map.lookup "3.0.1" (pkmtVersions pk)
-            `shouldBe` Just (Map.singleton "test" "mocha")
-
-    it "reads a string license at the package level" $ do
-        pk <- decodeFixture @Packument "is-odd.full.json"
-        pkmtLicense pk `shouldBe` Just (LicenseSpdx "MIT")
-
-    it "hoists the package-level description, homepage, repository, bugs, and keywords" $ do
-        -- The full form carries these convenience fields lifted from `latest`;
-        -- repository and bugs arrive as objects here (the lenient object form).
-        pk <- decodeFixture @Packument "request.full.json"
-        pkmtDescription pk `shouldBe` Just "Simplified HTTP request client."
-        pkmtHomepage pk `shouldBe` Just "https://github.com/request/request#readme"
-        pkmtRepository pk
-            `shouldBe` Just (Repository (Just "git") "git+https://github.com/request/request.git")
-        pkmtBugs pk
-            `shouldBe` Just (Bugs (Just "https://github.com/request/request/issues") Nothing)
-        pkmtKeywords pk `shouldBe` ["http", "simple", "util", "utility"]
-
-    it "reads package-level maintainers, mixing object and string person forms" $ do
-        pk <- decodeFixture @Packument "request.full.json"
-        pkmtMaintainers pk
-            `shouldBe` [ Person "mikeal" (Just "mikeal.rogers@gmail.com") Nothing
-                       , Person "simov <simeonvelichkov@gmail.com>" Nothing Nothing
-                       ]
-
-    it "decodes the same full-packument bytes to equal whole records" $ do
-        -- Whole-record determinism check, exercising the derived Eq over the
-        -- entire Packument (its nested versions, time map, and scalars).
-        a <- decodeFixture @Packument "is-odd.full.json"
-        b <- decodeFixture @Packument "is-odd.full.json"
-        a `shouldBe` b
-
-    it "drops a version broken in a required field, keeping the healthy one" $ do
-        -- A version with a non-object dist and another that is a bare scalar are
-        -- each dropped element-wise, so the healthy 1.0.0 still decodes: one
-        -- poisoned version never denies the whole packument.
-        pk <-
-            decodeOrFail @Packument
-                "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
-                \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix-1.0.0.tgz\"}},\
-                \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5},\
-                \\"3.0.0\":42}}"
-        Map.keys (pkmtVersions pk) `shouldBe` ["1.0.0"]
 
 versionManifestSpec :: Spec
 versionManifestSpec = describe "VersionManifest" $ do
@@ -262,15 +140,15 @@ distSpec = describe "Dist" $ do
                 }
             )
 
-{- | A regression guard for the whole-packument denial defect: the __advisory__
+{- | A regression guard for the advisory-field denial defect: the __advisory__
 @dist@ sub-fields (@unpackedSize@, @fileCount@, @signatures@) decide no rule and
-no serve, so a single hostile value in one version must degrade that field alone,
-never failing the decode of the entire packument. The load-bearing integrity
-fields (@tarball@, @integrity@) stay strict and intact, and healthy sibling
-versions still decode in full.
+no serve, so a single hostile value in one must degrade that field alone, never
+failing the 'Dist' decode. The load-bearing integrity fields (@tarball@,
+@integrity@) stay strict and intact. Whole-packument survival across such a version
+is the projection layer's concern, pinned on the live decoder by @ProjectSpec@.
 -}
 advisoryFieldLeniencySpec :: Spec
-advisoryFieldLeniencySpec = describe "advisory dist-field leniency (whole-packument survival)" $ do
+advisoryFieldLeniencySpec = describe "advisory dist-field leniency" $ do
     describe "an undecodable advisory number degrades to Nothing rather than failing the Dist" $ do
         it "maps an out-of-range unpackedSize (1e400) to Nothing" $
             decodesTo @Dist
@@ -313,53 +191,6 @@ advisoryFieldLeniencySpec = describe "advisory dist-field leniency (whole-packum
                 (bareDist "https://e.test/x.tgz")
                     { distSignatures = [Signature "a" "k1", Signature "b" "k2"]
                     }
-
-    -- The headline regression: a single version stacked with every junk advisory
-    -- vector once denied the WHOLE package. The poisoned "1.0.0" carries an
-    -- out-of-range unpackedSize, a fractional fileCount, and a signature missing
-    -- its keyid; "2.0.0" carries a non-array signatures value; "3.0.0" is a
-    -- healthy sibling. All three must survive, each with its load-bearing
-    -- tarball/integrity intact and only the advisory fields degraded.
-    it "decodes the whole packument despite a version carrying every junk advisory vector" $ do
-        pk <-
-            decodeOrFail @AbbreviatedPackument
-                "{\"name\":\"poisoned\",\"modified\":\"2026-01-01T00:00:00.000Z\"\
-                \,\"dist-tags\":{\"latest\":\"3.0.0\"},\"versions\":{\
-                \\"1.0.0\":{\"name\":\"poisoned\",\"version\":\"1.0.0\",\"dist\":{\
-                \\"tarball\":\"https://e.test/poisoned-1.0.0.tgz\"\
-                \,\"integrity\":\"sha512-AAAA\"\
-                \,\"unpackedSize\":1e400,\"fileCount\":1.5\
-                \,\"signatures\":[{\"sig\":\"x\"}]}},\
-                \\"2.0.0\":{\"name\":\"poisoned\",\"version\":\"2.0.0\",\"dist\":{\
-                \\"tarball\":\"https://e.test/poisoned-2.0.0.tgz\",\"signatures\":5}},\
-                \\"3.0.0\":{\"name\":\"poisoned\",\"version\":\"3.0.0\",\"dist\":{\
-                \\"tarball\":\"https://e.test/poisoned-3.0.0.tgz\"\
-                \,\"integrity\":\"sha512-BBBB\",\"unpackedSize\":4096\
-                \,\"signatures\":[{\"sig\":\"s\",\"keyid\":\"k\"}]}}}}"
-
-        -- Every version is present -- not just the healthy one.
-        Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
-
-        -- The poisoned 1.0.0 keeps its load-bearing integrity fields; its advisory
-        -- fields degrade to absent/empty rather than denying the version.
-        let d1 = vmDist <$> Map.lookup "1.0.0" (apkmtVersions pk)
-        (distTarball <$> d1) `shouldBe` Just "https://e.test/poisoned-1.0.0.tgz"
-        (distIntegrity <$> d1) `shouldBe` Just (Just "sha512-AAAA")
-        (distUnpackedSize <$> d1) `shouldBe` Just Nothing
-        (distFileCount <$> d1) `shouldBe` Just Nothing
-        (distSignatures <$> d1) `shouldBe` Just []
-
-        -- 2.0.0's non-array signatures collapses to empty; its tarball is intact.
-        let d2 = vmDist <$> Map.lookup "2.0.0" (apkmtVersions pk)
-        (distTarball <$> d2) `shouldBe` Just "https://e.test/poisoned-2.0.0.tgz"
-        (distSignatures <$> d2) `shouldBe` Just []
-
-        -- The healthy sibling decodes in full: both its advisory and integrity fields.
-        let d3 = vmDist <$> Map.lookup "3.0.0" (apkmtVersions pk)
-        (distTarball <$> d3) `shouldBe` Just "https://e.test/poisoned-3.0.0.tgz"
-        (distIntegrity <$> d3) `shouldBe` Just (Just "sha512-BBBB")
-        (distUnpackedSize <$> d3) `shouldBe` Just (Just 4096)
-        (distSignatures <$> d3) `shouldBe` Just [Signature "s" "k"]
 
 lenientScalarSpec :: Spec
 lenientScalarSpec = describe "lenient string-or-object scalars" $ do
@@ -502,24 +333,6 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
         map vmName vms `shouldBe` ["a", "b"]
         map vmVersion vms `shouldBe` ["1.0.0", "2.0.0"]
 
-    it "decodes a list of full packuments" $ do
-        pks <-
-            decodeOrFail @[Packument]
-                "[{\"name\":\"a\",\"dist-tags\":{\"latest\":\"1.0.0\"}}\
-                \,{\"name\":\"b\",\"dist-tags\":{\"latest\":\"2.0.0\"}}]"
-        map pkmtName pks `shouldBe` ["a", "b"]
-        map (Map.lookup "latest" . pkmtDistTags) pks `shouldBe` [Just "1.0.0", Just "2.0.0"]
-
-    it "decodes a list of abbreviated packuments" $ do
-        pks <-
-            decodeOrFail @[AbbreviatedPackument]
-                "[{\"name\":\"a\",\"modified\":\"2020-01-01T00:00:00.000Z\"}\
-                \,{\"name\":\"b\",\"modified\":\"2021-02-03T04:05:06.000Z\"}]"
-        map apkmtName pks `shouldBe` ["a", "b"]
-        expectedA <- readUTC "2020-01-01T00:00:00.000Z"
-        expectedB <- readUTC "2021-02-03T04:05:06.000Z"
-        map apkmtModified pks `shouldBe` [expectedA, expectedB]
-
     it "decodes a list of error responses, mixing string and object forms" $ do
         errs <-
             decodeOrFail @[ErrorResponse]
@@ -554,8 +367,6 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
         it "Signature" $ hedgehog (valueDecodeIsTotal @Signature)
         it "Dist" $ hedgehog (valueDecodeIsTotal @Dist)
         it "VersionManifest" $ hedgehog (valueDecodeIsTotal @VersionManifest)
-        it "Packument" $ hedgehog (valueDecodeIsTotal @Packument)
-        it "AbbreviatedPackument" $ hedgehog (valueDecodeIsTotal @AbbreviatedPackument)
         it "ErrorResponse" $ hedgehog (valueDecodeIsTotal @ErrorResponse)
 
     -- The bytes-level entry ('eitherDecodeStrict') must be total over arbitrary
@@ -564,8 +375,6 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
         it "Person" $ hedgehog (bytesDecodeIsTotal @Person)
         it "Dist" $ hedgehog (bytesDecodeIsTotal @Dist)
         it "VersionManifest" $ hedgehog (bytesDecodeIsTotal @VersionManifest)
-        it "Packument" $ hedgehog (bytesDecodeIsTotal @Packument)
-        it "AbbreviatedPackument" $ hedgehog (bytesDecodeIsTotal @AbbreviatedPackument)
         it "ErrorResponse" $ hedgehog (bytesDecodeIsTotal @ErrorResponse)
 
     -- For the permissive string-or-object scalars the generator must reach BOTH
@@ -761,10 +570,3 @@ decodeOrFail :: forall a. (FromJSON a) => LByteString -> IO a
 decodeOrFail json = case eitherDecode json of
     Right a -> pure a
     Left e -> fail ("expected a successful decode, got: " <> e)
-
-{- | Parse an ISO-8601 timestamp for an expectation. Runs in the example\'s own
-'MonadFail' (here @IO@), so an unparseable literal fails the test rather than
-crashing -- keeping the suite total (no partial @error@; see STYLE.md §10).
--}
-readUTC :: (MonadFail m) => Text -> m UTCTime
-readUTC = iso8601ParseM . toString

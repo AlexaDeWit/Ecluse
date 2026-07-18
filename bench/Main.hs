@@ -16,7 +16,7 @@ path fails the run (a non-zero exit) -- the one red state this harness recognise
 -}
 module Main (main) where
 
-import Data.Aeson (Value (Object, String), eitherDecodeStrict)
+import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -33,8 +33,9 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (infoVersions)
+import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
-import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
+import Ecluse.Core.Registry.Npm.Project (parseVersionList)
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
@@ -84,9 +85,9 @@ generatorTests =
         [ testCase "yields the requested version count" $
             length (versionKeysOf (syntheticPackumentValue sampleCount)) @?= sampleCount
         , testCase "decodes with every version preserved" $
-            case eitherDecodeStrict (syntheticPackumentBytes sampleCount) :: Either String Packument of
-                Left err -> assertFailure ("synthetic packument did not decode: " <> err)
-                Right packument -> Map.size (pkmtVersions packument) @?= sampleCount
+            case parseVersionList (RegistryResponse (syntheticPackumentBytes sampleCount)) of
+                Left err -> assertFailure ("synthetic packument did not decode: " <> show err)
+                Right versions -> length versions @?= sampleCount
         , testCase "projects with every version preserved" $
             Map.size (infoVersions (projectInfo benchPackageName (syntheticPackumentValue sampleCount)))
                 @?= sampleCount

@@ -38,9 +38,6 @@ import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated, Full),
     noValidators,
  )
-import Ecluse.Core.Registry.Npm.Wire (
-    AbbreviatedPackument (apkmtDistTags, apkmtName, apkmtVersions),
- )
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 
@@ -53,8 +50,9 @@ failure is a prompt to investigate -- protocol drift, or just flakiness -- not a
 automatic blocker.
 
 Two cases run against the public @registry.npmjs.org@. The first fetches a real
-__abbreviated__ packument and decodes it through "Ecluse.Core.Registry.Npm.Wire"
-(shelling out to @curl@), pinning the lenient decoder to reality. The second
+__abbreviated__ packument and projects it through the live decoder
+("Ecluse.Core.Registry.Npm.Project", shelling out to @curl@), pinning the decoder
+the serve path actually runs to reality. The second
 drives the full data plane -- 'fetchMetadataFormBounded' over real @http-client@
 -- and projects the response to the domain
 'PackageInfo', so a protocol or projection drift surfaces end-to-end. Both
@@ -78,15 +76,21 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                 pendingWith
                     "npm registry unreachable (offline or curl unavailable); smoke test skipped"
             ExitSuccess ->
-                case eitherDecodeStrict (encodeUtf8 out) of
+                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
                     Left err ->
                         expectationFailure ("abbreviated packument failed to decode: " <> err)
-                    Right pk -> do
-                        -- The model still matches reality: the four top-level
-                        -- fields decode, and dist-tags always carries `latest`.
-                        apkmtName pk `shouldBe` "is-odd"
-                        Map.member "latest" (apkmtDistTags pk) `shouldBe` True
-                        Map.null (apkmtVersions pk) `shouldBe` False
+                    Right value ->
+                        case parsePackageInfoFromValue (mkPackageName Npm Nothing "is-odd") value of
+                            Left err ->
+                                expectationFailure ("abbreviated packument failed to project: " <> show err)
+                            Right (NameMismatch reported) ->
+                                expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
+                            Right (Projected info) -> do
+                                -- The live decoder still matches reality: the packument
+                                -- projects, and dist-tags always carries `latest`.
+                                renderPackageName (infoName info) `shouldBe` "is-odd"
+                                Map.member "latest" (infoDistTags info) `shouldBe` True
+                                Map.null (infoVersions info) `shouldBe` False
 
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
         manager <- newManager tlsManagerSettings

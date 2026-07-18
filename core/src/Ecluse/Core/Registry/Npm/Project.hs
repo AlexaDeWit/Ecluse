@@ -147,9 +147,9 @@ import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
 {- The packument as this projection needs to read it: the wire fields plus the
 per-version @_npmUser@ that "Ecluse.Core.Registry.Npm.Wire" intentionally leaves off
-the manifest. Decoding the version objects here (rather than reusing the wire
-'Wire.Packument') is what lets the publisher survive, since the wire manifest has
-already discarded it.
+the manifest. Decoding the version objects here (rather than through the wire
+'VersionManifest' alone) is what lets the publisher survive, since the wire manifest
+has already discarded it.
 -}
 data WirePackument = WirePackument
     { wpName :: Text
