@@ -78,7 +78,7 @@ conditional-GET handling __relays__ rather than computing an own ETag (see
 the merged-packument own-ETag path): the client's @If-None-Match@\/@If-Modified-Since@
 are forwarded onto the upstream artifact request on __both__ legs ('forwardValidators'),
 and an upstream @304 Not Modified@ is relayed straight back to the client as a bodiless
-@304@ ('isNotModified' via the relay's accept predicate) rather than re-downloading the
+@304@ ('Ecluse.Core.Server.Conditional.isNotModified' via the relay's accept predicate) rather than re-downloading the
 tarball -- the cheap freshness check on the hot artifact path.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
@@ -87,25 +87,18 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     -- * The tarball handler
     serveTarball,
     headTarball,
-
-    -- * The public relay verdict (exported for its spec)
-    RelayVerdict (..),
-    relayVerdict,
 ) where
 
-import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus)
 import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
-import Data.ByteString qualified as BS
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (
     Artifact (artFilename, artUrl),
     PackageDetails,
     PackageName,
-    renderPackageName,
  )
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -136,10 +129,9 @@ import Ecluse.Core.Security (
     thgPublicHostPort,
  )
 import Ecluse.Core.Server.Admission (withServeAdmission)
-import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 import UnliftIO (withRunInIO)
 
-import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
+import Ecluse.Core.Server.Conditional (forwardValidators)
 import Ecluse.Core.Server.Context (
     Handler,
     MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
@@ -160,6 +152,17 @@ import Ecluse.Core.Server.Pipeline.Internal (
  )
 import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (
+    ArtifactServe (ServeFull, ServeHead),
+    RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape),
+    acceptArtifact,
+    observeRelayAnomaly,
+    relayArtifact,
+    relayUpstreamWhen,
+    relayVerdict,
+    withMethod,
+    withValidators,
+ )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     RejectReason (Unavailable),
@@ -172,7 +175,7 @@ import Ecluse.Core.Server.Response (
     artifactStatusCode,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
@@ -250,19 +253,6 @@ headTarball ::
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 headTarball = tarballWith ServeHead
-
--- The artifact serve mode: a full GET that streams the body through, or a HEAD that
--- probes the upstream bodiless and relays only the headers. Threaded through the
--- artifact path so the gating and upstream-request construction are shared verbatim
--- between the two, differing only in the upstream method, whether a body is pumped,
--- and whether an admit enqueues a mirror job.
-data ArtifactServe
-    = -- A GET: stream the artifact body through, enqueuing a mirror job on a public
-      -- admit (the demand-driven back-fill).
-      ServeFull
-    | -- A HEAD: probe the upstream as a HEAD and relay the headers with no body,
-      -- enqueuing nothing (no bytes are served, so there is nothing to mirror).
-      ServeHead
 
 -- The dispatch shared by 'serveTarball' and 'headTarball': read the mount's
 -- dependencies and serve in the given mode.
@@ -604,117 +594,6 @@ streamPublicArtifact mode replies rt deps validators name version artifact obser
 
     publicRequest = withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact)
 
-{- | What the public leg relayed, judged at relay time from the status and headers
-alone -- the body always relays verbatim, and client-side plus worker
-@dist.integrity@ verification stay the guarantors of the bytes. Header-only by
-design: nothing here hashes, buffers, or inspects a body, and the private leg
-computes no verdict at all.
-
-The verdict's consumer side: a non-'RelayedArtifact' is logged and counted
-(@ecluse.serve.relay.anomalies@), and only a 'RelayedArtifact' enqueues the
-demand-driven mirror job -- a relayed upstream miss used to enqueue a doomed job
-that the worker could only drop after a metadata round trip.
--}
-data RelayVerdict
-    = {- | A success whose headers look like the admitted artifact (a relayed
-      @304@ counts: the validators matched, nothing odd).
-      -}
-      RelayedArtifact
-    | -- | A success that does not look like an artifact (carried, bounded reason).
-      RelayedOddShape Text
-    | -- | A non-success passed through verbatim (carried).
-      RelayedNonSuccess Status
-    deriving stock (Eq, Show)
-
-{- | Judge one public relay from its status and headers. A @304@ is a clean
-pass-through (the relayed validators matched); any other non-2xx is the relayed
-non-success; a 2xx whose @Content-Type@ is textual (@text\/*@, or JSON where a
-tarball was admitted) is the odd shape -- an upstream answering a success that is
-visibly not the artifact. An absent or binary content type is taken as the
-artifact: this is a header-only tripwire, not a validator (integrity
-verification owns the bytes).
-
-The admitted metadata's declared size is deliberately __not__ compared against
-@Content-Length@: for npm the declared size is the unpacked-tree size
-(@dist.unpackedSize@), which never equals the transfer length, so the comparison
-would flag every healthy relay.
--}
-
-{- Observe one public-relay verdict on its consumer side: a clean artifact relay
-is silent; an anomaly is counted on the bounded @ecluse.serve.relay.anomalies@
-metric and logged WARNING with the package coordinates (the unbounded detail
-stays on the log line, never a label). The verdict never changes what the client
-received -- the body already relayed verbatim. -}
-observeRelayAnomaly :: forall m. (KatipContext m) => MetricsPort -> PackageName -> Version -> RelayVerdict -> m ()
-observeRelayAnomaly metrics name version = \case
-    RelayedArtifact -> pass
-    RelayedOddShape reason -> record Metric.RelayOddShape ("the public upstream answered a success that does not look like the admitted artifact: " <> reason)
-    RelayedNonSuccess status -> record Metric.RelayNonSuccess ("the public upstream answered a non-success, relayed verbatim: HTTP " <> show (statusCode status))
-  where
-    record :: Metric.RelayAnomaly -> Text -> m ()
-    record cls message = do
-        liftIO (mpPublicRelayAnomaly metrics cls)
-        katipAddContext payload (logFM WarningS (ls message))
-    payload =
-        sl "module" ("Ecluse.Core.Server.Pipeline.Tarball" :: Text)
-            <> sl "package" (renderPackageName name)
-            <> sl "version" (renderVersion version)
-
-relayVerdict :: Status -> ResponseHeaders -> RelayVerdict
-relayVerdict status headers
-    | isNotModified status = RelayedArtifact
-    | not (statusIsSuccessful status) = RelayedNonSuccess status
-    | Just contentType <- snd <$> find ((== hContentType) . fst) headers
-    , textualContentType contentType =
-        RelayedOddShape ("a success carrying a non-artifact content type: " <> decodeUtf8 contentType)
-    | otherwise = RelayedArtifact
-  where
-    textualContentType raw =
-        "text/" `BS.isPrefixOf` raw || "application/json" `BS.isPrefixOf` raw
-
-{- Tag an upstream artifact request with the serve mode's method: a 'ServeFull' fetch
-keeps the request's default @GET@, a 'ServeHead' probe is marked @HEAD@ so the upstream
-sees a bodiless request and the proxy never pumps the body. -}
-withMethod :: ArtifactServe -> HTTP.Request -> HTTP.Request
-withMethod = \case
-    ServeFull -> id
-    ServeHead -> \req -> req{HTTP.method = methodHead}
-
-{- Relay the client's conditional validators (the @If-None-Match@ \/ @If-Modified-Since@
-'forwardValidators' filtered) onto an upstream artifact request, so upstream can answer
-a @304 Not Modified@ for a pass-through body we serve unchanged. An empty validator set
-(the client sent none) leaves the request unconditional. -}
-withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
-withValidators validators req =
-    req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
-
-{- The upstream artifact statuses the private relay accepts back to the client: a
-@2xx@ success (the streamed artifact) or a @304 Not Modified@ (the pass-through
-conditional-GET relay -- the client's relayed validators matched upstream's, so the
-unchanged artifact is answered as a bodiless @304@ by 'streamUpstreamWhen' rather than
-re-downloaded). Any other status is a clean private miss the caller falls through on.
-(The public relay accepts every status -- it relays whatever the public origin returns
-verbatim -- so it needs no predicate of its own.) -}
-acceptArtifact :: Status -> Bool
-acceptArtifact s = statusIsSuccessful s || isNotModified s
-
-{- Relay an upstream artifact response in the serve mode: 'ServeFull' streams the body
-through with bounded memory ('streamUpstreamWhen'); 'ServeHead' probes bodiless,
-relaying the status and headers with no body ('probeUpstreamWhen'). Both keep the same
-recoverable-miss / committed split, so a HEAD falls through a private miss to the public
-origin exactly as a GET does. -}
-relayUpstreamWhen ::
-    ArtifactServe ->
-    Manager ->
-    HTTP.Request ->
-    (Status -> Bool) ->
-    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
-    RelayResponder response ->
-    IO (Maybe response)
-relayUpstreamWhen = \case
-    ServeFull -> streamUpstreamWhen
-    ServeHead -> probeUpstreamWhen
-
 -- Adapt the route's typed response constructors to the streaming helper's callback.
 -- The upstream connection remains open until the selected response has completed.
 relayResponder :: TarballReplies response -> (response -> IO received) -> RelayResponder received
@@ -795,18 +674,6 @@ same @403@ surface a rule denial renders, with a fixed reason. -}
 crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies (mkStatus 403 "Forbidden") [] "the upstream artifact host is not permitted by the tarball-host policy"
-
-{- The relay for an artifact stream: forward the upstream status and headers,
-dropping only the hop-by-hop framing headers (@Transfer-Encoding@, @Connection@)
-whose values describe the upstream hop, not the artifact. The body is opaque binary
-streamed verbatim, so the content headers (type, length, encoding) and the
-upstream's @ETag@ pass through unchanged -- the client verifies the artifact's own
-@dist.integrity@ over exactly these bytes. -}
-relayArtifact :: Status -> ResponseHeaders -> (Status, ResponseHeaders)
-relayArtifact status headers =
-    (status, filter (not . isHopByHop . fst) headers)
-  where
-    isHopByHop name = name == "Transfer-Encoding" || name == "Connection"
 
 {- Render a non-admit artifact outcome as the serve error model: @403@ for a policy
 denial, @503@ for a transient upstream unavailability, @404@ for a forwarded
