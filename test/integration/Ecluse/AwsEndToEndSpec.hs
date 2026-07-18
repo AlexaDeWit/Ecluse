@@ -4,9 +4,7 @@
 
 module Ecluse.AwsEndToEndSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
 import Data.Aeson (Value, encode, object, (.=))
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
@@ -54,7 +52,7 @@ import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpoi
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, unsafeHash)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
@@ -278,12 +276,12 @@ tarballBytes = "left-pad-1.0.0-artifact-bytes"
 
 -- The true lower-cased hex SHA-1 (npm @dist.shasum@) of the served bytes.
 sha1Shasum :: Text
-sha1Shasum = decodeUtf8 (convertToBase Base16 (hashlazy tarballBytes :: Digest SHA1) :: ByteString)
+sha1Shasum = hexSha1Of (toStrict tarballBytes)
 
 -- The true SRI @sha512-<base64>@ (npm @dist.integrity@) of the served bytes -- the
 -- strongest digest, the one the worker verifies the fetched bytes against.
 sha512Integrity :: Text
-sha512Integrity = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy tarballBytes :: Digest SHA512) :: ByteString)
+sha512Integrity = sriSha512Of (toStrict tarballBytes)
 
 {- A two-version packument: @1.0.0@ published in 2020 (clears the quarantine) and
 @2.0.0@ published two days before the fixed clock (denied by it). Both carry a real

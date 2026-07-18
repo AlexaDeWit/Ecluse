@@ -82,10 +82,8 @@ module Ecluse.BenchLoad.Npm (
 ) where
 
 import Control.Concurrent (threadDelay)
-import Crypto.Hash qualified as Crypto
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -155,7 +153,7 @@ import Ecluse.Core.Worker (
 import Ecluse.Runtime.Env (newEnvWithAdmission)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, unsafeHash, validSha1, validSha512Sri)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -638,15 +636,7 @@ artifactBytes size = LBS.replicate (fromIntegral (max 1 size)) 0x61
 -- The artifact's real integrity digests (an SRI sha512 and a hex sha1), so the worker's
 -- recompute-and-compare verify gate admits exactly these bytes.
 jobHashes :: LByteString -> NonEmpty Hash
-jobHashes bytes = unsafeHash SRI (sriOf bytes) :| [unsafeHash SHA1 (sha1HexOf bytes)]
-
--- The sha512 SRI of the given bytes (@sha512-<base64>@).
-sriOf :: LByteString -> Text
-sriOf bytes = "sha512-" <> decodeUtf8 (convertToBase Base64 (Crypto.hashlazy bytes :: Crypto.Digest Crypto.SHA512) :: ByteString)
-
--- The lower-cased hex sha1 of the given bytes.
-sha1HexOf :: LByteString -> Text
-sha1HexOf bytes = decodeUtf8 (convertToBase Base16 (Crypto.hashlazy bytes :: Crypto.Digest Crypto.SHA1) :: ByteString)
+jobHashes bytes = unsafeHash SRI (sriSha512OfLazy bytes) :| [unsafeHash SHA1 (hexSha1OfLazy bytes)]
 
 -- A stub upstream that injects the configured latency then serves a fixed body -- used by
 -- the worker scenario's artifact upstream, which answers any path the same way.

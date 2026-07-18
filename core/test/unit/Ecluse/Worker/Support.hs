@@ -5,10 +5,8 @@
 
 module Ecluse.Worker.Support where
 
-import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
 import Data.Aeson (Key, Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
@@ -78,7 +76,15 @@ import Ecluse.Core.Worker (
     newWorkerHeartbeat,
     runWorkerM,
  )
-import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validBlake2b, validMd5, validSha1, validSha256, validSha256Sri)
+import Ecluse.Test.Package (
+    defaultMinIntegrity,
+    unsafeHash,
+    validBlake2b,
+    validMd5,
+    validSha1,
+    validSha256,
+    validSha256Sri,
+ )
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -108,51 +114,51 @@ tarballBytes = "the-real-artifact-bytes"
 
 -- | The lower-cased hex SHA-1 of 'tarballBytes' -- the shasum a faithful job carries.
 trueSha1 :: Text
-trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA1) :: ByteString)
+trueSha1 = Package.hexSha1Of tarballBytes
 
 -- | The SRI (@sha512-<base64>@) of 'tarballBytes'.
 trueSri :: Text
-trueSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
+trueSri = Package.sriSha512Of tarballBytes
 
 {- | The lower-cased hex SHA-512 of 'tarballBytes' -- the form a __raw 'SHA512'-tagged__
 digest carries (as opposed to the base64 inside an SRI string).
 -}
 trueSha512Hex :: Text
-trueSha512Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
+trueSha512Hex = Package.hexSha512Of tarballBytes
 
 -- | The lower-cased hex SHA-256 of 'tarballBytes' (a digest the worker now computes).
 trueSha256 :: Text
-trueSha256 = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA256) :: ByteString)
+trueSha256 = Package.hexSha256Of tarballBytes
 
 -- | The SRI (@sha256-<base64>@) of 'tarballBytes', the resolved-and-computable SRI form.
 trueSha256Sri :: Text
-trueSha256Sri = "sha256-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA256) :: ByteString)
+trueSha256Sri = Package.sriSha256Of tarballBytes
 
 -- | The lower-cased hex Blake2b-512 of 'tarballBytes' (a digest the worker now computes).
 trueBlake2b :: Text
-trueBlake2b = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest Blake2b_512) :: ByteString)
+trueBlake2b = Package.hexBlake2bOf tarballBytes
 
 -- | The SRI (@sha384-<base64>@) of 'tarballBytes' -- a genuine sha384 the worker computes.
 trueSha384Sri :: Text
-trueSha384Sri = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA384) :: ByteString)
+trueSha384Sri = Package.sriSha384Of tarballBytes
 
 {- | The lower-cased hex SHA-384 of 'tarballBytes' -- the form a __raw 'SHA384'-tagged__
 digest carries (as opposed to the base64 inside an SRI string).
 -}
 trueSha384Hex :: Text
-trueSha384Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA384) :: ByteString)
+trueSha384Hex = Package.hexSha384Of tarballBytes
 
 {- | A well-formed sha384 SRI that does NOT match 'tarballBytes' (it is the digest of
 different bytes) -- the sha384 tamper-direction fixture: a real sha384 that fails.
 -}
 falseSha384Sri :: Text
-falseSha384Sri = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA384) :: ByteString)
+falseSha384Sri = Package.sriSha384Of "completely-different-bytes"
 
 {- | A well-formed sha512 SRI that does NOT match 'tarballBytes' (it is the digest of
 different bytes) -- for the tamper-direction regression: a real sha512 that fails.
 -}
 falseSri :: Text
-falseSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
+falseSri = Package.sriSha512Of "completely-different-bytes"
 
 {- | A well-formed sha512 SRI whose base64 body is the correct digest with its
 letter case flipped. base64 is case-sensitive, so this must NOT verify -- a

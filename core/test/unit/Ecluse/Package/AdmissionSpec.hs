@@ -15,8 +15,6 @@ authority order, with tampered bytes always refused.
 -}
 module Ecluse.Package.AdmissionSpec (spec) where
 
-import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.List.NonEmpty qualified as NE
 import Data.Time (UTCTime (..), fromGregorian)
 import Hedgehog (annotateShow, assert, forAll, (===))
@@ -62,6 +60,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails, unsafeHash, unsafeSriHashes)
+import Ecluse.Test.Package qualified as Package
 
 -- The blessed splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -108,21 +107,6 @@ sampleBytes = "some tarball bytes the digests below are computed over"
 tamperedBytes :: ByteString
 tamperedBytes = sampleBytes <> "!"
 
-hex16 :: (ByteString -> ByteString) -> ByteString -> Text
-hex16 digestOf = decodeUtf8 . digestOf
-
-sha1HexOf, sha256HexOf, sha384HexOf, sha512HexOf, blake2bHexOf :: ByteString -> Text
-sha1HexOf = hex16 (\b -> convertToBase Base16 (hashlazy (toLazy b) :: Digest SHA1))
-sha256HexOf = hex16 (\b -> convertToBase Base16 (hashlazy (toLazy b) :: Digest SHA256))
-sha384HexOf = hex16 (\b -> convertToBase Base16 (hashlazy (toLazy b) :: Digest SHA384))
-sha512HexOf = hex16 (\b -> convertToBase Base16 (hashlazy (toLazy b) :: Digest SHA512))
-blake2bHexOf = hex16 (\b -> convertToBase Base16 (hashlazy (toLazy b) :: Digest Blake2b_512))
-
-sri256Of, sri384Of, sri512Of :: ByteString -> Text
-sri256Of bs = "sha256-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy bs) :: Digest SHA256) :: ByteString)
-sri384Of bs = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy bs) :: Digest SHA384) :: ByteString)
-sri512Of bs = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy bs) :: Digest SHA512) :: ByteString)
-
 -- ── the digest-set generator for the differential property ─────────────────────
 
 -- One producible digest kind: how a registry could describe bytes. The 'Show' is
@@ -140,14 +124,14 @@ instance Show DigestKind where
 
 digestKinds :: [DigestKind]
 digestKinds =
-    [ HexOf SHA1 sha1HexOf
-    , HexOf SHA256 sha256HexOf
-    , HexOf SHA384 sha384HexOf
-    , HexOf SHA512 sha512HexOf
-    , HexOf Blake2b blake2bHexOf
-    , SriOf "sha256" sri256Of
-    , SriOf "sha384" sri384Of
-    , SriOf "sha512" sri512Of
+    [ HexOf SHA1 Package.hexSha1Of
+    , HexOf SHA256 Package.hexSha256Of
+    , HexOf SHA384 Package.hexSha384Of
+    , HexOf SHA512 Package.hexSha512Of
+    , HexOf Blake2b Package.hexBlake2bOf
+    , SriOf "sha256" Package.sriSha256Of
+    , SriOf "sha384" Package.sriSha384Of
+    , SriOf "sha512" Package.sriSha512Of
     ]
 
 hashOfKind :: ByteString -> DigestKind -> Hash
@@ -159,7 +143,7 @@ spec :: Spec
 spec = do
     describe "admitArtifact -- the shared serve/worker admission oracle" $ do
         it "admits a rule-admitted, floor-clearing artifact, selecting it by filename" $ do
-            let details = detailsWith (sriHashesOf (sri512Of sampleBytes))
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
                 AdmissionAdmit artifact digests -> do
@@ -171,21 +155,21 @@ spec = do
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "carries a rule denial through as AdmissionDenied (both surfaces render the same decision)" $ do
-            let details = detailsWith (sriHashesOf (sri512Of sampleBytes))
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admission <- admitArtifact ctx [denyRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected a rule denial, got " <> show other)
 
         it "carries a fail-closed uncomputable rule through as AdmissionUndecidable" $ do
-            let details = detailsWith (sriHashesOf (sri512Of sampleBytes))
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
                 AdmissionUndecidable Undecidable{} -> pass
                 other -> expectationFailure ("expected undecidable, got " <> show other)
 
         it "reports an absent filename as AdmissionFileAbsent, never selecting another artifact" $ do
-            let details = detailsWith (sriHashesOf (sri512Of sampleBytes))
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "renamed-2.0.0.tgz" details
             case admission of
                 AdmissionFileAbsent -> pass
@@ -198,7 +182,7 @@ spec = do
                 other -> expectationFailure ("expected integrity-missing, got " <> show other)
 
         it "refuses a weak-only digest set as AdmissionBelowFloor" $ do
-            let details = detailsWith [unsafeHash SHA1 (sha1HexOf sampleBytes)]
+            let details = detailsWith [unsafeHash SHA1 (Package.hexSha1Of sampleBytes)]
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
             case admission of
                 AdmissionBelowFloor -> pass
@@ -218,7 +202,7 @@ spec = do
             -- the worker compared against the joined tail and could never match, so
             -- the version was served from public forever and never mirrored. Split
             -- into components, both gates read the same digest.
-            let joined = sri512Of sampleBytes <> " " <> sri256Of sampleBytes
+            let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 details = detailsWith hashes
             classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
@@ -234,15 +218,15 @@ spec = do
         it "#738 (ranking): the strongest component decides, not the first on the wire" $ do
             -- "sha256-… sha512-…" used to rank at the SHA-256 tier because only the
             -- first component was read; per-component hashes rank exactly.
-            let joined = sri256Of sampleBytes <> " " <> sri512Of sampleBytes
+            let joined = Package.sriSha256Of sampleBytes <> " " <> Package.sriSha512Of sampleBytes
                 hashes = NE.fromList (sriHashesOf joined)
             assertedAlg (authoritativeDigest hashes) `shouldBe` Just SHA512
-            hashValue (authoritativeDigest hashes) `shouldBe` sri512Of sampleBytes
+            hashValue (authoritativeDigest hashes) `shouldBe` Package.sriSha512Of sampleBytes
 
         it "#409: a SHA-256-only artifact admitted by the default floor is worker-verifiable" $ do
             -- The predecessor gap: the floor admitted SHA-256 while the worker's
             -- hand-rolled vocabulary could not verify it, stranding the version.
-            let hashes = [unsafeHash SHA256 (sha256HexOf sampleBytes)]
+            let hashes = [unsafeHash SHA256 (Package.hexSha256Of sampleBytes)]
                 details = detailsWith hashes
             classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
             verifyIntegrity (NE.fromList hashes) sampleBytes `shouldBe` IntegrityVerified
