@@ -13,8 +13,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
-import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time (UTCTime (..), fromGregorian, nominalDay)
 import Hedgehog (Gen, annotateShow, assert, failure, forAll, success, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -38,6 +37,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan),
  )
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
 spec :: Spec
@@ -67,8 +67,7 @@ quarantine = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 projection's @UTCTime@ decoder.
 -}
 publishedDaysAgo :: Integer -> Text
-publishedDaysAgo ageDays =
-    toText (iso8601Show (addUTCTime (negate (fromInteger ageDays * nominalDay)) now))
+publishedDaysAgo = NpmFixture.publishedDaysAgo now
 
 base :: Text
 base = "https://proxy.test/npm"

@@ -7,7 +7,7 @@ module Ecluse.Server.Pipeline.TestSupport where
 
 import Prelude hiding (get)
 
-import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict, object, (.=))
+import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -15,8 +15,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
-import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status304, status404, status500, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hETag, hHost, hIfNoneMatch)
@@ -65,6 +64,8 @@ import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm qualified as NpmFixture (publishedDaysAgo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
@@ -75,8 +76,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 version's survival under the quarantine is controlled purely by its fixture time.
 -}
 publishedDaysAgo :: Integer -> Text
-publishedDaysAgo ageDays =
-    toText (iso8601Show (addUTCTime (negate (fromInteger ageDays * nominalDay)) now))
+publishedDaysAgo = NpmFixture.publishedDaysAgo now
 
 {- | The policy under test: a 7-day publish-age quarantine plus an install-script
 deny. A public version is approved iff it is at least 7 days old and declares no
@@ -221,17 +221,12 @@ builds it from its own @Host@ ('selfBaseUrl') to address itself.
 -}
 selfHostedVersion :: Text -> Text -> Value
 selfHostedVersion baseUrl version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
-                , "integrity" .= sriFor version
-                , "shasum" .= validShasum
-                ]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue
+        ( (versionFixture version (baseUrl <> "/thing/-/thing-" <> version <> ".tgz"))
+            { vsIntegrity = Just (sriFor version)
+            , vsShasum = Just validShasum
+            }
+        )
 
 {- | An admitting public packument (single old-enough version @v@) whose
 @dist.tarball@ points at @baseUrl@ -- the self-hosting form the artifact path fetches.
@@ -424,13 +419,12 @@ top-level key -- so a test can assert the unmodeled key is relayed unchanged.
 -}
 packument :: [(Text, Value)] -> Text -> [(Text, Text)] -> Value
 packument versions latest times =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "dist-tags" .= object ["latest" .= latest]
-        , "versions" .= object [(Key.fromText v, obj) | (v, obj) <- versions]
-        , "time" .= object (("created" .= publishedDaysAgo 400) : [(Key.fromText v, String t) | (v, t) <- times])
-        , "_id" .= ("thing" :: Text) -- an unmodeled top-level key
-        ]
+    packumentValue
+        "thing"
+        latest
+        versions
+        (("created" .= publishedDaysAgo 400) : [(Key.fromText version, String time) | (version, time) <- times])
+        ["_id" .= ("thing" :: Text)] -- an unmodeled top-level key
 
 {- | A packument like 'packument' but self-reporting a /different/ top-level @name@,
 to exercise the route-name validation. The route under test is always @\/npm\/thing@,
@@ -449,19 +443,20 @@ install-script deny can be exercised.
 -}
 versionObject :: Text -> Text -> Bool -> Value
 versionObject version integrity hasInstall =
-    object
-        ( [ "name" .= ("thing" :: Text)
-          , "version" .= version
-          , "dist"
-                .= object
-                    [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
-                    , "integrity" .= integrity
-                    , "shasum" .= validShasum
-                    ]
-          , "_unmodeled" .= ("kept" :: Text) -- a per-version unmodeled key
-          ]
-            <> ["scripts" .= object ["postinstall" .= ("node build.js" :: Text)] | hasInstall]
+    versionValue
+        ( (versionFixture version ("https://upstream.example/thing/-/thing-" <> version <> ".tgz"))
+            { vsIntegrity = Just integrity
+            , vsShasum = Just validShasum
+            , vsHasInstallScript = hasInstall
+            }
         )
+
+-- A @thing@ version fixture with the unmodelled field the relay assertions preserve.
+versionFixture :: Text -> Text -> VersionSpec
+versionFixture version tarballUrl =
+    (versionSpec "thing" version tarballUrl)
+        { vsExtraPairs = ["_unmodeled" .= ("kept" :: Text)]
+        }
 
 -- A plain (no-install-script) version object with a distinct integrity.
 plainVersion :: Text -> Value
@@ -487,16 +482,11 @@ refuses such a version from a /public/ upstream; a /private/ one is exempt.
 -}
 shasumOnlyVersion :: Text -> Value
 shasumOnlyVersion version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
-                , "shasum" .= validShasum
-                ]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue
+        ( (versionFixture version ("https://upstream.example/thing/-/thing-" <> version <> ".tgz"))
+            { vsShasum = Just validShasum
+            }
+        )
 
 {- | A version object carrying __no integrity digest at all__: a @dist@ with a
 @tarball@ but neither @integrity@ nor @shasum@ (both optional on the wire), so it
@@ -505,12 +495,7 @@ policy refuses such a version from a public upstream.
 -}
 hashlessVersion :: Text -> Value
 hashlessVersion version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist" .= object ["tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue (versionFixture version ("https://upstream.example/thing/-/thing-" <> version <> ".tgz"))
 
 {- | A version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@ (a
 present-but-content-empty digest pair). The projection normalises an empty digest to
@@ -520,17 +505,12 @@ upstream (classified 'NoIntegrity', not 'BelowFloor').
 -}
 emptyDigestVersion :: Text -> Value
 emptyDigestVersion version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
-                , "integrity" .= ("" :: Text)
-                , "shasum" .= ("" :: Text)
-                ]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue
+        ( (versionFixture version ("https://upstream.example/thing/-/thing-" <> version <> ".tgz"))
+            { vsIntegrity = Just ""
+            , vsShasum = Just ""
+            }
+        )
 
 {- | A hashless version object whose @dist.tarball@ points at @baseUrl@ -- the
 self-hosting form the artifact path fetches, but with neither @integrity@ nor
@@ -538,12 +518,7 @@ self-hosting form the artifact path fetches, but with neither @integrity@ nor
 -}
 selfHostedHashless :: Text -> Text -> Value
 selfHostedHashless baseUrl version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist" .= object ["tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue (versionFixture version (baseUrl <> "/thing/-/thing-" <> version <> ".tgz"))
 
 {- | A self-hosting version object carrying __only a legacy SHA-1 shasum__ (no SRI
 @integrity@), so its strongest digest is below the default floor. The artifact-gate
@@ -551,16 +526,11 @@ refusal (@BelowIntegrityFloor@) must fire before its @dist.tarball@ is ever fetc
 -}
 selfHostedShasumOnly :: Text -> Text -> Value
 selfHostedShasumOnly baseUrl version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
-                , "shasum" .= validShasum
-                ]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue
+        ( (versionFixture version (baseUrl <> "/thing/-/thing-" <> version <> ".tgz"))
+            { vsShasum = Just validShasum
+            }
+        )
 
 {- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and
 @shasum@, so it projects to no digest at all. The artifact-gate refusal ('MissingIntegrity')
@@ -568,17 +538,12 @@ must fire before its @dist.tarball@ is ever fetched.
 -}
 selfHostedEmptyDigest :: Text -> Text -> Value
 selfHostedEmptyDigest baseUrl version =
-    object
-        [ "name" .= ("thing" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
-                , "integrity" .= ("" :: Text)
-                , "shasum" .= ("" :: Text)
-                ]
-        , "_unmodeled" .= ("kept" :: Text)
-        ]
+    versionValue
+        ( (versionFixture version (baseUrl <> "/thing/-/thing-" <> version <> ".tgz"))
+            { vsIntegrity = Just ""
+            , vsShasum = Just ""
+            }
+        )
 
 {- | A fresh 'Env' over handle doubles and a real (no-TLS) manager for the in-process
 upstream doubles, carrying the given mirror queue (the in-memory double, or one
@@ -1010,12 +975,12 @@ honouredPathUpstream version filename tarballBody = do
                     then responseLBS status200 [] tarballBody
                     else responseLBS status200 [] (encodePackument (altPackument (selfBaseUrl req)))
         altPackument base =
-            let dist =
-                    object
-                        [ "tarball" .= (base <> "/files/" <> filename)
-                        , "integrity" .= sriFor version
-                        ]
-                vo = object ["name" .= ("thing" :: Text), "version" .= version, "dist" .= dist]
+            let vo =
+                    versionValue
+                        ( (versionSpec "thing" version (base <> "/files/" <> filename))
+                            { vsIntegrity = Just (sriFor version)
+                            }
+                        )
              in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
     mkUpstream seen app
 
