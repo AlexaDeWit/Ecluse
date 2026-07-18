@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
-import Ecluse.Core.Security (HostPort, Limits)
+import Ecluse.Core.Security (HostPort, Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -448,6 +448,9 @@ npmPolicy resolve rules =
         , wpArtifactHostHonoured = const True
         , wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
         , wpPublish = unwiredPublish
+        , -- A generous artifact cap: these tests fetch tiny fixtures, so the cap never
+          -- bites; it matches the pre-plan worker default so fetch behaviour is unchanged.
+          wpArtifactLimits = defaultLimits{maxBodyBytes = 512 * 1024 * 1024}
         , wpNow = pure epoch
         }
 

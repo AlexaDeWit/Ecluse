@@ -13,6 +13,7 @@ competing with its batch-mates for it.
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
+    outcomeOfFetchFault,
     processJob,
     processBatch,
     workerPublishVisibilityBudget,
@@ -335,20 +336,33 @@ readmittedDescriptor artifact digests =
 -- security crux: a tampered or corrupt artifact must never reach the private
 -- upstream, which is served without the rules, so a mismatch fails the job with no
 -- publish and alarms.
+
+{- | Classify a mirror-artifact fetch fault into a terminal job outcome. An artifact
+over the plan-sized byte cap is a __non-retryable drop__: it is deterministic in the
+artifact's own size, so a redelivery re-fetches the same over-cap bytes and fails
+identically, and retrying it only churns the queue's redrive/DLQ. Any other fetch
+fault (an unformable URL, a transport failure) is a transient retry, since a
+redelivery may succeed. This is issue #846's classification: an over-cap artifact
+that previously redelivered until the DLQ retired it now drops at once.
+-}
+outcomeOfFetchFault :: ArtifactFetchFault -> JobOutcome
+outcomeOfFetchFault = \case
+    ArtifactOverCap reason -> Dropped reason
+    ArtifactUnavailable reason -> Retried reason
+
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
     fetched <- fetchArtifactBytes (wpArtifactLimits policy) (wpBuildArtifactRequest policy) (jobArtifactUrl job)
     case fetched of
-        Left (ArtifactUnavailable reason) -> pure (Retried reason)
-        Left (ArtifactOverCap reason) -> do
-            -- The artifact deterministically exceeds the plan-sized byte cap, so a
-            -- redelivery would re-fetch the same over-cap bytes and fail identically:
-            -- drop it (acked) rather than churn it to the DLQ. Raising the cap needs a
-            -- larger pod or an explicit limits.maxArtifactBytes -- an operator decision,
-            -- not a retry.
-            logFM ErrorS (ls ("artifact exceeds the mirror byte cap, dropping (a redelivery cannot succeed): " <> reason))
-            pure (Dropped reason)
+        Left fault -> do
+            -- Alarm on the terminal over-cap drop before returning it; the outcome
+            -- itself is 'outcomeOfFetchFault' (over-cap drops, other faults retry).
+            case fault of
+                ArtifactOverCap reason ->
+                    logFM ErrorS (ls ("artifact exceeds the mirror byte cap, dropping (a redelivery cannot succeed): " <> reason))
+                ArtifactUnavailable _ -> pass
+            pure (outcomeOfFetchFault fault)
         Right bytes ->
             case verifyIntegrity (maHashes admitted) bytes of
                 IntegrityMismatch detail -> do

@@ -29,7 +29,7 @@ import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 
 {- | An admit-everything worker policy for the npm ecosystem: every version

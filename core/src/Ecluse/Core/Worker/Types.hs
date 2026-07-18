@@ -134,8 +134,8 @@ data WorkerPolicy = WorkerPolicy
     , wpArtifactLimits :: Limits
     {- ^ The bounded-fetch budget for the artifact download
     ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'): the composition root sets its
-    @maxBodyBytes@ from the memory plan's mirror-artifact tenant
-    ('Ecluse.Composition.MemoryPlan'), so the worker never buffers a tarball whose
+    @maxBodyBytes@ from the memory plan's mirror-artifact tenant (in
+    @Ecluse.Composition.MemoryPlan@), so the worker never buffers a tarball whose
     transient publish envelope would breach the heap ceiling the plan partitions.
     -}
     , wpNow :: IO UTCTime

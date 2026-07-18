@@ -32,11 +32,13 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (Retried, Succeeded),
+    JobOutcome (Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
  )
+import Ecluse.Core.Worker.Fetch (ArtifactFetchFault (ArtifactOverCap, ArtifactUnavailable))
+import Ecluse.Core.Worker.Job (outcomeOfFetchFault)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -44,6 +46,18 @@ import Ecluse.Worker.Support
 
 spec :: Spec
 spec = do
+    describe "outcomeOfFetchFault (issue #846: over-cap is terminal, not retried)" $ do
+        -- The pre-fix worker treated every fetch Left as a retry, so a deterministically
+        -- over-cap tarball redelivered until the queue's redrive/DLQ retired it. The
+        -- fix splits an over-cap fault (a non-retryable drop) from a transient one.
+        it "drops an over-cap artifact (a redelivery re-fetches the same over-cap bytes)" $
+            outcomeOfFetchFault (ArtifactOverCap "artifact exceeded the response bound")
+                `shouldBe` Dropped "artifact exceeded the response bound"
+
+        it "retries a transient fetch fault (a redelivery may succeed)" $
+            outcomeOfFetchFault (ArtifactUnavailable "artifact fetch failed: connection reset")
+                `shouldBe` Retried "artifact fetch failed: connection reset"
+
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
             let document =

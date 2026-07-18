@@ -43,8 +43,8 @@ __publish-by-document__: the npm @PUT \/{pkg}@ carries the tarball base64-encode
 under @_attachments@, so the whole artifact must be in hand to verify it and assemble
 the document. This path is therefore __bounded-buffered__, not streamed -- the bytes
 are necessarily held -- but the read is capped by the caller's 'Limits' (the
-composition root sizes it from the memory plan's mirror-artifact tenant,
-"Ecluse.Composition.MemoryPlan"), so an upstream returning a body past the cap is
+composition root sizes it from the memory plan's mirror-artifact tenant, in
+@Ecluse.Composition.MemoryPlan@), so an upstream returning a body past the cap is
 refused fail-closed rather than exhausting the heap the plan partitions. An over-cap
 body is an 'ArtifactOverCap' (terminal at the call site); a network or URL failure an
 'ArtifactUnavailable' (transient), so a flaky upstream redelivers rather than killing
