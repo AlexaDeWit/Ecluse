@@ -148,9 +148,16 @@ request was shed -- the room was full, or the weight did not fit within the wait
 the wrapper's responsibility. Held weight is released on every exit path: normal
 completion, a synchronous throw, and asynchronous cancellation.
 
+The masked entry decides a 'Gate' and dispatches: 'shedRecording' refuses, 'admittedRun'
+is the release-protected run, and 'queuedWait' is the brief wait for room before that run.
+Each arm's mask and finally reasoning sits with its own code rather than woven through one
+expression.
+
 Marked @INLINE@ so each wrapper's literal 'AdmissionObservers' is eliminated at its call
 site (case-of-known-constructor), leaving the same code the two hand-written twins
-compiled to: the extraction is allocation-neutral on the admitted hot path.
+compiled to: the extraction is allocation-neutral on the admitted hot path. The arm
+helpers are @INLINE@ too, so the whole chain folds back into that saturated call and the
+observers record never survives to be allocated.
 -}
 {-# INLINE withWeightedAdmission #-}
 withWeightedAdmission ::
@@ -164,35 +171,74 @@ withWeightedAdmission obs wa weight action =
     UE.mask $ \restore -> do
         gate <- atomically (doorDecision wa weight)
         case gate of
-            Refused -> shed
-            Admitted -> admitted restore
-            Queued -> do
-                deadline <- liftIO (registerDelay (waWaitMicros wa))
-                -- The wait runs masked, not restored: a blocked retry is still
-                -- interruptible (a cancellation aborts the transaction, taking
-                -- nothing), while a committed acquire returns with exceptions masked,
-                -- so the weight reaches the protected run below. The room place is
-                -- surrendered on every path.
-                acquired <-
-                    atomically (acquireOrExpire wa weight deadline)
-                        `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
-                if acquired then liftIO (onQueued obs) >> admitted restore else shed
-  where
-    shed = liftIO (onShed obs) $> Nothing
+            Refused -> shedRecording obs
+            Admitted -> admittedRun obs wa weight (pure ()) restore action
+            Queued -> queuedWait obs wa weight restore action
 
-    -- The in-flight gauge is moved under the enclosing mask, before 'restore', so it is
-    -- paired with the 'release' decrement on every path. Were the increment inside
-    -- 'restore' (interruptible), a cancellation delivered after unmasking but before it
-    -- ran would still run 'release' via 'finally', decrementing a gauge that was never
-    -- incremented and drifting it negative. 'restore' therefore wraps only the
-    -- interruptible run.
-    admitted restore =
-        Just <$> ((liftIO (onInFlightDelta obs weight) >> restore action) `UE.finally` release)
+-- Record the shed and refuse. A room place taken on the queued path is already
+-- surrendered before this runs.
+{-# INLINE shedRecording #-}
+shedRecording :: (MonadIO m) => AdmissionObservers -> m (Maybe a)
+shedRecording obs = liftIO (onShed obs) $> Nothing
 
-    -- Publish the gauge decrement before waking a waiter. Returning capacity first
-    -- would let that waiter publish its increment while the departing holder was
-    -- still observable, transiently putting the gauge above the configured bound.
-    -- The STM release is the finalizer so a throwing observer cannot leak capacity.
-    release =
-        liftIO (onInFlightDelta obs (negate weight))
-            `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
+-- The brief wait for room, then the armed run. The wait runs masked, not restored: a
+-- blocked retry is still interruptible (a cancellation aborts the transaction, taking
+-- nothing), while a committed acquire returns with exceptions masked, so the weight
+-- reaches the armed run. The room place is surrendered on every path. On acquire the
+-- queued record runs through 'admittedRun', after the in-flight increment and under the
+-- release 'finally', so a throwing observer releases the held weight instead of leaking
+-- it.
+{-# INLINE queuedWait #-}
+queuedWait ::
+    (MonadUnliftIO m) =>
+    AdmissionObservers ->
+    WeightedAdmission ->
+    Int ->
+    (m a -> m a) ->
+    m a ->
+    m (Maybe a)
+queuedWait obs wa weight restore action = do
+    deadline <- liftIO (registerDelay (waWaitMicros wa))
+    acquired <-
+        atomically (acquireOrExpire wa weight deadline)
+            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
+    if acquired
+        then admittedRun obs wa weight (onQueued obs) restore action
+        else shedRecording obs
+
+-- The release-protected run. The in-flight gauge is moved under the enclosing mask,
+-- before 'restore', so it is paired with the 'releaseWeight' decrement on every path.
+-- Were the increment inside 'restore' (interruptible), a cancellation delivered after
+-- unmasking but before it ran would still run 'releaseWeight' via 'finally', decrementing
+-- a gauge that was never incremented and drifting it negative. 'restore' therefore wraps
+-- only the interruptible run.
+--
+-- 'afterArm' runs in that same masked, release-protected step, after the increment: the
+-- queued path passes 'onQueued' here (the door path passes nothing) so a throwing queued
+-- observer releases the held weight rather than leaking it, and, running after the
+-- increment, can never decrement a gauge that was not raised.
+{-# INLINE admittedRun #-}
+admittedRun ::
+    (MonadUnliftIO m) =>
+    AdmissionObservers ->
+    WeightedAdmission ->
+    Int ->
+    IO () ->
+    (m a -> m a) ->
+    m a ->
+    m (Maybe a)
+admittedRun obs wa weight afterArm restore action =
+    Just
+        <$> ( (liftIO (onInFlightDelta obs weight >> afterArm) >> restore action)
+                `UE.finally` releaseWeight obs wa weight
+            )
+
+-- Publish the gauge decrement before waking a waiter. Returning capacity first would let
+-- that waiter publish its increment while the departing holder was still observable,
+-- transiently putting the gauge above the configured bound. The STM release is the
+-- finalizer so a throwing observer cannot leak capacity.
+{-# INLINE releaseWeight #-}
+releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
+releaseWeight obs wa weight =
+    liftIO (onInFlightDelta obs (negate weight))
+        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
