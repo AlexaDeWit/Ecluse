@@ -1,15 +1,15 @@
-# weeder — reports library code that is not reachable from the application entry
-# point (app/Main.hs → Ecluse.run). `make weeder` builds only the library +
+# weeder reports library code that is not reachable from the application entry
+# point (app/Main.hs, Ecluse.run). `task weeder` builds only the library and the
 # executable (not the test suites) with .hie info, so "reachable" means "wired
-# into the running proxy" — NOT merely "covered by a test".
+# into the running proxy", NOT merely "covered by a test".
 #
 # That deliberately surfaces any library code not yet wired into the composition
-# root (config loading, policy resolution, the queue/credential backends, …) as it
-# is built and tested ahead of the slice that connects it. The tree is wired through
-# to zero app-unreachable definitions today, and the `weeder` CI job GATES on that: a
-# newly-introduced unreachable definition fails the job and blocks the merge (see
-# ci.yml → weeder), so a slice lands its scaffolding and the wiring that reaches it
-# together, or roots the definition below.
+# root (config loading, policy resolution, the queue and credential backends, and
+# so on) as it is built and tested ahead of the slice that connects it. The tree is
+# wired through to zero app-unreachable definitions today, and the `weeder` CI job
+# GATES on that: a newly-introduced unreachable definition fails the job and blocks
+# the merge (see ci.yml, the weeder job), so a slice lands its scaffolding and the
+# wiring that reaches it together, or roots the definition below.
 
 # Reachability roots: the executable entry point and Cabal's generated Paths_,
 # plus one documented structural exception.
@@ -29,6 +29,29 @@ roots = [
   "^Ecluse\\.Core\\.Security\\.Egress\\.DevHttp\\.loopbackRegistryUrl$",
 ]
 
-# Treat instance methods as roots, so lawful type-class instances aren't reported
-# just because the app has no direct call site for them.
-type-class-roots = true
+# Type-class instances are NOT blanket-rooted. weeder's evidence tracking decides
+# instance reachability: an instance counts as reachable only where a reachable
+# definition actually uses its dictionary, so dead code that hangs off an orphaned
+# instance stays visible to the gate. Blanket instance-rooting hides exactly that:
+# it is what let the production-dead Wire.hs packument decoder survive, reachable
+# only from its own FromJSON instances (#863).
+#
+# `root-instances` names the narrow exceptions: classes whose dictionary use weeder
+# cannot see, because the only consumers live outside the analysed library-plus-exe
+# build (the test tiers and load harness weeder does not build, as for the
+# loopbackRegistryUrl root above), or because the compiler inserts the use with no
+# traceable evidence. Every entry carries its justification. Declaring this key
+# replaces weeder's built-in default (IsString and IsList), so those two are
+# restated here.
+root-instances = [
+  # weeder's shipped defaults: OverloadedStrings and OverloadedLists desugar string
+  # and list literals to compiler-inserted fromString / fromList calls that leave no
+  # evidence use to follow.
+  { class = '\.IsString$' },
+  { class = '\.IsList$' },
+  # universeGeneric enumerations of the enum-like domain types (metric names, label
+  # keys, hash algorithms, OSV meta keys, and so on) are consumed only by the
+  # exhaustiveness and round-trip test tiers, which weeder does not build. Same
+  # test-tier-only rationale as the loopbackRegistryUrl root above.
+  { class = '\.Universe$' },
+]
