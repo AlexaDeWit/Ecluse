@@ -155,11 +155,9 @@ initialWalk = WalkState emptySelection False False False
 
 {- Walk the top-level packument record to its end, threading the walk state. @childBudget@
 is the depth budget each top-level value sits at (one below the document object's own
-budget). The first @name@ value and the first @versions@\/@time@ object are captured (the
-requested version and the count taken from that first @versions@); a duplicate of an
-already-captured key, and every other value, is skipped unallocated but still walked to its
-end, so a malformed or over-deep sibling anywhere still breaches. The trailing bytes after
-the record must be whitespace only. -}
+budget). @name@, @versions@ and @time@ are each captured at their first occurrence (the
+requested version and the count come from that first @versions@ object); every other value
+is skipped unallocated. The trailing bytes after the record must be whitespace only. -}
 walkTop :: Int -> Text -> TkRecord ByteString String -> Either SelectiveError SelectedVersion
 walkTop childBudget target = fmap wsSelection . go initialWalk
   where
@@ -169,22 +167,38 @@ walkTop childBudget target = fmap wsSelection . go initialWalk
             | otherwise -> Left SelectiveUndecodable
         TkRecordErr _ -> Left SelectiveUndecodable
         TkPair key valueToks -> case Key.toText key of
-            "versions"
-                | wsSeenVersions st -> skipValue childBudget valueToks >>= go st
-                | otherwise -> withRecord childBudget valueToks $ \versionsRec -> do
-                    (found, count, cont) <- findInRecord (childBudget - 1) target versionsRec
-                    go st{wsSelection = (wsSelection st){svVersion = found, svVersionCount = count}, wsSeenVersions = True} cont
-            "time"
-                | wsSeenTime st -> skipValue childBudget valueToks >>= go st
-                | otherwise -> withRecord childBudget valueToks $ \timeRec -> do
-                    (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
-                    go st{wsSelection = (wsSelection st){svTime = found}, wsSeenTime = True} cont
-            "name"
-                | wsSeenName st -> skipValue childBudget valueToks >>= go st
-                | otherwise -> do
-                    (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
-                    go st{wsSelection = (wsSelection st){svName = Just nameValue}, wsSeenName = True} cont
+            "versions" -> adoptFirst wsSeenVersions captureVersions st valueToks
+            "time" -> adoptFirst wsSeenTime captureTime st valueToks
+            "name" -> adoptFirst wsSeenName captureName st valueToks
             _ -> skipValue childBudget valueToks >>= go st
+
+    {- Adopt a captured top-level key at its first occurrence, or skip a later duplicate:
+    @aeson@ keeps the first of a duplicate key, so once captured a repeat must not overwrite
+    it. Either branch still walks the value to its end (its tokens consumed, depth-bounded),
+    so a malformed or over-deep sibling anywhere still breaches; a skipped value is never
+    materialised. Continues the walk from the value's continuation. -}
+    adoptFirst captured capture st valueToks
+        | captured st = skipValue childBudget valueToks >>= go st
+        | otherwise = capture st valueToks >>= uncurry go
+
+    -- Capture the first @versions@ object: the requested version (first-wins within the
+    -- object) and its raw entry count, then mark @versions@ seen.
+    captureVersions st valueToks =
+        withRecord childBudget valueToks $ \versionsRec -> do
+            (found, count, cont) <- findInRecord (childBudget - 1) target versionsRec
+            pure (st{wsSelection = (wsSelection st){svVersion = found, svVersionCount = count}, wsSeenVersions = True}, cont)
+
+    -- Capture the first @time@ object: the requested version's publish stamp (first-wins),
+    -- then mark @time@ seen. The entry count is the version count's concern, not @time@'s.
+    captureTime st valueToks =
+        withRecord childBudget valueToks $ \timeRec -> do
+            (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
+            pure (st{wsSelection = (wsSelection st){svTime = found}, wsSeenTime = True}, cont)
+
+    -- Capture the first top-level @name@ value, then mark @name@ seen.
+    captureName st valueToks = do
+        (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
+        pure (st{wsSelection = (wsSelection st){svName = Just nameValue}, wsSeenName = True}, cont)
 
 {- Find one key in a record, materialising __only__ the __first__ occurrence of that key's
 value (a 'Value') and skipping every other entry's tokens unallocated: @aeson@'s object
