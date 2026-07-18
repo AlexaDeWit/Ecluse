@@ -35,4 +35,4 @@ runDredger bootEnv = do
     runKatipContextT logEnv (moduleField "Ecluse.Dredger") mempty $ do
         logFM InfoS (ls ("Dredger mode starting up on port " <> show port :: String))
 
-    runWarp cfg (dredgerApplication cfg)
+    runWarp cfg dredgerApplication

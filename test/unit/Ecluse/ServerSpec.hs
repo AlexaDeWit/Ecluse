@@ -44,9 +44,11 @@ import Ecluse.Runtime.Server (
     beginDrain,
     defaultPort,
     defaultShutdownDrainTimeout,
+    isDraining,
     mkServerConfig,
     newDrainSignal,
     perimeterGuard,
+    runWarp,
  )
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
@@ -200,6 +202,7 @@ matchNoConnectionHeader = MatchHeader $ \headers _body ->
 spec :: Spec
 spec = do
     perimeterGuardSpec
+    runWarpDrainWiringSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
             it "answers /livez with 200" $
@@ -444,3 +447,34 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         case outcome of
             Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
             Right () -> expectationFailure "expected the post-commit escape to rethrow"
+
+{- | A control-flow abort raised from the application builder the instant it is
+handed its config, so 'runWarp' unwinds before @warp@ binds a socket.
+-}
+data AbortLaunch = AbortLaunch
+    deriving stock (Eq, Show)
+
+instance Exception AbortLaunch
+
+{- | Pin the real 'runWarp' drain wiring (issue #841): the application builder must
+be handed the live 'DrainSignal' the shutdown handler raises, not the inert
+'neverDraining' a bare 'mkServerConfig' carries. Every other draining spec sets
+'scDrain' by hand, so this is the only one that exercises 'runWarp''s
+allocate-then-build path -- the gap that let the dead wiring ship.
+-}
+runWarpDrainWiringSpec :: Spec
+runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)" $
+    it "hands the application builder the live drain, not the inert neverDraining" $ do
+        captured <- newEmptyMVar
+        -- Capture the drain from the config runWarp hands the builder, then abort
+        -- before warp binds a socket. mkServerConfig's scDrain is neverDraining, so
+        -- the pre-fix wiring closed the app over that inert signal; the live signal
+        -- runWarp allocates must reach the builder instead.
+        let getApp cfg = putMVar captured (scDrain cfg) >> throwIO AbortLaunch
+        runWarp (mkServerConfig []) getApp `shouldThrow` (== AbortLaunch)
+        drain <- takeMVar captured
+        -- A live, lowered signal: raising it is observed. neverDraining's raise is a
+        -- no-op, so this stays False under the pre-fix wiring and flips True here.
+        isDraining drain `shouldReturn` False
+        beginDrain drain
+        isDraining drain `shouldReturn` True

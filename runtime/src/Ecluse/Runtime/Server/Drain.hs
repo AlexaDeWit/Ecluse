@@ -33,9 +33,10 @@ data DrainSignal = DrainSignal
     }
 
 {- | Allocate a live, lowered shutdown-drain signal backed by a 'TVar'. @runWarp@
-allocates one per launch and flips it from the signal handler; the @application@ it
-builds reads the very same signal, so the readiness probe and the going-away
-middleware see the drain the instant the handler raises it.
+allocates one per launch, hands it to the @application@ builder through the
+'ServerConfig' it passes, and flips it from the signal handler, so the readiness
+probe and the going-away middleware read the very same signal the instant the handler
+raises it.
 -}
 newDrainSignal :: IO DrainSignal
 newDrainSignal = do

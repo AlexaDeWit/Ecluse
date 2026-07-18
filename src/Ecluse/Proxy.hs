@@ -366,7 +366,7 @@ shared 'Ecluse.Core.Server.Route.Route' set. Splitting the server into its own
 binary later reuses this same entry.
 -}
 runServer :: ServerConfig -> Env -> IO ()
-runServer cfg env = Server.runWarp cfg (Server.tracedApplication cfg env)
+runServer cfg env = Server.runWarp cfg (`Server.tracedApplication` env)
 
 {- Warp's exception hook over the process logger: a post-commit teardown the
 request perimeter rethrew, or a fault in warp's own connection handling, logged
