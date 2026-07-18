@@ -117,6 +117,24 @@ spec = describe "resolveMemoryPlan" $ do
             mpOverrideViolations plan `shouldSatisfy` (not . null)
             mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
 
+    it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
+        -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
+        -- check-config prints, pinned so any operator-visible change is reviewed.
+        let (_, lines') = resolve bareCache bareLimits bareQueue Nothing (planWith (Just gib)) MemoryQueueTenant True
+            ceilingClause = " (computed from heap ceiling " <> show gib <> ", derived from the cgroup limit)"
+        lines'
+            `shouldBe` [ "memory plan: runtime reserve 214748364" <> ceilingClause
+                       , "runtime: serve admission 40 (computed from 4 capabilities)"
+                       , "memory plan: admission capacity 2" <> ceilingClause
+                       , "memory plan: material aggregate 386547028" <> ceilingClause
+                       , "memory plan: response byte cap 12884900" <> ceilingClause
+                       , "memory plan: request byte cap 104857600" <> ceilingClause
+                       , "memory plan: cache byte bound 257698038" <> ceilingClause
+                       , "memory plan: cache entry bound 983" <> ceilingClause
+                       , "memory plan: publish aggregate 128849019" <> ceilingClause
+                       , "memory plan: memory-queue depth 41943" <> ceilingClause
+                       ]
+
     describe "the combined invariant (property)" $
         it "holds after the solver for every computed pod, or the plan names the irreducible overshoot" $
             hedgehog $ do
