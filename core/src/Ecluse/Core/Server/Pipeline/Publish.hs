@@ -35,7 +35,7 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
-import Ecluse.Core.Security (LimitError (BodyTooLarge), Limits (maxBodyBytes), boundedRead)
+import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -108,7 +108,8 @@ publishWithDeps replies deps name request respond
             -- perimeter. Read only after the scope guard admitted the name, so a
             -- refused publish never even buffers its (large, base64-tarball) body.
             liftIO (boundedRead requestBodyLimits (getRequestBodyChunk request)) >>= \case
-                Left (BodyTooLarge _cap) -> pure (publishTooLarge replies deps)
+                -- 'boundedRead' reports only 'BodyTooLarge'; any breach of the request cap is the 413.
+                Left _ -> pure (publishTooLarge replies deps)
                 -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
                 -- guard authorised the URL-path name, but the publish document carries its own
                 -- declared identity, so a crafted body could otherwise write a name the guard never
