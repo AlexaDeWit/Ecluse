@@ -30,6 +30,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
+import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
@@ -94,6 +95,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubHelp = Nothing
         , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
         , pubCanonicaliseName = rightToMaybe . Project.projectName
+        , pubDeclaredNames = NpmPublish.declaredNames
         }
 
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps

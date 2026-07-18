@@ -79,7 +79,8 @@ data RegistryAdapter = RegistryAdapter
     , adapterArtifact :: AdapterArtifact
     -- ^ The artifact request formation, by filename and by authoritative URL.
     , adapterPublish :: AdapterPublish
-    {- ^ The publish capability: the first-party relay, the name canonicaliser, and
+    {- ^ The publish capability: the first-party relay, the name canonicaliser, the
+    declared-name extractor the anti-shadowing guard reads a publish body through, and
     the mirror write's protocol codec.
     -}
     }
@@ -171,10 +172,12 @@ data AdapterArtifact = AdapterArtifact
     }
 
 {- | The ecosystem's publish capability: relaying a client's own publish document,
-canonicalising a raw package name, and the mirror-write protocol codec. The relay
-and canonicaliser have exactly the shapes the consuming dependency record carries
-('Ecluse.Core.Server.Context.pubRelayPublish' and
-'Ecluse.Core.Server.Context.pubCanonicaliseName'); the codec is the protocol half
+canonicalising a raw package name, extracting the names a publish body declares, and
+the mirror-write protocol codec. The relay, canonicaliser, and declared-name extractor
+have exactly the shapes the consuming dependency record carries
+('Ecluse.Core.Server.Context.pubRelayPublish',
+'Ecluse.Core.Server.Context.pubCanonicaliseName', and
+'Ecluse.Core.Server.Context.pubDeclaredNames'); the codec is the protocol half
 of the mirror write, which the composition root marries to the shared publish
 transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
@@ -183,6 +186,13 @@ data AdapterPublish = AdapterPublish
     -- ^ Relay a client's publish document to the publication target, returning its response.
     , publishCanonicaliseName :: Text -> Maybe PackageName
     -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.
+    , publishDeclaredNames :: LByteString -> [Text]
+    {- ^ Extract every package name a publish body declares as its own identity, read
+    from the ecosystem's own publish-document schema. The neutral publish pipeline's
+    anti-shadowing body-name guard injects this and refuses any declared name that
+    disagrees with the URL-path name, so npm's document shape stays adapter-side rather
+    than coupling the pipeline. A body that declares no readable name yields @[]@.
+    -}
     , publishCodec :: PublishCodec
     {- ^ The mirror write's protocol codec: publish document assembly and request
     formation, the probe's request and version-list projection, and the status

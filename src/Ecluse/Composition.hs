@@ -79,6 +79,7 @@ import Ecluse.Core.Registry.Adapter (
     metadataAssemble,
     metadataNewClient,
     publishCanonicaliseName,
+    publishDeclaredNames,
     publishRelay,
  )
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
@@ -316,8 +317,8 @@ publish policy itself is 'validateComposition''s to refuse; construction here
 assumes it and is only consumed on an error-free compose. The target's URL, the
 scopes, and the static fallback credential are the publish env layer; the response
 bounds ('Limits') and help message are shared with the read paths and passed in;
-the relay and the name canonicaliser are the ecosystem's own capability, projected
-from its registered adapter.
+the relay, the name canonicaliser, and the declared-name extractor are the
+ecosystem's own capability, projected from its registered adapter.
 -}
 publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
 publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
@@ -336,6 +337,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
             , pubHelp = helpMessage
             , pubRelayPublish = publishRelay (adapterPublish adapter)
             , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
+            , pubDeclaredNames = publishDeclaredNames (adapterPublish adapter)
             }
   where
     inboundToken :: Maybe Secret

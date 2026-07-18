@@ -18,13 +18,8 @@ module Ecluse.Core.Server.Pipeline.Publish (
     servePublish,
 ) where
 
-import Data.Aeson (Value (String))
-import Data.Aeson qualified as Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 
-import Lens.Micro ((^?))
-import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status413, status500, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength)
 
@@ -115,7 +110,7 @@ publishWithDeps replies deps name request respond
                 -- declared identity, so a crafted body could otherwise write a name the guard never
                 -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
                 -- URL-path name, so the identity authorised is provably the identity written.
-                Right body -> case bodyNameDisagreement (pubCanonicaliseName deps) name (LBS.fromStrict body) of
+                Right body -> case bodyNameDisagreement (pubDeclaredNames deps) (pubCanonicaliseName deps) name (LBS.fromStrict body) of
                     Just declared -> pure (bodyNameMismatch replies deps name declared)
                     -- The relay reports its failures as the typed 'PublishRelayFault'
                     -- value, so the render below is a total match -- nothing caught, and
@@ -227,39 +222,21 @@ bodyNameMismatch replies deps name declared =
 
 {- The first declared body name that disagrees with the URL-path name, or 'Nothing'
 when the body declares no disagreeing name. The publish document carries its own
-identity -- a top-level @_id@ and @name@, and a @name@ per entry in @versions@ -- so a
-relay that keyed the write off the body could otherwise write a name the scope guard
-never authorised. Each __present__ declared name is canonicalised the same way the
-route builds its 'PackageName' ('projectName') and compared by 'PackageName' equality
-(ecosystem-aware, so an encoding variant of the same name cannot disagree silently); a
-present name that does not equal the URL-path name is a disagreement. Only the names
-are read -- the base64 @_attachments@ are never decoded. An __absent__ name is not a
-claim, so it is not a disagreement (a legitimate npm client always sends matching
-names); a body that does not decode to a JSON object likewise declares no readable
-name and raises none, leaving the relay to meet the target's own validation. -}
-bodyNameDisagreement :: (Text -> Maybe PackageName) -> PackageName -> LByteString -> Maybe Text
-bodyNameDisagreement canonicalise name body =
-    case Aeson.decode body of
-        Nothing -> Nothing
-        Just document -> find disagrees (declaredNames document)
+identity, so a relay that keyed the write off the body could otherwise write a name the
+scope guard never authorised. The ecosystem's own 'pubDeclaredNames' extractor reads
+each present declared name from the raw body (the publish-document schema is the
+adapter's knowledge, not this neutral pipeline's), and each is canonicalised the same
+way the route builds its 'PackageName' and compared by 'PackageName' equality
+(ecosystem-aware, so an encoding variant of the same name cannot disagree silently). A
+present name that does not equal the URL-path name is a disagreement. An __absent__
+name is not a claim, so it is not a disagreement (a legitimate client always sends
+matching names); a body the extractor reads no name from raises none, leaving the relay
+to meet the target's own validation. -}
+bodyNameDisagreement :: (LByteString -> [Text]) -> (Text -> Maybe PackageName) -> PackageName -> LByteString -> Maybe Text
+bodyNameDisagreement declaredNames canonicalise name body =
+    find disagrees (declaredNames body)
   where
     disagrees :: Text -> Bool
     disagrees declared = case canonicalise declared of
         Just declaredName -> declaredName /= name
         Nothing -> True
-
--- Every package-name string a publish document declares as its own identity: the
--- top-level @_id@ and @name@, and each @versions.<v>.name@. Only string-valued name
--- slots are read (a non-string slot is no name claim); the base64 @_attachments@ are
--- never touched.
-declaredNames :: Value -> [Text]
-declaredNames document =
-    [ declared
-    | slot <-
-        [document ^? key "_id", document ^? key "name"]
-            <> [ versionDoc ^? key "name"
-               | versions <- maybeToList (document ^? key "versions" . _Object)
-               , versionDoc <- KeyMap.elems versions
-               ]
-    , Just (String declared) <- [slot]
-    ]

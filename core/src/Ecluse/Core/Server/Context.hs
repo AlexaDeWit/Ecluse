@@ -389,6 +389,14 @@ data PublishDeps = PublishDeps
     {- ^ Canonicalise a raw package-name string to a 'PackageName', or 'Nothing' if
     it cannot be parsed. Used by the body-name agreement guard.
     -}
+    , pubDeclaredNames :: LByteString -> [Text]
+    {- ^ Extract every package name a publish body declares as its own identity, the
+    ecosystem's own reading of its publish-document schema
+    ('Ecluse.Core.Registry.Adapter.Types.publishDeclaredNames'). The body-name
+    agreement guard canonicalises each and refuses any that disagrees with the URL-path
+    name, so the pipeline compares names without knowing the wire schema. A body that
+    declares no readable name yields @[]@.
+    -}
     }
 
 {- | How one matched request is served: by the proxy itself, or through the data plane.
