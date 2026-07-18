@@ -13,6 +13,7 @@ import Test.Hspec
 import Ecluse.Config (
     AdvisoriesSettings (..),
     AppConfig (..),
+    CacheSettings (..),
     Config (..),
     ConfigError,
     EgressSettings (..),
@@ -117,6 +118,27 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
             `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
 
+    it "rejects a malformed publishAllow entry (a wrong separator folds into one dead scope), naming publishAllow" $
+        -- A stray separator used to fold into a single unmatchable scope that still
+        -- passed the non-empty boot check, refusing every publish only at request time.
+        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme;@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+
+    it "rejects a publishAllow with an empty segment from a stray comma, naming publishAllow" $
+        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme,,@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+
+    it "accepts a well-formed comma-separated publishAllow (trimmed, leading sigil tolerated)" $
+        case loadConfig
+            ( pubUrlEnv
+                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+                   , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme, beta")
+                   ]
+            )
+            Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =
                 "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://m1.example.test\",\"mirrorTargetToken\":\"t\"},\
@@ -160,6 +182,40 @@ spec = describe "decodeDocument" $ do
     it "rejects an advisories.compileInterval whose microsecond conversion would overflow Int" $
         loadConfig [] (Just "{\"advisories\":{\"compileInterval\":9223372036855}}")
             `shouldSatisfy` decodeErrorMentions "advisories.compileInterval"
+
+    it "rejects a fractional cache.ttl, naming the field (a fraction was silently truncated before)" $
+        loadConfig [] (Just "{\"cache\":{\"ttl\":2.7}}")
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
+    it "rejects a huge-exponent cache.ttl without realising the integer (no boot hang or OOM)" $
+        -- The env overlay JSON-decodes this to a Scientific verbatim, reaching
+        -- parseSeconds' Number branch. A raw truncate would try to materialise an
+        -- astronomically large Integer at boot; the bounded parse fails instantly.
+        loadConfig [("ECLUSE_CACHE__TTL", "1e999999999999")] Nothing
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
+    it "rejects a huge-exponent advisories.pollInterval (the delay path is guarded too)" $
+        loadConfig [("ECLUSE_ADVISORIES__POLL_INTERVAL", "1e999999999999")] Nothing
+            `shouldSatisfy` decodeErrorMentions "advisories.pollInterval must be a non-negative integer count of seconds"
+
+    it "accepts a zero and a positive integer cache.ttl (the pre-fix accepted forms, unchanged)" $ do
+        case loadConfig [] (Just "{\"cache\":{\"ttl\":0}}") of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 0
+        case loadConfig [("ECLUSE_CACHE__TTL", "120")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
+
+    it "accepts a quoted integer cache.ttl and rejects a quoted fractional one (both branches agree)" $ do
+        case loadConfig [] (Just "{\"cache\":{\"ttl\":\"120\"}}") of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
+        loadConfig [] (Just "{\"cache\":{\"ttl\":\"2.7\"}}")
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
+    it "rejects a cache.ttl that is neither a string nor a number, naming the field" $
+        loadConfig [] (Just "{\"cache\":{\"ttl\":true}}")
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
     it "rejects a non-positive advisories.maxDatabaseBytes" $
         loadConfig [] (Just "{\"advisories\":{\"maxDatabaseBytes\":0}}")

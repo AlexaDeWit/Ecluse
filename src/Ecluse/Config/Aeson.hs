@@ -11,8 +11,10 @@ import Data.Aeson (FromJSON (..), Value (..), withObject, withText, (.!=), (.:),
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
+import Data.Char (isSpace)
 import Data.IP (IPRange)
 import Data.Map.Strict qualified as Map
+import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
@@ -69,7 +71,21 @@ parseScopes :: Value -> Parser [Scope]
 parseScopes = withText "Scopes" $ \t ->
     if T.null (T.strip t)
         then pure []
-        else pure (map (mkScope . T.strip) (T.splitOn "," t))
+        else traverse parseScopeEntry (T.splitOn "," t)
+
+-- Reject a publishAllow segment that no conforming scope can equal (an empty
+-- segment from a stray comma, or one bearing a wrong separator), so a typo fails
+-- the load rather than seeding a dead allow-list that refuses every publish at
+-- request time. Mirrors 'parseBlockedRangeEntry' for the sibling comma list.
+parseScopeEntry :: Text -> Parser Scope
+parseScopeEntry entry =
+    let trimmed = T.strip entry
+        body = fromMaybe trimmed (T.stripPrefix "@" trimmed)
+     in if T.null body || T.any invalidScopeChar body
+            then fail ("invalid scope in publishAllow: " <> show trimmed)
+            else pure (mkScope trimmed)
+  where
+    invalidScopeChar c = c == '/' || c == '@' || isSpace c
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" appConfigParser
@@ -128,7 +144,7 @@ cacheParser :: KeyMap.KeyMap Value -> Parser CacheSettings
 cacheParser o = do
     rejectUnknownKeys "cache" ["ttl", "maxEntries", "maxBytes"] o
     CacheSettings
-        <$> (o .: "ttl" >>= parseSeconds)
+        <$> (o .: "ttl" >>= parseSeconds "cache.ttl")
         <*> (o .:? "maxEntries" >>= traverse (parsePositiveInt "cache.maxEntries"))
         <*> (o .:? "maxBytes" >>= traverse (parsePositiveInt "cache.maxBytes"))
 
@@ -221,14 +237,28 @@ parseBlockedRangeEntry entry =
             Just range -> pure range
             Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack trimmed)
 
-parseSeconds :: Value -> Parser NominalDiffTime
-parseSeconds (String t) = case readMaybe (T.unpack t) :: Maybe Integer of
-    Just n | n >= 0 -> pure (fromInteger n)
-    _ -> fail ("expected a non-negative integer count of seconds, got " <> show t)
-parseSeconds (Number n) =
-    let val = truncate n :: Integer
-     in if val >= 0 then pure (fromInteger val) else fail "expected a non-negative integer count of seconds"
-parseSeconds _ = fail "expected a String or Number for Seconds"
+parseSeconds :: String -> Value -> Parser NominalDiffTime
+parseSeconds field = \case
+    String t -> case readMaybe (T.unpack t) :: Maybe Integer of
+        Just n -> boundedSeconds field n
+        Nothing -> secondsFailure field (show t)
+    -- 'toBoundedInteger' refuses a fractional or out-of-'Int64'-range value, and
+    -- its exponent guard rejects a pathological 1e999999999999 without ever
+    -- realising the integer, so a hostile config or env value fails the load
+    -- instead of hanging or exhausting memory at boot.
+    Number n -> case toBoundedInteger n :: Maybe Int64 of
+        Just val -> boundedSeconds field (toInteger val)
+        Nothing -> secondsFailure field (show n)
+    other -> fail (field <> " must be a non-negative integer count of seconds, but encountered a " <> valueKind other)
+
+boundedSeconds :: String -> Integer -> Parser NominalDiffTime
+boundedSeconds field n
+    | n >= 0 && n <= toInteger (maxBound :: Int64) = pure (fromInteger n)
+    | otherwise = secondsFailure field (show n)
+
+secondsFailure :: String -> String -> Parser a
+secondsFailure field got =
+    fail (field <> " must be a non-negative integer count of seconds, got " <> got)
 
 parsePositiveInt :: String -> Int -> Parser Int
 parsePositiveInt field value
@@ -241,7 +271,7 @@ rather than wrapping into an invalid negative delay.
 -}
 parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
 parseDelaySeconds field v = do
-    secs <- parseSeconds v
+    secs <- parseSeconds field v
     let n = truncate secs :: Integer
         maxDelay = toInteger (maxBound :: Int) `div` 1_000_000
     if n >= 1 && n <= maxDelay
