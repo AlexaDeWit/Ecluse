@@ -209,7 +209,7 @@ The gate is Codecov's two commit statuses, both in [`codecov.yml`](../codecov.ym
 (`use_oidc: true`), so there's no `CODECOV_TOKEN` to leak. Library code only is measured; `app/**`,
 `bench/**`, and `test/**` are excluded, and every `Ecluse.Test.*` module of `ecluse-test-support` is
 dropped from the HPC report too. Which derived instances the 85% patch bar treats as accepted
-partials is decided in [`STYLE.md`](../STYLE.md) → "Data types and deriving".
+partials is decided in [`docs/style.md`](style.md) → "Data types and deriving".
 
 **References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) ·
 [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image

@@ -43,6 +43,46 @@ SQS backend; a Pub/Sub topic resource names the GCP backend (roadmap, see [Servi
 mapping](#service-mapping)); with no URL set, mirroring runs on a bounded in-memory queue
 (non-durable, best-effort) with a boot warning.
 
+The worker fetches each accepted artifact from the public upstream, verifies its bytes
+against the version's integrity hash, and publishes to the mirror target via the credential
+handle. Retry is "don't ack"; at-least-once delivery is safe because publishing is
+idempotent.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Mirror worker
+    participant Queue as Mirror queue
+    participant Pub as Public upstream
+    participant Cred as CredentialProvider
+    participant Mirror as Mirror target
+
+    loop consume loop
+        W->>Queue: receive (long-poll)
+        alt no message
+            Queue-->>W: empty batch (timeout)
+        else job delivered
+            Queue-->>W: mirror job
+            W->>Pub: fetch artifact
+            Pub-->>W: bytes
+            Note over W: verify bytes against dist.integrity
+            alt hash mismatch
+                W-->>Queue: do not ack (retry / DLQ) + alarm
+            else verified
+                W->>Cred: currentToken
+                Cred-->>W: bearer token
+                W->>Mirror: publishArtifact (npm protocol + token)
+                alt published or already-exists
+                    W->>Queue: ack
+                else publish failed
+                    W-->>Queue: do not ack (retry / DLQ)
+                end
+            end
+        end
+    end
+    Note over W,Mirror: at-least-once delivery + idempotent publish
+```
+
 ### Process model: the unified multicall binary
 
 Écluse ships as a single image with three sub-commands, `ecluse proxy`, `ecluse pilot` (OSV
@@ -164,6 +204,27 @@ with backoff behind a circuit breaker (the same machinery as the
 is left un-acked and retries or dead-letters, never touching the serve path. The `static`
 provider never refreshes, and the clock is injected, so the policy is unit-tested
 deterministically.
+
+A `CredentialProvider` refreshes a registry token off its own `expiresAt`, proactively and
+single-flight, so the hot path never blocks on a mint. The token is mirror-write only, so
+even a failed refresh touches only the mirror publish, never the serve path.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Valid: first mint
+    Valid --> Refreshing: nearing expiry (proactive, single-flight)
+    Refreshing --> Valid: mint succeeds
+    Refreshing --> Valid: mint fails, token still valid (backoff + breaker, alarm)
+    Valid --> Expired: TTL elapsed before a successful mint
+    Expired --> Valid: mint succeeds
+    Expired --> PublishFails: expired and mint still failing
+    PublishFails --> Valid: mint recovers
+    note right of PublishFails
+        The mirror publish is the only dependent op:
+        the job is left un-acked and retries /
+        dead-letters, never touching the client serve path.
+    end note
+```
 
 ### Queue abstraction
 

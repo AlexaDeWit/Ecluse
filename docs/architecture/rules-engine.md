@@ -14,7 +14,7 @@ deny overrides any allow" holds out of the box, but an operator can rank a speci
 specific deny (say, to let a trusted internal scope through an install-script deny).
 
 Rules evaluate a single `PackageDetails` snapshot, the ecosystem-agnostic per-version view an
-adapter produces (see [Internal domain model](domain-model.md)); a rule never sees registry wire
+adapter produces (see [The internal domain model](registry-model.md#the-internal-domain-model)); a rule never sees registry wire
 formats, and rule names track the agnostic concept, not one ecosystem's mechanism (the install-time
 code-execution signal, not npm's `hasInstallScript`). Where a signal a rule reads is simply absent
 for an ecosystem, the rule yields no decision, the sensible no-op under deny-by-default, never a
@@ -156,7 +156,7 @@ It ranks above the quarantine allow (so a fix is admitted immediately) and below
 (so a trusted scope never pays the probe). The fix test is a deliberate exact string match on the
 advisory's canonical `fixed` version; a fix published under any other string waits out the quarantine,
 with `AllowByIdentity` as the operator's workaround. Range membership is decided in Haskell using the
-same per-ecosystem ordering as [`compareVersions`](domain-model.md), with every unprovable comparison
+same per-ecosystem ordering as [`compareVersions`](registry-model.md#the-internal-domain-model), with every unprovable comparison
 counting as affected, so the lane only opens on evidence.
 
 ### `DenyIfCve`, the deny direction

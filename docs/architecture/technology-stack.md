@@ -10,7 +10,7 @@
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Raw WAI routing, not a framework; `wai-extra` supplies size limits, real-IP, and timeouts. See [Web layer](web-layer.md#web-layer). |
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the managed-registry npm endpoints. Kept off `amazonka`'s `ResourceT` path. |
 | JSON | `aeson` | Metadata parsing (lenient inbound decoding), rule config, queue payloads, denial bodies. |
-| API manifest / schemas | `autodocodec` + `openapi3` | Owned types derive their `aeson` codec and the OpenAPI / JSON Schema from one codec, so the schema cannot drift from the wire. See [API surface](api-surface.md). |
+| API manifest / schemas | `autodocodec` + `openapi3` | Owned types derive their `aeson` codec and the OpenAPI / JSON Schema from one codec, so the schema cannot drift from the wire. See [Capability manifest](web-layer.md#capability-manifest). |
 | Observability | `hs-opentelemetry` (OTLP) | Traces and metrics over OTLP, opt-in and off by default. Package roles in [Observability](observability.md). |
 | Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity), `amazonka-s3` (advisory object storage), `amazonka-core`. |
 | Cloud, GCP | `gogol` *or* a REST client (roadmap) | Pub/Sub queue and Artifact Registry token, gated on a spike; see [Cloud backends](cloud-backends.md#cloud-backends). |
@@ -51,4 +51,4 @@ the composition-root `Env`, never a `StateT` layer, which would lose state acros
 bespoke API, so its OpenAPI document is a capability manifest, generated from the closed
 `Route` enumeration and the configured mounts. Owned responses are modelled code-first via
 `autodocodec` so the schema cannot drift from the wire. Full rationale in
-[API surface](api-surface.md).
+[Capability manifest](web-layer.md#capability-manifest).

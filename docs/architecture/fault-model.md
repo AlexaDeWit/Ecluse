@@ -4,7 +4,7 @@ How Écluse decides what a failure is, where it's allowed to travel, and who ans
 Routine failures are values carried on typed channels; the few deliberate exceptions are
 confined to a named boundary; and everything that still escapes is met by one of exactly two
 outer edges, each with an explicit disposition. This document is the vocabulary those decisions
-are made in. The coding rules it leans on are [STYLE.md rules 10-11](../../STYLE.md), and the
+are made in. The coding rules it leans on are [docs/style.md rules 10-11](../style.md), and the
 operator-facing surfaces it feeds are in [Observability](observability.md).
 
 ## The two edges
@@ -50,7 +50,7 @@ its policy.
 ## The disposition vocabulary
 
 Every fault, wherever it surfaces, gets exactly one disposition. Naming it first is what keeps
-the shape honest (STYLE.md rule 11.6).
+the shape honest (docs/style.md rule 11.6).
 
 | Surface | Dispositions |
 | --- | --- |
@@ -94,7 +94,7 @@ has the library's type in scope folds it into the core vocabulary (`Ecluse.Core.
 
 ## The stays-inner catch inventory
 
-The remaining broad catches, each with the local knowledge that justifies it (STYLE.md rule
+The remaining broad catches, each with the local knowledge that justifies it (docs/style.md rule
 11.4). This list is the review baseline: a `tryAny`/`catchAny` in `core/src`, `runtime/src`, or
 `src/` that is neither below nor justified inline the same way is a review flag.
 

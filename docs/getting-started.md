@@ -79,7 +79,7 @@ path, `nix flake update` or Renovate's weekly `flake.lock` refresh. Renovate wid
 ## Codebase layout
 
 The *principles* of module organisation (types with their functions, one `Ecluse.<Area>` namespace
-per area, when a `.Types` split is justified) live in [`STYLE.md`](../STYLE.md) →
+per area, when a `.Types` split is justified) live in [`docs/style.md`](style.md) →
 "Module organisation". This section records the current layout and one project-specific pattern.
 
 - **Two libraries behind one `ecluse.cabal`.** The pure capability core is `ecluse-core` (`core/src`,

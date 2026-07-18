@@ -6,7 +6,7 @@ repository's requirements. This file is policy; the practical guides live alongs
 - **Set up and build** ([Getting Started](docs/getting-started.md)): Nix, the `task` loop,
   reproducible builds, dependency locking.
 - **Testing** ([Testing Strategy](docs/testing.md)): the tiers, what gates, and coverage.
-- **Code style** ([`STYLE.md`](STYLE.md)); documentation ([`HADDOCK.md`](HADDOCK.md)).
+- **Code style** ([`docs/style.md`](docs/style.md)); documentation ([`docs/haddock.md`](docs/haddock.md)).
 - **Design** ([`docs/architecture.md`](docs/architecture.md)).
 - **CI, caches, and Semgrep internals**, and agent instructions ([`AGENTS.md`](AGENTS.md)).
 
@@ -92,7 +92,7 @@ Signed-off-by: Your Name <you@example.com>
 - **Commits are GPG-signed** and **DCO signed off** (see above); **non-trivial AI
   assistance is disclosed** with an `Assisted-by:` trailer.
 - **Every Haskell source file carries an SPDX licence header.** `task spdx-fix` stamps it,
-  `task lint-spdx` gates it in `static-checks` ([STYLE.md](STYLE.md#14-licence-headers)).
+  `task lint-spdx` gates it in `static-checks` ([docs/style.md](docs/style.md#14-licence-headers)).
 - **Pin every GitHub Action to a full commit SHA** (never a tag), with the version in a
   trailing comment; Renovate bumps them. The shared toolchain setup (install Nix, restore
   the caches) lives once in the `setup-toolchain` composite action, and CI jobs enter the

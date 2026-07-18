@@ -77,6 +77,34 @@ credential from the mirror write.
 - **Opt-in.** The path exists only when `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set; otherwise a
   `PUT /{pkg}` is `405 Method Not Allowed`.
 
+A client's `npm publish` (`PUT /{pkg}`) is gated by the operator's publish-scope allow-list
+(the anti-shadowing guard, rejecting before any upstream write) and relayed to the publication
+target with the publisher's own forwarded credential, distinct from the mirror target. It is
+opt-in: with no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`, `PUT /{pkg}` is a `405`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Publisher
+    participant E as Écluse
+    participant PubT as Publication target
+
+    Client->>E: PUT /{pkg} (npm publish: document + client token)
+    alt no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET configured
+        E-->>Client: 405 Method Not Allowed
+    else publication target configured
+        Note over E: enforce publish-scope allow-list<br/>(anti-shadowing, reject before any write)
+        alt name out of scope
+            E-->>Client: 4xx npm-shaped error (no upstream write)
+        else name in scope
+            E->>PubT: publishArtifact (client token forwarded)
+            PubT-->>E: result (publication target authorises the publisher)
+            E-->>Client: npm success shape
+        end
+    end
+    Note over E,PubT: write-only from the proxy, read back via the private upstream
+```
+
 ## Serving a tarball
 
 A tarball is one concrete version from one source, so a private-upstream hit is streamed straight
@@ -104,6 +132,42 @@ That location is gated, not trusted: the allowlist and same-host gate bound wher
 fetched, https-only egress with certificate validation authenticates the host, and a legacy `http`
 tarball is upgraded (same host) or dropped (see
 [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
+
+A private hit is streamed unfiltered; a private miss gates that one version, then streams
+from public and enqueues a demand-driven mirror job, non-blocking, so the client is served
+immediately. See [Streaming](web-layer.md#streaming-and-resource-lifetime) and
+[Mirror queue](cloud-backends.md#mirror-queue).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant E as Écluse
+    participant Priv as Private upstream
+    participant Pub as Public upstream
+    participant Rules as Rules engine
+    participant Queue as Mirror queue
+
+    Client->>E: GET tarball (e.g. npm ci, direct)
+    E->>Priv: fetch (client token forwarded)
+    alt private hit (2xx)
+        Priv-->>E: tarball stream
+        E-->>Client: stream unfiltered (already vetted)
+    else private miss
+        E->>Pub: fetch version metadata (anonymous)
+        E->>Rules: evaluate that one version
+        alt denied
+            E-->>Client: 403 + denial message
+        else unavailable
+            E-->>Client: 503 Retry-After or 500
+        else admitted
+            E->>Pub: stream artifact bytes
+            E-->>Client: stream (constant memory, backpressure)
+            E-)Queue: enqueue mirror job (best-effort)
+        end
+    end
+    Note over E,Queue: demand-driven, enqueue only when a tarball is accepted
+```
 
 ## Packument merge across upstreams
 
@@ -145,6 +209,43 @@ to the raw `Value`.
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
   nothing resolves does the request error.
 
+Private and public upstreams are fetched in parallel and merged (private wins, integrity
+divergence flagged); public versions are gated by the rules, and metadata filters but never
+mirrors. See [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant E as Écluse
+    participant Cache as Metadata cache
+    participant Priv as Private upstream
+    participant Pub as Public upstream
+    participant Rules as Rules engine
+
+    Client->>E: GET packument
+    par fetch upstreams in parallel
+        E->>Priv: fetch (client token forwarded)
+        Priv-->>E: packument (or miss)
+    and
+        E->>Cache: lookup parsed public metadata
+        alt cache miss
+            E->>Pub: fetch (anonymous, token stripped)
+            Pub-->>E: packument (or miss)
+            E->>Cache: store parsed metadata (short TTL)
+        end
+    end
+    E->>Rules: evaluate every public version
+    Rules-->>E: verdicts (allow / deny / unavailable)
+    Note over E: filter gated (public) versions, trust private,<br/>merge (private wins, flag integrity divergence),<br/>repoint latest, recompute ETag over merged body
+    alt no survivors in merge
+        E-->>Client: 403 policy / 503 transient or upstream-unavailable
+    else some admitted
+        E-->>Client: merged + filtered packument
+    end
+    Note over E,Pub: packument requests filter but never mirror
+```
+
 ### The route name is the served name's validation authority
 
 The proxy knows the requested name from the route, so an upstream's self-reported top-level `name`
@@ -164,7 +265,7 @@ The merge decides over the typed `PackageInfo` but serves the raw upstream JSON 
 place: only surviving versions taken, their tarball URLs rewritten, `latest` carried from the plan,
 every unmodeled key relayed unchanged. The body is never re-serialised from the lossy typed model,
 which is why its schema is
-[owned by the API surface](api-surface.md#the-synthesised-packument-schema--the-trust-boundary).
+[owned by the API surface](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
 
 ### Graceful degradation: per-version, not per-package
 
@@ -211,6 +312,41 @@ detect this from the outside (the private upstream is trusted by construction), 
 internal registry disconnected from public is an operator-architecture invariant, catalogued in the
 [threat model](https://ecluse-proxy.com/threat-model.html).
 
+## The internal domain model
+
+`PackageDetails` ([`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs))
+is the ecosystem-agnostic per-version snapshot every adapter produces and the rules engine
+consumes; its shape follows the npm, PyPI, and RubyGems protocol studies in
+[`research/reverse-engineering/`](../research/reverse-engineering/README.md). Two principles
+govern it:
+
+- **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.
+  Adapters project each wire format into normalised signals: a rule sees `CodeExecSignal`,
+  `Trust`, `Availability`, never `hasInstallScript`, `packagetype`, or `extensions`.
+- **Signal availability is explicit.** A signal the adapter has not (or cannot cheaply)
+  determined is represented as such (`CodeExecUnknown`, `TrustUnknown`, `Nothing`), so a pure
+  rule yields no decision rather than guessing and an effectful rule can resolve it later.
+
+### The shared vocabulary
+
+| Concern | Representation | Why |
+|---|---|---|
+| **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering are on `(ecosystem, namespace, canonical)`; the display and base forms are excluded. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity; matching uses the canonical key while rendering stays faithful. |
+| **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain, but the version is still served. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
+| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions; `Unknown` carries the gemspec-fetch case. |
+| **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`; `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing, attestation, and MFA differ per ecosystem but reduce to one signal; the evidence captures the how without the ecosystem. |
+| **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates and RubyGems yanks whole versions; PyPI yanks individual files, so the per-file flag keeps "listed-but-yanked" and lets exact pins resolve. |
+| **Artifacts** | A version owns `NonEmpty Artifact`; each carries algorithm-tagged `Hash`es, kind/platform, size, interpreter constraint, and a provenance URL. | npm has one tarball; PyPI an sdist plus many wheels; RubyGems one gem per platform. |
+| **Dependencies** | Deliberately not modelled, nor parsed off the wire. | A dependency matters only when itself fetched, and that fetch returns through this gate for its own verdict, so gating a parent's dependency list would duplicate the gate on every child. The raw document still relays the lists untouched. Restore the `Dependency` / `DepKind` vocabulary from history if a dependency-reading rule is designed. |
+
+The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),
+[`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs), and
+[`Ecluse.Core.Ecosystem`](../../core/src/Ecluse/Core/Ecosystem.hs).
+
+A served packument is the merge of several upstreams' `PackageInfo`; see
+[Registry model → Packument merge](registry-model.md#packument-merge-across-upstreams) for
+how trusted and gated provenances combine.
+
 ## Registry abstraction
 
 The proxy core is registry-agnostic. An ecosystem registers one capability record (`RegistryAdapter`,
@@ -230,7 +366,7 @@ failures as a typed value (`FetchFault` on a read, `PublishFault` on the mirror 
 rides up as an exception and a caller's retry-vs-drop decision is total at the call site. See
 [Technology stack → the effect model](technology-stack.md#key-decisions). Nothing above the registry
 layer imports registry-specific types: the core operates only on `PackageInfo` and `PackageDetails`
-(see [Internal domain model](domain-model.md)), and an adapter projects its wire format into these.
+(see [The internal domain model](#the-internal-domain-model)), and an adapter projects its wire format into these.
 The packument projection takes the route-requested `PackageName` as a validation input (see
 [route name validation](#the-route-name-is-the-served-names-validation-authority)).
 

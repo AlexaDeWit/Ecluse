@@ -22,6 +22,30 @@ resource policies), and authorisation granularity is not Écluse's concern. It's
 upstream authorisation model; the costs are a per-request round-trip and no sharing of the
 private origin across callers, both accepted by design.
 
+The client's credential is never sent to the public upstream. It is forwarded to the private
+upstream (the shipped passthrough posture) and, on publish, to the publication target; the
+worker writes the mirror target with Écluse's own token. See
+[Credential flow and authority](registry-model.md#credential-flow-and-authority).
+
+```mermaid
+flowchart LR
+    Client["Client (dev / CI)"]
+    subgraph E["Écluse"]
+        SRV["Server, reads + publish"]
+        WK["Worker, writes"]
+    end
+    Priv["Private upstream<br/>e.g. CodeArtifact"]
+    Pub["Public upstream"]
+    Mirror["Mirror target"]
+    PubT["Publication target<br/>(first-party publishes)"]
+
+    Client -->|"client credential"| SRV
+    SRV -->|"forwards the client credential"| Priv
+    SRV -->|"anonymous, client token stripped"| Pub
+    SRV -->|"forwards the client credential (publish)"| PubT
+    WK -->|"Écluse's own token (CredentialProvider)"| Mirror
+```
+
 ## Why Écluse never caches the private origin
 
 A shared cache of the private origin is tempting (one fetch could serve many callers) but never

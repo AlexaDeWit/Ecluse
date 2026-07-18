@@ -23,7 +23,7 @@ Layers 2-4 are replaceable. Do not copy layer 1 or whole design documents into a
 6. State the objective, applicable invariants, evidence sources, open questions, and next action.
 
 Do not read `AGENTS.md` again in a session: the harness injects it at startup. Do not read
-`CONTRIBUTING.md`, all of `STYLE.md`, every architecture document, or every memory file merely
+`CONTRIBUTING.md`, all of `docs/style.md`, every architecture document, or every memory file merely
 because it exists.
 
 ## Phase-specific retrieval

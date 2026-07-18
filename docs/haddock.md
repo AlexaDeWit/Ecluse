@@ -1,12 +1,12 @@
 # Haddock and documentation guide
 
 How we write the in-source documentation for Écluse (package `ecluse`). It is the
-companion to [`STYLE.md`](STYLE.md), which owns formatting, naming, totality, and the
+companion to [`docs/style.md`](style.md), which owns formatting, naming, totality, and the
 compiler flags, and is written to be followed directly.
 
 > When in doubt, match the nearest existing module.
-> [`core/src/Ecluse/Core/Package.hs`](core/src/Ecluse/Core/Package.hs) and
-> [`core/src/Ecluse/Core/Rules.hs`](core/src/Ecluse/Core/Rules.hs) are the reference
+> [`core/src/Ecluse/Core/Package.hs`](../core/src/Ecluse/Core/Package.hs) and
+> [`core/src/Ecluse/Core/Rules.hs`](../core/src/Ecluse/Core/Rules.hs) are the reference
 > implementations.
 
 ## What Haddock is for
@@ -14,8 +14,8 @@ compiler flags, and is written to be followed directly.
 Haddock is our **reference** documentation, the authoritative "what is this and how do I call it?"
 for the public API, rendered to a browsable site by `task docs` and published from `main`. It is one
 of the [four kinds of documentation](https://diataxis.fr/): reference, not tutorial, how-to, or
-explanation. Narrative and onboarding belong in [`README.md`](README.md) and
-[`docs/architecture.md`](docs/architecture.md), not spread across every function. Haddock answers the
+explanation. Narrative and onboarding belong in [`README.md`](../README.md) and
+[`docs/architecture.md`](architecture.md), not spread across every function. Haddock answers the
 focused question at each type and function: its contract, its caveats, and the reasoning a signature
 can't carry, in one-line summaries rather than a wall of prose.
 
@@ -122,7 +122,7 @@ the cabal file and `LICENSE`, so a plain prose header is the convention. Structu
 
 **Functions, with per-argument docs.** Annotate the contract the signature can't state, here a
 load-bearing totality (a crash would take down the gate), not a reflexive "pure and total" tag
-(STYLE.md §9.2):
+(docs/style.md §9.2):
 
 ```haskell
 {- | Evaluate a single rule against a single package version. Total: a
@@ -158,7 +158,7 @@ UTCTime  -- ^ When this version was published, if the registry reports it.`).
 ## 7. Organising a module for navigation
 
 **Group the export list with section headings** (`-- *`, `-- **`). They become the page's
-table of contents, the single biggest aid to a newcomer. (STYLE.md → "Exports" states the
+table of contents, the single biggest aid to a newcomer. (docs/style.md → "Exports" states the
 export-list-is-contract rule.)
 
 ```haskell
@@ -245,8 +245,8 @@ it is exactly what a type signature, a test, or a later reader cannot reconstruc
 
 Haddock is the durable contract, read long after any PR. Keep project-management narration out of it:
 no status or roadmap ("for now", "currently", "a later slice will…"); no slice/PR/issue references
-("(see S07)", "added in #42", "TODO(after the spike)"), which belong in git history and
-[`planning/`](planning/); no test-plumbing narration (document a test double where it is defined, not
+("(see S07)", "added in #42", "TODO(after the spike)"), which belong in git history and the issue
+tracker; no test-plumbing narration (document a test double where it is defined, not
 in the production module it stands in for). The test: if a sentence would read as false or pointless
 a year from now, once the "later" work has landed, it is project narration, so cut it.
 

@@ -3,7 +3,7 @@
 How **Écluse** (package `ecluse`) is built as a coordinated multi-agent effort. This document owns
 _process_; the system design is in [`../docs/architecture.md`](../docs/architecture.md), the
 development workflow and CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
-[`../STYLE.md`](../STYLE.md), and agent-facing essentials in [`../AGENTS.md`](../AGENTS.md).
+[`../docs/style.md`](../docs/style.md), and agent-facing essentials in [`../AGENTS.md`](../AGENTS.md).
 
 ## Roles
 
@@ -156,13 +156,13 @@ The implementer's own "it works" does not count; evidence does.
   doesn't](../docs/testing.md#what-gates-and-what-doesnt)). Nothing in the slice's architecture scope
   is silently dropped; changes stay within the slice's file scope (touching others needs strong
   justification); documentation is updated in the _same_ PR (per [`../AGENTS.md`](../AGENTS.md)).
-- **Stage B, quality and security.** Idiomatic Haskell per [`../STYLE.md`](../STYLE.md); totality;
+- **Stage B, quality and security.** Idiomatic Haskell per [`../docs/style.md`](../docs/style.md); totality;
   `-Werror`-clean; no unsafe or partial functions; a **security review** appropriate to a
   supply-chain tool (input parsing, deny-by-default invariants, injection-free workflows); **test
   quality** (properties present where required, e.g. rules-engine deny-precedence, not tautological
   assertions, with the foreseeable branches tested by intent; `codecov/patch` ≥ 85% is a CI backstop,
   not a number to chase); and **comment appropriateness** (Haddock documents the timeless contract
-  and the _why_, never project/roadmap/slice narration, per [`../HADDOCK.md`](../HADDOCK.md) §11).
+  and the _why_, never project/roadmap/slice narration, per [`../docs/haddock.md`](../docs/haddock.md) §11).
 
 Critical findings block; the fix is routed per **Fix routing** above, then re-verified.
 
@@ -176,7 +176,7 @@ dispatched, a dedicated agent audits the integrated tree (fresh context, read-an
 
 - **Structural improvements:** cross-slice duplication, misplaced or mis-sized modules, abstractions
   to share or split, leaky handles, and error/idiom patterns that diverged.
-- **Haddock cleanup:** gaps, drift, HADDOCK.md §11 violations (roadmap or slice narration that crept
+- **Haddock cleanup:** gaps, drift, docs/haddock.md §11 violations (roadmap or slice narration that crept
   in), inconsistent voice or cross-references.
 - **Performance problems likely to surface:** needless type conversions (the
   `String`/`Text`/`ByteString` bounce), avoidable re-parsing or re-allocation, lazy/strict
@@ -285,7 +285,7 @@ A PR reaches the architect only when **all** hold:
       plus a green CI run for batch work.
 - [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop, not a
       number chased locally).
-- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (HADDOCK.md §11).
+- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11).
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
 - [ ] CI `gate` (and every job it needs) green on the PR.
@@ -296,7 +296,7 @@ A PR reaches the architect only when **all** hold:
       an issue left open after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed and DCO `Signed-off-by` (`git commit -s`), Conventional Commits, AI help
       disclosed with `Assisted-by:`. The
-      [`open-pull-request`](../.agents/skills/open-pull-request/SKILL.md) skill is the recipe.
+      [`open-pull-request`](skills/open-pull-request/SKILL.md) skill is the recipe.
 - [ ] PR taken out of draft and marked **ready for review**, the hand-off itself, done only once
       every box above holds.
 
@@ -338,7 +338,7 @@ checklist. These are the standing rules it does not capture:
   call. Duplicated invariant logic drifts and gets fixed N times.
 - **Surface decisions one at a time.** When several design questions are open at once, the team lead
   does not front-load them all in one message. They are parked (a short-lived `design-queue.md` under
-  `planning/`, spun up when decisions accumulate and removed once drained into `docs/` and issues)
+  `.agents/`, spun up when decisions accumulate and removed once drained into `docs/` and issues)
   and brought one at a time, lead-with-a-recommendation. This complements _escalate, don't guess_:
   surface proactively, but serialised.
 - **Reference work by identifiers the architect can see.** Name a piece of work by its PR or issue
@@ -349,8 +349,9 @@ checklist. These are the standing rules it does not capture:
   pattern" for the abstraction and "integration boundary" / "interface contract" / "abstraction
   boundary" for where components meet.
 
-## What lives under `planning/`
+## What lives under `.agents/`
 
-This strategy; and, when design questions accumulate, a short-lived `design-queue.md` holding area
-(worked one at a time, then drained into `docs/` and issues, and removed once empty). See
-[README](README.md).
+Everything agent-facing: this strategy, the context-management and remote-execution guides, the
+compaction prompt, the skills, and, when design questions accumulate, a short-lived
+`design-queue.md` holding area (worked one at a time, then drained into `docs/` and issues, and
+removed once empty). Design lives in `docs/`; process lives here.

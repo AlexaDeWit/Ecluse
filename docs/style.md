@@ -3,9 +3,9 @@
 The coding-style reference for Écluse (package `ecluse`): how code is written
 (formatting, documentation, naming, function design). For where code lives (module
 layout, the `Ecluse.<Area>` namespacing, the `.Types` split), see
-[`docs/getting-started.md`](docs/getting-started.md) → "Codebase layout". For why the
+[`docs/getting-started.md`](getting-started.md) → "Codebase layout". For why the
 stack is what it is (relude, raw WAI, the effect style), see
-[`docs/architecture.md`](docs/architecture.md).
+[`docs/architecture.md`](architecture.md).
 
 > When in doubt, match the nearest existing module.
 > `core/src/Ecluse/Core/Package.hs` and `core/src/Ecluse/Core/Rules.hs` are the reference
@@ -34,8 +34,8 @@ otherwise crash.
 ## 1. Formatting
 
 **fourmolu** owns layout (indentation, commas, line breaks, import alignment), configured by
-[`fourmolu.yaml`](fourmolu.yaml): run `task format` before committing, `task format-check`
-gates it. **hlint** ([`.hlint.yaml`](.hlint.yaml)) owns idioms and a large class of
+[`fourmolu.yaml`](../fourmolu.yaml): run `task format` before committing, `task format-check`
+gates it. **hlint** ([`.hlint.yaml`](../.hlint.yaml)) owns idioms and a large class of
 correctness issues: run `task lint` and apply its suggestions. Don't format or argue by hand;
 the dev shell pins both binaries. The rest of this guide covers what a tool can't decide.
 
@@ -67,7 +67,7 @@ the dev shell pins both binaries. The rest of this guide covers what a tool can'
 ## 3. Compiler flags
 
 The warning set lives in the `common` stanza of `ecluse.cabal`; **warnings are errors**
-(`-Werror` in [`cabal.project`](cabal.project)), so a clean build is a hard requirement. On
+(`-Werror` in [`cabal.project`](../cabal.project)), so a clean build is a hard requirement. On
 top of `-Wall`, each flag reinforces a rule here:
 
 | Flag | Guards |
@@ -100,7 +100,7 @@ never the committed flags.
 
 The durable how-to for structuring modules; the current module list is the published Haddock
 index and the root `Ecluse` synopsis, and
-[`docs/getting-started.md`](docs/getting-started.md) → "Codebase layout" records the
+[`docs/getting-started.md`](getting-started.md) → "Codebase layout" records the
 project-specific patterns.
 
 **4.1 Organise by concept, favouring small modules.** Group each area's types and the functions
@@ -125,8 +125,8 @@ parsers). Don't spin up a generic bucket before the split pays for itself.
 `Ecluse.Core.Version`, `Ecluse.Core.Package`), with no `IO`. Effects live at the boundary
 (`app/Main.hs`, the server and worker layers) in `ReaderT Env IO`; swappable effectful backends
 (registry, queue, credentials) are records of functions chosen at one composition root, the Handle
-pattern (see [`docs/getting-started.md`](docs/getting-started.md) and
-[`docs/architecture/cloud-backends.md`](docs/architecture/cloud-backends.md)). Keep the dependency
+pattern (see [`docs/getting-started.md`](getting-started.md) and
+[`docs/architecture/cloud-backends.md`](architecture/cloud-backends.md)). Keep the dependency
 arrow pointing inward: pure modules never import the effectful shell.
 
 **4.5 Put instances with the type or the class, no orphans.** Define an instance in the module
@@ -144,7 +144,7 @@ opts out of the stability promise, as `text` and `bytestring` do.
 the public contract, and everything absent is private and free to change. Exporting a type abstract
 (constructor hidden, built with `mkX`) or with its constructors and fields (`PackageDetails (..)`)
 encodes whether it has invariants to protect (§6), pairing with the `.Internal` hatch (§4.6). Group
-a large export list with Haddock section headers; [`HADDOCK.md`](HADDOCK.md) → "Organising a module
+a large export list with Haddock section headers; [`docs/haddock.md`](haddock.md) → "Organising a module
 for navigation" owns that convention and the example.
 
 **4.8 Delete superseded code when a replacement lands.** Delete the old implementation in the same
@@ -160,7 +160,7 @@ live composition root.
 ## 5. Documentation (Haddock)
 
 Documentation is not optional, and it's the rule agents most often skip. Its conventions have
-their own reference, **[`HADDOCK.md`](HADDOCK.md)**, which you read before writing doc
+their own reference, **[`docs/haddock.md`](haddock.md)**, which you read before writing doc
 comments: every module opens with a prose header, every exported type and function gets a
 Haddock comment, non-exported helpers get a plain `--` at most, and you document the *why*
 (especially a rule's security rationale), never the signature. `task doctest` runs the `>>>`
@@ -241,7 +241,7 @@ a domain rule depend on the *specific* shape, or only that *some* instance exist
   upstream `Value`, edited in place).
 
 Prefer designing the coupling away over testing a fragile derivation. Which derived lines the
-coverage gate treats as accepted partials is in [`docs/testing.md`](docs/testing.md) → "Coverage".
+coverage gate treats as accepted partials is in [`docs/testing.md`](testing.md) → "Coverage".
 
 ---
 
@@ -272,7 +272,7 @@ reader skip the body; single-use glue that only makes sense beside its caller st
 purity/totality guarantee **only where it is surprising or load-bearing** (a boundary parser a reader
 would expect to throw; `evalRule` never crashing the gate on hostile metadata), never reflexively: in
 a module whose header already says it is pure, or on a signature with no `IO` and a total return type,
-`-- Pure and total.` only restates the header and the type ([`HADDOCK.md`](HADDOCK.md)). The effectful
+`-- Pure and total.` only restates the header and the type ([`docs/haddock.md`](haddock.md)). The effectful
 parts run in `ReaderT Env IO`; handlers take `Env` and run in plain `IO`.
 
 **9.3 Use `where` helpers, and lift them when they stop earning the nesting.** Name sub-steps with
@@ -389,7 +389,7 @@ the structured-concurrency shutdown the shell depends on (§11.3). To act on *ev
 async one, use `finally`/`withException`/`bracket`, async-aware by construction.
 
 **11.6 Place a new failure mode in the fault-model vocabulary before choosing its shape.** The
-system-wide map is [`docs/architecture/fault-model.md`](docs/architecture/fault-model.md). Before
+system-wide map is [`docs/architecture/fault-model.md`](architecture/fault-model.md). Before
 adding a throw, catch, or error type, name the failure's disposition there (Transient / Permanent /
 Cancelled for a loop; Deny / Propagate for a request; BootAbort / FailUp / Graceful for the process)
 and pick the matching shape: an `Either` when a caller decides per call, a confined typed exception
@@ -401,7 +401,7 @@ exception must not travel.
 ## 12. Tests
 
 Tests are documentation too; keep them as readable as the code. The layout and tier strategy are
-in [`docs/testing.md`](docs/testing.md); this is style.
+in [`docs/testing.md`](testing.md); this is style.
 
 - **Structure with `hspec`**: `describe` per function/area, `it` with a full-sentence
   expectation.

@@ -37,6 +37,57 @@ executable (`app/Main.hs`) is a thin multicall router for the `proxy`, `pilot`, 
 roles, plus `check-config`, which resolves the configuration and prints the posture without
 booting anything.
 
+## System overview
+
+A single Écluse binary runs the HTTP server and an in-process mirror worker over a shared,
+handle-based `Env`. The data plane (metadata and artifact bytes) is `http-client`; the
+control plane (queue, token mint) sits behind the
+[`MirrorQueue`](architecture/cloud-backends.md#queue-abstraction) and
+[`CredentialProvider`](architecture/cloud-backends.md#credential-provider) handles. Solid edges are
+synchronous request-path, dotted are best-effort or asynchronous.
+
+```mermaid
+flowchart LR
+    DEV["Developer / CI<br/>(npm, npm ci)"]
+
+    subgraph ecluse["Écluse (single binary)"]
+        direction TB
+        WEB["Web layer<br/>router, streaming, middleware"]
+        RULES["Rules engine<br/>deny-by-default"]
+        CACHE["Metadata cache<br/>short-TTL, in-memory"]
+        SYNC["Advisory sync<br/>in-memory OSV index"]
+        WORKER["Mirror worker<br/>in-process, supervised"]
+    end
+
+    subgraph registries["Registries (npm protocol)"]
+        PRIV["Private upstream<br/>e.g. CodeArtifact"]
+        PUB["Public upstream<br/>registry.npmjs.org"]
+        MIRROR["Mirror target<br/>managed npm registry"]
+        PUBT["Publication target<br/>first-party publishes (opt-in)"]
+    end
+
+    subgraph handles["Cloud handles"]
+        QUEUE["MirrorQueue<br/>SQS / Pub/Sub"]
+        CRED["CredentialProvider<br/>mint + refresh token"]
+    end
+
+    OSV["OSV advisory exports"]
+
+    DEV -->|"packument / tarball / publish"| WEB
+    WEB --> RULES
+    WEB --> CACHE
+    WEB -->|"read: client token forwarded"| PRIV
+    WEB -->|"read: anonymous"| PUB
+    WEB -->|"publish (write): client token forwarded"| PUBT
+    WEB -.->|"enqueue (best-effort)"| QUEUE
+    RULES -.->|"reads index"| SYNC
+    SYNC -->|"periodic pull"| OSV
+    WORKER -->|"receive / ack"| QUEUE
+    WORKER -->|"fetch artifact"| PUB
+    WORKER -->|"token"| CRED
+    WORKER -->|"publish (write)"| MIRROR
+```
+
 ## Request lifecycle
 
 The three request shapes use the upstreams differently: a tarball _falls back_, a
@@ -85,11 +136,8 @@ flowchart TD
 
 | Document | Covers |
 | --- | --- |
-| [Diagrams](architecture/diagrams.md) | Mermaid companion: system overview, packument / tarball / worker sequences, rule and credential lifecycles. |
-| [Registry model](architecture/registry-model.md) | The four registry roles (two reads, two writes) and the registry abstraction. |
-| [Internal domain model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signals the rules engine consumes. |
-| [Web layer](architecture/web-layer.md) | Raw-WAI front door: routing, mounts, the control/data-plane split, streaming, and graceful shutdown. |
-| [API surface and capability manifest](architecture/api-surface.md) | The OpenAPI capability manifest and the synthesised-packument schema. |
+| [Registry model](architecture/registry-model.md) | The four registry roles (two reads, two writes), the domain vocabulary, and the registry abstraction. |
+| [Web layer](architecture/web-layer.md) | Raw-WAI front door: routing, mounts, the capability manifest, the control/data-plane split, streaming, and graceful shutdown. |
 | [Rules engine and responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
 | [Cloud backends and mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS today, GCP planned. |
 | [Configuration and authentication](architecture/configuration.md) | Environment config, outbound registry credentials, and inbound client auth. |
@@ -108,7 +156,7 @@ flowchart TD
   through `publishArtifact`; revisit only for a non-registry mirror target.
 - Web UI or admin API.
 - Re-specifying upstream registry protocols in the
-  [capability manifest](architecture/api-surface.md): Écluse documents its coverage, not npm's
+  [capability manifest](architecture/web-layer.md#capability-manifest): Écluse documents its coverage, not npm's
   full contract, which clients hardcode.
 - Non-npm adapters: the adapter registry, the mount model, and the protocol codec over the
   shared publish transport accommodate them (see

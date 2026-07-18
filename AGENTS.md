@@ -20,13 +20,13 @@ durable memory: load detailed guidance only when the task needs it. See
 
 | Work | Read next |
 |---|---|
-| Implement or change Haskell | Active slice or issue, relevant architecture section, [`STYLE.md`](STYLE.md), then applicable sections of [`HADDOCK.md`](HADDOCK.md) |
+| Implement or change Haskell | Active slice or issue, relevant architecture section, [`docs/style.md`](docs/style.md), then applicable sections of [`docs/haddock.md`](docs/haddock.md) |
 | Change architecture or module boundaries | [`docs/architecture.md`](docs/architecture.md) and only the linked concern documents affected |
 | Change operator behaviour or configuration | [`USAGE.md`](USAGE.md) and the relevant architecture document |
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
-| Coordinate implementation slices | [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md) |
+| Coordinate implementation slices | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
 | Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md), the PR template, and the `open-pull-request` skill |
 | Run in a hosted/web execution environment | [`.agents/remote-execution.md`](.agents/remote-execution.md) |
 
@@ -44,7 +44,7 @@ durable memory: load detailed guidance only when the task needs it. See
 
 The repo owner is the **principal architect** and owns design and requirements. The lead agent
 coordinates PR-sized work, independent evaluation, and handoff; the full workflow lives in
-[`planning/orchestration-strategy.md`](planning/orchestration-strategy.md).
+[`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md).
 
 - One isolated worktree per implementation agent; never let concurrent agents edit the same
   checkout.
@@ -62,7 +62,7 @@ test/     unit and integration tests mirroring the library hierarchy
 docs/     architecture and design documents
 ```
 
-- Follow [`STYLE.md`](STYLE.md) for Haskell and [`HADDOCK.md`](HADDOCK.md) for documentation.
+- Follow [`docs/style.md`](docs/style.md) for Haskell and [`docs/haddock.md`](docs/haddock.md) for documentation.
 - Organise vertically by capability. Keep effects at the application edge; avoid generic `.Types` or
   `.Helpers` modules unless the split is earned.
 - Tests mirror library paths (`src/Foo/Bar.hs` -> `test/Foo/BarSpec.hs`).
@@ -86,13 +86,13 @@ docs/     architecture and design documents
   passes, and **`task sast` before pushing**. Never ignore a failing exit code; re-run the command
   and see `0` before trusting a fix. CI is the authoritative gate. In the CI-verified batch mode the
   PR's own CI run is the verification loop; see
-  [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md).
+  [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md).
 - Nix-less web agents must still verify locally: bootstrap with `scripts/setup-jules.sh`.
 - Use one worktree per agent. Create it with `task new-worktree BRANCH=<branch>` (warms the local
   HLS index) and retire it with `task rm-worktree BRANCH=<branch>`, which reclaims the roughly 1 GB
   HLS cache a bare `git worktree remove` strands; `task worktree-clean` sweeps up after
   hand-removed worktrees. The lifecycle detail lives in
-  [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md).
+  [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md).
 - The `task test-integration` and `task test-e2e` suites run Docker containers scoped to your
   worktree by the `com.ecluse.test.scope` label. If you kill a suite, run `task test-clean`
   (worktree-scoped, safe while others run) and confirm none remain with
