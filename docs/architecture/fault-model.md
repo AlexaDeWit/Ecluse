@@ -83,8 +83,9 @@ codebase has exactly this pattern in:
   name the leg an assembly invariant break escaped from;
 - `OsvDbCapExceeded`, thrown inside the byte-cap conduit (which has no value channel) and folded
   back into the `OsvDbTooLarge` value at the adapter boundary;
-- `ResponseBoundExceeded`, re-raised by the worker's bounded artifact fetch for its supervision
-  to classify.
+- `ResponseBoundExceeded`, absorbed as a typed gate fault at the request perimeter; the
+  worker's bounded artifact fetch carries the same breach as a value
+  (`Either ResponseBoundExceeded ByteString`), never a re-raise.
 
 Each documents its confinement on the type. If you can't name the single boundary that absorbs
 it, it's not this pattern; use a value. Client-library exceptions never travel: the adapter that

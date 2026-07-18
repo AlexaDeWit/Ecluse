@@ -84,7 +84,7 @@ semantic conventions (`http.server.*`) plus an `ecluse.*` namespace for domain s
   `ecluse.serve.relay.anomalies` (cause odd_shape/non_success), public relays that were not
   the admitted artifact. The fault channels are mapped in the [fault model](fault-model.md).
 - **Gate**: `ecluse.rule.denials` (rule, reason-class); `ecluse.rule.eval.duration` (tier);
-  `ecluse.rule.effectful.failures` (rule, cause); `ecluse.rule.breaker.state` (source).
+  `ecluse.rule.effectful.failures` (cause); `ecluse.rule.breaker.state` (source).
 - **Upstream (data plane)**: `ecluse.upstream.fetch.duration` (upstream, status-class);
   `ecluse.upstream.fetch.errors`.
 - **Metadata cache**: `ecluse.metadata_cache.requests` (hit/miss) and `.entries`, plus the
@@ -119,7 +119,7 @@ explosion. The discipline:
   values the closed `Label` sum, both in `Ecluse.Core.Telemetry.Metrics`; `package`,
   `version`, `scope`, and `message` have no constructor in either, so a high-cardinality
   identifier cannot become a label. `rule` is the one operator-bounded label (a deployment
-  defines a small fixed rule set), and a guard test (`Ecluse.TelemetryMetricsSpec`) pins the
+  defines a small fixed rule set), and a guard test (`Ecluse.Telemetry.MetricsSpec`) pins the
   key set.
 - **Secrets and PII never appear in any signal**: no tokens, no `Authorization`. A forwarded
   client token is scrubbed from anything the WAI or http-client instrumentation might capture.

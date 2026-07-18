@@ -176,8 +176,8 @@ redacted), the same dump `ecluse check-config` prints.
 
 The secret-typed variables also accept the container-secret file pattern: set the `_FILE` form
 (`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE`,
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE`) to a file path and the file's contents (one
-trailing newline stripped) become the value, so the token never enters the environment. Setting both
+`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE`) to a file path and the file's contents (trailing
+newlines stripped) become the value, so the token never enters the environment. Setting both
 a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud boot error.
 
 #### Process

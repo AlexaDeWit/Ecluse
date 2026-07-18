@@ -85,19 +85,22 @@ sequenceDiagram
 
 ### Process model: the unified multicall binary
 
-Écluse ships as a single image with three sub-commands, `ecluse proxy`, `ecluse pilot` (OSV
-ingestion), and `ecluse dredger` (registry cleanup); the binary shape is described in the
-[architecture overview](../architecture.md). The operator deploys the same image for all
-three, changing only the command and the IAM role. Sharing one config document keeps the
-dredger and proxy from drifting, with two load-bearing consequences for mirroring:
+Écluse ships as a single image with the `ecluse proxy`, `ecluse pilot` (OSV ingestion), and
+`ecluse dredger` (registry cleanup) roles, plus `ecluse check-config` for validating a
+configuration; the binary shape is described in the
+[architecture overview](../architecture.md). The operator deploys the same image for every
+role, changing only the command and the IAM role. The dredger currently boots and serves its
+health probes only; its reaper loop is designed and tracked but not yet implemented. Sharing
+one config document keeps the dredger and proxy from drifting, and the design leans on that
+in two load-bearing ways:
 
-- **First-party scope protection.** The dredger reads the same
+- **First-party scope protection (planned).** The dredger reads the same
   `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` first-party scopes the proxy routes to the publication
-  target, and unconditionally excludes them from its purge routines, so it never deletes
-  first-party packages.
-- **Collapsed-registry refusal.** If an operator points the mirror target and the publication
-  target at one shared registry, the dredger refuses to boot, so it can never mistake a
-  first-party package for a stale public one and delete it.
+  target, and excludes them from every purge, so it never deletes first-party packages.
+- **Collapsed-registry refusal (planned).** If an operator points the mirror target and the
+  publication target at one shared registry, the dredger refuses to boot, so it can never
+  mistake a first-party package for a stale public one and delete it. The proxy supports the
+  collapsed arrangement itself and flags it with a boot advisory warning.
 
 The mirror worker exists only when a mount mirrors: a serve-only deployment starts no worker
 and builds no queue. It runs inside the `ecluse proxy` process as a supervised concurrent
@@ -129,8 +132,8 @@ Every handle, `MirrorPublish`, `MirrorQueue`, `CredentialProvider`, is a record 
 are functions, built by a per-backend smart constructor (`newSqsQueue`,
 `newCodeArtifactProvider`) whose closure captures that backend's private state: an `amazonka`
 env, an HTTP manager. The advisory-sync S3 client seals its `amazonka` env the same way, in
-`newS3CveSource`. No raw SDK env crosses a runtime boundary, so both `ecluse-core` and the
-`ecluse` composition shell carry no cloud SDK; only `ecluse-runtime` does.
+`newS3CveSource`. No raw SDK env crosses a runtime boundary: no module in `ecluse-core` or the `ecluse`
+composition shell imports the SDK, and every `amazonka` import lives in `ecluse-runtime`.
 
 Backend choice is runtime, config-driven, and single-binary: all adapters are compiled in,
 and one composition root reads the configured provider, calls the matching constructor, and
@@ -192,9 +195,9 @@ never at runtime.
 
 The interesting logic is the refresh, cache, and expiry policy, not the cloud call. A single
 generic wrapper holds it over a tiny per-cloud `mintToken` leaf, the only un-emulable part.
-Adapters supply only the leaf: `static` (a fixed token, no expiry), CodeArtifact
-(`GetAuthorizationToken` via `amazonka`, TTL up to 12h), and ADC (an OAuth2 token, TTL around
-1h). The wide TTL spread is why the wrapper refreshes off the token's own `authExpiresAt`
+Adapters supply only the leaf: `static` (a fixed token, no expiry) and CodeArtifact
+(`GetAuthorizationToken` via `amazonka`, TTL up to 12h); the GCP backend's ADC leaf (an
+OAuth2 token, TTL around 1h) is designed to slot in the same way when that backend lands. The wide TTL spread is why the wrapper refreshes off the token's own `authExpiresAt`
 rather than a fixed interval. It refreshes proactively at around 80% of the token's lifetime
 (with jitter) while the current token stays valid, single-flight per provider so a cohort
 never stampedes the token API. On mint failure it keeps serving the still-valid token, retries
