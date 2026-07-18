@@ -206,6 +206,17 @@ spec = describe "decodeDocument" $ do
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
 
+    it "accepts a quoted integer cache.ttl and rejects a quoted fractional one (both branches agree)" $ do
+        case loadConfig [] (Just "{\"cache\":{\"ttl\":\"120\"}}") of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
+        loadConfig [] (Just "{\"cache\":{\"ttl\":\"2.7\"}}")
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
+    it "rejects a cache.ttl that is neither a string nor a number, naming the field" $
+        loadConfig [] (Just "{\"cache\":{\"ttl\":true}}")
+            `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
     it "rejects a non-positive advisories.maxDatabaseBytes" $
         loadConfig [] (Just "{\"advisories\":{\"maxDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "advisories.maxDatabaseBytes"
