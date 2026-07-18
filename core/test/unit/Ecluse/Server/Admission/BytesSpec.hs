@@ -56,6 +56,16 @@ spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
         _ <- mapConcurrently (\(_ :: Int) -> withByteAdmission port ba 40 (threadDelay 10_000)) [1 .. 6]
         readIORef peak >>= (`shouldSatisfy` (<= 100))
 
+    it "returns capacity when the release observer throws" $ do
+        let port =
+                noopMetricsPort
+                    { mpPublishBodyInFlightBytes = \delta -> when (delta < 0) (throwIO HolderEscaped)
+                    }
+        ba <- newBudget 100
+        outcome <- try (withByteAdmission port ba 100 (pure ()))
+        outcome `shouldBe` Left HolderEscaped
+        holding ba 100 (pure ()) `shouldReturn` Just ()
+
     it "returns the weight when the holder is cancelled, unblocking a waiter" $ do
         ba <- newBudget 100
         release <- newEmptyMVar

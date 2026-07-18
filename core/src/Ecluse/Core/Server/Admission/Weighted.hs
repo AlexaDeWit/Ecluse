@@ -35,7 +35,10 @@ Held weight is released across normal completion, failure, and asynchronous
 cancellation. The waits run masked: a blocked STM retry remains interruptible (a
 cancellation lands and aborts the transaction, taking nothing), while a committed
 acquire returns with exceptions still masked, so weight can never be lost between
-acquisition and the protected run.
+acquisition and the protected run. Release publishes the in-flight gauge decrement
+before returning capacity to the door, so a newly admitted request cannot make the
+observable gauge transiently exceed the configured bound; capacity is still returned
+if that observer throws.
 
 The two instances differ only in their construction policy (the serve handle errors on
 a non-positive capacity, the byte handle clamps to one byte and clamps each call's
@@ -186,4 +189,10 @@ withWeightedAdmission obs wa weight action =
     admitted restore =
         Just <$> ((liftIO (onInFlightDelta obs weight) >> restore action) `UE.finally` release)
 
-    release = atomically (modifyTVar' (waAvailable wa) (+ weight)) >> liftIO (onInFlightDelta obs (negate weight))
+    -- Publish the gauge decrement before waking a waiter. Returning capacity first
+    -- would let that waiter publish its increment while the departing holder was
+    -- still observable, transiently putting the gauge above the configured bound.
+    -- The STM release is the finalizer so a throwing observer cannot leak capacity.
+    release =
+        liftIO (onInFlightDelta obs (negate weight))
+            `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
