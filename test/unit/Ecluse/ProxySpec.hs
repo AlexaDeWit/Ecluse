@@ -6,35 +6,15 @@ module Ecluse.ProxySpec (spec) where
 
 import Prelude hiding (get)
 
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Wai (Application)
 import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Proxy (mountBindingFor)
-import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testServeAdmission)
-
-newTestManager :: IO Manager
-newTestManager = newManager defaultManagerSettings
-
-newTestEnv :: IO Env
-newTestEnv = do
-    queue <- newTestMemoryQueue
-    manager <- newTestManager
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The composed npm front door: a single npm mount with __inert__ packument-serve
 dependencies (every upstream a closed port) and no publish target, assembled through the

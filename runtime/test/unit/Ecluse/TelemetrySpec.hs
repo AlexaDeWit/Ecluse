@@ -8,13 +8,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
-import Katip (
-    Environment (Environment),
-    LogEnv,
-    Namespace (Namespace),
-    Severity (WarningS),
-    initLogEnv,
- )
+import Ecluse.Test.Support (newTestLogEnv)
+import Katip (Severity (WarningS))
 import OpenTelemetry.Exporter.Metric (MetricExporter (..))
 import OpenTelemetry.Exporter.Span (ExportResult (Failure), SpanExporter (..))
 import OpenTelemetry.Log.Core (createLoggerProvider, emptyLoggerProviderOptions)
@@ -159,7 +154,7 @@ lifecycleSpec = describe "withTelemetry" $ do
         -- assertion is that the handle exposes no providers (a 'TracerProvider'
         -- has no 'Eq', so each is checked through 'isNothing'). The 'LogEnv' is
         -- unused on the off path, so a scribe-less one suffices.
-        logEnv <- quietLogEnv
+        logEnv <- newTestLogEnv
         (noTracer, noMeter) <-
             withTelemetry TelemetryOff logEnv $ \telemetry ->
                 pure
@@ -170,7 +165,7 @@ lifecycleSpec = describe "withTelemetry" $ do
         noMeter `shouldBe` True
 
     it "returns the body's result through the off bracket" $ do
-        logEnv <- quietLogEnv
+        logEnv <- newTestLogEnv
         result <- withTelemetry TelemetryOff logEnv (const (pure (42 :: Int)))
         result `shouldBe` 42
 
@@ -234,7 +229,3 @@ failingMetricExporter =
 -- differences, so the absolute value is immaterial.
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 1 1) 0
-
--- A scribe-less katip environment: log calls are accepted and dropped.
-quietLogEnv :: IO LogEnv
-quietLogEnv = initLogEnv (Namespace ["test"]) (Environment "test")

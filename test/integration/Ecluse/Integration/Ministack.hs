@@ -40,7 +40,8 @@ import Amazonka.Auth qualified as AWS.Auth
 import Amazonka.SQS.CreateQueue qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
+import Ecluse.Test.Support (newTestLogEnv)
+import Katip (LogEnv)
 import Lens.Micro ((^.))
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
@@ -152,7 +153,7 @@ not assert on the log, so a no-output environment satisfies the dependency witho
 cluttering the run.
 -}
 quietLogEnv :: IO LogEnv
-quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+quietLogEnv = newTestLogEnv
 
 {- | Create a fresh SQS queue in the @ministack@ container and bind a
 'MirrorQueue' to it with the given options. ministack may not have the SQS service
