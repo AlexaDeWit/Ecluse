@@ -141,8 +141,10 @@ library ecluse-core
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
+    Ecluse.Core.Security.Authority
     Ecluse.Core.Security.Egress
     Ecluse.Core.Security.Host
+    Ecluse.Core.Security.IpLiteral
     Ecluse.Core.Security.Limits
     Ecluse.Core.Server.Cache
     Ecluse.Core.Server.Cache.Store
@@ -568,8 +570,10 @@ test-suite ecluse-core-unit
     Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
+    Ecluse.Security.AuthoritySpec
     Ecluse.Security.EgressSpec
     Ecluse.Security.HostSpec
+    Ecluse.Security.IpLiteralSpec
     Ecluse.Security.LimitsSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.Cache.StoreSpec
@@ -682,7 +686,6 @@ test-suite ecluse-unit
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.Core.CveSpec
-    Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
     Ecluse.Proxy.CveSyncSpec
