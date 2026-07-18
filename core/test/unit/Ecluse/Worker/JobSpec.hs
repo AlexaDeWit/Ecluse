@@ -21,7 +21,7 @@ import Ecluse.Core.Queue (QueueMessage (msgReceipt))
 import Ecluse.Core.Registry (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishError (PublishError),
-    PublishFault (PublishRejected, PublishUrlUnformable),
+    PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Metadata (
@@ -151,6 +151,21 @@ spec = do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isRetried
+
+        it "renders a transport fault's retry reason with the prefix exactly once" $
+            -- The mirror write folds a thrown transport failure through the shared
+            -- classifier into a PublishTransport value; the consumer renders the reason
+            -- prefix here, once. Regression: the fault once carried the prefix as raw
+            -- text and the consumer added it again, so the log line doubled it.
+            withUpstream $ \url ->
+                withRuntime (Left (PublishTransport (transportFault TransportUnreachable "connection refused"))) $ \runtime queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    case outcome of
+                        Retried reason -> do
+                            reason `shouldSatisfy` T.isInfixOf "connection refused"
+                            T.count "publish transport failure:" reason `shouldBe` 1
+                        other -> expectationFailure ("expected a Retried transport outcome, got " <> show other)
 
         it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
             -- A job whose artifact URL cannot be parsed into a request never reaches a

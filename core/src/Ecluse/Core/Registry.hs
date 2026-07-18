@@ -204,11 +204,13 @@ data PublishFault
       -}
       PublishRejected PublishError
     | {- | The write never reached the registry: the HTTP request threw before any
-      status returned (a connection failure, a TLS error, a timeout), carried as its
-      rendered detail. __Retryable__: the transport may recover, so the job is left
-      un-acked and redelivered, exactly as a 'PublishRejected'. Surfacing it as a value
-      is what lets the mirror write ('Ecluse.Core.Registry.Publish.mpPublishArtifact')
-      honour its total, never-thrown contract.
+      status returned (a connection failure, a TLS error, a timeout), carried as the
+      'TransportFault' the adapter edge classified out of its client library's
+      exception, exactly as 'FetchTransport' and 'RelayTransport' carry theirs.
+      __Retryable__: the transport may recover, so the job is left un-acked and
+      redelivered, exactly as a 'PublishRejected'. Surfacing it as a value is what
+      lets the mirror write ('Ecluse.Core.Registry.Publish.mpPublishArtifact') honour
+      its total, never-thrown contract.
       -}
-      PublishTransport Text
+      PublishTransport TransportFault
     deriving stock (Eq, Show)

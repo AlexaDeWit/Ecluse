@@ -363,12 +363,13 @@ publishVerified policy receipt job admitted bytes = do
             -- success). The message is left un-acked, so it redelivers either way.
             releaseForRetry receipt
             pure (Retried ("registry rejected publish: " <> show err))
-        Left (PublishTransport detail) -> do
+        Left (PublishTransport fault) -> do
             -- Transient: the write never reached the registry (a connection failure, a
             -- timeout), so release the hold and let the un-acked message redeliver,
-            -- exactly as a registry rejection.
+            -- exactly as a registry rejection. The classified fault carries its own
+            -- bounded detail; the prefix is rendered here exactly once.
             releaseForRetry receipt
-            pure (Retried ("publish transport failure: " <> detail))
+            pure (Retried ("publish transport failure: " <> show fault))
         Left (PublishUrlUnformable urlErr) ->
             -- Non-retryable: 'processMessage' acks this to retire it, so there is no
             -- redelivery to hasten -- leave the hold be.
