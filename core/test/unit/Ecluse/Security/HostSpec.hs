@@ -322,10 +322,10 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "08.0.0.1" `shouldBe` False
         it "treats 0400.0.0.1 as a name -- octal 0400 = 256 overflows an octet" $
             isBlockedTarget noOptIn "0400.0.0.1" `shouldBe` False
-        it "leaves the short 32-bit form 2130706433 to the connect-time recheck (not a literal here)" $
+        it "does not block the short 32-bit form 2130706433 (not a four-part literal here)" $
             -- inet_aton resolves this to 127.0.0.1, but the four-part recogniser does not
-            -- model the short forms; the resolved-IP recheck in Ecluse.Core.Security.Egress
-            -- is the backstop for it.
+            -- model the short forms: they are treated as names the host allowlist constrains,
+            -- with certificate validation authenticating the dialled host.
             isBlockedTarget noOptIn "2130706433" `shouldBe` False
 
 {- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an

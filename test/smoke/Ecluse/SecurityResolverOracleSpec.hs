@@ -174,8 +174,8 @@ genMalformedToken =
 {- | Resolve @host@ as a numeric IPv4 literal through the real 'getAddrInfo' (the
 @inet_aton@ coercion path), returning its 'SockAddr' or 'Nothing' if the resolver
 rejects it. @AI_NUMERICHOST@ forbids a DNS lookup, so a non-numeric spelling fails
-locally rather than touching the network -- the same coercion the connection-time
-recheck sees, isolated from name resolution.
+locally rather than touching the network: the same coercion the literal recogniser
+is differentially checked against, isolated from name resolution.
 -}
 resolveNumeric :: Text -> IO (Maybe SockAddr)
 resolveNumeric host = do

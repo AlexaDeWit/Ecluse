@@ -74,8 +74,9 @@ per-mount `service` read strategy is planned; the full model is in
 
 ### Outbound egress safety
 
-Écluse constrains its own outbound fetches (host allowlist + internal-range block, re-applied to every
-resolved IP at connection time), but network egress is a shared responsibility: the deployment must
+Écluse constrains its own outbound fetches (an https-only host allowlist, a literal internal-range block
+on the `dist.tarball` host, and certificate validation authenticating the dialled host), but network
+egress is a shared responsibility: the deployment must
 also fence egress at the platform layer (security groups, `NetworkPolicy`, Istio egress policy). See
 [Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).
 
