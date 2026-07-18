@@ -24,10 +24,9 @@ module Ecluse.Core.Server.Path (
     encodeComponent,
 ) where
 
-import Data.ByteString qualified as BS
-import Data.ByteString.Internal (w2c)
-import Data.Char (intToDigit, isControl, toUpper)
+import Data.Char (isControl)
 import Data.Text qualified as T
+import Network.HTTP.Types.URI (urlEncode)
 
 {- | An artifact's on-the-wire file name: the agnostic artifact-name type an
 ecosystem's artifact route carries, and the data-plane handler
@@ -101,27 +100,8 @@ point: the component is decoded content, so any @\'%\'@ in it is a literal to be
 escaped, not a structural escape to preserve.
 -}
 encodeComponent :: Text -> Text
-encodeComponent = T.concat . map encodeByte . BS.unpack . encodeUtf8
-  where
-    encodeByte :: Word8 -> Text
-    encodeByte b
-        | isUnreserved b = T.singleton (chr8 b)
-        | otherwise = T.pack ['%', hexDigit (b `div` 16), hexDigit (b `mod` 16)]
-
-    -- RFC 3986 §2.3 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
-    isUnreserved :: Word8 -> Bool
-    isUnreserved b =
-        (b >= 0x41 && b <= 0x5A) -- A-Z
-            || (b >= 0x61 && b <= 0x7A) -- a-z
-            || (b >= 0x30 && b <= 0x39) -- 0-9
-            || b == 0x2D -- '-'
-            || b == 0x2E -- '.'
-            || b == 0x5F -- '_'
-            || b == 0x7E -- '~'
-
-    -- An unreserved byte is ASCII, so its 'Char' is its code point.
-    chr8 :: Word8 -> Char
-    chr8 = w2c
-
-    hexDigit :: Word8 -> Char
-    hexDigit = toUpper . intToDigit . fromIntegral
+-- 'urlEncode' in query-string mode (True), not path mode (False): its keep-verbatim
+-- set is exactly the RFC 3986 unreserved set the contract above names. Path mode,
+-- which http-types recommends for path elements, additionally passes ':@&=+$,'
+-- through unencoded, which a component must not carry.
+encodeComponent = decodeUtf8 . urlEncode True . encodeUtf8
