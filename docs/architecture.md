@@ -161,7 +161,7 @@ flowchart TD
 - Non-npm adapters: the adapter registry, the mount model, and the protocol codec over the
   shared publish transport accommodate them (see
   [Multi-ecosystem mounts](architecture/web-layer.md#multi-ecosystem-mounts)), but only npm
-  ships at launch. PyPI and RubyGems are planned.
+  ships at launch. PyPI is planned.
 - Cloud IAM validation at the proxy edge (a gateway concern).
 - Local on-disk caching of artifacts (the mirror retry window is acceptable).
 - GCP backends: the cloud handles are designed for GCP, but a GCP backend is gated on the

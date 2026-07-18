@@ -100,7 +100,7 @@ Everything else unrecognised is a `404`.
 
 ## Capability manifest
 
-Écluse speaks package-registry protocols (npm at launch; PyPI and RubyGems planned), not a
+Écluse speaks package-registry protocols (npm at launch; PyPI planned), not a
 bespoke HTTP API. Clients (`npm`, `pnpm`, `yarn`) hardcode the registry protocol and never
 read an API description, so the OpenAPI document here is not a client-integration contract.
 It is a **capability manifest**: one human-facing statement of which protocols this server
