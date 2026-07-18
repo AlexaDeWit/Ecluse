@@ -167,6 +167,7 @@ import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
     lookupStore,
+    lookupStoreTouching,
     newSingleFlight,
     resolveSingleFlight,
  )
@@ -396,10 +397,11 @@ slot on every exit and, on an escape before the marker is filled, hands that err
 to every waiting follower rather than leaving them parked forever. This closes the
 single-flight orphan window (without it, a cancelled leader would wedge that
 @(source, package)@ key until restart). A follower receiving an orphaned marker
-re-evaluates the resolve when the leader was cancelled (async), and re-raises when
-the leader escaped synchronously: the fetch's contract is total, so a synchronous
-escape is an invariant break for the outer boundary, never laundered into the typed
-channel. A follower's own wait on the marker stays interruptible.
+re-evaluates the resolve when the leader was cancelled (async), re-entering
+interruptibly and counting its miss only once, and re-raises when the leader escaped
+synchronously: the fetch's contract is total, so a synchronous escape is an invariant
+break for the outer boundary, never laundered into the typed channel. A follower's own
+wait on the marker stays interruptible.
 
 The 'Source' partitions the cache: distinct upstreams of the same package resolve
 under distinct keys and never cross-contaminate. The fetch action supplies the origin's
@@ -500,18 +502,26 @@ resolveAssembled metrics cache key render =
             (Right <$> render)
 
 {- | Look up a package's cached full-packument entry for one 'Source' without fetching on a
-miss: the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
-expired entry; this never triggers a fetch and never collapses (use 'resolveMetadata' for
-the serve path).
+miss and __without bumping recency__: the cache's read-only view. Two readers share it: the
+inspection and test probes, and the hybrid serve path's step-2 full-packument consult (the
+tarball gate selecting one version from a warm entry). That consult stays read-only on
+purpose: the full store's recency is driven by the packument @GET@'s own 'resolveMetadata'
+hit, so the gate's select need not bump it, unlike the single-version store whose only
+steady-state read is 'cachedVersion'. A 'Nothing' is a miss or an expired entry; this never
+triggers a fetch and never collapses (use 'resolveMetadata' for the serve path).
 -}
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
 cachedMetadata cache source name = lookupStore (mcFull cache) (cacheKey source name)
 
 {- | Look up a single-version cached entry for one @(source, package, version)@ without
-fetching on a miss: the version store's read-only view (the hybrid serve path's negative\/
-positive lookup before it leads a selective fetch). The outer 'Maybe' is the cache hit\/miss
-(an expired or absent entry is 'Nothing'); the inner @'Maybe' 'PackageDetails'@ is the
-cached result (a version determined absent is a cached @'Just' 'Nothing'@).
+fetching on a miss, __bumping the entry's recency on a hit__: the hybrid serve path's step-1
+version consult before it leads a selective fetch. This read is the version store's only
+steady-state access (a hit here short-circuits before 'resolveVersion' and its recency-bumping
+hit), so without the bump a warm version entry would never refresh its recency and would age
+out of the least-recently-used eviction in insert order. The outer 'Maybe' is the cache
+hit\/miss (an expired or absent entry is 'Nothing'); the inner @'Maybe' 'PackageDetails'@ is
+the cached result (a version determined absent is a cached @'Just' 'Nothing'@). Never fetches
+and never collapses (use 'resolveVersion' to lead a selective fetch).
 -}
 cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
-cachedVersion cache source name version = lookupStore (mcVersion cache) (versionKey source name version)
+cachedVersion cache source name version = lookupStoreTouching (mcVersion cache) (versionKey source name version)
