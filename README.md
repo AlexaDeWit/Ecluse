@@ -34,7 +34,7 @@ asynchronously, without hosting packages itself. The serve path is capacity-boun
 metadata requests are admitted up to a process-wide limit, and excess load is shed rather
 than queued. npm is the first supported ecosystem; the core is registry-agnostic, each
 ecosystem registers as a self-contained adapter (`Ecluse.Core.Registry.Adapter`), and PyPI
-and RubyGems are on the roadmap.
+is on the roadmap.
 
 Each ecosystem route carries an abstract response contract interpreted as both runtime
 wire behaviour and OpenAPI capability documentation; handlers receive only the matching

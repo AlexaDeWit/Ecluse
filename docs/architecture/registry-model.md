@@ -375,5 +375,5 @@ CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio or Nexus all sp
 protocol and differ only in how a bearer token is obtained. So the npm implementation is used
 unchanged and paired with a [`CredentialProvider`](cloud-backends.md#credential-provider) that mints
 the token, making the backend matrix ecosystem × credential provider. Only the npm protocol ships at
-launch; the abstraction exists from day one to make future backends (PyPI, RubyGems) additive rather
+launch; the abstraction exists from day one to make future backends (PyPI first) additive rather
 than structural. See [Cloud backends](cloud-backends.md#cloud-backends).

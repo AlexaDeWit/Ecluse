@@ -99,8 +99,8 @@ These address a different part of the problem and pair with any of the above.
 self-hostable, composes in front of the managed registry you already run rather than replacing
 it or hosting packages itself, and applies a deny-by-default freshness policy consistently, so
 a malicious-package disclosure is answered by comparing timelines rather than auditing logs.
-npm is the first supported ecosystem; the core is registry-agnostic, with PyPI and RubyGems on
-the roadmap. It's also early and unproven (see [`MOTIVATION.md`](MOTIVATION.md) → _What Écluse
+npm is the first supported ecosystem; the core is registry-agnostic, with PyPI on the
+roadmap. It's also early and unproven (see [`MOTIVATION.md`](MOTIVATION.md) → _What Écluse
 is not_).
 
 If a different point on these trade-offs serves you better, use one of the tools above.

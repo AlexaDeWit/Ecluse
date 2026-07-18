@@ -34,7 +34,7 @@ clients, and fence its network egress. It's the companion to the internal
 deny-by-default policy before any package reaches a build. It reads through a private upstream
 first, falls back to the gated public registry, and mirrors approved packages asynchronously. It's
 a policy gate, not a registry, and hosts nothing itself. npm is the first supported ecosystem; the
-engine is ecosystem-agnostic, with PyPI and RubyGems on the roadmap. The design is in
+engine is ecosystem-agnostic, with PyPI on the roadmap. The design is in
 [`docs/architecture.md`](docs/architecture.md).
 
 ## Deployment model
