@@ -4,8 +4,9 @@
 
 module Ecluse.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Object), encode, object, (.=))
+import Data.Aeson (Value (Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Test.Hspec
@@ -193,6 +194,61 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         projectNpmVersion (defaultLimits{maxNestingDepth = 2}) (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
+    duplicateKeyParity
+
+{- | A hostile\/broken upstream can repeat a top-level key. @aeson@'s whole-document decode
+keeps the __first__ occurrence of a duplicate key, so the selective single-version decode
+must too: for each fixture, 'projectNpmVersion' must reach the __same__ outcome the full
+'projectNpmManifest' projection does. These pin the three ways the pre-fix last-wins walk
+diverged -- summing the version count across duplicate @versions@ keys, serving a later
+duplicate's manifest, and letting a later duplicate revive an absent version or shadow the
+validated @name@.
+-}
+duplicateKeyParity :: Spec
+duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence-wins, matching the whole-document decode" $ do
+    it "counts only the first versions object, not the sum across duplicate versions keys" $ do
+        let body =
+                rawObject
+                    [ ("name", String "is-odd")
+                    , ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
+                    , ("versions", object ["2.0.0" .= versionObject "is-odd" "2.0.0", "3.0.0" .= versionObject "is-odd" "3.0.0"])
+                    ]
+            limits = defaultLimits{maxVersionCount = 1}
+        projectNpmVersion limits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome limits (unscoped "is-odd") "1.0.0" body
+
+    it "serves the first versions object's manifest, not a later duplicate's" $ do
+        let firstManifest = distTarballObject "is-odd" "1.0.0" "https://example.test/is-odd-1.0.0-first.tgz"
+            secondManifest = distTarballObject "is-odd" "1.0.0" "https://example.test/is-odd-1.0.0-second.tgz"
+            body =
+                rawObject
+                    [ ("name", String "is-odd")
+                    , ("versions", object ["1.0.0" .= firstManifest])
+                    , ("versions", object ["1.0.0" .= secondManifest])
+                    ]
+        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscoped "is-odd") "1.0.0" body
+
+    it "treats a version absent from the first versions object as absent, ignoring a later duplicate" $ do
+        let body =
+                rawObject
+                    [ ("name", String "is-odd")
+                    , ("versions", object [])
+                    , ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
+                    ]
+        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscoped "is-odd") "1.0.0" body
+
+    it "validates the first top-level name, not a later duplicate (anti-shadowing)" $ do
+        let body =
+                rawObject
+                    [ ("name", String "is-odd")
+                    , ("name", String "evil")
+                    , ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
+                    ]
+        projectNpmVersion defaultLimits (unscoped "evil") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscoped "evil") "1.0.0" body
+
 -- | An unscoped npm 'PackageName'.
 unscoped :: Text -> PackageName
 unscoped = mkPackageName Npm Nothing
@@ -272,3 +328,30 @@ richVersionObject nm v =
         , "maintainers" .= [object ["name" .= ("alice" :: Text), "email" .= ("alice@example.test" :: Text)]]
         , "_npmUser" .= object ["name" .= ("bob" :: Text)]
         ]
+
+{- | A minimal version manifest with an explicit @dist.tarball@, so two manifests for the
+same version can be told apart.
+-}
+distTarballObject :: Text -> Text -> Text -> Value
+distTarballObject name v tarball =
+    object
+        [ "name" .= name
+        , "version" .= v
+        , "dist" .= object ["tarball" .= tarball]
+        ]
+
+{- | The outcome the whole-document path reaches for one version: the same refusal, or the
+same 'PackageDetails' looked out of the full projection. 'projectNpmVersion' must match it,
+duplicate-key documents included.
+-}
+fullVersionOutcome :: Limits -> PackageName -> Text -> ByteString -> Either MetadataError (Maybe PackageDetails)
+fullVersionOutcome limits name v body =
+    (\(info, _raw) -> Map.lookup v (infoVersions info)) <$> projectNpmManifest limits name body
+
+{- | Serialise raw packument bytes from top-level members in order, __preserving duplicate
+keys__. @aeson@'s 'encode' cannot emit a repeated key (its @KeyMap@ de-duplicates), so a
+duplicate-key fixture must be assembled by hand.
+-}
+rawObject :: [(Text, Value)] -> ByteString
+rawObject members =
+    "{" <> BS.intercalate "," [BL.toStrict (encode k) <> ":" <> BL.toStrict (encode v) | (k, v) <- members] <> "}"

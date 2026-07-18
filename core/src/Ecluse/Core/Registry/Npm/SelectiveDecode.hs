@@ -80,6 +80,12 @@ reproduces the whole-document outcome: an absent @name@ is the empty-name decode
 an absent version object is a genuine miss, an absent @time@ entry is a version with no
 known publish stamp. The 'svVersionCount' is the count the caller bounds against
 'Ecluse.Core.Security.maxVersionCount'.
+
+When a key appears more than once -- a duplicate top-level @name@, @versions@ or @time@, or
+a duplicate version key inside @versions@ -- the __first__ occurrence is kept and the later
+ones are consumed only for validation, matching @aeson@'s duplicate-key resolution (the
+first of a duplicate wins), so neither the chosen value nor the count diverges from the
+whole-document decode.
 -}
 data SelectedVersion = SelectedVersion
     { svName :: Maybe Value
@@ -121,7 +127,7 @@ selectVersionFromPackument maxDepth version body
     -- @cap >= 1@ for the document object.
     | maxDepth < 1 = Left SelectiveTooDeeplyNested
     | otherwise = case bsToTokens body of
-        TkRecordOpen rec -> walkTop (maxDepth - 1) (renderVersion version) emptySelection rec
+        TkRecordOpen rec -> walkTop (maxDepth - 1) (renderVersion version) rec
         -- A well-formed non-object body decodes but never projects to a packument, and a
         -- malformed body never decodes; the whole-document path renders both as the same
         -- "unobtainable metadata", so neither is distinguished here.
@@ -131,38 +137,63 @@ selectVersionFromPackument maxDepth version body
 emptySelection :: SelectedVersion
 emptySelection = SelectedVersion Nothing Nothing Nothing 0
 
-{- Walk the top-level packument record to its end, threading the accumulated selection.
-@childBudget@ is the depth budget each top-level value sits at (one below the document
-object's own budget). The requested version object and the @name@ value are materialised;
-the @versions@ count is tallied; every other value is skipped unallocated. The trailing
-bytes after the record must be whitespace only. -}
-walkTop :: Int -> Text -> SelectedVersion -> TkRecord ByteString String -> Either SelectiveError SelectedVersion
-walkTop childBudget target = go
+{- The walk's threaded state: the selection built so far, plus whether each captured
+top-level key has already been seen. @aeson@ keeps the __first__ occurrence of a duplicate
+key, so once a @name@, @versions@ or @time@ key is captured a later duplicate is consumed
+for validation but never overwrites the first. The flags carry that "already captured"
+signal, which the selection alone cannot: a captured @versions@\/@time@ whose target was
+absent leaves its value field 'Nothing', indistinguishable from "not yet seen". -}
+data WalkState = WalkState
+    { wsSelection :: SelectedVersion
+    , wsSeenName :: Bool
+    , wsSeenVersions :: Bool
+    , wsSeenTime :: Bool
+    }
+
+initialWalk :: WalkState
+initialWalk = WalkState emptySelection False False False
+
+{- Walk the top-level packument record to its end, threading the walk state. @childBudget@
+is the depth budget each top-level value sits at (one below the document object's own
+budget). The first @name@ value and the first @versions@\/@time@ object are captured (the
+requested version and the count taken from that first @versions@); a duplicate of an
+already-captured key, and every other value, is skipped unallocated but still walked to its
+end, so a malformed or over-deep sibling anywhere still breaches. The trailing bytes after
+the record must be whitespace only. -}
+walkTop :: Int -> Text -> TkRecord ByteString String -> Either SelectiveError SelectedVersion
+walkTop childBudget target = fmap wsSelection . go initialWalk
   where
-    go acc = \case
+    go st = \case
         TkRecordEnd leftover
-            | trailingWhitespace leftover -> Right acc
+            | trailingWhitespace leftover -> Right st
             | otherwise -> Left SelectiveUndecodable
         TkRecordErr _ -> Left SelectiveUndecodable
         TkPair key valueToks -> case Key.toText key of
-            "versions" -> withRecord childBudget valueToks $ \versionsRec -> do
-                (found, count, cont) <- findInRecord (childBudget - 1) target versionsRec
-                go acc{svVersion = found, svVersionCount = svVersionCount acc + count} cont
-            "time" -> withRecord childBudget valueToks $ \timeRec -> do
-                (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
-                go acc{svTime = found} cont
-            "name" -> do
-                (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
-                go acc{svName = Just nameValue} cont
-            _ -> skipValue childBudget valueToks >>= go acc
+            "versions"
+                | wsSeenVersions st -> skipValue childBudget valueToks >>= go st
+                | otherwise -> withRecord childBudget valueToks $ \versionsRec -> do
+                    (found, count, cont) <- findInRecord (childBudget - 1) target versionsRec
+                    go st{wsSelection = (wsSelection st){svVersion = found, svVersionCount = count}, wsSeenVersions = True} cont
+            "time"
+                | wsSeenTime st -> skipValue childBudget valueToks >>= go st
+                | otherwise -> withRecord childBudget valueToks $ \timeRec -> do
+                    (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
+                    go st{wsSelection = (wsSelection st){svTime = found}, wsSeenTime = True} cont
+            "name"
+                | wsSeenName st -> skipValue childBudget valueToks >>= go st
+                | otherwise -> do
+                    (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
+                    go st{wsSelection = (wsSelection st){svName = Just nameValue}, wsSeenName = True} cont
+            _ -> skipValue childBudget valueToks >>= go st
 
-{- Find one key in a record, materialising __only__ that key's value (a 'Value', the last
-occurrence winning as @aeson@'s object decode does) and skipping every other entry's
-tokens unallocated. Returns the found value (if any), the number of entries scanned, and
-the record's continuation. @childBudget@ is the depth budget the record's values sit at;
-each is depth-bounded there so a deeply-nested sibling still breaches. The scan runs to
-the record's end (it never stops early), so a later duplicate key, a malformed entry, or
-an over-deep sibling is still seen. -}
+{- Find one key in a record, materialising __only__ the __first__ occurrence of that key's
+value (a 'Value') and skipping every other entry's tokens unallocated: @aeson@'s object
+decode keeps the first of duplicate keys, so a later duplicate of the target is walked (for
+the malformed\/over-deep checks) but not re-materialised. Returns the found value (if any),
+the __raw__ number of entries scanned, and the record's continuation. @childBudget@ is the
+depth budget the record's values sit at; each is depth-bounded there so a deeply-nested
+sibling still breaches. The scan runs to the record's end (it never stops early), so a later
+duplicate key, a malformed entry, or an over-deep sibling is still seen. -}
 findInRecord :: Int -> Text -> TkRecord k String -> Either SelectiveError (Maybe Value, Int, k)
 findInRecord childBudget target = go Nothing 0
   where
@@ -170,7 +201,8 @@ findInRecord childBudget target = go Nothing 0
         TkRecordEnd cont -> Right (found, count, cont)
         TkRecordErr _ -> Left SelectiveUndecodable
         TkPair key valueToks
-            | Key.toText key == target -> do
+            | Key.toText key == target
+            , Nothing <- found -> do
                 (value, cont) <- materialiseWithinBudget childBudget valueToks
                 go (Just value) (count + 1) cont
             | otherwise -> skipValue childBudget valueToks >>= go found (count + 1)
