@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Core.CveSpec (spec) where
+module Ecluse.Cve.AcceptanceSpec (spec) where
 
 import Data.List (isSuffixOf)
 import Database.SQLite.Simple (Only, Query (Query), SQLError, close, execute_, fromOnly, open, query_)

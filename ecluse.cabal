@@ -555,6 +555,7 @@ test-suite ecluse-core-unit
     Ecluse.BreakerSpec
     Ecluse.CredentialSpec
     Ecluse.Credential.Refresh.InternalSpec
+    Ecluse.Cve.AcceptanceSpec
     Ecluse.Cve.SlotSpec
     Ecluse.CveSpec
     Ecluse.InFlightSpec
@@ -703,7 +704,6 @@ test-suite ecluse-unit
     Ecluse.ConfigSpec
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
-    Ecluse.Core.CveSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
     Ecluse.Proxy.CveSyncSpec
