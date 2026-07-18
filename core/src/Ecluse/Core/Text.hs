@@ -2,16 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Small pure text helpers shared across the codebase, so the blank-value and
-URL-path-join idioms have a single definition rather than several near-identical
-re-spellings -- plus the hot-path ISO-8601 instant renderer the serve path uses
-('renderIso8601Utc'). This module depends on nothing else in @Ecluse@, so any
-module may import it without risking an import cycle.
+{- | Small pure text helpers shared across the codebase, so the blank-value,
+URL-path-join, and last-path-segment idioms have a single definition rather than
+several near-identical re-spellings -- plus the hot-path ISO-8601 instant renderer
+the serve path uses ('renderIso8601Utc'). This module depends on nothing else in
+@Ecluse@, so any module may import it without risking an import cycle.
 -}
 module Ecluse.Core.Text (
     nonBlank,
     stripTrailingSlash,
     joinUrlPath,
+    lastPathSegment,
     renderIso8601Utc,
     displayExceptionT,
 ) where
@@ -47,6 +48,16 @@ verbatim -- this neither encodes nor validates it.
 -}
 joinUrlPath :: Text -> Text -> Text
 joinUrlPath b path = stripTrailingSlash b <> "/" <> path
+
+{- | The last path segment of a slash-separated string: the text after the final
+@\'\/\'@, or the whole string when it carries none. 'Nothing' when that segment is
+empty (the string ends in a slash), so a caller supplies its own fallback rather
+than forming a segmentless path. This neither decodes nor validates the segment.
+-}
+lastPathSegment :: Text -> Maybe Text
+lastPathSegment url =
+    let afterLastSlash = snd (T.breakOnEnd "/" url)
+     in if T.null afterLastSlash then Nothing else Just afterLastSlash
 
 {- | Render a 'UTCTime' as the ISO-8601 instant 'iso8601Show' produces,
 __byte-for-byte__, at a fraction of the allocation cost: a handful of digit

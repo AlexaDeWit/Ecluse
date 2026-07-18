@@ -143,6 +143,7 @@ import Ecluse.Core.Registry.Npm.Wire (
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
+import Ecluse.Core.Text (lastPathSegment)
 import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
 {- The packument as this projection needs to read it: the wire fields plus the
@@ -522,8 +523,7 @@ a slash).
 -}
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
-    let afterLastSlash = snd (T.breakOnEnd "/" url)
-     in if T.null afterLastSlash then unVersion version <> ".tgz" else afterLastSlash
+    fromMaybe (unVersion version <> ".tgz") (lastPathSegment url)
 
 {- Project the @dist-tags@ map (tag to raw version string) into a map of tag
 to parsed 'Version'.

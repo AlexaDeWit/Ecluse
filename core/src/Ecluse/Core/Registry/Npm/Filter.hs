@@ -79,7 +79,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Server.Path (isSafeComponent)
-import Ecluse.Core.Text (renderIso8601Utc)
+import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
@@ -129,24 +129,9 @@ rewriteDist :: Text -> Value -> Value
 rewriteDist prefix = \case
     Object dist
         | Just url <- stringField "tarball" dist
-        , Just file <- tarballFile url ->
+        , Just file <- lastPathSegment url ->
             Object (KeyMap.insert "tarball" (String (prefix <> "/-/" <> file)) dist)
     other -> other
-
-{- | The artifact filename of a tarball URL: the path segment after the last
-@\'\/\'@. 'Nothing' when that segment is empty (a URL ending in a slash), so
-the caller leaves such a URL untouched rather than forming a fileless path.
--}
-tarballFile :: Text -> Maybe Text
-tarballFile url =
-    let afterLastSlash = snd (T.breakOnEnd "/" url)
-     in if T.null afterLastSlash then Nothing else Just afterLastSlash
-
-{- | Join a base URL and a path segment with a single @\'\/\'@, ignoring a
-trailing slash already on the base.
--}
-joinUrl :: Text -> Text -> Text
-joinUrl base seg = T.dropWhileEnd (== '/') base <> "/" <> seg
 
 {- | Assemble the served packument from a 'MergePlan' and the raw source documents:
 rebuild @versions@, @dist-tags@, and @time@ from the plan onto the base document,
@@ -194,7 +179,7 @@ assembleMergedPackument mountBase bySource plan base =
     -- safe-name-gated self-reported @name@. No usable or safe name -> no rewrite.
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = case stringField "name" baseObject of
-        Just pkg | safeName pkg -> rewriteVersion (joinUrl mountBase pkg)
+        Just pkg | safeName pkg -> rewriteVersion (joinUrlPath mountBase pkg)
         _ -> id
 
     -- Each surviving version's object, taken from the raw @Value@ of the source

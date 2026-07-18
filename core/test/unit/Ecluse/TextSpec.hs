@@ -12,20 +12,22 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (joinUrlPath, nonBlank, renderIso8601Utc, stripTrailingSlash)
+import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, renderIso8601Utc, stripTrailingSlash)
 
 {- | Tests for the shared text helpers. They pin the promises callers depend on:
 'nonBlank' treats an empty or all-whitespace value as absent and returns the surviving
 text __trimmed__, the URL-path helpers tolerate exactly one trailing slash on the
-base so a join never doubles or drops the separator, and the hot-path ISO-8601
-renderer is byte-for-byte 'iso8601Show' -- pinned by a property over the whole
-domain, including the delegating edges.
+base so a join never doubles or drops the separator, 'lastPathSegment' returns the
+text after the final slash or nothing when the string ends in one, and the hot-path
+ISO-8601 renderer is byte-for-byte 'iso8601Show' -- pinned by a property over the
+whole domain, including the delegating edges.
 -}
 spec :: Spec
 spec = do
     nonBlankSpec
     trailingSlashSpec
     joinUrlPathSpec
+    lastPathSegmentSpec
     renderIso8601Spec
 
 nonBlankSpec :: Spec
@@ -69,6 +71,20 @@ joinUrlPathSpec = describe "joinUrlPath" $ do
 
     it "appends the path verbatim" $
         joinUrlPath "https://host" "@scope%2Fname" `shouldBe` "https://host/@scope%2Fname"
+
+lastPathSegmentSpec :: Spec
+lastPathSegmentSpec = describe "lastPathSegment" $ do
+    it "returns the segment after the last slash" $
+        lastPathSegment "https://host/thing/-/thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
+
+    it "returns the whole string when it carries no slash" $
+        lastPathSegment "thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
+
+    it "is absent when the string ends in a slash" $
+        lastPathSegment "https://host/thing/" `shouldBe` Nothing
+
+    it "is absent for the empty string" $
+        lastPathSegment "" `shouldBe` Nothing
 
 renderIso8601Spec :: Spec
 renderIso8601Spec = describe "renderIso8601Utc" $ do
