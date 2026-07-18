@@ -30,8 +30,10 @@ tenants are, in allocation order:
    deployment spends no heap on queued jobs).
 
 The combined invariant -- reserve + cache + material + publish + queue + fixed
-buffers within the ceiling -- is enforced by construction for computed shares and
-re-checked once explicit overrides substitute in.
+buffers within the ceiling -- is enforced by construction for computed shares.
+Explicit overrides are re-checked by attribution, described under degradation
+below: a pin refuses the boot only when it is what a fitting plan cannot shed
+around, never on mere presence.
 
 == Graceful degradation, never a refusal
 
@@ -44,9 +46,17 @@ smaller-cores recommendation); then the publish aggregate shrinks to one maximum
 request; then the queue depth to its floor. One operation on one capability with
 no cache is the irreducible minimum and __always boots__ -- if even that exceeds
 the ceiling, the plan says so in its loudest warning and boots anyway (the cgroup
-backstop is then the guard). Only an __explicit operator override__ that breaks
-the combined invariant refuses the boot: an override is an operator claim, and a
-false claim is a misconfiguration to fix, not to shrink around.
+backstop is then the guard).
+
+Only an __explicit operator override__ refuses the boot, and only when it is the
+cause. The plan re-derives the override-free minimum (every pin substituted out,
+every computed tenant at its floor) and refuses just when that minimum fits the
+ceiling while the pinned plan does not, naming the pins whose individual removal
+would fit (all of them when only their combination overshoots). A pin at or below
+the value the shed ladder would compute anyway pushes the plan past nothing and
+never refuses; a pod too small even without the pins boots with the loud warning
+like any other. An override is an operator claim, and a claim that alone breaks
+the ceiling is a misconfiguration to fix, not to shrink around.
 
 With no ceiling datapoint at all, every bound falls back to the shipped values
 that predate the plan. An explicit config value always wins its own bound, and
@@ -131,9 +141,11 @@ data MemoryPlan = MemoryPlan
     , mpDegradations :: [Text]
     -- ^ The shed-ladder warnings, in the order taken; empty when everything fits.
     , mpOverrideViolations :: [Text]
-    {- ^ Explicit overrides that break the combined invariant even after every
-    computed tenant shed to its minimum: the boot and check-config refuse on
-    these (exit 2), never on a computed plan.
+    {- ^ The pins named as the cause of a residual overshoot the plan cannot shed
+    around: populated only when the override-free minimum fits the ceiling while
+    the pinned plan does not. The boot and check-config refuse on these (exit 2).
+    A pin that contributes nothing to the overshoot is never named, and a pod too
+    small even without the pins boots (a degradation, not a refusal).
     -}
     }
     deriving stock (Eq, Show)
@@ -321,25 +333,56 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         queueTenantBytes = queueCharge depthFinal
         overshoot4 = overshoot3 - queueShedBytes
 
-        -- Anything left is either the irreducible minimum exceeding the ceiling
-        -- (boots anyway, loudest warning) or an explicit override's doing (refused).
-        explicitNames =
+        -- Attribute a residual overshoot before refusing. Re-derive the fully-shed
+        -- minimum for a hypothetical set of explicit pins: every un-pinned tenant
+        -- at its floor (cache at zero), every pin at its claimed value. At the
+        -- actual pins this reproduces overshoot4; substituting pins out isolates
+        -- which of them, if any, a fitting plan cannot shed around.
+        minShedSum (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth) =
+            reserve
+                + fixedBuffers
+                + fromMaybe 0 pinCache
+                + materialOf (fromMaybe 1 pinAdmission) (fromMaybe responseBytesFloor pinResponse)
+                + (if publishConfigured then requestFloorOr pinRequest else 0)
+                + queueCharge (fromMaybe queueDepthFloor pinDepth)
+          where
+            requestFloorOr = fromMaybe (clamp requestBytesFloor requestBytesCap (appHeap * publishSharePercent `div` 100))
+        overshootAt pins = max 0 (minShedSum pins - h)
+
+        -- The override-free minimum: every pin substituted out at once. It fitting
+        -- while the pinned plan does not is what makes the pins the cause (refuse);
+        -- it overshooting too means the pod is simply too small (boot, warn).
+        overshootWithoutOverrides = overshootAt (Nothing, Nothing, Nothing, Nothing, Nothing)
+
+        -- Each explicit pin paired with the plan that substitutes only it out, for
+        -- per-pin attribution (the value the shed ladder would reach without it:
+        -- cache to zero, admission and response to their floors, request to the
+        -- computed share, depth to the queue-depth floor).
+        explicitPins =
             catMaybes
-                [ "cache.maxBytes" <$ cacheExplicit
-                , "runtime.serveMaxInFlight" <$ explicitAdmission
-                , "limits.maxResponseBytes" <$ responseExplicit
-                , "limits.maxRequestBytes" <$ requestExplicit
-                , "queue.memoryMaxDepth" <$ depthExplicit
+                [ ("cache.maxBytes", (Nothing, explicitAdmission, responseExplicit, requestExplicit, depthExplicit)) <$ cacheExplicit
+                , ("runtime.serveMaxInFlight", (cacheExplicit, Nothing, responseExplicit, requestExplicit, depthExplicit)) <$ explicitAdmission
+                , ("limits.maxResponseBytes", (cacheExplicit, explicitAdmission, Nothing, requestExplicit, depthExplicit)) <$ responseExplicit
+                , ("limits.maxRequestBytes", (cacheExplicit, explicitAdmission, responseExplicit, Nothing, depthExplicit)) <$ requestExplicit
+                , ("queue.memoryMaxDepth", (cacheExplicit, explicitAdmission, responseExplicit, requestExplicit, Nothing)) <$ depthExplicit
                 ]
+
+        -- Name the pins whose individual removal makes the plan fit; when none
+        -- alone flips the verdict (the pins only overshoot in combination), name
+        -- them all rather than under-blame.
+        culpritPins = case [name | (name, pins) <- explicitPins, overshootAt pins <= 0] of
+            [] -> map fst explicitPins
+            flips -> flips
+
         overrideViolations
-            | overshoot4 > 0 && not (null explicitNames) =
+            | overshoot4 > 0 && overshootWithoutOverrides <= 0 =
                 [ "explicit override(s) "
-                    <> T.intercalate ", " explicitNames
-                    <> " leave the combined memory plan "
+                    <> T.intercalate ", " culpritPins
+                    <> " push the combined memory plan "
                     <> show overshoot4
                     <> " bytes past the effective heap ceiling "
                     <> show h
-                    <> " even after every computed tenant shed to its minimum; lower them or raise the ceiling"
+                    <> "; the override-free minimum fits within it, so lower them or raise the ceiling"
                 ]
             | otherwise = []
 
@@ -378,9 +421,9 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
                     ["memory plan: memory-queue depth shed to " <> show depthFinal | queueShedBytes > 0]
                 , listToMaybe
                     [ "memory plan: the irreducible minimum (one operation on one capability, no cache) still exceeds the heap ceiling by "
-                        <> show overshoot4
+                        <> show overshootWithoutOverrides
                         <> " bytes; booting anyway with the container limit as the only backstop -- give this pod more memory"
-                    | overshoot4 > 0 && null explicitNames
+                    | overshoot4 > 0 && overshootWithoutOverrides > 0
                     ]
                 ]
 

@@ -117,6 +117,42 @@ spec = describe "resolveMemoryPlan" $ do
             mpOverrideViolations plan `shouldSatisfy` (not . null)
             mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
 
+    describe "attributes a residual overshoot before refusing (issue #845)" $ do
+        it "boots, never refuses, on an explicit queue depth equal to the floor the ladder would compute" $ do
+            -- The traced regression: a 64 MiB pod overshoots and must boot with the
+            -- loud warning. Pinning queue.memoryMaxDepth to the very floor the shed
+            -- ladder reaches on its own adds no byte, so it must not flip the boot
+            -- into an exit-2 refusal that blames a pin contributing nothing.
+            let queue' = bareQueue{qsMemoryMaxDepth = Just 5000} -- the queue-depth floor
+                (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+                (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+            mpOverrideViolations pinned `shouldBe` []
+            mpDegradations pinned `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
+            -- The pin moved no tenant byte: the plan matches the override-free one.
+            mpQueueMemoryMaxDepth pinned `shouldBe` mpQueueMemoryMaxDepth free
+            mpQueueTenantBytes pinned `shouldBe` mpQueueTenantBytes free
+
+        it "never refuses on an explicit queue depth under a non-memory backend (the depth charges no heap)" $ do
+            -- Under a durable (or absent) queue backend queueCharge is identically
+            -- zero, so queue.memoryMaxDepth contributes to no overshoot whatever its
+            -- value; the too-small pod boots with its warning, unblamed.
+            let queue' = bareQueue{qsMemoryMaxDepth = Just 100000} -- the cap, deliberately large
+                (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MirroringWithoutMemoryQueue False
+            mpOverrideViolations plan `shouldBe` []
+            mpQueueTenantBytes plan `shouldBe` 0
+            mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
+
+        it "names only the contributing override when an innocent one is co-present" $ do
+            -- A 1 GiB cache on a 256 MiB pod genuinely cannot fit; a queue depth
+            -- pinned to the floor beside it contributes nothing and must not be
+            -- named, and the message must not claim it pushes the plan past bytes.
+            let cache' = bareCache{csMaxBytes = Just (1 * gib)}
+                queue' = bareQueue{qsMemoryMaxDepth = Just 5000}
+                (plan, _) = resolve cache' bareLimits queue' Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
+            mpOverrideViolations plan `shouldSatisfy` (not . null)
+            mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+            mpOverrideViolations plan `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+
     it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
         -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
         -- check-config prints, pinned so any operator-visible change is reviewed.
