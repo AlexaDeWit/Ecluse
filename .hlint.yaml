@@ -1,8 +1,8 @@
 # HLint configuration — security-oriented restrictions on top of HLint's default
 # hint set (we keep all the built-in suggestions; the entries below only ADD
-# rules). The dev shell pins HLint via flake.lock; run `make lint`.
+# rules). The dev shell pins HLint via flake.lock; run `task lint`.
 #
-# The theme is totality: a supply-chain resilience proxy must not crash on
+# The theme is totality: a supply-chain policy proxy must not crash on
 # hostile input, so partial functions (those that can throw on some inputs) are
 # banned outright. Most are already hidden by `relude` (our prelude); these
 # restrictions are defence-in-depth for when they are reached for via a

@@ -27,7 +27,7 @@ maintainer time and will be closed without a detailed response. Confirm the issu
 Some of Écluse's security refusals can surprise an operator expecting a transparent passthrough (for
 example, the public integrity-digest floor that drops weakly-hashed public versions). These are
 designed behaviour, documented in the [operator
-manual](USAGE.md#always-on-a-public-version-must-carry-a-strong-integrity-digest) and the [security
+manual](USAGE.md#rule-policy) and the [security
 invariants](docs/architecture/security.md). Confirm a surprising refusal against those before
 reporting it.
 
