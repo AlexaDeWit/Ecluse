@@ -15,13 +15,16 @@ module Ecluse.Core.Server.Pipeline.Shared (
     trustedIntegrityMissing,
     trustedIntegrityBelowFloor,
     hRetryAfter,
+    shedStatus,
+    shedRetryAfter,
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (HeaderName, hAuthorization)
+import Network.HTTP.Types (Header, HeaderName, Status, hAuthorization, status503)
 import Network.Wai (Request, requestHeaders)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
@@ -30,6 +33,22 @@ import Ecluse.Core.Server.Response (
 
 hRetryAfter :: HeaderName
 hRetryAfter = "Retry-After"
+
+{- | The HTTP status a brief-wait admission shed renders across the read and publish
+paths: @503 Service Unavailable@, the server-capacity signal (not a @429@ rate limit).
+Shared so every shed site renders the identical status rather than re-spelling the
+reason phrase.
+-}
+shedStatus :: Status
+shedStatus = status503
+
+{- | The @Retry-After@ header a shed 503 carries, in whole seconds equal to the admission
+wait budget ('admissionWaitMicros', divided by the microseconds in a second): a shed
+client is never told to come back sooner than the interval a queued request waits
+in-process, and the two cannot drift because the hint is derived from the budget.
+-}
+shedRetryAfter :: Header
+shedRetryAfter = (hRetryAfter, show (admissionWaitMicros `div` 1_000_000))
 
 {- | The shared edge gate against a configured inbound token: with none configured the
 edge is open; with one configured the request's forwarded bearer must match it exactly.

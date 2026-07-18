@@ -286,7 +286,7 @@ serveWithDeps mode replies deps name request respond
             Just received -> pure received
             Nothing -> liftIO $ do
                 mpServeDecision (srMetrics rt) Metric.Unavailable
-                respond (packumentUnavailable replies [(hRetryAfter, "1")] "server is busy; retry later")
+                respond (packumentUnavailable replies [shedRetryAfter] "server is busy; retry later")
 
 {- Serve a packument once past the admission gate: fetch both origins, gate and merge
 them, then either answer the conditional serve or take the no-survivors terminal. Hoisted

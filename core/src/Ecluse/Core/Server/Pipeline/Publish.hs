@@ -23,7 +23,7 @@ import Data.ByteString.Lazy qualified as LBS
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502, status503)
+import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, consumeRequestBodyStrict, requestBodyLength)
 
 import Ecluse.Core.Package (
@@ -160,7 +160,7 @@ renderRelay replies deps = \case
 -- @Retry-After@ hint as the read path's admission.
 bodyBudgetShed :: PublishReplies response -> PublishDeps -> response
 bodyBudgetShed replies deps =
-    publishError replies status503 [(hRetryAfter, "1")] (appendHelp (pubHelp deps) "the server is at its publish-body capacity; retry shortly")
+    publishError replies shedStatus [shedRetryAfter] (appendHelp (pubHelp deps) "the server is at its publish-body capacity; retry shortly")
 
 -- A @405@ for a publish on a mount with no publication target configured: the
 -- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@
