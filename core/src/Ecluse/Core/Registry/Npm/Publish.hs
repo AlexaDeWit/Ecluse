@@ -2,8 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm mirror-write protocol: publish-document assembly, request shaping,
-and the codec that carries them into the shared publish transport.
+{- | The npm publish-document schema: the mirror-write side (document assembly,
+request shaping, and the codec that carries them into the shared publish transport)
+and the read side ('declaredNames', the identity names the ecosystem-neutral publish
+pipeline's anti-shadowing guard reads from a first-party publish body).
 
 Everything here is pure. 'npmPublishCodec' is npm's
 'Ecluse.Core.Registry.Publish.PublishCodec': the composition root marries it to
@@ -16,15 +18,19 @@ module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
+    declaredNames,
 ) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value (String), object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
 
+import Lens.Micro ((^?))
+import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
@@ -200,3 +206,28 @@ attachmentObject tarball =
     -- The npm attachment carries the raw tarball bytes, standard-base64-encoded.
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
+
+{- | Every package name a first-party npm publish body declares as its own identity:
+the top-level @_id@ and @name@, and each @versions.\<v\>.name@. Only string-valued
+name slots are read (a non-string slot is no name claim); a body that does not decode
+to a JSON object declares no readable name (the empty list). The base64 @_attachments@
+are never decoded.
+
+This is the read-side inverse of 'npmPublishDocument', which assembles the same
+@_id@\/@name@\/@versions@ shape for the mirror write. The ecosystem-neutral publish
+pipeline injects it as its adapter's declared-name extractor, so the anti-shadowing
+body-name guard (issue #391) can refuse a crafted body that names a package the scope
+guard never authorised without the neutral pipeline knowing npm's document schema.
+-}
+declaredNames :: LByteString -> [Text]
+declaredNames body =
+    [ declared
+    | document <- maybeToList (Aeson.decode body :: Maybe Value)
+    , slot <-
+        [document ^? key "_id", document ^? key "name"]
+            <> [ versionDoc ^? key "name"
+               | versions <- maybeToList (document ^? key "versions" . _Object)
+               , versionDoc <- KeyMap.elems versions
+               ]
+    , Just (String declared) <- [slot]
+    ]

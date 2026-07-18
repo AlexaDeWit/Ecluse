@@ -26,6 +26,7 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
+import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
@@ -117,6 +118,7 @@ basePublishDeps bodyBudget =
         , pubHelp = Nothing
         , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
         , pubCanonicaliseName = rightToMaybe . Project.projectName
+        , pubDeclaredNames = NpmPublish.declaredNames
         }
 
 {- | The 'application' under a single @\/npm@ mount carrying the given publish deps,

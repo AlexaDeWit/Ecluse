@@ -12,9 +12,9 @@ denial renderer ("Ecluse.Core.Registry.Npm.Serve"), the metadata client and serv
 packument assembly ("Ecluse.Core.Registry.Npm.Metadata",
 "Ecluse.Core.Registry.Npm.Filter"), the artifact request builders
 ("Ecluse.Core.Registry.Npm.Request"), the publish relay
-("Ecluse.Core.Registry.Npm"), and the mirror-write codec
-("Ecluse.Core.Registry.Npm.Publish"), with the name canonicaliser from
-"Ecluse.Core.Registry.Npm.Project".
+("Ecluse.Core.Registry.Npm"), and the mirror-write codec with the body-name
+extractor the anti-shadowing guard reads through ("Ecluse.Core.Registry.Npm.Publish"),
+with the name canonicaliser from "Ecluse.Core.Registry.Npm.Project".
 -}
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Npm (
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
+import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 
@@ -72,6 +72,7 @@ npmAdapter =
                 { publishRelay = \limits manager targetUrl token ->
                     relayPublishDocument (NpmClientConfig targetUrl manager token limits)
                 , publishCanonicaliseName = rightToMaybe . projectName
+                , publishDeclaredNames = declaredNames
                 , publishCodec = npmPublishCodec
                 }
         }
