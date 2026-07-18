@@ -22,6 +22,7 @@ bench; until then the conservative bound stands.
 -}
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
+    contractResidentBytes,
     packumentOriginFanout,
     mirrorJobEstimatedBytes,
 ) where
@@ -32,6 +33,14 @@ arithmetic.
 -}
 expandWireBytes :: Int -> Int
 expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
+
+{- | Invert 'expandWireBytes': scale a resident-byte budget back to the wire
+(compact-encoded) byte count it can hold, by the same ratio. A response cap carved
+from a material share is derived through this, so the forward expansion and the
+inverse contraction share one ratio and can never drift apart.
+-}
+contractResidentBytes :: Int -> Int
+contractResidentBytes residentBytes = residentBytes * residentRatioDenominator `div` residentRatioNumerator
 
 residentRatioNumerator :: Int
 residentRatioNumerator = 15
