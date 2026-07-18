@@ -19,6 +19,7 @@ import Network.Wai (
     responseStatus,
  )
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
+import Network.Wai.Request (RequestSizeException (RequestSizeException))
 import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
 import Test.Hspec
 import Test.Hspec.Wai
@@ -493,3 +494,18 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         case outcome of
             Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
             Right () -> expectationFailure "expected the post-commit escape to rethrow"
+
+    it "rethrows a pre-commit over-cap escape unclassified: no response, nothing observed, so the outer size-limit cap answers the 413 (issue #849)" $ do
+        -- The size-limit middleware's chunked cap throws 'RequestSizeException' from the
+        -- wrapped body reader while a strict-body handler consumes it -- inside this
+        -- guard. It is client misbehaviour, so the guard must rethrow it (giving no
+        -- response of its own and observing NO perimeter fault -- neither the metric nor
+        -- the audit line fires) for the outer cap to answer as the documented 413.
+        (statuses, observed, outcome) <- driveGuard (\_respond -> throwIO (RequestSizeException 8))
+        statuses `shouldBe` []
+        observed `shouldBe` []
+        case outcome of
+            Left escape -> case fromException escape of
+                Just (RequestSizeException limit) -> limit `shouldBe` 8
+                Nothing -> expectationFailure "expected the rethrown escape to be a RequestSizeException"
+            Right () -> expectationFailure "expected the over-cap escape to rethrow"

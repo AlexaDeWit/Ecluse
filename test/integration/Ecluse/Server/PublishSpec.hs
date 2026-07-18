@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (..), ServerConfig (scSizeLimit), application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
@@ -113,6 +113,29 @@ proxyWith mkPublishDeps = do
                     , bindingPublishDeps = publishDeps
                     }
                 ]
+    pure (application cfg env)
+
+{- | A proxy 'Application' with the publish path enabled and its request-body cap set
+to @cap@, so a body crossing the cap exercises the size-limit middleware. The
+publication target is never reached (the cap fires while the handler reads the body),
+so its port is an unconnectable placeholder.
+-}
+cappedProxyWith :: RequestSizeLimit -> IO Application
+cappedProxyWith cap = do
+    env <- newTestEnv
+    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+    let cfg =
+            ( mkServerConfig
+                [ MountBinding
+                    { bindingPrefix = "npm" :| []
+                    , bindingRouter = npmRouter
+                    , bindingPackumentDeps = inertPackumentDeps
+                    , bindingPublishDeps = Just (publishDepsAt 1 Nothing bodyBudget)
+                    }
+                ]
+            )
+                { scSizeLimit = cap
+                }
     pure (application cfg env)
 
 -- | A @PUT \/npm\/{path}@ publish carrying the given bearer (if any) and body.
@@ -194,6 +217,18 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status secondPublish `shouldBe` 503
             putMVar gate ()
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
+
+    it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
+        -- A chunked body declares no length, so the size-limit cap is enforced by the
+        -- wrapped reader THROWING while the publish handler strictly consumes the body --
+        -- inside the request perimeter. Before the fix that escape was reclassified into
+        -- the route's neutral 500 (and an internal-fault audit line); an over-cap upload
+        -- is client misbehaviour, so it must surface as the middleware's documented 413.
+        -- The 413 (mutually exclusive with the perimeter's 500 fault path) proves the
+        -- escape was rethrown for the outer cap rather than observed as a perimeter fault.
+        app <- cappedProxyWith (RequestSizeLimit 8)
+        resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        status resp `shouldBe` 413
 
     it "relays an in-scope publish with the publisher's forwarded credential and returns the target's response" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do

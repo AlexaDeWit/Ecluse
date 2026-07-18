@@ -99,6 +99,7 @@ import Network.Wai (Application, Middleware, Request, Response, ResponseReceived
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.Timeout (timeout)
+import Network.Wai.Request (RequestSizeException)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Exception (catchAny, throwIO)
 
@@ -318,6 +319,14 @@ Pre-commit, the escape is classified ('Ecluse.Core.Server.Fault.classifyEscape')
 handed to the injected observation channel (the composition wires the bounded
 @ecluse.serve.perimeter.faults@ metric and the audit log line), and answered with
 the route's declared neutral 500 -- no fault detail ever reaches the client.
+
+One pre-commit escape is exempt: the size-limit middleware's 'RequestSizeException'
+-- a chunked over-cap body, thrown from the wrapped reader while the handler consumes
+it -- is __client__ misbehaviour, not an escaped internal contract, so it is rethrown
+unclassified. The outer 'serverMiddleware' cap then answers it as the documented 413
+(the same answer its up-front known-length check gives), and no perimeter fault is
+recorded.
+
 Post-commit -- the wrapped respond has already begun the response -- there is no
 second response to give: the escape rethrows, warp tears the connection down, and
 the 'scOnException' hook logs it. Exported for its spec; 'serve' wires it per
@@ -340,11 +349,20 @@ perimeterGuard observeFault respond fallback handlerOn = do
             respond response
     handlerOn respondCommitted `catchAny` \escape -> do
         wasCommitted <- readIORef committed
-        if wasCommitted
+        if wasCommitted || isOverCapEscape escape
             then throwIO escape
             else do
                 observeFault (classifyEscape escape)
                 respond fallback
+
+{- Whether an escape is the size-limit middleware's over-cap signal. The cap
+('serverMiddleware', composed outermost) enforces a chunked body's limit by throwing
+'RequestSizeException' from the wrapped reader, which fires while a strict-body handler
+consumes the body -- inside 'perimeterGuard'. It is a client fault, not an escaped
+internal contract, so the guard rethrows it (skipping the fault metric and audit line)
+for the outer cap to answer as the documented 413. -}
+isOverCapEscape :: SomeException -> Bool
+isOverCapEscape escape = isJust (fromException escape :: Maybe RequestSizeException)
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
 with, paired with the action its ecosystem's router names for the remainder.
