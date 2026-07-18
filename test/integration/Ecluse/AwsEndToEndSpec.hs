@@ -38,7 +38,6 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
@@ -47,15 +46,14 @@ import Ecluse.Integration.Ministack (
     quietLogEnv,
     withMinistack,
  )
-import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
@@ -175,11 +173,7 @@ buildEnv :: MirrorQueue -> IO Env
 buildEnv queue = do
     guardedManager <- newManager defaultManagerSettings
     trusted <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- quietLogEnv
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
+    newTestEnvWith queue (guardedManager, trusted) telemetryDisabled
 
 {- The worker's admit-everything bundles publishing through the production marriage
 (npm's codec over the shared transport) at the mirror-target stub, with a static

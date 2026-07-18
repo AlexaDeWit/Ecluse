@@ -5,8 +5,6 @@
 module Ecluse.Server.PublishSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, hContentType, methodPut, mkStatus, statusCode)
 import Network.Wai (
     Application,
@@ -35,15 +33,10 @@ import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PublishDeps (..))
-import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testServeAdmission)
 
 {- | An in-process publication-target double: it records the @Authorization@ header
 and the body of every @PUT@ it receives (so the credential-passthrough and
@@ -82,16 +75,6 @@ authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
 -- The (auth, body) pairs the target saw, in arrival order.
 targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
 targetSaw target = reverse <$> readIORef (tgSeen target)
-
-newTestEnv :: IO Env
-newTestEnv = do
-    queue <- newTestMemoryQueue
-    manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The first-party publish dependencies for the tests: a @\@acme@ publish-scope
 allow-list, the publication target at the given loopback port, and the given static

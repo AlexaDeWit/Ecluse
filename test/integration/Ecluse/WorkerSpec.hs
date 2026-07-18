@@ -4,7 +4,6 @@
 
 module Ecluse.WorkerSpec (spec) where
 
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status201, status409, status503)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
@@ -25,7 +24,6 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
@@ -35,11 +33,10 @@ import Ecluse.Integration.Ministack (
     unwrapQ,
     withMinistack,
  )
-import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnvWithAdmission, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Package (sriSha512Of, unsafeHash)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
@@ -225,15 +222,7 @@ job upstreamUrl =
 envFor :: MirrorQueue -> IO Env
 envFor queue = do
     manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- newTestLogEnv
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
-
--- A scribe-free LogEnv (no stdout output during the integration run).
-newTestLogEnv :: IO LogEnv
-newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    newTestEnvWith queue (manager, manager) telemetryDisabled
 
 {- Run the supervised mirror worker ('runWorker') under the given re-evaluation
 policies against the real queue until a condition holds, then tear it down. The loop

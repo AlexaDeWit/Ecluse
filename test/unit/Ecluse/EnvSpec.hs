@@ -4,8 +4,7 @@
 
 module Ecluse.EnvSpec (spec) where
 
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
+import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec
 import UnliftIO (evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
@@ -14,46 +13,17 @@ import Ecluse (mountBindingFor, runServer, runWorker)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
-import Ecluse.Core.Server.Cache (CacheConfig (..), MetadataCache, StoreBudget (..), newMetadataCache)
+import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Runtime.Env (Env (..), newEnvWithAdmission, newWorkerHeartbeat, withEnvWithAdmission)
+import Ecluse.Runtime.Env (Env (..), newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testServeAdmission)
-
-{- | A manager built from 'defaultManagerSettings' (no TLS, no connection opened
-on construction), so assembling an 'Env' touches no network.
--}
-newTestManager :: IO Manager
-newTestManager = newManager defaultManagerSettings
-
-{- | A scribe-free 'LogEnv' double: a @katip@ environment with no scribe attached,
-so assembling an 'Env' opens no handle and writes nothing to stdout.
--}
-newTestLogEnv :: IO LogEnv
-newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
-
-{- | A cache config for the assembly tests: a short TTL over modest entry and byte
-budgets. The exact tunables are immaterial here (no eviction is exercised); the
-fixture is local so the spec depends on no particular default-config export.
--}
-testCacheConfig :: CacheConfig
-testCacheConfig =
-    CacheConfig
-        { cacheTtl = 60
-        , cacheFullBudget = budget
-        , cacheVersionBudget = budget
-        , cacheAssembledBudget = budget
-        }
-  where
-    budget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 256 * 1024 * 1024}
-
--- | A metadata cache on the local test config (touches no network).
-newTestCache :: IO MetadataCache
-newTestCache = newMetadataCache testCacheConfig
+import Ecluse.Test.Support (newTestLogEnv, testServeAdmission)
 
 {- | The npm front door the split-ready server test drives: a single npm mount with
 inert packument-serve dependencies and no publish target, assembled through the public
@@ -62,26 +32,13 @@ binding resolver exactly as the composition root would ('mountBindingFor' over n
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
-{- | Assemble an 'Env' from the doubles above, a no-network manager, a metadata
-cache, and a scribe-free 'LogEnv'.
--}
-newTestEnv :: IO Env
-newTestEnv = do
-    queue <- newTestMemoryQueue
-    manager <- newTestManager
-    metadataCache <- newTestCache
-    logEnv <- newTestLogEnv
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
-
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
 sampleJob =
     MirrorJob
         { jobPackage = pkg
         , jobVersion = ver
-        , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
+        , jobArtifactUrl = unsafeRegistryUrl "https://registry.example.test/thing/-/thing-1.0.0.tgz"
         , jobArtifactFilename = "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
@@ -145,8 +102,8 @@ spec = do
     describe "withEnvWithAdmission" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newTestMemoryQueue
-            manager <- newTestManager
-            metadataCache <- newTestCache
+            manager <- newManager defaultManagerSettings
+            metadataCache <- newMetadataCache defaultCacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
@@ -154,8 +111,8 @@ spec = do
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
-            manager <- newTestManager
-            metadataCache <- newTestCache
+            manager <- newManager defaultManagerSettings
+            metadataCache <- newMetadataCache defaultCacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission

@@ -38,6 +38,7 @@ import Ecluse.Runtime.Queue.Sqs (
     liftReceivedMessages,
  )
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Support (newTestLogEnv)
 
 -- | An unscoped npm job fixture.
 npmJob :: MirrorJob
@@ -192,7 +193,7 @@ spec = do
 
     describe "liftReceivedMessages -- delivering a batch and logging poison drops" $ do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
-            logEnv <- quietLogEnv
+            logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
             -- Only the well-formed message is delivered; the three poison ones are dropped
             -- (omitted from the result and left un-acked for redelivery / dead-lettering).
@@ -227,12 +228,6 @@ poisonBatch =
     , ReceivedMessage{rmBody = Just (encodeJob scopedJob), rmReceipt = Nothing, rmMessageId = Just "m-no-receipt"}
     , ReceivedMessage{rmBody = Just "not-a-valid-body", rmReceipt = Just "receipt-3", rmMessageId = Just "m-bad-body"}
     ]
-
-{- | A scribe-free 'LogEnv': the delivery test asserts on the returned batch, not on
-any log line, so a no-output environment satisfies the dependency.
--}
-quietLogEnv :: IO LogEnv
-quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
 {- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
 severity admitted, so a drop line's serialised bytes are assertable through

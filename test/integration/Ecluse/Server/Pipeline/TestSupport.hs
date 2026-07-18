@@ -17,7 +17,6 @@ import Data.CaseInsensitive qualified as CI
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status304, status404, status500, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hETag, hHost, hIfNoneMatch)
@@ -54,21 +53,19 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
 import Ecluse.Core.Version (Version)
-import Ecluse.Runtime.Env (Env (envQueue), newEnvWithAdmission, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env (envQueue))
 import Ecluse.Runtime.Server (
     MountBinding (..),
     application,
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -588,12 +585,7 @@ upstream doubles, carrying the given mirror queue (the in-memory double, or one
 rigged to fail for the best-effort-enqueue assertion).
 -}
 newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
-newTestEnvWithQueue queue manager = do
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+newTestEnvWithQueue queue manager = newTestEnvWith queue (manager, manager) telemetryDisabled
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').

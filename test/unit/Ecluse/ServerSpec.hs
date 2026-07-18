@@ -6,8 +6,6 @@ module Ecluse.ServerSpec (spec) where
 
 import Prelude hiding (get)
 
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (hConnection, methodHead, methodPost, methodPut, status200, status500, statusCode)
 import Network.Wai (
     Application,
@@ -36,13 +34,12 @@ import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow, workerHeartbeatStaleAfter)
-import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, newEnvWithAdmission, newWorkerHeartbeat, recordPoll)
+import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
     MountBinding (..),
@@ -58,11 +55,8 @@ import Ecluse.Runtime.Server (
     perimeterGuard,
     serverMiddleware,
  )
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testServeAdmission)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders -- it never fetches -- so a handle that
@@ -71,21 +65,6 @@ field, the refusal would surface the leak.
 -}
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
-
--- | A manager with no TLS and no connection opened on construction.
-newTestManager :: IO Manager
-newTestManager = newManager defaultManagerSettings
-
--- | Assemble an 'Env' from the handle doubles, touching no network.
-newTestEnv :: IO Env
-newTestEnv = do
-    queue <- newTestMemoryQueue
-    manager <- newTestManager
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and router, and __inert__ packument-serve
 dependencies (every upstream a closed port). A bound mount always

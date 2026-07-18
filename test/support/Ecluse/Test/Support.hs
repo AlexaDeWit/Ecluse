@@ -11,10 +11,11 @@ deliberately minimal for now: 'supportLinkageSpec' is a linkage probe that every
 suite imports and runs, proving the library is built, links against the library
 under test, and is reachable from each suite's discovered specs.
 -}
-module Ecluse.Test.Support (supportLinkageSpec, testServeAdmission) where
+module Ecluse.Test.Support (supportLinkageSpec, testServeAdmission, newTestLogEnv) where
 
 import Ecluse.Core.Package (HashAlg (SHA256), renderHashAlg)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
+import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 {- | A trivial spec that touches a stable export of the library under test, so a
@@ -34,3 +35,7 @@ bounded admission the boot path sizes from @ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT@
 -}
 testServeAdmission :: IO ServeAdmission
 testServeAdmission = newServeAdmission 1_000_000
+
+-- | A scribe-free LogEnv (no stdout output during the test run).
+newTestLogEnv :: IO LogEnv
+newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")

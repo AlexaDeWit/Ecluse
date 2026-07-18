@@ -10,7 +10,7 @@ import System.Environment (unsetEnv)
 import Test.Hspec
 import UnliftIO (bracket_)
 
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
+import Ecluse.Test.Support (newTestLogEnv)
 
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Runtime.Telemetry.Resolve (
@@ -138,24 +138,19 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
 prepareSpec :: Spec
 prepareSpec = describe "prepareTelemetry" $ do
     it "normalises the canonical OTEL_* environment the SDK reads from the resolved identity" $ do
-        logEnv <- quietLogEnv
+        logEnv <- newTestLogEnv
         endpoint <- withCleanOtelEnv $ do
             prepareTelemetry logEnv [("DD_SERVICE", "api"), ("DD_AGENT_HOST", "10.0.0.9")]
             lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
         endpoint `shouldBe` Just "http://10.0.0.9:4318"
 
     it "warns and defaults to localhost when no endpoint is configured" $ do
-        logEnv <- quietLogEnv
+        logEnv <- newTestLogEnv
         endpoint <- withCleanOtelEnv $ do
             prepareTelemetry logEnv []
             lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
         endpoint `shouldBe` Just "http://localhost:4318"
   where
-    -- A scribe-less katip environment: log calls are accepted and dropped, so the
-    -- boot warning under test produces no stdout.
-    quietLogEnv :: IO LogEnv
-    quietLogEnv = initLogEnv (Namespace ["test"]) (Environment "test")
-
     -- Run an action, then clear the OTEL_* variables prepareTelemetry writes, so a
     -- mutated process environment never leaks into another spec.
     withCleanOtelEnv :: IO a -> IO a

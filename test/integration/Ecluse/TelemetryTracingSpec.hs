@@ -42,8 +42,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (mountBindingFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
+import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Log (
     DdContext (..),
     DdSpan (DdSpan),
@@ -58,12 +57,11 @@ import Ecluse.Runtime.Telemetry (
  )
 import Ecluse.Runtime.Telemetry.Correlation (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testServeAdmission)
 
 {- | The integration tier for tracing: drive a request through an in-process Écluse
 into a real OTLP __Collector__ container (no Datadog SaaS) and assert the spans are
@@ -163,11 +161,7 @@ buildEnv telemetry = do
     manager <- newManager defaultManagerSettings
     privateManager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat
+    newTestEnvWith queue (manager, privateManager) telemetry
 
 -- A fresh, unique, path-safe marker per case, so one case's spans never satisfy
 -- another's assertion (in particular the off case's absence assertion).

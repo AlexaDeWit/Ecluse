@@ -523,6 +523,20 @@ library ecluse-test-support
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
 
+-- Internal runtime-test-support library shared by suites that depend on the runtime tier.
+library ecluse-runtime-test-support
+  import:          shared
+  hs-source-dirs:  runtime/test-support
+  exposed-modules:
+    Ecluse.Runtime.Test.Support
+
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-runtime
+    , ecluse:ecluse-test-support
+    , http-client       ^>=0.7
+    , katip             ^>=0.8.8
+
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
 -- enforcement — an app spec accidentally placed here fails to compile.
@@ -709,6 +723,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-runtime
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-runtime-test-support
     , aeson             ^>=2.2
     , autodocodec       ^>=0.5
     , bytestring        ^>=0.12
@@ -855,6 +870,7 @@ test-suite ecluse-integration
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-runtime-test-support
     , hspec            ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12
@@ -901,6 +917,7 @@ test-suite ecluse-residency
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-runtime-test-support
     , hspec             ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12
@@ -1077,6 +1094,7 @@ executable bench-load
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-runtime-test-support
     , aeson            ^>=2.2
     , bytestring       ^>=0.12
     , containers       ^>=0.7

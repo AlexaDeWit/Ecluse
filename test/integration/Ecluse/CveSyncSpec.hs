@@ -54,23 +54,20 @@ import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
-import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Pilot.Export (buildS3Env)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
-import Ecluse.Test.Support (testServeAdmission)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
@@ -202,12 +199,8 @@ proxyApp :: RuleDeps -> Text -> Text -> IO Application
 proxyApp ruleDeps privateUrl publicUrl = do
     prepared <- prepare ruleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
     manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- quietLogEnv
-    heartbeat <- newWorkerHeartbeat
     queue <- newTestMemoryQueue
-    admission <- testServeAdmission
-    env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
+    env <- newTestEnvWith queue (manager, manager) telemetryDisabled
     let deps =
             PackumentDeps
                 { pdPrivateBaseUrl = Just privateUrl

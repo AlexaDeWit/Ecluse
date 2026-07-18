@@ -5,8 +5,6 @@
 module Ecluse.Composition.WorkerSpec (spec) where
 
 import Data.Map.Strict qualified as Map
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
@@ -14,15 +12,11 @@ import Ecluse.Composition (PublishTarget, planMounts, planPublishTargets)
 import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdMinIntegrity))
 import Ecluse.Core.Worker (WorkerPolicy (wpMinIntegrity, wpNow))
-import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Runtime.Env (Env)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Rules (inertRuleDeps)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
 
 {- | Tests for the composition root's worker bundle construction: the served mounts,
 the resolved publish targets, and the adapter registry in; the per-ecosystem
@@ -72,13 +66,3 @@ composedFixtures = do
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets providers config)
     env <- newTestEnv
     pure (env, bindings, targets)
-
-newTestEnv :: IO Env
-newTestEnv = do
-    queue <- newTestMemoryQueue
-    manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    heartbeat <- newWorkerHeartbeat
-    admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
