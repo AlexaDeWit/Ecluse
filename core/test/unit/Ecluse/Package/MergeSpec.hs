@@ -11,8 +11,6 @@
 
 module Ecluse.Package.MergeSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA256, SHA512, hash)
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -28,7 +26,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge
 import Ecluse.Core.Version (mkVersion, unVersion)
-import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, unsafeHash)
 
 name :: PackageName
 name = mkPackageName Npm Nothing "thing"
@@ -110,22 +108,18 @@ packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 -- A well-formed sha512 SRI deterministically derived from a mnemonic label, so distinct
 -- labels yield distinct well-formed digests and the same label always yields the same one.
 validSriOf :: Text -> Text
-validSriOf label =
-    "sha512-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA512) :: ByteString)
+validSriOf = sriSha512Of . encodeUtf8
 
 -- Well-formed hex SHA-1 / SHA-256 digests derived from a label (40- / 64-hex).
 validSha1Of, validSha256Of :: Text -> Text
-validSha1Of label =
-    decodeUtf8 (convertToBase Base16 (hash (encodeUtf8 label :: ByteString) :: Digest SHA1) :: ByteString)
-validSha256Of label =
-    decodeUtf8 (convertToBase Base16 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+validSha1Of = hexSha1Of . encodeUtf8
+validSha256Of = hexSha256Of . encodeUtf8
 
 -- A well-formed sha256 SRI (@sha256-\<base64\>@) deterministically derived from a label --
 -- the SRI encoding of a sha256 digest a recomputing mirror serves in place of, or beside,
 -- npm's sha512.
 validSha256SriOf :: Text -> Text
-validSha256SriOf label =
-    "sha256-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+validSha256SriOf = sriSha256Of . encodeUtf8
 
 -- Mnemonic SRI tokens (each a distinct, well-formed sha512 SRI), named for the role
 -- each plays in the collision / divergence tests.

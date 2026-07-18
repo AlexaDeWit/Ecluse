@@ -20,7 +20,6 @@ Hermetic and gating, but requires a Docker daemon (for @ministack@'s S3).
 -}
 module Ecluse.CveSyncSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
@@ -39,8 +38,6 @@ import UnliftIO.Concurrent (threadDelay)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
-
 import Ecluse.Composition.MirrorQueue (parseEndpointUrl)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv)
@@ -68,7 +65,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -301,10 +298,10 @@ artifactBytes :: LByteString
 artifactBytes = "corpus-vuln-1.2.0-artifact-bytes"
 
 sha1Shasum :: Text
-sha1Shasum = decodeUtf8 (convertToBase Base16 (hashlazy artifactBytes :: Digest SHA1) :: ByteString)
+sha1Shasum = hexSha1Of (toStrict artifactBytes)
 
 sha512Integrity :: Text
-sha512Integrity = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy artifactBytes :: Digest SHA512) :: ByteString)
+sha512Integrity = sriSha512Of (toStrict artifactBytes)
 
 -- A fixed clock one day after the stub packument's publish time: always inside
 -- the 7-day quarantine.

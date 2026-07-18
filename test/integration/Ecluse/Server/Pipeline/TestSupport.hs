@@ -7,12 +7,10 @@ module Ecluse.Server.Pipeline.TestSupport where
 
 import Prelude hiding (get)
 
-import Crypto.Hash (Digest, SHA256, SHA512, hash)
 import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
@@ -66,7 +64,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -478,10 +476,8 @@ dist-tag reconciliation -- not digest realism -- so a deterministic well-formed 
 per label stands in for a real one while staying 'mkHash'-constructible.
 -}
 sriFor, sri256For :: Text -> Text
-sriFor label =
-    "sha512-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA512) :: ByteString)
-sri256For label =
-    "sha256-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+sriFor = sriSha512Of . encodeUtf8
+sri256For = sriSha256Of . encodeUtf8
 
 -- | A well-formed 40-hex SHA-1 shasum (sha1 of the empty string) for the dist fixtures.
 validShasum :: Text

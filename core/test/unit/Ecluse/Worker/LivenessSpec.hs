@@ -5,10 +5,8 @@
 
 module Ecluse.Worker.LivenessSpec (spec) where
 
-import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
 import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T

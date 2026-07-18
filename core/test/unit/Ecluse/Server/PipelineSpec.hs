@@ -18,9 +18,7 @@ suite's @Ecluse.Server.PipelineSpec@; this pins that the handlers run over the p
 -}
 module Ecluse.Server.PipelineSpec (spec) where
 
-import Crypto.Hash (Digest, SHA512, hash)
 import Data.Aeson (Value, encode, object, (.=))
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -64,7 +62,7 @@ import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha512Of)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -332,7 +330,7 @@ packumentFor host = packumentWithIntegrity host (sha512Integrity artifactBytes)
 
 -- | The Subresource-Integrity @sha512-<base64>@ string over the given bytes.
 sha512Integrity :: ByteString -> Text
-sha512Integrity bytes = "sha512-" <> decodeUtf8 (convertToBase Base64 (hash bytes :: Digest SHA512) :: ByteString)
+sha512Integrity = sriSha512Of
 
 {- | A private (trusted) upstream serving @leftpad@ 1.0.0 with an integrity that
 contradicts the public copy on the shared SHA-512 algorithm (a digest over different

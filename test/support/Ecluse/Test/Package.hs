@@ -10,7 +10,9 @@ support library follows. It carries the digest plumbing every suite reuses --
 'unsafeHash', which lifts a known-good digest into a 'Hash', the canonical
 well-formed digest fixtures (each the empty-input digest of its algorithm) that
 appear across the queue, integrity, env, and worker specs, and the SHA-256
-admission-floor fixtures the suites and harnesses gate with.
+admission-floor fixtures the suites and harnesses gate with. Digest renderers
+compute npm's hexadecimal shasums and Subresource-Integrity text independently
+of the production integrity machinery, so tests retain a separate oracle.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
@@ -21,6 +23,18 @@ module Ecluse.Test.Package (
     -- * Integrity floor fixtures
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
+
+    -- * Rendering digest fixtures
+    hexSha1Of,
+    hexSha256Of,
+    hexSha384Of,
+    hexSha512Of,
+    hexBlake2bOf,
+    sriSha256Of,
+    sriSha384Of,
+    sriSha512Of,
+    hexSha1OfLazy,
+    sriSha512OfLazy,
 
     -- * Canonical digest fixtures
     validSha1,
@@ -37,6 +51,10 @@ module Ecluse.Test.Package (
     sampleArtifact,
     sampleDetails,
 ) where
+
+import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
+import Data.ByteArray (ByteArrayAccess)
+import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 
 import Ecluse.Core.Package (
     Artifact (..),
@@ -105,6 +123,31 @@ concrete algorithm, so the construction cannot fail).
 -}
 defaultMinTrustedIntegrity :: MinTrustedIntegrity
 defaultMinTrustedIntegrity = either error id (mkMinTrustedIntegrity SHA256)
+
+-- | Lower-case hexadecimal digests for fixture bytes, named by algorithm.
+hexSha1Of, hexSha256Of, hexSha384Of, hexSha512Of, hexBlake2bOf :: ByteString -> Text
+hexSha1Of bytes = renderBase Base16 (hash bytes :: Digest SHA1)
+hexSha256Of bytes = renderBase Base16 (hash bytes :: Digest SHA256)
+hexSha384Of bytes = renderBase Base16 (hash bytes :: Digest SHA384)
+hexSha512Of bytes = renderBase Base16 (hash bytes :: Digest SHA512)
+hexBlake2bOf bytes = renderBase Base16 (hash bytes :: Digest Blake2b_512)
+
+-- | npm-compatible SRI components for fixture bytes, named by algorithm.
+sriSha256Of, sriSha384Of, sriSha512Of :: ByteString -> Text
+sriSha256Of bytes = renderSri "sha256-" (hash bytes :: Digest SHA256)
+sriSha384Of bytes = renderSri "sha384-" (hash bytes :: Digest SHA384)
+sriSha512Of bytes = renderSri "sha512-" (hash bytes :: Digest SHA512)
+
+-- | Chunk-preserving variants for the load harness's payload-sized fixture.
+hexSha1OfLazy, sriSha512OfLazy :: LByteString -> Text
+hexSha1OfLazy bytes = renderBase Base16 (hashlazy bytes :: Digest SHA1)
+sriSha512OfLazy bytes = renderSri "sha512-" (hashlazy bytes :: Digest SHA512)
+
+renderSri :: (ByteArrayAccess digest) => Text -> digest -> Text
+renderSri prefix digest = prefix <> renderBase Base64 digest
+
+renderBase :: (ByteArrayAccess digest) => Base -> digest -> Text
+renderBase base digest = decodeUtf8 (convertToBase base digest :: ByteString)
 
 {- | Canonical well-formed digests -- each the empty-input digest of its algorithm,
 so every fixture 'Hash' is 'mkHash'-constructible and survives a validated decode

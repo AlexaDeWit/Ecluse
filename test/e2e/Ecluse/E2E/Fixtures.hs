@@ -34,15 +34,15 @@ module Ecluse.E2E.Fixtures (
     buildFixtures,
 ) where
 
-import Crypto.Hash (Digest, SHA512, hash)
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Pair)
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
+
+import Ecluse.Test.Package (sriSha512Of)
 
 {- | One fixture package: its identity plus the two behaviours the scenarios turn
 on -- whether it declares an install script (so the @DenyInstallTimeExecution@ rule
@@ -154,10 +154,7 @@ buildOne root spec = do
 
 -- | @sha512-<base64>@ Subresource-Integrity string over the given bytes.
 sha512Sri :: ByteString -> Text
-sha512Sri bytes =
-    let digest = hash bytes :: Digest SHA512
-        b64 = convertToBase Base64 digest :: ByteString
-     in "sha512-" <> decodeUtf8 b64
+sha512Sri = sriSha512Of
 
 -- | The artifact's @package.json@: identity plus, for the deny case, an install script.
 tarballPackageJson :: PkgSpec -> Value

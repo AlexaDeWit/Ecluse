@@ -502,6 +502,7 @@ library ecluse-test-support
     , case-insensitive  ^>=1.2
     , conduit           ^>=1.3
     , containers        ^>=0.7
+    , crypton           ^>=1.0
     , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
@@ -509,6 +510,7 @@ library ecluse-test-support
     , http-types        ^>=0.12
     , exceptions        ^>=0.10
     , katip             ^>=0.8.8
+    , memory            ^>=0.18
     , primitive         ^>=0.9.1
     , resourcet         ^>=1.3
     , temporary         ^>=1.3
@@ -847,7 +849,6 @@ test-suite ecluse-integration
     , bytestring       ^>=0.12
     , case-insensitive  ^>=1.2
     , containers       ^>=0.7
-    , crypton          ^>=1.0
     , conduit          ^>=1.3
     , filepath         ^>=1.4 || ^>=1.5
     , ecluse
@@ -861,7 +862,6 @@ test-suite ecluse-integration
     , hs-opentelemetry-sdk  ^>=1.0
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
-    , memory           ^>=0.18
     , microlens        ^>=0.4.13
     , network          ^>=3.2
     , resourcet        ^>=1.3
@@ -897,7 +897,6 @@ test-suite ecluse-residency
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
-    , crypton           ^>=1.0
     , ecluse
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
@@ -907,7 +906,6 @@ test-suite ecluse-residency
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
-    , memory           ^>=0.18
     , text             ^>=2.1
     , time             ^>=1.12
     , unliftio         ^>=0.2.25
@@ -986,7 +984,6 @@ test-suite ecluse-e2e
     , aeson          ^>=2.2
     , bytestring     ^>=0.12
     , containers     ^>=0.7
-    , crypton        ^>=1.0
     , directory      ^>=1.3
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
@@ -994,7 +991,6 @@ test-suite ecluse-e2e
     , hspec          ^>=2.11
     , http-client    ^>=0.7
     , http-types     ^>=0.12
-    , memory         ^>=0.18
     , network        ^>=3.2
     , text           ^>=2.1
     , time           ^>=1.12
@@ -1084,13 +1080,11 @@ executable bench-load
     , aeson            ^>=2.2
     , bytestring       ^>=0.12
     , containers       ^>=0.7
-    , crypton          ^>=1.0
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
-    , memory           ^>=0.18
     , text             ^>=2.1
     , time             ^>=1.12
     , typed-process    ^>=0.2.13

@@ -4,8 +4,6 @@
 
 module Ecluse.WorkerSpec (spec) where
 
-import Crypto.Hash (Digest, SHA512, hashlazy)
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status201, status409, status503)
@@ -39,7 +37,7 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Runtime.Env (Env, envWorkerHeartbeat, lastPoll, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Package (sriSha512Of, unsafeHash)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (testServeAdmission)
 import Ecluse.Test.Worker (admitAllPolicies)
@@ -171,13 +169,13 @@ tarballBytes = "left-pad-artifact-bytes"
 -- The true SRI (@sha512-<base64>@) of the served bytes: the digest the worker's
 -- re-evaluation re-admits from current metadata and verifies the fetched bytes against.
 trueSri :: Text
-trueSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy tarballBytes :: Digest SHA512) :: ByteString)
+trueSri = sriSha512Of (toStrict tarballBytes)
 
 {- | A well-formed sha512 SRI of OTHER bytes, the tamper fixture: current metadata
 whose digest the served bytes cannot satisfy, distinct from a malformed digest.
 -}
 mismatchSri :: Text
-mismatchSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
+mismatchSri = sriSha512Of "completely-different-bytes"
 
 {- | The faithful current-metadata policies for a mirror target: the re-admitted
 artifact carries the served bytes' true digest, so verification passes and the
