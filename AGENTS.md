@@ -88,7 +88,7 @@ docs/     architecture and design documents
 
 - Run `task --list` to discover targets. `task check` is the pre-push suite: a subset of the full
   `task gate`, but not a quick check (a full `-Werror` build of every component that runs 10+ minutes
-  on a cold checkout or under CPU contention). CI remains the authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** Run `task sast` before pushing. Web-based agents without Nix access must
+  on a cold checkout or under CPU contention). CI remains the authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** In the CI-verified batch mode (several implementation agents sharing one host; see [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md)) the verification command *is* the PR's CI run, watched to green with `gh pr checks`; local tiers stay reserved for single-slice work. Run `task sast` before pushing. Web-based agents without Nix access must
   not skip local verification; instead, use `scripts/setup-jules.sh` to bootstrap the environment.
 - The integration and e2e suites (`task test-integration`, `task test-e2e`) start Docker
   containers. Those targets reap **this worktree's own** containers before and after each run, but
@@ -104,7 +104,8 @@ docs/     architecture and design documents
 - Use `hoogle`, HLS, `cabal-plan`, and `ghcid` to discover types and behaviour instead of
   guessing. Start the HLS MCP bridge with the worktree root before semantic requests.
 - Create agent worktrees with `task new-worktree BRANCH=<branch>` so the local HLS index warms in
-  isolation. Keep cold HLS concurrency to two or three worktrees.
+  isolation. Keep cold HLS concurrency to two or three worktrees. CI-verified batch agents use a
+  plain `git worktree add` instead: nothing warms, so a bare `git worktree remove` retires it.
 - Retire a worktree with **`task rm-worktree BRANCH=<branch>`**, not a bare `git worktree remove`.
   Creation warms a roughly 1 GB HLS index *outside* the checkout (under the hie-bios cache), and
   only `rm-worktree` reclaims both halves; removing the checkout alone strands the gigabyte. The

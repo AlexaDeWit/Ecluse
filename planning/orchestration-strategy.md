@@ -105,11 +105,20 @@ Either way the fix lands as a distinct, separately-reviewable commit.
 
 **One git worktree per agent**, each on its own branch, is a hard rule: it keeps
 parallel slices from colliding on a shared tree and contains each agent's blast
-radius. Concurrency is capped (**2-3 slices in flight**) so evaluation quality
-does not degrade. After every merge, the team lead rebases the dependent
+radius. Concurrency is capped (**2-3 slices in flight**) in the local-verification
+mode so evaluation quality does not degrade; the
+[CI-verified batch mode](#ci-verified-batches-the-wide-parallel-mode) runs wider,
+bounded by disjoint file ownership rather than by local compute. After every merge, the team lead rebases the dependent
 worktrees onto the new base and re-runs their gate, so integration drift surfaces
 immediately rather than at PR time. Slices that genuinely cannot be split become
 **stacked PRs**; otherwise they stay small and independent.
+
+**Pick the worktree flavour by verification mode.** A CI-verified batch agent (see
+[CI-verified batches](#ci-verified-batches-the-wide-parallel-mode)) navigates by
+grep and never builds locally, so it uses a plain
+`git worktree add <path> -b <branch> origin/main`: no HLS warm, no hie-bios cache
+to strand, and a bare `git worktree remove` retires it cleanly. The warmed worktree
+below is for an agent that will actually use HLS or run local tiers.
 
 **Warm each worktree's HLS index at creation.** A fresh worktree is a fresh HLS
 workspace: its `dist-newstyle` and `.hie` start empty, so the first navigation call
@@ -300,6 +309,30 @@ two `-fwrite-ide-info` builds, so it is no longer a quick pass. The hard stops w
 it are **Semgrep clean** (zero findings, no new ignores without the architect's
 approval) and a clean weeder/stan floor. Then **push early, let CI parallelise the
 rest, and watch the real run to green** (`gh pr checks --watch`).
+
+### CI-verified batches: the wide parallel mode
+
+When several implementation agents run in parallel on one host, the local fast
+floor does not scale: each agent's `task check` contends for the cores every
+sibling needs. In this mode the floor shrinks to formatting, and the PR's CI run
+is the whole verification loop:
+
+- The one build-adjacent local command is
+  `env -u IN_NIX_SHELL nix develop --command task format`, run as the last edit
+  before every commit (CI gates on format-check).
+- No local `task check`, builds, test tiers, Docker, or HLS; agents navigate by
+  grep and read, in a plain worktree (see
+  [Subagents and isolation](#subagents-and-isolation)).
+- Verification is watching the PR: `gh pr checks <pr> --watch`; on a red,
+  `gh run view <run-id> --log-failed`, fix, format, commit, push, and re-watch.
+  An agent supersedes only its own branch's runs.
+- The invariant that makes the width safe: **disjoint file sets per batch, one
+  owner per file across every open PR**. An issue whose files collide with an
+  in-flight branch waits for that merge and starts from the new base.
+- Each green draft is reviewed by the lead, then flipped ready.
+
+This is the default for batch work (several PR-sized slices in flight at once);
+the fast floor above serves single-slice work where the host is otherwise idle.
 
 Reproduce a tier locally **only to debug a red**, map the red CI job back to its
 `task` target and run just that one, never the whole gate wholesale. The gating
