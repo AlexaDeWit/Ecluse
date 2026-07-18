@@ -98,13 +98,15 @@ import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot
 import Ecluse.Composition (
+    PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
     planMounts,
     planPublishTargets,
  )
 import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    PublishTenant (ptAggregateBytes),
     planCacheConfig,
     queueTenantDemand,
     resolveMemoryPlan,
@@ -133,6 +135,7 @@ import Ecluse.Core.Registry.Adapter (
  )
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
 import Ecluse.Core.Server.Admission (newServeAdmission)
+import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Supervision (
@@ -239,13 +242,19 @@ runProxy bootEnv = do
     -- apply it in-process before the parallel machinery spins up.
     whenJust (mpShedCapabilities plan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity plan)
+    -- The publish-body byte discipline, present exactly when a publication
+    -- target is configured (the plan's tenant derives from the same predicate):
+    -- one process-wide aggregate shared by every publishing mount.
+    publishBudget <- forM (mpPublishTenant plan) $ \tenant -> do
+        bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
+        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes plan}
     let limits =
             Limits
                 { maxBodyBytes = mpMaxResponseBytes plan
                 , maxVersionCount = limMaxVersionCount (cfgLimits env)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits env)
                 }
-    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits config >>= orExit (T.unlines . map renderBootError)
+    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- The private-upstream connection pool: an explicit override, else computed from the
     -- process file-descriptor limit (the pool's real ceiling, since each pooled

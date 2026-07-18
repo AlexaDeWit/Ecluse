@@ -55,6 +55,8 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.rule.breaker.state"
                             , "ecluse.serve.admission.in_flight"
                             , "ecluse.serve.admission.queued"
+                            , "ecluse.publish.body.in_flight_bytes"
+                            , "ecluse.publish.body.shed"
                             , "ecluse.registry.merge.divergence"
                             , "ecluse.upstream.fetch.duration"
                             , "ecluse.upstream.fetch.errors"

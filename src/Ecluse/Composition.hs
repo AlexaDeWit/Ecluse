@@ -38,6 +38,7 @@ module Ecluse.Composition (
     validateComposition,
 
     -- * Publish-side wiring
+    PublishBudget (..),
     PublishTarget (..),
     planPublishTargets,
 ) where
@@ -83,6 +84,7 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits, tarballHostGate)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
@@ -106,9 +108,22 @@ planMounts ::
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
     Limits ->
+    Maybe PublishBudget ->
     Config ->
     IO (Either [BootError] [MountBinding])
 planMounts = composeBindings
+
+{- | The publish-side byte discipline the composition root builds from the memory
+plan's publish tenant and hands to every publishing mount: the process-wide
+aggregate byte-admission and the per-request cap (the chunked-body weight).
+Present exactly when a publication target is configured -- the tenant and the
+target derive from the same predicate, so a publishing mount without a budget is
+unrepresentable at the root.
+-}
+data PublishBudget = PublishBudget
+    { pbBodyBudget :: ByteAdmission
+    , pbMaxRequestBytes :: Int
+    }
 
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
@@ -125,14 +140,15 @@ composeBindings ::
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
     Limits ->
+    Maybe PublishBudget ->
     Config ->
     IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock ruleDepsFor providers limits config = do
+composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
     -- The pure structural refusals (missing adapters, publish policy) come from
     -- 'validateComposition', the same function check-config runs, so the checker
     -- and the boot cannot drift on what is refused.
     let structuralErrs = validateComposition config
-        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg limits helpMessage) (cfgMounts app)
+        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg limits publishBudget helpMessage) (cfgMounts app)
     -- Each resolved mount paired with its environment-layer 'MountConfig':
     -- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for
     -- entry, so the two maps share a keyset and the pairing is total.
@@ -303,10 +319,11 @@ bounds ('Limits') and help message are shared with the read paths and passed in;
 the relay and the name canonicaliser are the ecosystem's own capability, projected
 from its registered adapter.
 -}
-publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Maybe PublishDeps
-publishDepsFor mAdapter app mcfg limits helpMessage = do
+publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
+publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     url <- mntPublicationTarget mcfg
     adapter <- mAdapter
+    budget <- publishBudget
     pure
         PublishDeps
             { pubTargetUrl = registryUrlText url
@@ -314,6 +331,8 @@ publishDepsFor mAdapter app mcfg limits helpMessage = do
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
             , pubLimits = limits
+            , pubBodyBudget = pbBodyBudget budget
+            , pubMaxRequestBytes = pbMaxRequestBytes budget
             , pubHelp = helpMessage
             , pubRelayPublish = publishRelay (adapterPublish adapter)
             , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)

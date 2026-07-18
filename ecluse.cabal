@@ -146,6 +146,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
@@ -576,6 +577,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.Pipeline.InternalSpec
     Ecluse.Server.Pipeline.TarballSpec
     Ecluse.Server.Pipeline.PackumentSpec
+    Ecluse.Server.Admission.BytesSpec
     Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec

@@ -77,6 +77,7 @@ import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
+import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -366,6 +367,16 @@ data PublishDeps = PublishDeps
     , pubLimits :: Limits
     {- ^ The response-bound budget enforced on the publication target's response,
     carried for symmetry with the read paths.
+    -}
+    , pubBodyBudget :: ByteAdmission
+    {- ^ The process-wide aggregate byte-admission buffered publish bodies are
+    reserved against __before__ the body is read, shared by every mount; sized
+    from the memory plan's publish tenant. Exhaustion sheds (503), exactly as the
+    unit-slot admission does on the read path.
+    -}
+    , pubMaxRequestBytes :: Int
+    {- ^ The per-request body cap (the WAI size limit), the pessimistic weight a
+    chunked body (no declared length) reserves.
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.

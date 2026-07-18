@@ -107,6 +107,10 @@ data MetricName
       ServeAdmissionInFlight
     | -- | @ecluse.serve.admission.queued@ -- admissions that waited for a slot (counter).
       ServeAdmissionQueued
+    | -- | @ecluse.publish.body.in_flight_bytes@ -- bytes reserved for buffered publish bodies (up-down counter).
+      PublishBodyInFlightBytes
+    | -- | @ecluse.publish.body.shed@ -- publishes shed at the body-byte budget (counter).
+      PublishBodyShed
     | -- | @ecluse.registry.merge.divergence@ -- cross-upstream integrity divergences detected in the packument merge (counter).
       MergeDivergence
     | -- | @ecluse.upstream.fetch.duration@ -- upstream fetch latency (histogram).
@@ -154,6 +158,8 @@ metricName = \case
     RuleBreakerState -> "ecluse.rule.breaker.state"
     ServeAdmissionInFlight -> "ecluse.serve.admission.in_flight"
     ServeAdmissionQueued -> "ecluse.serve.admission.queued"
+    PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
+    PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"
     UpstreamFetchDuration -> "ecluse.upstream.fetch.duration"
     UpstreamFetchErrors -> "ecluse.upstream.fetch.errors"

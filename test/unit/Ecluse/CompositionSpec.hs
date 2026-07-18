@@ -7,7 +7,7 @@ module Ecluse.CompositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (composeBindings, planMounts)
+import Ecluse.Composition (PublishBudget (..), composeBindings, planMounts)
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Support (
@@ -35,6 +35,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
     MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -101,7 +102,12 @@ planFromWith limits envVars mDocBytes = do
         Right cfg -> do
             initCredentialProviders noCredentialReporters cfg >>= \case
                 Left pErrs -> pure (Left pErrs)
-                Right providers -> planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits cfg
+                Right providers -> do
+                    -- The root always pairs a publishing mount with a body budget; a
+                    -- generous test one keeps these specs about the wiring.
+                    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+                    let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
+                    planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
 
 composeBindingsSpec :: Spec
 composeBindingsSpec = describe "planMounts / composeBindings (config-driven serving)" $ do
@@ -157,7 +163,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- message -- all wired by the composition root.
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -270,7 +276,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- sequenced into it.
         config <- expectConfig staticEnvVars Nothing
         providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 
