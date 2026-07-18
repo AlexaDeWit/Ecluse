@@ -66,6 +66,7 @@ import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
@@ -265,25 +266,21 @@ withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
 
 packument :: Value
 packument =
-    object
-        [ "name" .= ("corpus-vuln" :: Text)
-        , "dist-tags" .= object ["latest" .= ("1.2.0" :: Text)]
-        , "versions"
-            .= object
-                [ "1.2.0"
-                    .= object
-                        [ "name" .= ("corpus-vuln" :: Text)
-                        , "version" .= ("1.2.0" :: Text)
-                        , "dist"
-                            .= object
-                                [ "tarball" .= ("http://localhost:1/corpus-vuln/-/corpus-vuln-1.2.0.tgz" :: Text)
-                                , "integrity" .= sha512Integrity
-                                , "shasum" .= sha1Shasum
-                                ]
-                        ]
-                ]
-        , "time" .= object ["1.2.0" .= ("2026-06-19T00:00:00.000Z" :: Text)]
+    packumentValue
+        "corpus-vuln"
+        "1.2.0"
+        [
+            ( "1.2.0"
+            , versionValue
+                ( (versionSpec "corpus-vuln" "1.2.0" "http://localhost:1/corpus-vuln/-/corpus-vuln-1.2.0.tgz")
+                    { vsIntegrity = Just sha512Integrity
+                    , vsShasum = Just sha1Shasum
+                    }
+                )
+            )
         ]
+        ["1.2.0" .= ("2026-06-19T00:00:00.000Z" :: Text)]
+        []
 
 -- Placeholder artifact bytes carrying honest digests, so integrity admission
 -- never confounds what the rules decided.

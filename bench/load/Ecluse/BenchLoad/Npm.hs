@@ -82,7 +82,7 @@ module Ecluse.BenchLoad.Npm (
 ) where
 
 import Control.Concurrent (threadDelay)
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value, encode, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
@@ -155,6 +155,7 @@ import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Worker (admitAllPolicies)
@@ -747,25 +748,20 @@ selfAuthority request =
 -- the public stream to fetch, nothing more.
 onboardingPackument :: Text -> Text -> Value
 onboardingPackument base name =
-    object
-        [ "name" .= name
-        , "dist-tags" .= object ["latest" .= onboardingVersion]
-        , "versions" .= object [Key.fromText onboardingVersion .= versionObj]
-        , "time" .= object ["created" .= publishedLongAgo, Key.fromText onboardingVersion .= publishedLongAgo]
-        , "_id" .= name
-        ]
+    packumentValue
+        name
+        onboardingVersion
+        [(onboardingVersion, versionObj)]
+        ["created" .= publishedLongAgo, Key.fromText onboardingVersion .= publishedLongAgo]
+        ["_id" .= name]
   where
     versionObj =
-        object
-            [ "name" .= name
-            , "version" .= onboardingVersion
-            , "dist"
-                .= object
-                    [ "tarball" .= (base <> "/" <> name <> "/-/" <> unscopedName name <> "-" <> onboardingVersion <> ".tgz")
-                    , "integrity" .= validSha512Sri
-                    , "shasum" .= validSha1
-                    ]
-            ]
+        versionValue
+            ( (versionSpec name onboardingVersion (base <> "/" <> name <> "/-/" <> unscopedName name <> "-" <> onboardingVersion <> ".tgz"))
+                { vsIntegrity = Just validSha512Sri
+                , vsShasum = Just validSha1
+                }
+            )
 
 onboardingVersion :: Text
 onboardingVersion = "1.0.0"
@@ -819,13 +815,12 @@ the merge serves a genuine union for every package in the mix.
 -}
 privateOverlay :: Int -> Text -> Value
 privateOverlay artPort name =
-    object
-        [ "name" .= name
-        , "dist-tags" .= object ["latest" .= ("9999.0.2" :: Text)]
-        , "versions" .= object [Key.fromText v .= overlayVersionObject artPort name v | v <- overlayVersions]
-        , "time" .= object (("created" .= publishedLongAgo) : [Key.fromText v .= publishedLongAgo | v <- overlayVersions])
-        , "_id" .= name
-        ]
+    packumentValue
+        name
+        "9999.0.2"
+        [(version, overlayVersionObject artPort name version) | version <- overlayVersions]
+        (("created" .= publishedLongAgo) : [Key.fromText version .= publishedLongAgo | version <- overlayVersions])
+        ["_id" .= name]
   where
     overlayVersions :: [Text]
     overlayVersions = ["9999.0.0", "9999.0.1", "9999.0.2"]
@@ -834,16 +829,12 @@ privateOverlay artPort name =
 -- floor-meeting integrity digests so the version is admitted and the serve-time rewrite runs.
 overlayVersionObject :: Int -> Text -> Text -> Value
 overlayVersionObject artPort name version =
-    object
-        [ "name" .= name
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= (localhost artPort <> "/" <> name <> "/-/" <> unscoped <> "-" <> version <> ".tgz")
-                , "integrity" .= validSha512Sri
-                , "shasum" .= validSha1
-                ]
-        ]
+    versionValue
+        ( (versionSpec name version (localhost artPort <> "/" <> name <> "/-/" <> unscoped <> "-" <> version <> ".tgz"))
+            { vsIntegrity = Just validSha512Sri
+            , vsShasum = Just validSha1
+            }
+        )
   where
     unscoped = unscopedName name
 

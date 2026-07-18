@@ -92,6 +92,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution),
  )
 import Ecluse.Test.Package (validSha1, validSha512Sri)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
 {- | A size\/shape tier for a corpus entry, ordering the corpus small-to-heavy and
@@ -228,13 +229,12 @@ sizes.
 -}
 syntheticPackumentValue :: Int -> Value
 syntheticPackumentValue versionCount =
-    object
-        [ "name" .= benchPackageText
-        , "dist-tags" .= object ["latest" .= versionText (max 0 (versionCount - 1))]
-        , "versions" .= Object (KeyMap.fromList [(versionKeyOf i, versionObject i) | i <- indices])
-        , "time" .= Object (KeyMap.fromList timeEntries)
-        , "maintainers" .= toJSON [object ["name" .= ("ecluse-bench" :: Text)]]
-        ]
+    packumentValue
+        benchPackageText
+        (versionText (max 0 (versionCount - 1)))
+        [(versionText i, versionObject i) | i <- indices]
+        timeEntries
+        ["maintainers" .= toJSON [object ["name" .= ("ecluse-bench" :: Text)]]]
   where
     indices :: [Int]
     indices = [0 .. versionCount - 1]
@@ -259,22 +259,21 @@ publishedAt = "2020-01-01T00:00:00.000Z"
 -- | One synthetic version manifest, with the fields the projection and serve paths read.
 versionObject :: Int -> Value
 versionObject i =
-    object
-        [ "name" .= benchPackageText
-        , "version" .= versionText i
-        , "dist"
-            .= object
-                [ "tarball" .= tarballUrl i
-                , "integrity" .= validSha512Sri
-                , "shasum" .= validSha1
+    versionValue
+        ( (versionSpec benchPackageText (versionText i) (tarballUrl i))
+            { vsIntegrity = Just validSha512Sri
+            , vsShasum = Just validSha1
+            , vsHasInstallScript = True
+            , vsExtraPairs =
+                [ "dependencies"
+                    .= object
+                        [ "left-pad" .= ("^1.0.0" :: Text)
+                        , "lodash" .= ("^4.17.0" :: Text)
+                        ]
+                , "scripts" .= object ["postinstall" .= ("node ./build.js" :: Text)]
                 ]
-        , "dependencies"
-            .= object
-                [ "left-pad" .= ("^1.0.0" :: Text)
-                , "lodash" .= ("^4.17.0" :: Text)
-                ]
-        , "scripts" .= object ["postinstall" .= ("node ./build.js" :: Text)]
-        ]
+            }
+        )
 
 -- | The upstream tarball URL a synthetic version reports, before the serve rewrite.
 tarballUrl :: Int -> Text

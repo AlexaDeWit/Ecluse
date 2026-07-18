@@ -18,7 +18,7 @@ suite's @Ecluse.Server.PipelineSpec@; this pins that the handlers run over the p
 -}
 module Ecluse.Server.PipelineSpec (spec) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value, encode, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -65,6 +65,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, sriSha512Of)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Network.HTTP.Types.Header (hHost)
@@ -305,24 +306,20 @@ to the given @integrity@ string (so a divergent copy differs only in that digest
 -}
 packumentWithIntegrity :: ByteString -> Text -> Value
 packumentWithIntegrity host integrity =
-    object
-        [ "name" .= ("leftpad" :: Text)
-        , "dist-tags" .= object ["latest" .= ("1.0.0" :: Text)]
-        , "versions"
-            .= object
-                [ "1.0.0"
-                    .= object
-                        [ "name" .= ("leftpad" :: Text)
-                        , "version" .= ("1.0.0" :: Text)
-                        , "dist"
-                            .= object
-                                [ "tarball" .= ("http://" <> (decodeUtf8 host :: Text) <> "/leftpad/-/leftpad-1.0.0.tgz")
-                                , "integrity" .= integrity
-                                ]
-                        ]
-                ]
-        , "time" .= object ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)]
+    packumentValue
+        "leftpad"
+        "1.0.0"
+        [
+            ( "1.0.0"
+            , versionValue
+                ( (versionSpec "leftpad" "1.0.0" ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-1.0.0.tgz"))
+                    { vsIntegrity = Just integrity
+                    }
+                )
+            )
         ]
+        ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)]
+        []
 
 -- | The public copy's packument: its integrity is a real SHA-512 over the served bytes.
 packumentFor :: ByteString -> Value

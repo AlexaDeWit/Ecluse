@@ -43,6 +43,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
 
 import Ecluse.Test.Package (sriSha512Of)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 
 {- | One fixture package: its identity plus the two behaviours the scenarios turn
 on -- whether it declares an install script (so the @DenyInstallTimeExecution@ rule
@@ -171,33 +172,28 @@ pointing its artifact at the stub, with the integrity fixed to the real digest a
 -}
 packument :: PkgSpec -> Text -> Value
 packument spec sri =
-    object
-        [ "name" .= psName spec
-        , "dist-tags" .= object ["latest" .= psVersion spec]
-        , "versions" .= object [fromString (toString (psVersion spec)) .= versionMeta]
-        , "time"
-            .= object
-                [ "created" .= backdated
-                , "modified" .= backdated
-                , fromString (toString (psVersion spec)) .= backdated
-                ]
+    packumentValue
+        (psName spec)
+        (psVersion spec)
+        [(psVersion spec, versionMeta)]
+        [ "created" .= backdated
+        , "modified" .= backdated
+        , fromString (toString (psVersion spec)) .= backdated
         ]
+        []
   where
     backdated :: Text
     backdated = "2020-01-01T00:00:00.000Z"
 
     versionMeta :: Value
     versionMeta =
-        object $
-            [ "name" .= psName spec
-            , "version" .= psVersion spec
-            , "dist"
-                .= object
-                    [ "tarball" .= tarballUrl
-                    , "integrity" .= sri
-                    ]
-            ]
-                <> installScriptFields
+        versionValue
+            ( (versionSpec (psName spec) (psVersion spec) tarballUrl)
+                { vsIntegrity = Just sri
+                , vsHasInstallScript = psInstallScript spec
+                , vsExtraPairs = installScriptFields
+                }
+            )
 
     tarballUrl :: Text
     tarballUrl =

@@ -4,7 +4,7 @@
 
 module Ecluse.AwsEndToEndSpec (spec) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value, encode, (.=))
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
@@ -53,6 +53,7 @@ import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of, unsafeHash)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Worker (admitAllPolicies)
 
@@ -283,33 +284,25 @@ integrity digest, so the distinguishing factor is the rule, not integrity presen
 The @dist.tarball@ of each names the public stub at the given base URL. -}
 packument :: Text -> Value
 packument baseUrl =
-    object
-        [ "name" .= ("left-pad" :: Text)
-        , "dist-tags" .= object ["latest" .= ("1.0.0" :: Text)]
-        , "versions"
-            .= object
-                [ "1.0.0" .= versionObject "1.0.0" "left-pad-1.0.0.tgz" baseUrl
-                , "2.0.0" .= versionObject "2.0.0" "left-pad-2.0.0.tgz" baseUrl
-                ]
-        , "time"
-            .= object
-                [ "1.0.0" .= ("2020-01-01T00:00:00.000Z" :: Text)
-                , "2.0.0" .= ("2026-05-30T00:00:00.000Z" :: Text)
-                ]
+    packumentValue
+        "left-pad"
+        "1.0.0"
+        [ ("1.0.0", versionObject "1.0.0" "left-pad-1.0.0.tgz" baseUrl)
+        , ("2.0.0", versionObject "2.0.0" "left-pad-2.0.0.tgz" baseUrl)
         ]
+        [ "1.0.0" .= ("2020-01-01T00:00:00.000Z" :: Text)
+        , "2.0.0" .= ("2026-05-30T00:00:00.000Z" :: Text)
+        ]
+        []
 
 versionObject :: Text -> Text -> Text -> Value
 versionObject version file baseUrl =
-    object
-        [ "name" .= ("left-pad" :: Text)
-        , "version" .= version
-        , "dist"
-            .= object
-                [ "tarball" .= (baseUrl <> "/left-pad/-/" <> file)
-                , "integrity" .= sha512Integrity
-                , "shasum" .= sha1Shasum
-                ]
-        ]
+    versionValue
+        ( (versionSpec "left-pad" version (baseUrl <> "/left-pad/-/" <> file))
+            { vsIntegrity = Just sha512Integrity
+            , vsShasum = Just sha1Shasum
+            }
+        )
 
 -- A fixed clock. 2.0.0 is published two days earlier, well inside the 7-day window.
 fixedNow :: UTCTime
