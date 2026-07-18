@@ -433,7 +433,7 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
             liftIO (respond (artifactError replies deps (artifactStatus decision) decision))
         Nothing -> liftIO $ do
             mpServeDecision metrics Metric.Unavailable
-            respond (tarballError replies (mkStatus 503 "Service Unavailable") [(hRetryAfter, "1")] "server is busy; retry later")
+            respond (tarballError replies shedStatus [shedRetryAfter] "server is busy; retry later")
 
 {- The outcome of gating a single requested artifact on the public path: either the
 chosen 'Artifact' to fetch, or the serve decision the error model renders. The

@@ -148,6 +148,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Bytes
+    Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
