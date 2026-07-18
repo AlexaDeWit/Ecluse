@@ -54,7 +54,6 @@ import Network.HTTP.Client (
     BodyReader,
     Manager,
     Response (responseStatus),
-    brRead,
     responseBody,
     withResponse,
  )
@@ -65,23 +64,20 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchUrlUnformable),
     PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable),
     PublishRelayResponse (..),
     RegistryResponse (RegistryResponse),
  )
 
+import Ecluse.Core.Registry.Exchange (boundedFetch, readBoundedBody)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm,
     Validators,
     metadataRequest,
  )
-import Ecluse.Core.Security (
-    LimitError,
-    Limits,
-    boundedRead,
- )
+import Ecluse.Core.Security (Limits)
 
 {- | Everything this data plane needs to talk to one npm-speaking registry: the
 base URL, the shared HTTP 'Manager', and an optional injected bearer token.
@@ -134,21 +130,7 @@ fetchMetadataFormBounded config form validators name =
     case metadataRequest (npmBaseUrl config) (npmToken config) form validators name of
         Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
         Right request ->
-            try (withResponse request (npmManager config) $ \response -> readBoundedBody (npmLimits config) (responseBody response))
-                <&> \case
-                    Left httpErr -> Left (FetchTransport (classifyTransport httpErr))
-                    Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
-                    Right (Right response) -> Right response
-
-{- Read a response body chunk-by-chunk through 'boundedRead' against the budget,
-returning the whole body as a 'RegistryResponse' when within the cap, or the 'LimitError'
-as a __value__ when the body crosses 'Ecluse.Core.Security.maxBodyBytes' (never a
-truncated body). Returning the breach lets the serve read path thread it as a value; a
-consumer behind an exception-shaped boundary wraps it in the agnostic
-'Ecluse.Core.Registry.Fault.ResponseBoundExceeded' there. -}
-readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
-readBoundedBody limits bodyReader =
-    fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)
+            boundedFetch (npmManager config) (npmLimits config) request
 
 {- | Relay a client's npm publish document to the publication target and return the
 target's own response: the first-party publish primitive behind the @PUT /{pkg}@

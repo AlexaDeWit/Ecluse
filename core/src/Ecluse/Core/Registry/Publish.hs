@@ -37,15 +37,11 @@ module Ecluse.Core.Registry.Publish (
 ) where
 
 import Network.HTTP.Client (
-    BodyReader,
     HttpException,
     Manager,
     Request,
     Response (responseStatus),
-    brRead,
     httpLbs,
-    responseBody,
-    withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (try)
@@ -54,14 +50,15 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchUrlUnformable),
     MirrorArtifact,
     ParseError,
     PublishFault (PublishTransport, PublishUrlUnformable),
-    RegistryResponse (RegistryResponse),
+    RegistryResponse,
     UrlFormationError,
  )
-import Ecluse.Core.Security (LimitError, Limits, boundedRead)
+import Ecluse.Core.Registry.Exchange (boundedFetch)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Version (Version)
 
 {- | One ecosystem's mirror-write protocol: the pure request formations and
@@ -156,11 +153,7 @@ probeMetadata transport targetUrl codec name = do
     case pcProbeRequest codec targetUrl token name of
         Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
         Right request ->
-            try (withResponse request (ptManager transport) (readBoundedBody (ptLimits transport) . responseBody))
-                <&> \case
-                    Left httpErr -> Left (FetchTransport (classifyTransport httpErr))
-                    Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
-                    Right (Right response) -> Right response
+            boundedFetch (ptManager transport) (ptLimits transport) request
 
 -- Execute the codec's publish over the transport: mint, form, PUT the whole
 -- document, and let the codec classify the status answer; a thrown transport
@@ -175,9 +168,3 @@ publishArtifact transport targetUrl codec name version artifact bytes = do
             try (httpLbs request (ptManager transport)) <&> \case
                 Left (err :: HttpException) -> Left (PublishTransport (classifyTransport err))
                 Right response -> pcPublishOutcome codec (statusCode (responseStatus response))
-
--- Read a response body chunk-by-chunk against the budget, returning the whole
--- body within the cap or the breach as a value (never a truncated body).
-readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
-readBoundedBody limits bodyReader =
-    fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)
