@@ -4,6 +4,7 @@
 
 module Ecluse.Proxy.CveSyncSpec (spec) where
 
+import Control.Retry (simulatePolicy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
@@ -38,7 +39,7 @@ import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
+import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays, bootBurstPolicy)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Rules (noFaultReporter)
 
@@ -140,6 +141,15 @@ spec = do
             let schedule = cveSyncScheduleFor cfg
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
+
+    describe "bootBurstPolicy -- the boot burst compiled to a retry policy" $
+        it "attempts immediately, backs off over the shipped schedule, then concedes" $ do
+            -- 'simulatePolicy' walks the policy without sleeping, so the burst
+            -- schedule is pinned directly: an immediate first attempt, a retry
+            -- after each 'bootBackoffDelays' entry in turn, then a stop ('Nothing')
+            -- once the list is spent (its length the retry budget).
+            delays <- simulatePolicy (length bootBackoffDelays) (bootBurstPolicy bootBackoffDelays)
+            map snd delays `shouldBe` map Just bootBackoffDelays <> [Nothing]
 
 -- A handle as 'planCveSync' would build it, minus the transport (the tests
 -- above never fetch): a fresh empty slot and a readiness flag at False.

@@ -45,9 +45,11 @@ module Ecluse.Runtime.Cve.Sync (
     SyncSchedule (..),
     runCveSync,
     bootBackoffDelays,
+    bootBurstPolicy,
 ) where
 
 import Conduit (ConduitT, await, runResourceT, yield, (.|))
+import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy, retrying)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
@@ -220,6 +222,14 @@ Constants by design; the poll interval is the operator-facing knob.
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
+{- | The boot-burst backoff schedule compiled to a "Control.Retry" policy: the
+n-th retry waits the n-th delay (microseconds) before it, and the policy stops
+(yields 'Nothing') once the list is spent, so the list's length is the retry
+budget. Inspect the schedule without sleeping with 'Control.Retry.simulatePolicy'.
+-}
+bootBurstPolicy :: (Monad m) => [Int] -> RetryPolicyM m
+bootBurstPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
+
 {- | One ecosystem's sync task: the boot burst, then the steady poll, forever.
 
 The __boot burst__ attempts a sync immediately and retries per the schedule's
@@ -239,27 +249,32 @@ swap (its consumer, the readiness signal, is an idempotent one-way flip).
 -}
 runCveSync :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> SyncSchedule -> IO () -> m ()
 runCveSync env schedule notifyFirstSync = do
-    seen <- burst Nothing (schedBootBackoff schedule)
+    seen <- burst
     poll seen
   where
     eco = show (syncEcosystem env) :: Text
 
-    burst lastSeen delays = do
-        (settled, seen') <- loggedStep env eco notifyFirstSync lastSeen
-        case (settled, delays) of
-            (True, _) -> pure seen'
-            (False, []) -> do
-                -- The boot budget is spent without an artifact. This ecosystem stays
-                -- not-ready (the readiness gate reads 'csReady'), so its rules deny by
-                -- default and no traffic is served against a missing advisory database;
-                -- the poll continues in case the artifact appears later. Logged at
-                -- 'ErrorS' because a persistent failure here is a real misconfiguration
-                -- (bucket, object key, or IAM), not a condition a healthy deploy hits.
-                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
-                pure seen'
-            (False, d : rest) -> do
-                threadDelay d
-                burst seen' rest
+    -- The boot burst under 'Control.Retry': an immediate first attempt, then a
+    -- retry on each not-settled outcome per 'bootBurstPolicy' until an artifact
+    -- settles the step or the schedule is spent. 'lastSeen' is fixed at 'Nothing'
+    -- because the only not-settled outcomes ('SyncAbsent', 'SyncFetchFaulted')
+    -- return it untouched, so it never changes across the burst; the settled ETag
+    -- is what 'poll' resumes from.
+    burst = do
+        (settled, seen') <-
+            retrying
+                (bootBurstPolicy (schedBootBackoff schedule))
+                (\_ (done, _) -> pure (not done))
+                (\_ -> loggedStep env eco notifyFirstSync Nothing)
+        unless settled $
+            -- The boot budget is spent without an artifact. This ecosystem stays
+            -- not-ready (the readiness gate reads 'csReady'), so its rules deny by
+            -- default and no traffic is served against a missing advisory database;
+            -- the poll continues in case the artifact appears later. Logged at
+            -- 'ErrorS' because a persistent failure here is a real misconfiguration
+            -- (bucket, object key, or IAM), not a condition a healthy deploy hits.
+            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
+        pure seen'
 
     poll lastSeen = do
         threadDelay (schedPollDelay schedule)
