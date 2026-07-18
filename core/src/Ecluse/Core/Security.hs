@@ -34,7 +34,16 @@ model these guards answer is recorded there too.
 module Ecluse.Core.Security (
     module Ecluse.Core.Security.Host,
     module Ecluse.Core.Security.Limits,
+    -- The host authority extractors ("Ecluse.Core.Security.Authority").
+    module Ecluse.Core.Security.Authority,
+    -- The IP-literal recogniser: only the surface consumers reach today. The
+    -- 'IpAddr' constructors stay internal to the parser and the policy layer.
+    parseIpLiteral,
+    isDecimal,
+    isHex,
 ) where
 
+import Ecluse.Core.Security.Authority
 import Ecluse.Core.Security.Host
+import Ecluse.Core.Security.IpLiteral (isDecimal, isHex, parseIpLiteral)
 import Ecluse.Core.Security.Limits

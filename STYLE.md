@@ -237,8 +237,7 @@ seriously consider a split. The deciding test is capability clusters, not the li
 count alone: split when the module holds two or more clusters whose definitions do
 not reference each other, with the module's own Haddock export groups, the mirrored
 spec's describe blocks, and disjoint importer sets as the evidence. A module that is
-one cohesive decision stays intact whatever its size; `Ecluse.Core.Security.Host`
-(one SSRF decision table under a shared property floor) is the canonical example.
+one cohesive decision stays intact whatever its size.
 
 ### 4.2 One namespace per area; module name = file path
 
