@@ -50,6 +50,7 @@ module Ecluse.Core.Worker (
     processBatch,
     processJob,
     JobOutcome (..),
+    workerPublishVisibilityBudget,
 
     -- * Liveness
     WorkerHeartbeat,

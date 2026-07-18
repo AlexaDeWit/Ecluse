@@ -8,9 +8,10 @@ module Ecluse.Core.Worker.Types (
     WorkerPolicies,
     WorkerM,
     runWorkerM,
+    recordWorkerProgress,
 ) where
 
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (Manager, Request)
 import UnliftIO (MonadUnliftIO)
@@ -28,7 +29,7 @@ import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
-import Ecluse.Core.Worker.Liveness (WorkerHeartbeat)
+import Ecluse.Core.Worker.Liveness (WorkerHeartbeat, recordPoll)
 
 {- | The runtime backends the mirror worker is closed over: exactly the effectful
 capabilities the consume loop needs to poll, fetch, verify, publish, and record. A
@@ -55,8 +56,8 @@ data WorkerRuntime = WorkerRuntime
     an https-only @dist.tarball@).
     -}
     , wrHeartbeat :: WorkerHeartbeat
-    {- ^ The consume-loop heartbeat, advanced on every successful poll and read by the
-    liveness probe.
+    {- ^ The consume-loop heartbeat, advanced on every successful poll and every
+    completed job (see 'recordWorkerProgress') and read by the liveness probe.
     -}
     , wrMetrics :: WorkerMetricsPort
     -- ^ The metric-recording port the worker emits its @ecluse.mirror.*@ job signals through.
@@ -183,3 +184,17 @@ namespace with @katip@'s combinators on top as it logs.
 runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
 runWorkerM logEnv initialContext runtime action =
     runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
+
+{- | Advance the worker heartbeat to the current instant, recording a unit of
+demonstrated progress. The consume loop ('Ecluse.Core.Worker.Loop.workerLoop')
+calls it after every successful poll (an empty long-poll is a healthy idle) and
+'Ecluse.Core.Worker.Job.processBatch' calls it after every completed job, so the
+@\/livez@ staleness bound ('Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter')
+covers a single job's worst case rather than a whole sequential batch of them. This
+is the one place the beat is taken, so the two call sites cannot drift.
+-}
+recordWorkerProgress :: WorkerM ()
+recordWorkerProgress = do
+    heartbeat <- asks wrHeartbeat
+    now <- liftIO getCurrentTime
+    liftIO (recordPoll heartbeat now)

@@ -44,9 +44,9 @@ spec = do
 
     describe "workerLoop -- liveness (a fully-dead worker must fail the heartbeat)" $
         it "a persistently faulting receive never advances the heartbeat" $ do
-            -- recordPoll runs only after a successful receive, so a worker that cannot
-            -- poll at all keeps retrying (proven above) yet never advances the heartbeat:
-            -- lastPoll stays Nothing across the window. The single-process /livez folds
+            -- The heartbeat advances only on progress (a successful poll or a completed
+            -- job), so a worker that cannot poll at all keeps retrying (proven above) yet
+            -- never advances it: lastPoll stays Nothing across the window. The /livez folds
             -- this heartbeat in, so a fully-dead worker eventually reads unhealthy and the
             -- orchestrator restarts the pod.
             calls <- newIORef (0 :: Int)

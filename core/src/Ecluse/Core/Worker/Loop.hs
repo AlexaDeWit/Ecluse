@@ -12,8 +12,9 @@ concern ('Ecluse.Core.Supervision.superviseLoop' wraps the step under the
 caller-supplied policy), classified per that policy: transient residue is logged
 and retried with bounded exponential backoff, while a wiring fault the policy
 names 'Ecluse.Core.Supervision.Permanent' fails up through the composition
-root's race and takes the process down (fail-stop). A successful poll advances
-the 'WorkerHeartbeat', so a stalled loop is visible to the liveness probe.
+root's race and takes the process down (fail-stop). Each successful poll and each
+completed job advances the 'WorkerHeartbeat', so a stalled loop is visible to the
+liveness probe.
 
 Shutdown tears the loop down cleanly: the composition root runs it raced against
 the server within its resource bracket, so process teardown cancels the loop
@@ -25,14 +26,12 @@ module Ecluse.Core.Worker.Loop (
     workerLoop,
 ) where
 
-import Data.Time (getCurrentTime)
 import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), qfDetail)
 import Ecluse.Core.Supervision (SupervisionPolicy, superviseLoop)
 import Ecluse.Core.Worker.Job (processBatch)
-import Ecluse.Core.Worker.Liveness (recordPoll)
 import Ecluse.Core.Worker.Types
 
 {- | The continuous consume loop: long-poll for a batch, process it, repeat,
@@ -42,11 +41,13 @@ that must fail up rather than retry; tests inject their own).
 A failed poll arrives as the handle's typed 'Ecluse.Core.Queue.QueueFault' value:
 it is logged and the step backs off and polls again, so a queue outage cannot
 kill the worker thread. A successful poll advances the heartbeat (whether or not
-the batch was empty), so a liveness probe sees the loop is alive; an idle queue
-is a healthy empty poll, not a stall. The heartbeat advances only on a successful
-@receive@, so a worker that cannot poll at all (a persistently faulting
-@receive@) keeps retrying but never advances it: the heartbeat goes stale and
-@\/livez@ fails, surfacing a fully-dead worker for the orchestrator to restart.
+the batch was empty), and 'processBatch' advances it again after each completed
+job, so a liveness probe sees the loop is alive even while a healthy worker grinds
+through a long batch of large artifacts; an idle queue is a healthy empty poll, not
+a stall. The heartbeat advances only on demonstrated progress (a successful
+@receive@ or a completed job), so a worker that cannot poll at all (a persistently
+faulting @receive@) keeps retrying but never advances it: the heartbeat goes stale
+and @\/livez@ fails, surfacing a fully-dead worker for the orchestrator to restart.
 -}
 workerLoop :: SupervisionPolicy -> WorkerM Void
 workerLoop policy = superviseLoop policy pollAndProcess
@@ -67,10 +68,9 @@ workerLoop policy = superviseLoop policy pollAndProcess
                 case messages of
                     [] -> pass
                     _ -> logFM DebugS (ls ("worker received " <> show (length messages) <> " messages" :: Text))
-                -- Heartbeat on every successful poll -- an empty long-poll is a healthy idle.
-                heartbeat <- asks wrHeartbeat
-                now <- liftIO getCurrentTime
-                liftIO (recordPoll heartbeat now)
+                -- Beat on every successful poll -- an empty long-poll is a healthy idle.
+                -- 'processBatch' beats again after each job, so a long batch cannot starve it.
+                recordWorkerProgress
                 processBatch messages
 
 -- The fixed pause after a faulted poll, so a persistently failing queue backend

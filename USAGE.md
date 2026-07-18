@@ -610,7 +610,9 @@ serve such a source, point it at the **private** upstream slot and loosen
   dozens of heavy requests at once, causing latency spikes or `503` backpressure. Pre-warm as part
   of deployment: run an `npm install` (or a script fetching your heavy dependencies) after starting
   Écluse, before sending production traffic. Once warm, request coalescing absorbs spikes.
-- **Health probes.** `GET /livez` reports process liveness (on a mirroring deployment a stalled mirror worker fails it; a serve-only deployment's liveness is the listener alone);
+- **Health probes.** `GET /livez` reports process liveness (on a mirroring deployment a stalled mirror worker fails it; a serve-only deployment's liveness is the listener alone).
+  A mirror worker's liveness is its consume-loop heartbeat, which advances on each queue poll and after each completed job, so a healthy worker grinding through a backlog of large
+  artifacts (one 512 MiB publish can legitimately run a few minutes) is not read as stalled: the staleness budget is sized to cover a single job's fetch and publish, not just a poll.
   `GET /readyz` reports config loaded and the listener serving. Readiness is deliberately lenient
   about public-upstream reachability, so a transient blip doesn't pull a healthy pod from rotation.
   With an advisory bucket configured, readiness also waits for each configured ecosystem's first
