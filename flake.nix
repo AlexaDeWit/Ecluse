@@ -174,7 +174,38 @@
         # Haskell library closure removed (justStaticExecutables). A plain dynamic
         # build drags that whole closure in and bloats the image to ~500 MB; this
         # keeps only the binary + its system C deps for the container image.
-        ecluseBin = hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+        ecluseBinUnpruned =
+          hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+
+        # GHC's x86_64 Linux RTS links libdw/libelf for DWARF stack unwinding.
+        # nixpkgs puts those libraries and the unused libdebuginfod in one
+        # elfutils output; libdebuginfod alone retains curl, libssh2, OpenSSL,
+        # Kerberos, and the HTTP/2 and HTTP/3 stacks in the image closure. Build
+        # the same elfutils ABI without debuginfod, preserving the RTS feature
+        # while removing that unreachable network-client surface. elfutils still
+        # needs pkg-config at configure time, although nixpkgs makes that native
+        # input conditional on debuginfod being enabled.
+        elfutilsWithoutDebuginfod =
+          (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs
+            (old: {
+              nativeBuildInputs =
+                (old.nativeBuildInputs or [ ]) ++ [ pkgs.pkg-config ];
+            });
+
+        # The arm64 GHC build does not enable DWARF support, and Darwin does not
+        # ship this Linux image closure, so only the affected release platform
+        # needs the ABI-compatible substitution.
+        ecluseBin =
+          if pkgs.stdenv.hostPlatform.isLinux
+            && pkgs.stdenv.hostPlatform.isx86_64
+          then
+            pkgs.replaceDependency {
+              drv = ecluseBinUnpruned;
+              oldDependency = pkgs.lib.getLib pkgs.elfutils;
+              newDependency = pkgs.lib.getLib elfutilsWithoutDebuginfod;
+            }
+          else
+            ecluseBinUnpruned;
 
         # The npm version-ordering oracle (`node-semver`) for the differential
         # smoke suite and `task gen-version-fixtures`. nixpkgs 26.05 removed the
