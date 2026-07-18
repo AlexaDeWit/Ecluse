@@ -19,15 +19,11 @@ import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure))
 
-import Data.Map.Strict qualified as Map
-
 import Ecluse.Boot (applySecretFileIndirection, readConfigDocument)
 import Ecluse.Composition (validateComposition)
 import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpDegradations, mpOverrideViolations, mpQueueMemoryMaxDepth),
-    queueTenantDemand,
-    resolveMemoryPlan,
  )
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -35,16 +31,16 @@ import Ecluse.Composition.MirrorQueue (
     memoryQueueBootWarning,
     planMirrorRuntime,
  )
+import Ecluse.Composition.Plan (resolveMemoryPlanFor)
 import Ecluse.Composition.Sizing (
     openFileSoftLimit,
     resolvePrivateConnections,
     resolvePublicConnections,
  )
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
+    AppConfig (cfgRuntime),
     Config (configApp),
-    MountConfig (mntPublicationTarget),
-    RuntimeSettings (rtCores, rtMaxHeapBytes, rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
+    RuntimeSettings (rtCores, rtMaxHeapBytes, rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost),
     loadConfig,
     mountCollisionWarnings,
     mountPostureLines,
@@ -98,16 +94,7 @@ runCheckConfig = do
         effective = appliedRuntimePlan cgroup plan rts
         (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
         (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
-        publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts env))
-        (memoryPlan, memoryPlanLines) =
-            resolveMemoryPlan
-                (cfgCache env)
-                (cfgLimits env)
-                (cfgQueue env)
-                (rtServeMaxInFlight runtimeSettings)
-                effective
-                (queueTenantDemand runtimePlan)
-                publishConfigured
+        (memoryPlan, memoryPlanLines) = resolveMemoryPlanFor env effective runtimePlan
     traverse_ TIO.putStrLn $
         concat
             [ resolvedKeyProvenance envVars docBlob

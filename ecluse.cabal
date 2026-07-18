@@ -262,6 +262,7 @@ library
     Ecluse.Composition.Credential
     Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MirrorQueue
+    Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Worker
     Ecluse.Config
