@@ -68,6 +68,10 @@ module Ecluse.Composition.MemoryPlan (
     QueueTenantDemand (..),
     queueTenantDemand,
     resolveMemoryPlan,
+    OverridePins,
+    overrideMinShedSum,
+    overrideSubstitutions,
+    attributeOverrideViolations,
     planCacheConfig,
 ) where
 
@@ -248,7 +252,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         cacheDesired = fromMaybe (clamp cacheBytesFloor cacheBytesCap (appHeap * cacheSharePercent `div` 100)) cacheExplicit
 
         requestExplicit = limMaxRequestBytes limitsSettings
-        requestFinal = fromMaybe (clamp requestBytesFloor requestBytesCap (appHeap * publishSharePercent `div` 100)) requestExplicit
+        computedRequestDefault = clamp requestBytesFloor requestBytesCap (appHeap * publishSharePercent `div` 100)
+        requestFinal = fromMaybe computedRequestDefault requestExplicit
 
         publishDesired = max requestFinal (appHeap * publishSharePercent `div` 100)
 
@@ -333,58 +338,23 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         queueTenantBytes = queueCharge depthFinal
         overshoot4 = overshoot3 - queueShedBytes
 
-        -- Attribute a residual overshoot before refusing. Re-derive the fully-shed
-        -- minimum for a hypothetical set of explicit pins: every un-pinned tenant
-        -- at its floor (cache at zero), every pin at its claimed value. At the
-        -- actual pins this reproduces overshoot4; substituting pins out isolates
-        -- which of them, if any, a fitting plan cannot shed around.
-        minShedSum (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth) =
-            reserve
-                + fixedBuffers
-                + fromMaybe 0 pinCache
-                + materialOf (fromMaybe 1 pinAdmission) (fromMaybe responseBytesFloor pinResponse)
-                + (if publishConfigured then requestFloorOr pinRequest else 0)
-                + queueCharge (fromMaybe queueDepthFloor pinDepth)
-          where
-            requestFloorOr = fromMaybe (clamp requestBytesFloor requestBytesCap (appHeap * publishSharePercent `div` 100))
-        overshootAt pins = max 0 (minShedSum pins - h)
-
-        -- The override-free minimum: every pin substituted out at once. It fitting
-        -- while the pinned plan does not is what makes the pins the cause (refuse);
-        -- it overshooting too means the pod is simply too small (boot, warn).
-        overshootWithoutOverrides = overshootAt (Nothing, Nothing, Nothing, Nothing, Nothing)
-
-        -- Each explicit pin paired with the plan that substitutes only it out, for
-        -- per-pin attribution (the value the shed ladder would reach without it:
-        -- cache to zero, admission and response to their floors, request to the
-        -- computed share, depth to the queue-depth floor).
-        explicitPins =
-            catMaybes
-                [ ("cache.maxBytes", (Nothing, explicitAdmission, responseExplicit, requestExplicit, depthExplicit)) <$ cacheExplicit
-                , ("runtime.serveMaxInFlight", (cacheExplicit, Nothing, responseExplicit, requestExplicit, depthExplicit)) <$ explicitAdmission
-                , ("limits.maxResponseBytes", (cacheExplicit, explicitAdmission, Nothing, requestExplicit, depthExplicit)) <$ responseExplicit
-                , ("limits.maxRequestBytes", (cacheExplicit, explicitAdmission, responseExplicit, Nothing, depthExplicit)) <$ requestExplicit
-                , ("queue.memoryMaxDepth", (cacheExplicit, explicitAdmission, responseExplicit, requestExplicit, Nothing)) <$ depthExplicit
-                ]
-
-        -- Name the pins whose individual removal makes the plan fit; when none
-        -- alone flips the verdict (the pins only overshoot in combination), name
-        -- them all rather than under-blame.
-        culpritPins = case [name | (name, pins) <- explicitPins, overshootAt pins <= 0] of
-            [] -> map fst explicitPins
-            flips -> flips
-
-        overrideViolations
-            | overshoot4 > 0 && overshootWithoutOverrides <= 0 =
-                [ "explicit override(s) "
-                    <> T.intercalate ", " culpritPins
-                    <> " push the combined memory plan "
-                    <> show overshoot4
-                    <> " bytes past the effective heap ceiling "
-                    <> show h
-                    <> "; the override-free minimum fits within it, so lower them or raise the ceiling"
-                ]
-            | otherwise = []
+        -- Attribute a residual overshoot to the pins that cause it before refusing.
+        -- The pin-independent context (base tenants, the computed publish floor, and
+        -- whether the queue is memory-backed) feeds the hoisted 'overrideMinShedSum';
+        -- substituting the pins out (all at once, then one at a time) isolates which
+        -- of them, if any, a fitting plan cannot shed around, and
+        -- 'attributeOverrideViolations' makes the decision and names the culprits. At
+        -- the actual pins 'overshootFor' reproduces overshoot4.
+        actualPins = (cacheExplicit, explicitAdmission, responseExplicit, requestExplicit, depthExplicit)
+        overshootFor pins =
+            max 0 (overrideMinShedSum (reserve + fixedBuffers) computedRequestDefault publishConfigured (queueDemand == MemoryQueueTenant) pins - h)
+        overshootWithoutOverrides = overshootFor (Nothing, Nothing, Nothing, Nothing, Nothing)
+        overrideViolations =
+            attributeOverrideViolations
+                h
+                overshoot4
+                overshootWithoutOverrides
+                [(name, overshootFor pins) | (name, pins) <- overrideSubstitutions actualPins]
 
         degradations =
             catMaybes
@@ -454,6 +424,74 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
                 <> [withCeiling "memory-queue depth" depthFinal (isJust depthExplicit) | queueDemand == MemoryQueueTenant]
 
     clamp lo hi = max lo . min hi
+
+{- | A hypothetical set of explicit overrides for the memory plan, in allocation
+order: the cache byte bound, the serve admission, the response byte cap, the request
+byte cap, and the memory-queue depth, each pinned ('Just') or substituted out
+('Nothing').
+-}
+type OverridePins = (Maybe Int, Maybe Int, Maybe Int, Maybe Int, Maybe Int)
+
+{- | The fully-shed minimum tenant sum for a hypothetical set of explicit pins: the
+pin-independent @base@ (runtime reserve plus fixed buffers) plus each shedable tenant
+at its pinned value, or un-pinned at the floor the shed ladder would reach -- cache
+to zero, admission to one operation, response to its floor, the publish aggregate to
+the computed one-request floor, and the queue depth to its floor. @memoryBacked@
+gates the queue tenant: a durable or absent backend spends no heap on depth, whatever
+its value. Comparing this across pin sets attributes a residual overshoot to the pins
+that cause it.
+-}
+overrideMinShedSum :: Int -> Int -> Bool -> Bool -> OverridePins -> Int
+overrideMinShedSum base computedRequestFloor publishPresent memoryBacked (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth) =
+    base
+        + fromMaybe 0 pinCache
+        + materialFloor
+        + (if publishPresent then fromMaybe computedRequestFloor pinRequest else 0)
+        + (if memoryBacked then fromMaybe queueDepthFloor pinDepth * mirrorJobEstimatedBytes else 0)
+  where
+    materialFloor = fromMaybe 1 pinAdmission * packumentOriginFanout * expandWireBytes (fromMaybe responseBytesFloor pinResponse)
+
+{- | Each explicit override present in the pin set, paired with the pin set that
+substitutes only it out (the value the shed ladder would reach without it) and tagged
+with the operator's config-key name, in the plan's allocation order. An absent
+override contributes no substitution.
+-}
+overrideSubstitutions :: OverridePins -> [(Text, OverridePins)]
+overrideSubstitutions (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth) =
+    catMaybes
+        [ ("cache.maxBytes", (Nothing, pinAdmission, pinResponse, pinRequest, pinDepth)) <$ pinCache
+        , ("runtime.serveMaxInFlight", (pinCache, Nothing, pinResponse, pinRequest, pinDepth)) <$ pinAdmission
+        , ("limits.maxResponseBytes", (pinCache, pinAdmission, Nothing, pinRequest, pinDepth)) <$ pinResponse
+        , ("limits.maxRequestBytes", (pinCache, pinAdmission, pinResponse, Nothing, pinDepth)) <$ pinRequest
+        , ("queue.memoryMaxDepth", (pinCache, pinAdmission, pinResponse, pinRequest, Nothing)) <$ pinDepth
+        ]
+
+{- | Decide the override refusal from the residual overshoots, and name the culprits.
+Refuse only when the override-free minimum fits the heap ceiling (@freeOvershoot@ is
+zero) while the pinned plan does not (@overriddenOvershoot@ is positive): the pins are
+then the cause, and a pod too small even without them is a degradation the shed
+ladder already warned about, never a refusal. Name the pins whose individual removal
+makes the plan fit (their one-out overshoot is zero); when none alone flips the
+verdict (the pins only overshoot in combination), name them all rather than
+under-blame. The message reports only the overshoot the named pins are responsible
+for, since the override-free minimum fits within the ceiling.
+-}
+attributeOverrideViolations :: Int -> Int -> Int -> [(Text, Int)] -> [Text]
+attributeOverrideViolations heapCeiling overriddenOvershoot freeOvershoot perOverrideOvershoot
+    | overriddenOvershoot > 0 && freeOvershoot <= 0 =
+        [ "explicit override(s) "
+            <> T.intercalate ", " culprits
+            <> " push the combined memory plan "
+            <> show overriddenOvershoot
+            <> " bytes past the effective heap ceiling "
+            <> show heapCeiling
+            <> "; the override-free minimum fits within it, so lower them or raise the ceiling"
+        ]
+    | otherwise = []
+  where
+    culprits = case [name | (name, o) <- perOverrideOvershoot, o <= 0] of
+        [] -> map fst perOverrideOvershoot
+        flips -> flips
 
 {- | The metadata cache's tunables: the configured TTL married to the plan's cache
 aggregate, split into the three stores' named sub-budgets __summing exactly to the
