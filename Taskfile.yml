@@ -1,5 +1,4 @@
 version: '3'
-
 vars:
   IMAGE: docker.io/alexadewit/ecluse
   DOCS_BUILDDIR: dist-newstyle
@@ -9,12 +8,10 @@ vars:
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
   PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
-
 tasks:
   default:
     cmds:
       - task --list
-
   version:
     desc: Print the release version (ecluse.cabal `version:`)
     silent: true
@@ -22,7 +19,6 @@ tasks:
       - |
         v="$(cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"
         [ -n "$v" ] && echo "$v" || { echo "task version: could not read from 'cabal info'" >&2; exit 1; }
-
   tag:
     desc: Create signed tag v<version> from the cabal version
     silent: true
@@ -31,12 +27,10 @@ tasks:
         v="v$(task version)"
         git tag -s -m "Release $v" "$v"
         echo "created $v — push to release:  git push origin $v"
-
   update:
     desc: Refresh the cabal package index
     cmds:
       - cabal update
-
   freeze:
     desc: Regenerate cabal.project.freeze at the latest index-state
     cmds:
@@ -45,17 +39,14 @@ tasks:
         bash -c 'ts=$(cabal update 2>&1 | sed -n "s/.*index-state is set to \(.*\)\.$/\1/p" | tail -1); \
         [ -n "$ts" ] && sed -i "s/^index-state:.*/index-state: $ts/" cabal.project; \
         cabal freeze'
-
   build:
     desc: Build library, executable, and all test suites
     cmds:
       - cabal build all --enable-tests
-
   test:
     desc: Run the fast, gating unit suites (core + app)
     cmds:
       - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
-
   test-integration:
     desc: Run the integration suite (requires a Docker daemon)
     env:
@@ -69,17 +60,14 @@ tasks:
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - cabal test ecluse-integration --test-show-details=direct
-
   test-residency:
     desc: Run the bounded-memory streaming gate (S54; own process, RTS -T)
     cmds:
       - cabal test ecluse-residency --test-show-details=direct
-
   test-smoke:
     desc: Run the smoke suite (live registries; non-gating)
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
-
   test-e2e:
     desc: End-to-end suite against a locally built OCI image (requires E2E image to run tests, E2E daemon must be active, E2E deps must be built)
     env:
@@ -106,34 +94,28 @@ tasks:
         
         echo "==> running ecluse-e2e"
         ECLUSE_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
-
   test-clean:
     desc: Reap THIS worktree's leftover test containers/networks (scoped; safe while other agents or worktrees run)
     cmds:
       - bash scripts/test-containers.sh reap
-
   test-clean-all:
     desc: Reap ALL Écluse test containers/networks/images across every worktree (only when no other suite is running)
     cmds:
       - bash scripts/test-containers.sh reap --all
-
   test-all:
     desc: Run every test suite
     cmds:
       - task: test
       - task: test-integration
       - task: test-smoke
-
   bench:
     desc: Run the work-per-request benchmarks
     cmds:
       - '{{.NIX_BENCH}} cabal bench ecluse-bench --benchmark-options="{{.BENCH_OPTS}}"'
-
   bench-report:
     desc: Render the work-per-request bench CSV as a Markdown report
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-report -- {{.BENCH_CSV | default "bench-results.csv"}} {{.BENCH_LOG | default "bench-output.txt"}}'
-
   bench-profile:
     desc: Profiling build -> run -> cost-centre flame graph
     cmds:
@@ -144,22 +126,18 @@ tasks:
         "$bin" {{.BENCH_PROFILE_OPTS | default "-p express"}} +RTS -p -RTS; \
         ghc-prof-flamegraph ecluse-bench.prof -o ecluse-bench.svg; \
         echo "flame graph: ecluse-bench.svg  (cost-centre profile: ecluse-bench.prof)"'
-
   bench-load:
     desc: Run the throughput & latency load tests
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-load'
-
   perf-acceptance:
     desc: Run the live performance-acceptance harness
     cmds:
       - cabal run -v0 perf-acceptance
-
   doctest:
     desc: Run the Haddock >>> examples as tests
     cmds:
       - cabal repl --with-ghc=doctest --repl-options="-Wwarn -Wno-missing-export-lists" lib:ecluse
-
   coverage:
     desc: Combined unit + integration coverage matching Codecov
     preconditions:
@@ -190,7 +168,6 @@ tasks:
           echo "coverage: missing a tier .tix under dist-coverage/ (did all four suites run?)" >&2
           exit 1
         fi
-
         hpc combine --union --output=dist-coverage/unit-core-runtime.tix "$core_unit_tix" "$runtime_unit_tix"
         hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/unit-core-runtime.tix "$unit_tix"
         hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix "$integration_tix"
@@ -207,12 +184,10 @@ tasks:
         
         hpc-codecov "${mix_args[@]}" -s . -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
         echo "coverage: wrote coverage/combined.json (combined core-unit ∪ app-unit ∪ integration — matches Codecov's merged total)"
-
   coverage-unit:
     desc: Fast, Docker-free unit-only coverage
     cmds:
       - bash scripts/coverage.sh {{.SUITE}} {{.COVERAGE_FLAGS}}
-
   coverage-integration:
     desc: Integration-tier coverage (drives ministack; scoped + reaped like test-integration)
     env:
@@ -231,41 +206,34 @@ tasks:
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
-
   gen-version-fixtures:
     desc: Regenerate version-ordering fixtures
     cmds:
       - bash scripts/gen-version-fixtures.sh
-
   gen-bench-corpus:
     desc: Re-capture the real-world packument benchmark corpus
     cmds:
       - bash scripts/gen-bench-corpus.sh
-
   new-worktree:
     desc: Create an agent worktree on BRANCH and warm its HLS index
     requires:
       vars: [BRANCH]
     cmds:
       - bash scripts/new-worktree.sh "{{.BRANCH}}" "{{.BASE}}" "{{.DIR}}"
-
   rm-worktree:
     desc: Retire BRANCH's agent worktree and reap its HLS cache (the branch is kept; FORCE=1 to discard local changes)
     requires:
       vars: [BRANCH]
     cmds:
       - bash scripts/rm-worktree.sh "{{.BRANCH}}" "{{.DIR}}"
-
   worktree-clean:
     desc: Reap HLS caches stranded by deleted worktrees and prune stale registrations (safe while other worktrees build; --dry-run to preview)
     cmds:
       - bash scripts/reap-hls-caches.sh {{.CLI_ARGS}}
-
   format:
     desc: Reformat Haskell sources in place
     cmds:
       - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec fourmolu --mode inplace {} +
-
   format-check:
     desc: Check formatting without writing
     sources:
@@ -282,7 +250,6 @@ tasks:
       - exclude: 'scratchpad/**'
     cmds:
       - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec fourmolu --mode check {} +
-
   lint:
     desc: Run hlint
     sources:
@@ -299,7 +266,6 @@ tasks:
       - exclude: 'scratchpad/**'
     cmds:
       - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec hlint {} +
-
   sast:
     desc: Static analysis (Semgrep)
     sources:
@@ -327,7 +293,6 @@ tasks:
       # the rule here, rather than per-tag nosemgrep comments, also keeps the
       # findings out of the SARIF upload, so code scanning stays quiet too.
       - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
-
   cabal-check:
     desc: Validate the .cabal package metadata
     sources:
@@ -337,7 +302,6 @@ tasks:
     cmds:
       - |
         out=$(cabal check 2>&1); printf "%s\n" "$out"; case "$out" in *Warning:*|*Error:*) exit 1 ;; esac
-
   lint-workflows:
     desc: Lint GitHub Actions workflows
     sources:
@@ -346,7 +310,6 @@ tasks:
     cmds:
       - actionlint
       - zizmor .github/workflows/
-
   lint-scripts:
     desc: Lint shell scripts
     sources:
@@ -354,7 +317,6 @@ tasks:
       - 'flake.lock'
     cmds:
       - find . -name '*.sh' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec shellcheck --severity=warning {} +
-
   lint-spdx:
     desc: Check SPDX licence headers on tracked Haskell sources
     sources:
@@ -371,7 +333,6 @@ tasks:
       # The file list comes from git at run time, never a static list, so the
       # gate stays correct while concurrent work adds, moves, or splits modules.
       - git ls-files -z -- '*.hs' | xargs -0 -r reuse lint-file
-
   spdx-fix:
     desc: Insert missing SPDX licence headers into tracked Haskell sources
     cmds:
@@ -383,7 +344,6 @@ tasks:
       # discard the original comment. git grep -L lists tracked files without
       # the tag and exits 1 when every file carries it, hence the guard.
       - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
-
   test-scripts:
     desc: Run the shell-script unit tests
     sources:
@@ -391,7 +351,6 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/rewrite-haddock-dep-links.test.sh
-
   analysis-build:
     desc: Build exe:ecluse with .hie output for weeder and stan
     # weeder and stan want the same artefact: exe:ecluse built with -fwrite-ide-info.
@@ -408,14 +367,12 @@ tasks:
     run: once
     cmds:
       - cabal build exe:ecluse --builddir=dist-analysis --ghc-options=-fwrite-ide-info
-
   weeder:
     desc: Report app-unreachable library code
     deps:
       - analysis-build
     cmds:
       - weeder --hie-directory dist-analysis
-
   stan:
     desc: Haskell static analysis
     deps:
@@ -426,14 +383,12 @@ tasks:
         n=$(bash -c 'stan --hiedir dist-analysis --json-output | jq ".observations | length"'); \
         if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (fails the gate)"; exit 1; fi; \
         echo "stan: clean at the configured floor"
-
   stan-all:
     desc: Full stan report incl Performance/space-leak
     deps:
       - analysis-build
     cmds:
       - stan --hiedir dist-analysis --no-default
-
   cabal-checks:
     desc: Run all Cabal-dependent checks sequentially
     cmds:
@@ -444,7 +399,6 @@ tasks:
       - task: test-residency
       - task: doctest
       - task: cabal-check
-
   static-checks:
     desc: Run all static analysis checks concurrently
     deps:
@@ -456,7 +410,6 @@ tasks:
       - lint-spdx
       - test-scripts
       - site-stub
-
   analysis-checks:
     desc: Dead-code (weeder) and Haskell static analysis (stan)
     # Both tools share one -fwrite-ide-info build (analysis-build), then read its .hie
@@ -468,7 +421,6 @@ tasks:
     deps:
       - weeder
       - stan
-
   check:
     desc: Pre-push checks (build, tests, doctest, lint, Semgrep, dead-code, static analysis)
     # cabal and static tiers run concurrently first; the analysis tier follows so its
@@ -478,26 +430,22 @@ tasks:
       - static-checks
     cmds:
       - task: analysis-checks
-
   ci:
     desc: Reproduce the core CI pipeline locally
     cmds:
       # weeder and stan are part of `check` now (via analysis-checks); not repeated here.
       - task: check
       - task: docs-check
-
   gate:
     desc: Reproduce the full CI gate locally
     cmds:
       - task: check
       - task: test-integration
       - task: docs-check
-
   run:
     desc: Run the proxy
     cmds:
       - cabal run ecluse
-
   docs:
     desc: Build hyperlinked, searchable Haddock HTML
     cmds:
@@ -506,12 +454,10 @@ tasks:
         html=$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
         echo "Haddock: $html"; \
         command -v xdg-open >/dev/null 2>&1 && xdg-open "$html" >/dev/null 2>&1 &
-
   docs-check:
     desc: Build Haddock for the CI gate
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --haddock-quickjump --disable-documentation
-
   docs-site:
     desc: Build Haddock + OpenAPI manifest and stage under ./_site/api
     cmds:
@@ -539,7 +485,6 @@ tasks:
       - cp web/api-index.html _site/api/index.html
       - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} openapi-gen -- _site/api/openapi.json
       - mkdir -p _site/api/openapi && cp web/redoc.html _site/api/openapi/index.html
-
   site:
     desc: Assemble the Pages site
     deps:
@@ -547,7 +492,6 @@ tasks:
     cmds:
       - task: site:assemble
       - task: site:check
-
   # The pandoc-and-static half of `site`, shared with `site-stub` so the PR gate
   # assembles exactly what the Pages deploy assembles.
   site:assemble:
@@ -558,7 +502,6 @@ tasks:
       - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - mkdir -p _site/architecture
       - task: site:pandoc
-
   # PR-tier site gate: everything the link and metadata checks cover lives in
   # web/, the Markdown sources, and the sitemap, none of which needs Haddock or
   # the OpenAPI generator. Stub the two generated API artefacts (the hub pages
@@ -573,7 +516,6 @@ tasks:
       - printf '{}' > _site/api/openapi.json
       - task: site:assemble
       - task: site:check
-
   site:pandoc:
     internal: true
     deps:
@@ -606,12 +548,9 @@ tasks:
       - task: site:pandoc-page
         vars: { SRC: "docs/architecture/cloud-backends.md", OUT: "architecture/cloud-backends.html", TITLE: "Cloud backends", DESCRIPTION: "The cloud edge behind handles: the mirror queue, the credential provider, service mapping, and the unified multicall binary.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
       - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/technology-stack.md", OUT: "architecture/technology-stack.html", TITLE: "Technology stack", DESCRIPTION: "The key technology decisions: the effect model, raw WAI, the codec strategy, and the pinned library table.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
         vars: { SRC: "docs/architecture/release-supply-chain.md", OUT: "architecture/release-supply-chain.html", TITLE: "Release and supply chain", DESCRIPTION: "How a release is cut and attested: reproducible Nix builds, keyless provenance and SBOM attestations, and vulnerability scanning.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
       - task: site:pandoc-page
         vars: { SRC: "docs/architecture/configuration.md", OUT: "architecture/configuration.html", TITLE: "Configuration model", DESCRIPTION: "The configuration model: sources and precedence, validation, runtime sizing, and the document-merge schema for rules.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-
   site:pandoc-page:
     internal: true
     sources:
@@ -624,28 +563,23 @@ tasks:
       - '_site/{{.OUT}}'
     cmds:
       - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} -M title="{{.TITLE}}" -M description="{{.DESCRIPTION}}" -M canonical-url="https://ecluse-proxy.com/{{.OUT}}"
-
   site:check:
     internal: true
     cmds:
       - bash scripts/check-site-metadata.sh _site
       - bash scripts/check-site-links.sh _site
-
   nix-build:
     desc: Build the release artifact via Nix (hermetic)
     cmds:
       - nix build
-
   nix-check:
     desc: Evaluate every flake output and build the hermetic Haddock check
     cmds:
       - nix flake check
-
   docker-build:
     desc: Build the lean OCI image via Nix
     cmds:
       - nix build .#dockerImage
-
   docker-push:
     desc: Push ./result to IMAGE:TAG
     requires:
@@ -653,13 +587,11 @@ tasks:
     cmds:
       - printf '%s' "$DOCKERHUB_TOKEN" | skopeo login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
       - skopeo copy docker-archive:./result "docker://{{.IMAGE}}:{{.TAG}}"
-
   sbom:
     desc: Generate the image SBOM
     cmds:
       - mkdir -p sbom
       - sbomnix --spdx sbom/ecluse.spdx.json --cdx sbom/ecluse.cdx.json --csv sbom/ecluse.csv .#ecluse-bin
-
   scan:
     desc: Scan the image closure for CVEs
     cmds:
@@ -667,13 +599,11 @@ tasks:
       - sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
       - grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json -o sarif=grype.sarif
       - bash scripts/grype-sarif-locations.sh grype.sarif
-
   scan-vulnix:
     desc: Secondary Nix-native cross-check (vulnix)
     ignore_error: true
     cmds:
       - bash -c 'vulnix -C $(nix build .#ecluse-bin --no-link --print-out-paths)'
-
   clean:
     desc: Remove build artifacts
     cmds:

@@ -30,7 +30,6 @@ local pages = {
   ["docs/architecture/fault-model.md"] = "architecture/fault-model.html",
   ["docs/architecture/observability.md"] = "architecture/observability.html",
   ["docs/architecture/cloud-backends.md"] = "architecture/cloud-backends.html",
-  ["docs/architecture/technology-stack.md"] = "architecture/technology-stack.html",
   ["docs/architecture/release-supply-chain.md"] = "architecture/release-supply-chain.html",
   ["docs/architecture/configuration.md"] = "architecture/configuration.html",
 }
