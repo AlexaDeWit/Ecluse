@@ -100,13 +100,13 @@ import Network.HTTP.Types.Header (hETag, hHost)
 import Network.Wai (Application, Request, pathInfo, requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
+import Ecluse (mountBindingFor)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
 import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolvePublicConnections, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
@@ -121,15 +121,9 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
@@ -151,13 +145,14 @@ import Ecluse.Core.Worker (
     runWorkerM,
  )
 import Ecluse.Runtime.Env (newEnvWithAdmission)
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
+import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.
@@ -432,7 +427,7 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             -- placeholder.
             env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
             deps <- npmDeps privatePort publicPort
-            let cfg = mkServerConfig [npmMount deps]
+            let cfg = mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing))
             testWithApplication (pure (application cfg env)) $ \proxyPort ->
                 body (mkMix proxyPort)
 
@@ -472,39 +467,10 @@ npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
     prepared <- prepare inertRuleDeps benchPolicy
     pure
-        PackumentDeps
-            { pdPrivateBaseUrl = Just (localhost privatePort)
-            , pdPublicBaseUrl = localhost publicPort
-            , pdMountBaseUrl = "https://bench.proxy"
-            , pdMirror = MirrorOnAdmit "https://mirror.bench"
-            , pdRules = prepared
-            , pdAdditionalBlockedRanges = []
-            , pdTarballHostGate = tarballHostGate [] (Just (localhost privatePort)) (localhost publicPort) (Just "https://mirror.bench")
-            , pdLimits = defaultLimits
-            , pdInboundToken = Nothing
-            , pdNow = pure benchNow
-            , pdAdvisoryEtag = pure Nothing
-            , pdHelp = Nothing
-            , pdMinIntegrity = defaultMinIntegrity
-            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-            , pdDivergencePolicy = Warn
-            , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
-            , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
-            , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-            , pdAssemble = assembleMergedPackument
+        (npmServeDeps (Just (localhost privatePort)) (localhost publicPort) (MirrorOnAdmit "https://mirror.bench") prepared (pure benchNow))
+            { pdMountBaseUrl = "https://bench.proxy"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
-
--- The npm mount binding: the shared npm classifier, renderer, and /npm prefix, carrying
--- the packument-serve dependencies (no publish path).
-npmMount :: PackumentDeps -> MountBinding
-npmMount deps =
-    MountBinding
-        { bindingPrefix = "npm" :| []
-        , bindingRouter = npmRouter
-        , bindingPackumentDeps = deps
-        , bindingPublishDeps = Nothing
-        }
 
 {- | A permissive rule set: every version old enough to clear a one-day quarantine is
 admitted, so the merge and rewrite run over the whole packument rather than

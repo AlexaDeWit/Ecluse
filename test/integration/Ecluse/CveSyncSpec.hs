@@ -38,35 +38,30 @@ import UnliftIO.Concurrent (threadDelay)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
+import Ecluse (mountBindingFor)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv, parseEndpointUrl)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, hexSha1Of, sriSha512Of)
+import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
+import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
@@ -203,36 +198,11 @@ proxyApp ruleDeps privateUrl publicUrl = do
     queue <- newTestMemoryQueue
     env <- newTestEnvWith queue (manager, manager) telemetryDisabled
     let deps =
-            PackumentDeps
-                { pdPrivateBaseUrl = Just privateUrl
-                , pdPublicBaseUrl = publicUrl
-                , pdMountBaseUrl = "https://proxy.test/npm"
-                , pdMirror = MirrorOnAdmit privateUrl
-                , pdRules = prepared
-                , pdAdditionalBlockedRanges = []
-                , pdTarballHostGate = tarballHostGate [] (Just privateUrl) publicUrl (Just privateUrl)
-                , pdLimits = defaultLimits
-                , pdInboundToken = Nothing
-                , pdNow = pure fixedNow
-                , pdAdvisoryEtag = pure Nothing
-                , pdHelp = Nothing
-                , pdMinIntegrity = defaultMinIntegrity
-                , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-                , pdDivergencePolicy = Warn
-                , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
-                , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
-                , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-                , pdAssemble = assembleMergedPackument
+            (npmServeDeps (Just privateUrl) publicUrl (MirrorOnAdmit privateUrl) prepared (pure fixedNow))
+                { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }
-        binding =
-            MountBinding
-                { bindingPrefix = "npm" :| []
-                , bindingRouter = npmRouter
-                , bindingPackumentDeps = deps
-                , bindingPublishDeps = Nothing
-                }
-    pure (application (mkServerConfig [binding]) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing))) env)
 
 {- The public upstream: a single-version packument for @corpus-vuln\@1.2.0@,
 the exact fixed version the corpus's GHSA-corpus-0001 names, published one day
