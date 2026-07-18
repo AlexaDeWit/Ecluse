@@ -6,6 +6,8 @@
 
 This module handles the publish flow: it validates edge authentication, applies
 anti-shadowing scope guards to ensure the package name is permitted for publication,
+bounds the request body at the per-request size cap (a declared over-cap length fails
+closed up front; a chunked body is bounded by a counted read, both answered @413@),
 enforces body-name agreement between the URL path and the publish document, and
 relays the request to the upstream publication target with the publisher's credential.
 -}
@@ -23,8 +25,8 @@ import Data.ByteString.Lazy qualified as LBS
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status500, status502)
-import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, consumeRequestBodyStrict, requestBodyLength)
+import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status413, status500, status502)
+import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength)
 
 import Ecluse.Core.Package (
     PackageName,
@@ -33,6 +35,7 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
+import Ecluse.Core.Security (LimitError (BodyTooLarge), Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -82,6 +85,11 @@ publishWithDeps replies deps name request respond
         liftIO (respond (publishError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
     | not (inPublishScope (pubScopes deps) name) =
         liftIO (respond (outOfScope replies deps name))
+    | overDeclaredCap =
+        -- A declared Content-Length already over the cap fails closed before a byte is
+        -- read (no reservation, no relay). A chunked body carries no length to judge up
+        -- front, so its cap is enforced by the counted read below instead.
+        liftIO (respond (publishTooLarge replies deps))
     | otherwise = do
         rt <- asks ctxRuntime
         -- The whole buffered-body residency -- read, name check, relay -- runs
@@ -89,37 +97,47 @@ publishWithDeps replies deps name request respond
         -- and the scope guard admitted the request, so a refused publish reserves
         -- nothing. The weight is the declared Content-Length; a chunked body
         -- declares nothing and reserves the per-request cap pessimistically, so
-        -- the reservation always covers what the size-limit middleware will let
-        -- the read buffer. Exhaustion sheds with the read path's vocabulary: a
-        -- brief in-process wait, then a 503 with the same Retry-After hint.
+        -- the reservation always covers the bounded read's ceiling. Exhaustion
+        -- sheds with the read path's vocabulary: a brief in-process wait, then a
+        -- 503 with the same Retry-After hint.
         outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $ do
-            -- The body is bounded by the client→proxy request-size cap (the size-limit
-            -- middleware), read here only after the scope guard has admitted the name, so a
-            -- refused publish never even buffers its (potentially large, base64-tarball)
-            -- body.
-            body <- liftIO (consumeRequestBodyStrict request)
-            -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
-            -- guard authorised the URL-path name, but the publish document carries its own
-            -- declared identity, so a crafted body could otherwise write a name the guard never
-            -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
-            -- URL-path name, so the identity authorised is provably the identity written.
-            case bodyNameDisagreement (pubCanonicaliseName deps) name body of
-                Just declared -> pure (bodyNameMismatch replies deps name declared)
-                -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
-                -- publish builder ('relayPublishDocument') puts it on the wire as a strict
-                -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
-                -- the client→proxy request-size cap.
-                Nothing ->
-                    -- The relay reports its failures as the typed
-                    -- 'PublishRelayFault' value, so the render below is a total
-                    -- match -- nothing caught, and residue is the perimeter's.
-                    renderRelay replies deps
-                        <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body))
+            -- Read the body chunk-by-chunk through 'boundedRead', bounded at the
+            -- per-request cap and returning the breach as a __value__: a chunked body
+            -- has no declared length, so this counted read is what caps it -- a
+            -- fail-closed 413, never a truncated body, never a throw across the
+            -- perimeter. Read only after the scope guard admitted the name, so a
+            -- refused publish never even buffers its (large, base64-tarball) body.
+            liftIO (boundedRead requestBodyLimits (getRequestBodyChunk request)) >>= \case
+                Left (BodyTooLarge _cap) -> pure (publishTooLarge replies deps)
+                -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
+                -- guard authorised the URL-path name, but the publish document carries its own
+                -- declared identity, so a crafted body could otherwise write a name the guard never
+                -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
+                -- URL-path name, so the identity authorised is provably the identity written.
+                Right body -> case bodyNameDisagreement (pubCanonicaliseName deps) name (LBS.fromStrict body) of
+                    Just declared -> pure (bodyNameMismatch replies deps name declared)
+                    -- The relay reports its failures as the typed 'PublishRelayFault'
+                    -- value, so the render below is a total match -- nothing caught, and
+                    -- residue is the perimeter's. 'boundedRead' returns the body strict,
+                    -- which the publish builder puts on the wire as a strict 'RequestBodyBS'.
+                    Nothing ->
+                        renderRelay replies deps
+                            <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name body)
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
     -- The publisher's bearer, scanned out of the headers once: the edge gate
     -- compares it and the relay forwards it (falling back to the static token).
     clientToken = forwardedToken request
+
+    -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
+    -- 'maxBodyBytes', so the response budget's other 'Limits' fields are immaterial
+    -- here; this keeps the request cap named in one place ('pubMaxRequestBytes').
+    requestBodyLimits = (pubLimits deps){maxBodyBytes = pubMaxRequestBytes deps}
+
+    -- Whether the request declares a Content-Length already over the per-request cap.
+    overDeclaredCap = case requestBodyLength request of
+        KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
+        ChunkedBody -> False
 
     bodyWeight = case requestBodyLength request of
         KnownLength n -> fromIntegral n
@@ -161,6 +179,14 @@ renderRelay replies deps = \case
 bodyBudgetShed :: PublishReplies response -> PublishDeps -> response
 bodyBudgetShed replies deps =
     publishError replies shedStatus [shedRetryAfter] (appendHelp (pubHelp deps) "the server is at its publish-body capacity; retry shortly")
+
+-- A @413@ for a publish whose body exceeds the per-request size cap
+-- ('pubMaxRequestBytes', the client→proxy request-body limit): a declared
+-- Content-Length over the cap, or a chunked body whose counted read crossed it.
+-- Rendered through the route's own error contract, before any upstream write.
+publishTooLarge :: PublishReplies response -> PublishDeps -> response
+publishTooLarge replies deps =
+    publishError replies status413 [] (appendHelp (pubHelp deps) "the publish body exceeds the maximum accepted request size")
 
 -- A @405@ for a publish on a mount with no publication target configured: the
 -- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@

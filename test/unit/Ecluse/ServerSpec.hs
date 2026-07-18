@@ -6,21 +6,15 @@ module Ecluse.ServerSpec (spec) where
 
 import Prelude hiding (get)
 
-import Network.HTTP.Types (hConnection, methodHead, methodPost, methodPut, status200, status500, statusCode)
+import Network.HTTP.Types (hConnection, methodHead, methodPut, status200, status500, statusCode)
 import Network.Wai (
     Application,
-    Request (requestBodyLength, requestMethod),
-    RequestBodyLength (ChunkedBody),
     Response,
     ResponseReceived,
-    consumeRequestBodyStrict,
-    defaultRequest,
     responseLBS,
     responseStatus,
  )
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
-import Network.Wai.Request (RequestSizeException (RequestSizeException))
-import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO.Exception (throwIO, try)
@@ -44,7 +38,6 @@ import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
     MountBinding (..),
-    RequestSizeLimit (..),
     ServerConfig (..),
     ShutdownDrainTimeout (..),
     application,
@@ -54,7 +47,6 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     newDrainSignal,
     perimeterGuard,
-    serverMiddleware,
  )
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
@@ -204,34 +196,6 @@ matchNoConnectionHeader = MatchHeader $ \headers _body ->
     if any ((== hConnection) . fst) headers
         then Just "expected no Connection header, but one was present"
         else Nothing
-
-{- | The server middleware stack wrapping a body-reading application under a tiny
-request-body cap. The size-limit middleware rejects an over-cap body only once a
-handler reads it, so the inner app strictly consumes the body -- exercising the cap.
-The 'realIp' and 'timeout' middleware are part of the same stack.
--}
-cappedApp :: Application
-cappedApp = serverMiddleware (mkServerConfig []){scSizeLimit = RequestSizeLimit 8} echoBody
-  where
-    echoBody :: Application
-    echoBody req respond = do
-        _ <- consumeRequestBodyStrict req
-        respond (responseLBS status200 [] "read")
-
-{- | Drive a POST with the given body through an 'Application' and return its
-status code. The request is marked 'ChunkedBody' (rather than a known length) so
-the size-limit middleware applies its streaming byte-count check as the body is
-read -- the path @hspec-wai@'s @request@, which fixes @requestBodyLength@ at a known
-zero, cannot reach. (@srequest@ supplies the body chunks from the 'LByteString'.)
--}
-statusForBody :: Application -> LByteString -> IO Int
-statusForBody app body = do
-    let req =
-            (setPath defaultRequest{requestMethod = methodPost} "/")
-                { requestBodyLength = ChunkedBody
-                }
-    response <- runSession (srequest (SRequest req body)) app
-    pure (statusCode (simpleStatus response))
 
 spec :: Spec
 spec = do
@@ -414,26 +378,12 @@ spec = do
                 get "/livez" `shouldRespondWith` 200
                 get "/readyz" `shouldRespondWith` 200
 
-    describe "middleware -- request size limit" $ do
-        it "rejects a request body over the cap with 413" $
-            -- The body exceeds the 8-byte cap; reading it trips the size-limit
-            -- middleware, which answers 413 rather than letting the handler buffer
-            -- an unbounded body.
-            statusForBody cappedApp "this body is well over eight bytes"
-                `shouldReturn` 413
-
-        it "passes a request whose body is within the cap through to the handler" $
-            statusForBody cappedApp "tiny" `shouldReturn` 200
-
     describe "mkServerConfig -- defaults" $ do
         it "listens on the conventional npm proxy port" $
             scPort (mkServerConfig []) `shouldBe` defaultPort
 
         it "the default port is 4873" $
             defaultPort `shouldBe` 4873
-
-        it "caps the request body at 25 MiB by default" $
-            scSizeLimit (mkServerConfig []) `shouldBe` RequestSizeLimit (25 * 1024 * 1024)
 
         it "defaults the graceful-drain timeout to 30 seconds" $
             scDrainTimeout (mkServerConfig []) `shouldBe` defaultShutdownDrainTimeout
@@ -494,18 +444,3 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         case outcome of
             Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
             Right () -> expectationFailure "expected the post-commit escape to rethrow"
-
-    it "rethrows a pre-commit over-cap escape unclassified: no response, nothing observed, so the outer size-limit cap answers the 413 (issue #849)" $ do
-        -- The size-limit middleware's chunked cap throws 'RequestSizeException' from the
-        -- wrapped body reader while a strict-body handler consumes it -- inside this
-        -- guard. It is client misbehaviour, so the guard must rethrow it (giving no
-        -- response of its own and observing NO perimeter fault -- neither the metric nor
-        -- the audit line fires) for the outer cap to answer as the documented 413.
-        (statuses, observed, outcome) <- driveGuard (\_respond -> throwIO (RequestSizeException 8))
-        statuses `shouldBe` []
-        observed `shouldBe` []
-        case outcome of
-            Left escape -> case fromException escape of
-                Just (RequestSizeException limit) -> limit `shouldBe` 8
-                Nothing -> expectationFailure "expected the rethrown escape to be a RequestSizeException"
-            Right () -> expectationFailure "expected the over-cap escape to rethrow"

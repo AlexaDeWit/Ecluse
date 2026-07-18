@@ -9,7 +9,7 @@ import Network.HTTP.Types (Header, hAuthorization, hContentType, methodPut, mkSt
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestHeaders, requestMethod),
-    RequestBodyLength (ChunkedBody),
+    RequestBodyLength (ChunkedBody, KnownLength),
     consumeRequestBodyStrict,
     responseLBS,
  )
@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
-import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (..), ServerConfig (scSizeLimit), application, mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
@@ -115,37 +115,46 @@ proxyWith mkPublishDeps = do
                 ]
     pure (application cfg env)
 
-{- | A proxy 'Application' with the publish path enabled and its request-body cap set
-to @cap@, so a body crossing the cap exercises the size-limit middleware. The
-publication target is never reached (the cap fires while the handler reads the body),
-so its port is an unconnectable placeholder.
+{- | A proxy 'Application' whose publish path caps the request body at @cap@ bytes
+('pubMaxRequestBytes'), so a body crossing the cap exercises the route's own bounded
+read. The publication target is never reached (the cap fires before the relay), so its
+port is an unconnectable placeholder.
 -}
-cappedProxyWith :: RequestSizeLimit -> IO Application
+cappedProxyWith :: Int -> IO Application
 cappedProxyWith cap = do
     env <- newTestEnv
     bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-    let cfg =
-            ( mkServerConfig
+    let deps = (publishDepsAt 1 Nothing bodyBudget){pubMaxRequestBytes = cap}
+        cfg =
+            mkServerConfig
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingRouter = npmRouter
                     , bindingPackumentDeps = inertPackumentDeps
-                    , bindingPublishDeps = Just (publishDepsAt 1 Nothing bodyBudget)
+                    , bindingPublishDeps = Just deps
                     }
                 ]
-            )
-                { scSizeLimit = cap
-                }
     pure (application cfg env)
 
--- | A @PUT \/npm\/{path}@ publish carrying the given bearer (if any) and body.
+-- | A @PUT \/npm\/{path}@ chunked publish carrying the given bearer (if any) and body.
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
-putPublish path bearer body =
+putPublish = putPublishAs ChunkedBody
+
+{- | Like 'putPublish' but the request declares its length ('KnownLength'), so the
+publish route's up-front Content-Length cap check sees it rather than the chunked path.
+-}
+putPublishKnownLength :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
+putPublishKnownLength path bearer body =
+    putPublishAs (KnownLength (fromIntegral (LBS.length body))) path bearer body
+
+-- The shared @PUT \/npm\/{path}@ driver, over a given declared body length.
+putPublishAs :: RequestBodyLength -> ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
+putPublishAs bodyLen path bearer body =
     runSession (srequest (SRequest req body))
   where
     req =
         (setPath defaultRequest{requestMethod = methodPut, requestHeaders = auth} path)
-            { requestBodyLength = ChunkedBody
+            { requestBodyLength = bodyLen
             }
     auth = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer
 
@@ -219,15 +228,21 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
 
     it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
-        -- A chunked body declares no length, so the size-limit cap is enforced by the
-        -- wrapped reader THROWING while the publish handler strictly consumes the body --
-        -- inside the request perimeter. Before the fix that escape was reclassified into
-        -- the route's neutral 500 (and an internal-fault audit line); an over-cap upload
-        -- is client misbehaviour, so it must surface as the middleware's documented 413.
-        -- The 413 (mutually exclusive with the perimeter's 500 fault path) proves the
-        -- escape was rethrown for the outer cap rather than observed as a perimeter fault.
-        app <- cappedProxyWith (RequestSizeLimit 8)
+        -- A chunked body declares no length, so the cap is enforced by the publish
+        -- route's counted bounded read as a VALUE (a fail-closed 413), never a throw
+        -- across the request perimeter. The route renders the 413 through its own
+        -- contract; the 413 (mutually exclusive with the perimeter's neutral 500 fault
+        -- path) proves the perimeter never saw an over-cap signal.
+        app <- cappedProxyWith 8
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        status resp `shouldBe` 413
+
+    it "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)" $ do
+        -- A declared Content-Length over the cap fails closed before a byte is read,
+        -- answered as the route's own 413 -- the same status the chunked path yields,
+        -- so both over-cap shapes render uniformly through the route contract.
+        app <- cappedProxyWith 8
+        resp <- putPublishKnownLength "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
 
     it "relays an in-scope publish with the publisher's forwarded credential and returns the target's response" $
