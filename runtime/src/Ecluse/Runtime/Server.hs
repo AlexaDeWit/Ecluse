@@ -66,6 +66,7 @@ module Ecluse.Runtime.Server (
 
     -- * Running the server
     runWarp,
+    raceServerAgainstLoop,
     probeApplication,
 
     -- * The typed request perimeter
@@ -97,6 +98,8 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.Timeout (timeout)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
+import UnliftIO (MonadUnliftIO)
+import UnliftIO.Async (race_)
 import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
@@ -154,8 +157,9 @@ data ServerConfig = ServerConfig
     readiness probe fails and responses carry @Connection: close@
     (the going-away middleware), so a load balancer stops routing new traffic to
     this instance and clients stop reusing keep-alive sockets to it. Defaults to
-    'neverDraining'; 'runServer' replaces it with a live signal it flips on a
-    shutdown signal.
+    'neverDraining'; 'runWarp' allocates a live signal per launch, builds the
+    'Application' over it (through the config it hands the builder), and raises it
+    on a shutdown signal.
     -}
     , scDrainTimeout :: ShutdownDrainTimeout
     {- ^ How long the graceful drain waits for in-flight requests and in-progress
@@ -418,28 +422,30 @@ serverMiddleware cfg =
         . timeout timeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
-{- | Serve the proxy's HTTP front door: start @warp@ on the 'ServerConfig''s port
-with the 'application' built over it and the composition-root 'Env'. The
+{- | Serve the proxy's HTTP front door: allocate the launch's live 'DrainSignal',
+build the 'Application' by handing the supplied builder a 'ServerConfig' whose
+'scDrain' is that signal, and start @warp@ on the config's port with it. The
 'ServerConfig' -- in particular its mount bindings ('scMounts'), each a mount's
 complete ecosystem wiring -- is supplied by the composition root, which is where the
 served ecosystems are mounted (see @Ecluse@).
 
-__Graceful shutdown.__ A fresh live 'DrainSignal' is allocated per launch and wired
-into both the request path (the @application@ reads it through 'scDrain') and the
-@warp@ shutdown handler. On @SIGTERM@ or @SIGINT@ the handler raises the drain -- so
-the readiness probe begins failing and responses gain @Connection: close@ -- then
-closes the listen socket, which puts @warp@ into graceful-shutdown mode: it stops
-accepting new connections and waits for in-flight requests __and in-progress
-artifact streams__ to finish before the process exits, bounded by 'scDrainTimeout'.
-The handler is a 'CatchOnce', so a second signal during the drain hard-stops the
-server rather than being swallowed.
+__Graceful shutdown.__ The fresh live 'DrainSignal' allocated per launch is wired into
+both the request path and the @warp@ shutdown handler: the 'Application' builder is
+invoked with a 'ServerConfig' carrying that signal, so the readiness probe and the
+going-away middleware read the very drain the handler raises. On @SIGTERM@ or @SIGINT@
+the handler raises the drain -- so the readiness probe begins failing and responses
+gain @Connection: close@ -- then closes the listen socket, which puts @warp@ into
+graceful-shutdown mode: it stops accepting new connections and waits for in-flight
+requests __and in-progress artifact streams__ to finish before the process exits,
+bounded by 'scDrainTimeout'. The handler is a 'CatchOnce', so a second signal during
+the drain hard-stops the server rather than being swallowed.
 
 __Local-dev quit key.__ The whole run is wrapped in 'withInteractiveHalt', which --
 __only when attached to an interactive terminal__ -- arms a watcher that forces an
 immediate halt on Ctrl-D (end of standard input), bypassing the drain like a second
 Ctrl-C. Outside a TTY (production) no watcher is installed and this changes nothing.
 -}
-runWarp :: ServerConfig -> IO Application -> IO ()
+runWarp :: ServerConfig -> (ServerConfig -> IO Application) -> IO ()
 runWarp cfg0 getApp = do
     drain <- newDrainSignal
     let cfg = cfg0{scDrain = drain}
@@ -459,7 +465,7 @@ runWarp cfg0 getApp = do
                 -- route-shaped.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
-    app <- getApp
+    app <- getApp cfg
     withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings app)
 
 -- The neutral response for a fault that escapes to warp's own handler (see 'runWarp'):
@@ -478,3 +484,20 @@ installShutdownHandler drain closeSocket =
     traverse_ install [sigTERM, sigINT]
   where
     install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
+
+{- | Race a server arm (the first argument) against a never-returning background loop
+(the second): the shutdown shape the single-process composition roots share -- the
+proxy racing its HTTP server against the mirror worker, and the pilot racing its probe
+server against the OSV export loop.
+
+Choosing 'race_' over 'concurrently_' is the shutdown invariant. The background loop
+never returns, so a 'concurrently_' would keep waiting on it after the server has
+gracefully drained and returned, leaving the surrounding telemetry and resource
+brackets un-unwound: no exporter flush, the process hanging until a second signal or
+the orchestrator's kill. 'race_' lets the server's graceful return cancel the loop and
+unwind those brackets (flush and exit cleanly), while a fault thrown by either arm
+still propagates ('race_' re-raises it) so a genuine failure fails the process up
+rather than being swallowed.
+-}
+raceServerAgainstLoop :: (MonadUnliftIO m) => m () -> m () -> m ()
+raceServerAgainstLoop = race_

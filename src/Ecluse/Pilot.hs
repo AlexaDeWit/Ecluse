@@ -18,7 +18,6 @@ import Katip (KatipContext, LogEnv, Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Async (concurrently_)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
@@ -40,7 +39,7 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, raceServerAgainstLoop, runWarp, serverMiddleware)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 
 {- | The WAI application for the Pilot worker mode.
@@ -52,6 +51,12 @@ pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg
 {- | The entry point for the Pilot worker mode.
 Pilot runs as a standalone HTTP server that only exposes liveness and readiness
 probes, while it concurrently runs the OSV export loop.
+
+The probe server is raced against the export loop through
+'Ecluse.Runtime.Server.raceServerAgainstLoop' (see there for the shutdown invariant):
+the export loop never returns (it idles with no bucket, or supervises every fault as
+transient with one), so the server's graceful return on shutdown must cancel it -- a
+cancelled export cycle resumes from the remote artifact on the next boot.
 -}
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
@@ -61,9 +66,9 @@ runPilot bootEnv = do
 
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
-        concurrently_
+        raceServerAgainstLoop
+            (liftIO $ runWarp cfg pilotApplication)
             (runExportLoop (beTelemetry bootEnv) (beAmbient bootEnv) (beConfigFull bootEnv))
-            (liftIO $ runWarp cfg (pilotApplication cfg))
 
 {- | The Pilot steady-state export loop: compile the npm OSV artifact and upload it
 to the configured S3 bucket, then wait the configured sync interval and repeat. With
