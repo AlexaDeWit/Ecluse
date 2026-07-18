@@ -45,6 +45,7 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * Errors
     MetadataError (..),
+    fetchFaultError,
 
     -- * Single-version resolution
     VersionEvaluation (..),
@@ -57,7 +58,10 @@ import Data.ByteArray qualified as BA
 
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    UrlFormationError,
+ )
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
@@ -157,6 +161,19 @@ data MetadataError
       -}
       MetadataUnreachable TransportFault
     deriving stock (Eq, Show)
+
+{- | Fold the shared upstream fault channel ('FetchFault') onto the serve-path error
+vocabulary ('MetadataError'), preserving the distinction each cause carries: a
+response-bound breach is 'MetadataBoundExceeded', an unformable upstream URL is
+'MetadataUrlUnformable' (a config fault held distinct from a decode or an outage), and a
+transport fault is 'MetadataUnreachable' (the outage, kept transient). Ecosystem-agnostic:
+every adapter's metadata layer threads its bounded fetch's fault through this same fold.
+-}
+fetchFaultError :: FetchFault -> MetadataError
+fetchFaultError = \case
+    FetchBoundExceeded err -> MetadataBoundExceeded err
+    FetchUrlUnformable urlErr -> MetadataUrlUnformable urlErr
+    FetchTransport transport -> MetadataUnreachable transport
 
 {- | The outcome of resolving one version's metadata for a policy decision: the projected
 version snapshot when present, or the degrade both the serve-time gate and the mirror
