@@ -5,20 +5,16 @@
 module Ecluse.AwsEndToEndSpec (spec) where
 
 import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
-import Data.Aeson (Value (Object), decode, encode, object, (.=))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200, status201, status404, statusCode)
-import Network.HTTP.Types.Header (hHost)
-import Network.Wai (Application, Request (rawPathInfo), requestHeaders, requestMethod, responseLBS)
+import Network.HTTP.Types (status200, status201, status404)
+import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Test (SResponse (simpleBody, simpleStatus), defaultRequest, request, runSession, setPath)
+import Network.Wai.Test (SResponse (simpleBody))
 import Test.Hspec
 import TestContainers (Container)
 import UnliftIO (race_, timeout)
@@ -50,12 +46,14 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
     endpointFor,
     freshQueueUrl,
+    quietLogEnv,
     withMinistack,
  )
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, unsafeHash)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -86,18 +84,18 @@ spec =
         describe "AWS-backed Écluse end to end (ministack SQS + WAI npm stubs)" $ do
             it "filters public versions by the rules on a packument request" $ \container ->
                 withAwsProxy container "aws-e2e-packument" $ \proxy -> do
-                    resp <- getThrough (tpApp proxy) "/npm/left-pad"
+                    resp <- getPath "/npm/left-pad" (tpApp proxy)
                     status resp `shouldBe` 200
                     -- The 7-day quarantine admits the 2020 version and denies the
                     -- 2-day-old one, so only the survivor is in the served document.
-                    packumentVersions (simpleBody resp) `shouldMatchList` ["1.0.0"]
+                    servedVersions resp `shouldMatchList` ["1.0.0"]
 
             it "gates a tarball, enqueues a real SQS job, and the worker mirrors it (fetch → verify → publish)" $ \container ->
                 withAwsProxy container "aws-e2e-tarball" $ \proxy -> do
                     -- The tarball request misses the private upstream, is gated and
                     -- streamed from the public upstream, and enqueues a mirror job to
                     -- the real SQS queue before the response returns.
-                    resp <- getThrough (tpApp proxy) "/npm/left-pad/-/left-pad-1.0.0.tgz"
+                    resp <- getPath "/npm/left-pad/-/left-pad-1.0.0.tgz" (tpApp proxy)
                     status resp `shouldBe` 200
                     simpleBody resp `shouldBe` tarballBytes
                     -- The worker long-polls the same SQS queue, fetches the artifact,
@@ -150,7 +148,7 @@ configDrivenQueue container queueName = do
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     let ambient = ambientAwsFromEnv (sqsEnvVars queueUrl endpointUrl)
     plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue ambient env)
-    logEnv <- newTestLogEnv
+    logEnv <- quietLogEnv
     case plan of
         -- The wire decode's egress former: the loopback dev former, since this
         -- suite's artifact URLs are in-process http servers.
@@ -180,7 +178,7 @@ buildEnv queue = do
     guardedManager <- newManager defaultManagerSettings
     trusted <- newManager defaultManagerSettings
     metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- newTestLogEnv
+    logEnv <- quietLogEnv
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
     newEnvWithAdmission admission queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
@@ -244,19 +242,19 @@ other path with the two-version packument, whose @dist.tarball@ names this same
 loopback host and port (learned from the request's @Host@ header) so the honoured
 location is reachable. -}
 withPublicUpstream :: (Text -> IO a) -> IO a
-withPublicUpstream k = testWithApplication (pure app) (k . loopbackUrl)
+withPublicUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
     app req respond =
         respond $
             if ".tgz" `BS.isSuffixOf` rawPathInfo req
                 then responseLBS status200 [] tarballBytes
-                else responseLBS status200 [] (encode (packument (selfPort req)))
+                else responseLBS status200 [] (encode (packument (selfBaseUrl req)))
 
 -- The private upstream: a clean 404 miss for everything, so every request falls
 -- through to the public origin.
 withPrivateUpstream :: (Text -> IO a) -> IO a
-withPrivateUpstream k = testWithApplication (pure app) (k . loopbackUrl)
+withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
     app _req respond = respond (responseLBS status404 [] "{}")
@@ -266,7 +264,7 @@ into an 'IORef', so the worker's publish can be observed. -}
 withMirrorTarget :: (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget body = do
     logRef <- newIORef []
-    testWithApplication (pure (app logRef)) $ \port -> body (loopbackUrl port) logRef
+    testWithApplication (pure (app logRef)) $ \port -> body (localhost port) logRef
   where
     app :: IORef [ByteString] -> Application
     app logRef req respond = do
@@ -290,16 +288,16 @@ sha512Integrity = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy tarbal
 {- A two-version packument: @1.0.0@ published in 2020 (clears the quarantine) and
 @2.0.0@ published two days before the fixed clock (denied by it). Both carry a real
 integrity digest, so the distinguishing factor is the rule, not integrity presence.
-The @dist.tarball@ of each names the public stub at the given port. -}
+The @dist.tarball@ of each names the public stub at the given base URL. -}
 packument :: Text -> Value
-packument port =
+packument baseUrl =
     object
         [ "name" .= ("left-pad" :: Text)
         , "dist-tags" .= object ["latest" .= ("1.0.0" :: Text)]
         , "versions"
             .= object
-                [ "1.0.0" .= versionObject "1.0.0" "left-pad-1.0.0.tgz" port
-                , "2.0.0" .= versionObject "2.0.0" "left-pad-2.0.0.tgz" port
+                [ "1.0.0" .= versionObject "1.0.0" "left-pad-1.0.0.tgz" baseUrl
+                , "2.0.0" .= versionObject "2.0.0" "left-pad-2.0.0.tgz" baseUrl
                 ]
         , "time"
             .= object
@@ -309,13 +307,13 @@ packument port =
         ]
 
 versionObject :: Text -> Text -> Text -> Value
-versionObject version file port =
+versionObject version file baseUrl =
     object
         [ "name" .= ("left-pad" :: Text)
         , "version" .= version
         , "dist"
             .= object
-                [ "tarball" .= ("http://localhost:" <> port <> "/left-pad/-/" <> file)
+                [ "tarball" .= (baseUrl <> "/left-pad/-/" <> file)
                 , "integrity" .= sha512Integrity
                 , "shasum" .= sha1Shasum
                 ]
@@ -328,40 +326,6 @@ fixedNow = UTCTime (fromGregorian 2026 6 1) 0
 -- The shipped quarantine: admit a version only once it is older than a week.
 admitOldEnough :: [PrecededRule]
 admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
-
--- A loopback base URL for a testWithApplication-hosted stub on the given port, addressed
--- by the "localhost" DNS name rather than a bare IP literal: the internal-range block
--- only recognises a literal, never a name, so this in-process stub never needs an
--- operator-style opt-in to let the fetch land.
-loopbackUrl :: Int -> Text
-loopbackUrl port = "http://localhost:" <> show port
-
--- The port a stub was reached on, from the request's @Host@ header, so a served
--- packument can name its own @dist.tarball@ at the same port.
-selfPort :: Request -> Text
-selfPort req =
-    case find ((== hHost) . fst) (requestHeaders req) of
-        Just (_, hostPort) -> snd (T.breakOnEnd ":" (decodeUtf8 hostPort))
-        Nothing -> ""
-
--- A GET through the in-process proxy with no credential.
-getThrough :: Application -> ByteString -> IO SResponse
-getThrough app path = runSession (request (setPath defaultRequest path)) app
-
-status :: SResponse -> Int
-status = statusCode . simpleStatus
-
--- The version keys of a served packument body (its @versions@ object keys).
-packumentVersions :: LByteString -> [Text]
-packumentVersions body = case decode body of
-    Just (Object o)
-        | Just (Object versions) <- KeyMap.lookup "versions" o ->
-            map Key.toText (KeyMap.keys versions)
-    _ -> []
-
--- A scribe-free LogEnv (no stdout output during the integration run).
-newTestLogEnv :: IO LogEnv
-newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
 {- Run the supervised mirror worker ('runWorker') against the real queue until a
 condition holds, then tear it down. The loop never returns on its own, so it is raced

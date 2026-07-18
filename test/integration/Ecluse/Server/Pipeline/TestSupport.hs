@@ -786,6 +786,12 @@ withProxyEffectful effectful privateUp publicUp k = do
                         ]
             k (application cfg env)
 
+{- | A @GET@ at the given path with no credential, driven through a WAI session: the
+arbitrary-path generalisation of 'getThing'.
+-}
+getPath :: ByteString -> Application -> IO SResponse
+getPath path = runSession (request (setPath defaultRequest path))
+
 -- | A @GET /npm/thing@ request carrying the given (optional) bearer credential.
 getThing :: Maybe Text -> Application -> IO SResponse
 getThing bearer = runSession (request (setPath baseRequest "/npm/thing"))
