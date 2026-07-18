@@ -375,8 +375,11 @@ data PublishDeps = PublishDeps
     unit-slot admission does on the read path.
     -}
     , pubMaxRequestBytes :: Int
-    {- ^ The per-request body cap (the WAI size limit), the pessimistic weight a
-    chunked body (no declared length) reserves.
+    {- ^ The per-request publish-body cap, in bytes, enforced by the publish route at
+    the read site: a declared Content-Length over it fails closed before any byte is
+    read, and a chunked body is bounded by a counted read against it. It is also the
+    pessimistic weight a chunked body (no declared length) reserves against the
+    aggregate body-byte budget.
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.

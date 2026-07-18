@@ -42,9 +42,10 @@ responds with it or runs it under the request perimeter. Adding an ecosystem add
 router and changes nothing here.
 
 Cross-cutting concerns are applied as middleware composed around the
-'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
-defensive request-body size cap, correct client-IP recovery behind a load
-balancer, and a request timeout. The middleware pieces and the health probes
+'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): correct
+client-IP recovery behind a load balancer, and a request timeout. The
+request-body cap is not cross-cutting -- it is a route concern, enforced at the
+read site by the only body-consuming route (publish). The middleware pieces and the health probes
 live in "Ecluse.Runtime.Server.Middleware", the graceful-shutdown drain
 vocabulary in "Ecluse.Runtime.Server.Drain", and the local-dev quit key in
 "Ecluse.Runtime.Server.Halt"; this module composes them and re-exports their
@@ -86,10 +87,6 @@ module Ecluse.Runtime.Server (
 
     -- * Middleware
     serverMiddleware,
-
-    -- * Request-body cap
-    RequestSizeLimit (..),
-    defaultRequestSizeLimit,
 ) where
 
 import Data.List (dropWhileEnd)
@@ -129,21 +126,20 @@ import Ecluse.Runtime.Server.Halt (
     withInteractiveHalt,
  )
 import Ecluse.Runtime.Server.Middleware (
-    RequestSizeLimit (..),
-    defaultRequestSizeLimit,
     goingAwayMiddleware,
     jsonResponse,
     probeApplication,
-    sizeLimitMiddleware,
     timeoutSeconds,
  )
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
 
 {- | The server's own settings -- the values the 'Application' and 'runServer'
-need that the composition-root 'Env' does not carry: the listen port, the served
-mount bindings, and the request-body cap. Backend selection is a composition-root
-concern; this is the minimal shape the web layer needs to route.
+need that the composition-root 'Env' does not carry: the listen port and the served
+mount bindings. Backend selection is a composition-root concern; this is the minimal
+shape the web layer needs to route. The request-body cap is not here: it is a route
+concern, enforced by the only body-consuming route (publish) against its own
+'Ecluse.Core.Server.Context.pubMaxRequestBytes'.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
@@ -153,8 +149,6 @@ data ServerConfig = ServerConfig
     request's leading segments wins. A deployment with no mounts serves nothing
     beyond the health probes -- every other path is the neutral @404@.
     -}
-    , scSizeLimit :: RequestSizeLimit
-    -- ^ The defensive cap on request-body size.
     , scDrain :: DrainSignal
     {- ^ The shared shutdown-drain flag the front door observes: once raised, the
     readiness probe fails and responses carry @Connection: close@
@@ -195,19 +189,18 @@ data ServerConfig = ServerConfig
     }
 
 {- | Build a 'ServerConfig' over the given mount bindings, taking the default
-listen port ('defaultPort') and request-body cap ('defaultRequestSizeLimit').
+listen port ('defaultPort').
 
 The composition root supplies the bindings -- each a mount's complete ecosystem
-wiring -- and overrides the port or cap by record update where a deployment needs
-to. There is no built-in mount: an ecosystem is served only once its binding is
-passed here, so the web layer carries no ecosystem of its own.
+wiring -- and overrides the port by record update where a deployment needs to. There
+is no built-in mount: an ecosystem is served only once its binding is passed here, so
+the web layer carries no ecosystem of its own.
 -}
 mkServerConfig :: [MountBinding] -> ServerConfig
 mkServerConfig mounts =
     ServerConfig
         { scPort = defaultPort
         , scMounts = mounts
-        , scSizeLimit = defaultRequestSizeLimit
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
         , scCheckReady = pure True
@@ -388,13 +381,20 @@ dropTrailingSlashes = dropWhileEnd (== "")
 -- renderer. The perimeter's neutral @500@ is the one such response the web layer still
 -- owns; every route's own body is shaped by its ecosystem's router.
 
-{- | The cross-cutting middleware stack composed around the proxy 'Application': a
-defensive request-body size cap (rejecting an over-cap body with @413@ once a
-handler reads it), correct client-IP recovery behind a load balancer
-(@X-Forwarded-For@ \/ @X-Real-IP@), and a per-request timeout. The pieces live in
-"Ecluse.Runtime.Server.Middleware"; this composes them over the 'ServerConfig'.
+{- | The cross-cutting middleware stack composed around the proxy 'Application':
+correct client-IP recovery behind a load balancer (@X-Forwarded-For@ \/ @X-Real-IP@),
+and a per-request timeout. The pieces live in "Ecluse.Runtime.Server.Middleware"; this
+composes them over the 'ServerConfig'.
 
-A fourth middleware, the __going-away__ header, is active only during a graceful
+The request-body cap is __not__ a middleware. Only one route (publish) consumes a
+request body, and it bounds it at the source as a value: a declared Content-Length over
+the cap fails closed before a byte is read, and a chunked body is bounded by a counted
+read ('Ecluse.Core.Security.boundedRead'), each answered as the route's own @413@. A
+body-cap middleware would instead have to wrap the reader and __throw__ across the
+request perimeter (untracked control flow), so the bound lives at the read site
+('Ecluse.Core.Server.Pipeline.Publish') rather than here.
+
+A third middleware, the __going-away__ header, is active only during a graceful
 drain: while the 'ServerConfig''s 'DrainSignal' is raised it stamps @Connection:
 close@ on every response so an HTTP\/1.1 keep-alive pool (a client's, or a service
 mesh's connection pool) does not reuse a socket on an instance that is shutting down
@@ -414,8 +414,7 @@ the serve path relies on.
 -}
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
-    sizeLimitMiddleware (scSizeLimit cfg)
-        . realIp
+    realIp
         . timeout timeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 

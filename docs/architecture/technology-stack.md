@@ -7,7 +7,7 @@
 | Language | Haskell (GHC 9.10) | Type safety, strong concurrency, suits the rule engine. |
 | Prelude | `relude` | Safer defaults: `Text` over `String`, partial functions hidden. Wired as the implicit prelude via cabal mixins (see below). |
 | Effect style | `ReaderT Env IO` (+ `unliftio`) | The orchestration monad; handlers read a per-request `RequestCtx` (see [key decisions](#key-decisions)). Shared mutable state is `TVar`s, never `StateT`. |
-| HTTP server | `warp` + `wai` (+ `wai-extra`) | Raw WAI routing, not a framework; `wai-extra` supplies size limits, real-IP, and timeouts. See [Web layer](web-layer.md#web-layer). |
+| HTTP server | `warp` + `wai` (+ `wai-extra`) | Raw WAI routing, not a framework; `wai-extra` supplies real-IP recovery and timeouts. See [Web layer](web-layer.md#web-layer). |
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the managed-registry npm endpoints. Kept off `amazonka`'s `ResourceT` path. |
 | JSON | `aeson` | Metadata parsing (lenient inbound decoding), rule config, queue payloads, denial bodies. |
 | API manifest / schemas | `autodocodec` + `openapi3` | Owned types derive their `aeson` codec and the OpenAPI / JSON Schema from one codec, so the schema cannot drift from the wire. See [Capability manifest](web-layer.md#capability-manifest). |

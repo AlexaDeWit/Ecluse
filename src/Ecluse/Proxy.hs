@@ -82,7 +82,7 @@ import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, work
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Runtime.Server (MountBinding (..), RequestSizeLimit (RequestSizeLimit), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort, scSizeLimit), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -197,9 +197,6 @@ runProxy bootEnv = do
                     MirrorWith _ -> heartbeatHealthyNow heartbeat
                     NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
-                , -- The request-body cap, resolved by the memory plan (configured
-                  -- or a share of the heap ceiling).
-                  scSizeLimit = RequestSizeLimit (fromIntegral (mpMaxRequestBytes plan))
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).

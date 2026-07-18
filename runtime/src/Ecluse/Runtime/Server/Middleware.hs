@@ -3,17 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The front door's cross-cutting middleware pieces and the control-plane health
-endpoints: the defensive request-body cap, the drain-aware going-away header, the
-per-request timeout knob, and the @\/livez@ \/ @\/readyz@ probe application.
-"Ecluse.Runtime.Server"'s @serverMiddleware@ composes the pieces around the
-proxy 'Application'; its dispatch answers the probes through 'probeApplication'.
+endpoints: the drain-aware going-away header, the per-request timeout knob, and the
+@\/livez@ \/ @\/readyz@ probe application. "Ecluse.Runtime.Server"'s @serverMiddleware@
+composes the pieces around the proxy 'Application'; its dispatch answers the probes
+through 'probeApplication'. The request-body cap is not here: it is a route concern,
+enforced at the read site by the only body-consuming route (publish).
 -}
 module Ecluse.Runtime.Server.Middleware (
-    -- * Request-body cap
-    RequestSizeLimit (..),
-    defaultRequestSizeLimit,
-    sizeLimitMiddleware,
-
     -- * Drain-aware going-away header
     goingAwayMiddleware,
 
@@ -29,31 +25,8 @@ module Ecluse.Runtime.Server.Middleware (
 
 import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
 import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
-import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
-
-{- | The maximum request-body size accepted, in bytes -- a defensive cap so a
-hostile or runaway client cannot force the proxy to buffer an unbounded body. A
-'newtype' so a raw byte count is not mistaken for some other 'Word64'.
--}
-newtype RequestSizeLimit = RequestSizeLimit Word64
-    deriving stock (Eq, Show)
-
-{- | The default request-body cap: 25 MiB. Generous for the metadata and small
-control-plane bodies the proxy accepts (artifact __downloads__ stream the other
-way and are never buffered), while still bounding a hostile upload.
--}
-defaultRequestSizeLimit :: RequestSizeLimit
-defaultRequestSizeLimit = RequestSizeLimit (25 * 1024 * 1024)
-
-{- | Cap the request body at the configured limit, rejecting an over-cap body
-before it is buffered.
--}
-sizeLimitMiddleware :: RequestSizeLimit -> Middleware
-sizeLimitMiddleware (RequestSizeLimit maxBytes) =
-    requestSizeLimitMiddleware
-        (setMaxLengthForRequest (\_req -> pure (Just maxBytes)) defaultRequestSizeLimitSettings)
 
 {- | While the instance is draining, stamp @Connection: close@ on every response so a
 keep-alive client (or a mesh connection pool) does not reuse the socket on a closing
