@@ -12,7 +12,7 @@ heap at once with no aggregate bound. An acquisition here reserves the request's
 -- its declared Content-Length, or the per-request cap when the body is chunked and
 declares nothing -- against a fixed byte capacity before the body is read, and releases
 it on every exit path. Reservation precedes buffering and is always at least the bytes
-actually buffered (the size-limit middleware refuses a body past the cap), so the
+actually buffered (the publish route's bounded read refuses a body past the cap), so the
 aggregate holds by construction.
 
 The door discipline is the core's: acquire immediately when the capacity holds the
@@ -83,8 +83,8 @@ newByteAdmissionTuned capacity room waitMicros = do
 
 {- | Run an action holding the given weight against the aggregate. 'Nothing' means the
 request was shed: the room was full, or the weight did not fit within the wait budget.
-The weight is clamped to the capacity defensively (a request the size-limit middleware
-admitted always fits the plan's floors, but a bound must never deadlock on arithmetic it
+The weight is clamped to the capacity defensively (a request the publish route's bounded
+read admitted always fits the plan's floors, but a bound must never deadlock on arithmetic it
 did not make), and released on every exit path -- normal completion, a synchronous
 throw, and asynchronous cancellation.
 

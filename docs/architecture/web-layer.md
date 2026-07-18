@@ -332,11 +332,20 @@ renders over HTTP.
 The dividing principle: adopt libraries for cross-cutting infrastructure identical for every
 service; hand-roll anything that encodes the domain or wire contract.
 
-Écluse composes `wai-extra` middleware around the `Application`: `RequestSizeLimit` (a defensive
-body cap), `RealIp`/`ForwardedFor` (correct client IP behind a load balancer), and `Timeout`.
-It deliberately avoids two: `Autohead`, which answers HEAD by running the GET handler and
-discarding the body (see [HEAD on artifacts](#head-on-artifacts)), and `Gzip`, since artifacts
-are already compressed and re-compressing would fight the backpressure above. `unliftio` lifts
+Écluse composes `wai-extra` middleware around the `Application`: `RealIp`/`ForwardedFor`
+(correct client IP behind a load balancer) and `Timeout`. It deliberately avoids two:
+`Autohead`, which answers HEAD by running the GET handler and discarding the body (see
+[HEAD on artifacts](#head-on-artifacts)), and `Gzip`, since artifacts are already compressed
+and re-compressing would fight the backpressure above.
+
+The request-body cap is not a middleware. Only the publish route consumes a request body, and
+it bounds that body at the read site as a value: a declared `Content-Length` over the cap fails
+closed before a byte is read, and a chunked body is bounded by a counted read (`boundedRead`),
+each answered `413` through the route's own contract. A cap middleware would instead wrap the
+body reader and throw across the request perimeter, so the bound lives with the route that reads
+the body rather than in the stack above it.
+
+`unliftio` lifts
 `bracket`/`finally`/`async` into the reader so resource-safety stays ergonomic. Handlers run in
 `Handler`, a reader over a per-request `RequestCtx` that pairs the shared `ServeRuntime`
 (`ctxRuntime`: data-plane managers, caches, queue, recording ports) with the matched mount's

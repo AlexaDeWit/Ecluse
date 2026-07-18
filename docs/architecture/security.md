@@ -86,8 +86,10 @@ deployment assumptions they rest on are in
    defaults: `ECLUSE_LIMITS__MAX_RESPONSE_BYTES`, `ECLUSE_LIMITS__MAX_VERSION_COUNT`
    (default 100000), and `ECLUSE_LIMITS__MAX_NESTING_DEPTH` (default 64); see
    [Response bounds](configuration.md#response-bounds). Artifacts stream in constant memory
-   and aren't subject to the body-size bound; the inbound client-to-proxy request-body cap is
-   the separate `sizeLimitMiddleware` (default 25 MiB).
+   and aren't subject to the body-size bound; the inbound client-to-proxy request-body cap
+   (default 25 MiB) is enforced at the publish read site as a value, not as middleware: an
+   over-cap `Content-Length` fails closed before any byte is read, and a chunked body is
+   bounded by a counted read, each answered `413`.
 
 5. **Every served version must carry a strong integrity digest**, by default, in both trust
    contexts. Écluse trusts a digest only as far as its algorithm is collision-resistant, so
