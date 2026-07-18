@@ -25,7 +25,7 @@ remains retrievable from repository files.
    - the `status:` and acceptance criteria of active or next-dispatchable slice files.
 3. **Retrieve by decision:** read only the sections needed for the next orchestration action:
    - per-PR loop, fix routing, evaluation, gate, or guardrails from
-     `planning/orchestration-strategy.md`;
+     `.agents/orchestration-strategy.md`;
    - active slice files;
    - architecture sections explicitly implicated by a blocker or review finding.
 4. **Reconcile selective memory:** only if the checkpoint names stale memory, or a current decision
@@ -35,7 +35,7 @@ remains retrievable from repository files.
    and the next dispatchable action. Wait for explicit architect kickoff before dispatching an
    implementation build.
 
-Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `STYLE.md`, `HADDOCK.md`, all
+Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/style.md`, `docs/haddock.md`, all
 of `docs/testing.md`, or the architecture set. Retrieve one
 when the next decision actually depends on it.
 

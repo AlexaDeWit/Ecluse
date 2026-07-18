@@ -56,7 +56,8 @@ observability endpoints. The [`docs/architecture/`](docs/architecture.md) docume
 ## Verifying the image
 
 > **Pre-release.** No GA release is cut yet. Release candidates (e.g. `0.1.0-rc.2`) are
-> published to Docker Hub and already carry the attestations below.
+> published to GitHub Container Registry (`ghcr.io/alexadewit/ecluse`) and already carry the
+> attestations below.
 
 Each tag is a single multi-arch image (`linux/amd64` + `linux/arm64`) carrying keyless
 (Sigstore) provenance and SBOM attestations in the public Rekor log. A cut release's digest
@@ -115,11 +116,10 @@ DCO sign-off; participation is governed by the [Code of Conduct](CODE_OF_CONDUCT
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `core/`     | `ecluse-core` library: the pure, ecosystem-agnostic capability core (`Ecluse.Core.*`)                                    |
-| `runtime/`  | `ecluse-runtime` library: the effectful edge — OTel SDK, warp, scribes, and cloud adapters (`Ecluse.Runtime.*`)          |
+| `runtime/`  | `ecluse-runtime` library: the effectful edge (OTel SDK, warp, scribes, and cloud adapters, `Ecluse.Runtime.*`)           |
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit and integration tests                                                                                               |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
-| `examples/` | Quickstart: a Compose file with serve-only and mirrored profiles, `.env.example`, `config.example.yaml`                  |
 | `docs/`     | Architecture and design documents                                                                                        |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |

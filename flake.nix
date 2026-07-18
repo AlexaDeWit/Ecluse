@@ -219,7 +219,7 @@
           hpkgs.hlint
           # Run the >>> examples in Haddock comments as tests (`task doctest`),
           # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
-          # set as the compiler it stands in for. See HADDOCK.md → "Examples that
+          # set as the compiler it stands in for. See docs/haddock.md → "Examples that
           # run".
           hpkgs.doctest
           # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
@@ -314,7 +314,7 @@
           # justified over a hand-rolled shell gate because it is the SPDX/REUSE
           # reference implementation; it stays scoped to tracked .hs files (no
           # repo-wide REUSE regime) and lives in the dev shell only, never on
-          # the product path. See STYLE.md, "Licence headers".
+          # the product path. See docs/style.md, "Licence headers".
           pkgs.reuse
         ];
 

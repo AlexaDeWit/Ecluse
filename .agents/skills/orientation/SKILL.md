@@ -31,7 +31,7 @@ contain only the current task contract, applicable invariants, and volatile evid
 6. **Report briefly:** state the objective, current shipped/in-flight state that matters,
    applicable invariants, sources selected, unresolved questions, and next action.
 
-Before writing Haskell or prose, retrieve the applicable sections of `STYLE.md` and `HADDOCK.md`.
+Before writing Haskell or prose, retrieve the applicable sections of `docs/style.md` and `docs/haddock.md`.
 Before committing or opening a PR, invoke `open-pull-request`; do not preload its instructions at
 startup.
 

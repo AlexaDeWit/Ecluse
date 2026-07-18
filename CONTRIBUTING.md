@@ -1,107 +1,50 @@
 # Contributing
 
-How we work on **Écluse** (package `ecluse`): the contribution *process* and the
+How we work on Écluse (package `ecluse`): the contribution *process* and the
 repository's requirements. This file is policy; the practical guides live alongside it:
 
-- **Set up & build** ([Getting Started](docs/getting-started.md)): Nix, the `task` loop,
-  reproducible builds, and dependency locking.
+- **Set up and build** ([Getting Started](docs/getting-started.md)): Nix, the `task` loop,
+  reproducible builds, dependency locking.
 - **Testing** ([Testing Strategy](docs/testing.md)): the tiers, what gates, and coverage.
-- **Code style** ([`STYLE.md`](STYLE.md)); documentation/Haddock ([`HADDOCK.md`](HADDOCK.md)).
+- **Code style** ([`docs/style.md`](docs/style.md)); documentation ([`docs/haddock.md`](docs/haddock.md)).
 - **Design** ([`docs/architecture.md`](docs/architecture.md)).
-- **CI, caches & Semgrep internals**, and agent-specific instructions ([`AGENTS.md`](AGENTS.md)).
+- **CI, caches, and Semgrep internals**, and agent instructions ([`AGENTS.md`](AGENTS.md)).
 
 ## Working language
 
-Issues and discussion are in **English**, so the next person with the same problem (and any
-future maintainer) can search, find, and help with them. You don't need perfect English: rough English, or your
-own language run through a translator like Google Translate, is genuinely welcome, and it
-keeps your report findable for the next person with the same problem. If English is a real
-barrier, I also read **French** and **Swedish**, so write in one of those and I'll manage;
-including a translated version alongside helps everyone else follow along.
-
-Source code, identifiers, comments, and commit messages stay in English.
-
----
+Issues and discussion are in **English**, so the next person with the same problem can search and
+find them. Rough English, or your own language run through a translator, is genuinely welcome. If
+English is a real barrier, I also read **French** and **Swedish**. Source code, identifiers,
+comments, and commit messages stay in English.
 
 ## Automation scripting
 
-Build and CI automation is **Bash**: one language, so there's one thing to read and review.
-Scripts live in [`scripts/`](scripts/) (`#!/usr/bin/env bash`, `set -euo pipefail`) and are
-invoked from the [`Taskfile.yml`](Taskfile.yml) or the workflows. The `Taskfile.yml` orchestrates; any
-complexity belongs in the shell scripts, not embedded in a multiline YAML `cmds:`
-block, so it stays reviewable, runnable outside CI, and `shellcheck`-clean. `task
-lint-scripts` runs `shellcheck` over `scripts/*.sh` in the gate (at `--severity=warning`).
-`awk`/`sort` handle structured-data munging, so reach for them before a heavier runtime.
+Build and CI automation is **Bash**: one language to read and review. Scripts live in
+[`scripts/`](scripts/) (`#!/usr/bin/env bash`, `set -euo pipefail`) and are invoked from
+[`Taskfile.yml`](Taskfile.yml) or the workflows. The Taskfile orchestrates; complexity belongs in the
+shell scripts, not a multiline YAML `cmds:` block, so it stays reviewable, runnable outside CI, and
+`shellcheck`-clean. `task lint-scripts` runs `shellcheck` over `scripts/*.sh` in the gate at
+`--severity=warning`. Reach for `awk`/`sort` before a heavier runtime.
 
-Use another language only when one is genuinely *forced*, and say why in review:
-
-- **Lua** for the pandoc filters in [`web/`](web/), because pandoc's filter API is Lua.
-- **Task** and **Nix** are the task orchestrator and the build/derivation language; they're
-  not homes for procedural logic.
-
-Introducing a new build-time dependency on Python, Node, or similar needs a strong, stated
-reason. "It reads a little cleaner" isn't one.
-
----
+Use another language only when one is forced, and say why in review: **Lua** for the pandoc filters in
+[`web/`](web/), because pandoc's filter API is Lua. A new build-time dependency on Python, Node, or
+similar needs a strong, stated reason; "it reads a little cleaner" isn't one.
 
 ## Coverage
 
-Coverage is reported to **Codecov**, which is the **merged authority**: it sums the per-tier
-flag uploads (unit ∪ integration) into one project total. The full strategy, gates, and
-Codecov knobs live in [Testing Strategy](docs/testing.md) → "Coverage"; the contributor-facing
-commands are:
+Coverage is reported to **Codecov**, the merged authority over the per-tier flag uploads. The two
+contributor commands are **`task coverage`** (combined, matches the dashboard, needs Docker) and
+**`task coverage-unit`** (fast, unit-only, Docker-free, a partial view); the full strategy and
+Codecov knobs are in [Testing Strategy](docs/testing.md) → "Coverage".
 
-- **`task coverage`: the canonical command.** Builds *both* gating tiers instrumented
-  (HPC, in an isolated `dist-coverage/`), `hpc combine --union`s their `.tix`, and writes the
-  combined Codecov JSON to `coverage/combined.json`. This reproduces the **merged total Codecov
-  shows**, so a local read agrees with the dashboard. It runs the integration tier, so it
-  **needs a running Docker daemon** (the ministack containers; the Nix shell ships the
-  toolchain, not the daemon). With no daemon it fails with a clear message pointing at the fast
-  path.
-- **`task coverage-unit` (≡ `task coverage SUITE=ecluse-unit`): the fast, Docker-free loop.**
-  Codecov treats them uniformly (it merges all tiers). You do not need to run `task coverage`
-  for a quick local number; reach for bare `task coverage` for the honest, Codecov-matching one.
-- **`task coverage SUITE=<tier>`: one tier's report.** The per-flag form CI uses: each tier
-  (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under
-  its own Codecov flag. Keep this shape: the per-flag uploads depend on it.
+## Releases, attestations, and vulnerability scanning
 
-**Only the two gating tiers surface coverage.** Codecov's total is `ecluse-unit ∪
-ecluse-integration` and **nothing else**: the **E2E and Smoke suites are deliberately
-excluded** (they are not built with HPC and upload no flag). That is by design: E2E is a
-slow end-to-end smoke of the assembled binary and Smoke hits live third-party registries
-off the gate, so neither is a coverage instrument. The practical consequence: **a line
-exercised only by E2E or Smoke still reads as uncovered**, both locally and on the
-dashboard. So do not reason "the e2e test covers it"; if a path needs coverage, it needs
-a **unit or integration** test. (This is the inverse trap of the per-tier partial above:
-there a real path looks uncovered because you ran one tier; here it looks uncovered
-because the tier that exercises it never counts.)
-
-**Reporting divergence is not a coverage gap.** This combined command exists to kill a
-*reporting* confusion (a local single-tier read disagreeing with the merged dashboard). It does
-not move real coverage: if the **merged** report still shows a module's error arms red, that is
-a genuine uncovered path the tests owe: fix it with a test, not with tooling.
-
-The generators are [`scripts/coverage.sh`](scripts/coverage.sh) (one tier) and
-[`scripts/coverage-combined.sh`](scripts/coverage-combined.sh) (the merged view).
-
----
-
-## Releases, attestations & vulnerability scanning
-
-Écluse ships as a lean, reproducible OCI image built by Nix (`task docker-build`), published
-via `skopeo` on GitHub Releases and Docker Hub (`task docker-push`). The workflow attaches
-GitHub Release pinning the digest. Image CVEs are scanned report-only (`task scan`, grype over
-the SBOM); findings surface both in the **Security tab** (code scanning, alongside Semgrep and
-Scorecard) and in a single auto-updating tracking issue. Dependency freshness is kept by Renovate
-refreshing `flake.lock` (and bumping the GitHub Actions and Haskell dependencies).
-
-The full operational detail (image contents, the publish/attest chain, Docker Hub token
-handling, and the scanning/freshness arms) is in
-[Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md). Consumers
-verify an image with `gh attestation verify`; the recipe is in the
-[README](README.md#verifying-the-image).
-
----
+Écluse ships as a reproducible OCI image built by Nix and published on GitHub Releases and Docker
+Hub. Image CVEs are scanned report-only, and Renovate keeps dependency freshness by refreshing
+`flake.lock` and bumping the Actions and Haskell dependencies. The full operational detail (image
+contents, the publish/attest chain, token handling, scanning) is in
+[Release and Supply-Chain Operations](docs/architecture/release-supply-chain.md); consumers verify an
+image with `gh attestation verify`, per the [README](README.md#verifying-the-image).
 
 ## AI-assisted contributions
 
@@ -110,71 +53,58 @@ understand and be able to explain every line, and the contribution has to be wor
 the time it takes to review.** Low-effort, unreviewed AI output ("slop") will be closed.
 
 - **Disclose non-trivial AI use.** Editor autocomplete needs no disclosure; AI-generated or
-  substantially AI-shaped code, prose, or commits do. Add an `Assisted-by:` git trailer naming
-  the tool, e.g. `Assisted-by: <Agent Name> (<Vendor>)`, and mention it in the PR description. This
-  records a tool that *helped*; you remain the sole author, so it's **not** `Co-authored-by:`.
-- **Verify before you file.** Never open an issue, and especially never a vulnerability
-  report, that an AI produced and you haven't reproduced and confirmed yourself (see
-  [`SECURITY.md`](SECURITY.md)).
-
----
+  substantially AI-shaped code, prose, or commits do. Add an `Assisted-by:` git trailer naming the
+  tool, e.g. `Assisted-by: <Agent Name> (<Vendor>)`, and mention it in the PR. This records a tool
+  that *helped*: you remain the sole author, so it is **not** `Co-authored-by:`.
+- **Verify before you file.** Never open an issue, and especially never a vulnerability report, that
+  an AI produced and you haven't reproduced and confirmed yourself (see [`SECURITY.md`](SECURITY.md)).
 
 ## Developer Certificate of Origin (DCO)
 
-Écluse is, and will remain, free and open-source software. Contributions are accepted under
-the **[Developer Certificate of Origin](DCO)** (DCO, v1.1), a lightweight, per-commit
-affirmation that you have the right to submit your work under the project's
-[MIT license](LICENSE). We use the DCO **rather than a Contributor License Agreement on
-purpose**: it asks you only to *certify provenance* and grants the project no power to
-relicense or close the code, so Écluse stays permanently FOSS, while MIT still lets anyone
-adopt it privately.
+Écluse is, and will remain, free and open-source software. Contributions are accepted under the
+**[Developer Certificate of Origin](DCO)** (DCO, v1.1), a lightweight per-commit affirmation that you
+have the right to submit your work under the project's [MIT licence](LICENSE). We use the DCO rather
+than a Contributor Licence Agreement on purpose: it asks you only to certify provenance and grants
+the project no power to relicense or close the code, so Écluse stays permanently FOSS.
 
-**Sign off every commit.** `git commit -s` (or `--signoff`) appends a `Signed-off-by` trailer
-from your git identity:
+**Sign off every commit.** `git commit -s` (or `--signoff`) appends a `Signed-off-by` trailer from
+your git identity, certifying that you wrote the change (or have the right to submit it) and that it
+becomes a permanent public record:
 
 ```
 Signed-off-by: Your Name <you@example.com>
 ```
 
-By signing off you certify the [DCO](DCO): in short, that you wrote the change (or otherwise
-have the right to submit it under the project's license), and that your contribution and
-sign-off become a permanent public record.
-
-- **Every commit in a PR** needs a valid `Signed-off-by` matching its author.
-- It's **separate from the GPG signature**: `-S` proves *who* committed (authenticity); `-s`
-  certifies your *right to contribute* (provenance). Use both, `git commit -S -s`, and it
-  coexists with the `Assisted-by:` trailer.
+- **Every commit in a PR** needs a `Signed-off-by` matching its author.
+- It is **separate from the GPG signature**: `-S` proves *who* committed; `-s` certifies your *right
+  to contribute*. Use both, `git commit -S -s`.
+- **We squash-merge, so sign off every commit.** The squash message is assembled from the branch
+  commits and the DCO check verifies each one, so a `Signed-off-by` reaches `main` only when the
+  commits carry it. Editing the PR description does not sign your commits.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit;
   `git rebase --signoff main` signs off a whole branch.
-- **We squash-merge, so sign off _every_ commit.** The squash commit's message is assembled
-  from your branch commits' messages, so a `Signed-off-by` reaches `main` only when the commits
-  themselves carry it, and the DCO check verifies it per commit regardless. When the PR is
-  squashed, keep the `Signed-off-by` line(s) in the final message; don't trim them. The
-  [pull-request template](.github/PULL_REQUEST_TEMPLATE.md) repeats this as a reminder, but the
-  per-commit trailer is what counts; editing the PR description does not sign your commits.
-
----
 
 ## Repository requirements
 
-- **Workflows stay injection-free.** Never interpolate untrusted `${{ github.event.* }}` /
-  `${{ github.head_ref }}` values directly into `run:` shell blocks; pass them via `env:` or
-  intermediate files instead.
-- **Pin every GitHub Action to a full commit SHA** (never a tag/branch), with the version in a trailing comment. Renovate bumps them, keeping them digest-pinned. The shared toolchain setup (install Nix, restore the Nix-store + cabal caches) lives once in the `setup-toolchain` composite action; CI jobs enter the lean `nix develop .#ci` shell and restore the Nix store via `cache-nix-action`.
-- **Caches are restore-only on PRs and written solely by `main`'s runs**. Caches are keyed on the dependency plan (`flake.lock`/`cabal.project`/`cabal.project.freeze`), with the `cache-cleanup` workflow pruning superseded/off-main entries daily; this keeps the repo under the 10 GB Actions-cache quota. The `stan` and `weeder` analysis jobs build their `.hie` variant into a throwaway `dist-analysis` that is **deliberately not cached**: stan and weeder scan every `.hie` in the builddir, and cabal cannot delete the artifacts of a removed source file, so a restored builddir would hand them orphaned `.hie` for modules that no longer exist (a false red, or a false green now that both gate). Their dependency closure still comes warm from the dependency-plan cache, so a fresh builddir is only the first-party packages; see the comments on those jobs in `.github/workflows/ci.yml`. The two run on separate runners in CI, so each builds `dist-analysis` for itself; the shared builddir is what lets `task check` build it once locally, where `weeder` and `stan` run concurrently in one checkout.
-- **Semgrep ignores require the repo owner's approval.** Don't add `.semgrepignore` entries or
-  `nosemgrep` comments unilaterally.
-- **Use [Conventional Commits](https://www.conventionalcommits.org/).** Write commit subjects
-  as `type(scope): summary`, where `type` is one of `feat`, `fix`, `docs`, `chore`, `ci`,
-  `refactor`, `test`, `build`, or `perf` (scope optional). Keep the summary short and
-  imperative; put detail in the body.
-- **Commits are GPG-signed.** Keep history verifiable.
-- **Every commit is signed off (DCO).** Certify the [Developer Certificate of
-  Origin](#developer-certificate-of-origin-dco) with a `Signed-off-by` trailer, `git commit -s`.
-- **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an `Assisted-by:`
-  trailer; see [AI-assisted contributions](#ai-assisted-contributions).
+- **Use [Conventional Commits](https://www.conventionalcommits.org/).** Subjects are
+  `type(scope): summary`, `type` one of `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`, `test`,
+  `build`, `perf` (scope optional). Keep the summary short and imperative.
+- **Commits are GPG-signed** and **DCO signed off** (see above); **non-trivial AI
+  assistance is disclosed** with an `Assisted-by:` trailer.
 - **Every Haskell source file carries an SPDX licence header.** `task spdx-fix` stamps it,
-  `task lint-spdx` gates it in `static-checks`; the convention lives in
-  [STYLE.md](STYLE.md#14-licence-headers).
-- **Diagrams are Mermaid, not ASCII art** in committed Markdown docs: a fenced ` ```mermaid `
-  block, never box-drawing characters.
+  `task lint-spdx` gates it in `static-checks` ([docs/style.md](docs/style.md#14-licence-headers)).
+- **Pin every GitHub Action to a full commit SHA** (never a tag), with the version in a
+  trailing comment; Renovate bumps them. The shared toolchain setup (install Nix, restore
+  the caches) lives once in the `setup-toolchain` composite action, and CI jobs enter the
+  lean `nix develop .#ci` shell.
+- **Caches are restore-only on PRs and written solely by `main`'s runs**, keyed on the dependency
+  plan (`flake.lock`/`cabal.project`/`cabal.project.freeze`). The `stan` and `weeder` jobs
+  deliberately build their `.hie` variant into an uncached `dist-analysis`, so a restored builddir
+  can't hand them orphaned `.hie` for deleted modules; see those jobs' comments in
+  [`ci.yml`](.github/workflows/ci.yml).
+- **Workflows stay injection-free.** Never interpolate untrusted `${{ github.event.* }}` /
+  `${{ github.head_ref }}` into `run:` blocks; pass them via `env:` or intermediate files.
+- **Semgrep ignores require the repo owner's approval.** Don't add `.semgrepignore` entries
+  or `nosemgrep` comments unilaterally.
+- **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
+  characters.

@@ -1,12 +1,12 @@
 # HLint configuration — security-oriented restrictions on top of HLint's default
 # hint set (we keep all the built-in suggestions; the entries below only ADD
-# rules). The dev shell pins HLint via flake.lock; run `make lint`.
+# rules). The dev shell pins HLint via flake.lock; run `task lint`.
 #
-# The theme is totality: a supply-chain resilience proxy must not crash on
+# The theme is totality: a supply-chain policy proxy must not crash on
 # hostile input, so partial functions (those that can throw on some inputs) are
 # banned outright. Most are already hidden by `relude` (our prelude); these
 # restrictions are defence-in-depth for when they are reached for via a
-# qualified import (e.g. `Data.List.head`). See STYLE.md → "Totality".
+# qualified import (e.g. `Data.List.head`). See docs/style.md → "Totality".
 #
 # To permit a banned function in one specific module, add that module to its
 # `within:` list with a comment justifying why it is safe there — never relax a
@@ -37,7 +37,7 @@
 
 # --- Stringly-typed throws: surface errors as values or typed exceptions -----
 # These erase the error type: a caught StringException / IOError carries only a
-# message, so a caller cannot dispatch on the cause (STYLE.md section 11). Prefer
+# message, so a caller cannot dispatch on the cause (docs/style.md section 11). Prefer
 # a domain value (an Either or a purpose-built sum) or, for a genuine fault, a
 # typed Exception with its own instance.
 #
@@ -48,7 +48,7 @@
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.stringException, within: [], message: "Stringly exception: throw a typed Exception or return a domain value. See STYLE.md section 11."}
-    - {name: UnliftIO.Exception.throwString, within: [Ecluse.Proxy.CveSyncSpec, Ecluse.BootSpec, Ecluse.PilotSpec, Ecluse.DredgerSpec, Ecluse.RegistryProtocolSpec, Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.Rules.EffectfulSpec, Ecluse.RulesSpec, Ecluse.Cve.SyncSpec, Ecluse.Server.CacheSpec, Ecluse.Server.PipelineSpec, Ecluse.Server.Pipeline.PackumentSpec, Ecluse.Server.Pipeline.TestSupport, Ecluse.Server.Pipeline.SharedSpec, Ecluse.ServerSpec, Ecluse.Worker.Support, Ecluse.Worker.JobSpec, Ecluse.Worker.LivenessSpec, Ecluse.Worker.IntegritySpec, Ecluse.Worker.LoopSpec, EcluseSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (STYLE.md section 11). Permitted in tests to simulate failures or mark unused handle stubs."}
+    - {name: UnliftIO.Exception.throwString, within: [Ecluse.Proxy.CveSyncSpec, Ecluse.BootSpec, Ecluse.PilotSpec, Ecluse.DredgerSpec, Ecluse.RegistryProtocolSpec, Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.Rules.EffectfulSpec, Ecluse.RulesSpec, Ecluse.Cve.SyncSpec, Ecluse.Server.CacheSpec, Ecluse.Server.PipelineSpec, Ecluse.Server.Pipeline.PackumentSpec, Ecluse.Server.Pipeline.TestSupport, Ecluse.Server.Pipeline.SharedSpec, Ecluse.ServerSpec, Ecluse.Worker.Support, Ecluse.Worker.JobSpec, Ecluse.Worker.LivenessSpec, Ecluse.Worker.IntegritySpec, Ecluse.Worker.LoopSpec, EcluseSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (docs/style.md section 11). Permitted in tests to simulate failures or mark unused handle stubs."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
 - modules:

@@ -9,8 +9,8 @@ follow the Haskell Package Versioning Policy (PVP). The version is a release ide
 The version lives in one place: the `version:` field of [`ecluse.cabal`](ecluse.cabal). Everything
 downstream derives from it, so the image tag, git tag, and GitHub Release can't disagree:
 
-- `make version` prints it (via `cabal info`).
-- `make tag` cuts a signed `vX.Y.Z` git tag from it, so it can't be mistyped.
+- `task version` prints it (via `cabal info`).
+- `task tag` cuts a signed `vX.Y.Z` git tag from it, so it can't be mistyped.
 - the release workflow asserts the pushed tag matches before building, and fails on any drift.
 
 The mechanics are in [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md).
@@ -47,7 +47,7 @@ version `X.Y.Z`.
 ## Cutting a release
 
 1. Bump `version:` in [`ecluse.cabal`](ecluse.cabal) in a pull request, following the rules above.
-2. Once it merges, run `make tag`: it creates the signed `vX.Y.Z` tag from the cabal version but
+2. Once it merges, run `task tag`: it creates the signed `vX.Y.Z` tag from the cabal version but
    doesn't push, since cutting a release is deliberate.
 3. Push the tag (`git push origin vX.Y.Z`). The release workflow re-asserts the tag matches the cabal
    version, builds the multi-arch image, attaches the provenance and SBOM attestations, and publishes

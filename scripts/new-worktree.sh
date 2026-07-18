@@ -3,7 +3,7 @@
 # Create a git worktree for one agent slice and warm its HLS index in the
 # background, so the implementer's first agent-lsp navigation call lands on a hot index
 # instead of paying a cold full-project typecheck mid-session. See AGENTS.md ->
-# "Build & Tooling" and planning/orchestration-strategy.md -> "Subagents and
+# "Build & Tooling" and .agents/orchestration-strategy.md -> "Subagents and
 # isolation".
 #
 # Why warm at creation, not on first call: each worktree is a separate HLS
