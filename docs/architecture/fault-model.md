@@ -36,7 +36,7 @@ flowchart LR
   `ecluse.serve.perimeter.faults`, logged with its audit payload, and answered with the route's
   contract-admitted neutral `500`. After the commit there's no honest second response, so the
   escape rethrows and the `scOnException` hook logs the teardown. Details in
-  [Web layer → the typed request perimeter](web-layer.md#the-typed-request-perimeter).
+  [Web layer → the typed request perimeter](web-layer.md#error-model).
 - **The process perimeter** (`superviseProcess` in `Ecluse`): classifies how the whole run
   ended and owns the exit-code table (`0` graceful, `1` service fault, `2` boot abort, `3`
   cancelled; a deliberate `ExitCode` such as the local-dev halt's `130` passes through). The

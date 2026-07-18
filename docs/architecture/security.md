@@ -30,7 +30,7 @@ deployment assumptions they rest on are in
    identifier and the configured base, never from raw client path segments. Component safety is
    enforced at the npm router (`isSafeComponent`, applied by `Ecluse.Core.Registry.Npm.Route`),
    which rejects traversal, encoded-slash, and control-character components (see
-   [Web layer](web-layer.md#raw-wai-not-a-web-framework)). That structural gate is a denylist,
+   [Web layer](web-layer.md#web-layer)). That structural gate is a denylist,
    so it's paired with encode-on-build: every accepted component is percent-encoded
    (`Ecluse.Core.Server.Path.encodeComponent`) when the URL is composed, so a reserved byte the
    denylist admits reaches the upstream re-encoded rather than raw, where a decode-and-normalise

@@ -503,6 +503,7 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
   ready. The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`, and
   `GET /npm/-/v1/search` returns `501` by design (search is a discovery convenience, not an install
   path). Pilot and Dredger export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
+- **Graceful shutdown and pod drain.** On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. `GET /readyz` flips to `503` (the signal a load balancer or mesh watches to stop routing new traffic here) while `GET /livez` stays `200`, so an orchestrator does not kill a still-draining instance early. Every response then carries `Connection: close`, so a keep-alive pool reconnects to a ready instance, and the process finishes in-flight requests and in-progress artifact streams (a half-delivered tarball runs to completion) before exiting, bounded by `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` (default 30 seconds). **Set the platform's termination grace period above `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT`** so the orchestrator does not `SIGKILL` mid-drain: on Kubernetes, set `terminationGracePeriodSeconds` comfortably above it. When Écluse is attached to an interactive terminal, a second `Ctrl+C` (or `Ctrl+D`) forces an immediate halt that bypasses the drain; this is gated on standard input being a TTY, so production has no such bypass.
 - **Process exit codes.** The exit status states how a run ended, so an orchestrator can branch
   without parsing logs:
 

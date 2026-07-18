@@ -76,6 +76,8 @@ This tier is also where the one un-emulable cloud surface runs end-to-end: the r
 (`CredentialProvider`'s `mintToken`) against the live cloud. It needs real external access, so it's
 allowed to fail and stays isolated to one small function, an accepted residual risk.
 
+The telemetry Datadog check lives here too: with Datadog API credentials in the environment, it emits a uniquely stamped span and metric through the real export path, then polls the Datadog API until they appear. It is secret-gated (skipped without credentials) and non-gating, so a Datadog outage or ingestion lag never blocks a merge. It is the only telemetry check that reaches the Datadog SaaS; the hermetic span and metric assertions (a request driven through an in-process Écluse, a real Collector container asserting the spans and metrics arrived) run in `ecluse-integration`, and config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard are covered in the unit tier.
+
 ## End-to-end tests: `ecluse-e2e` (gating)
 
 The only tier that assembles the whole system through the real composition root and drives it with
