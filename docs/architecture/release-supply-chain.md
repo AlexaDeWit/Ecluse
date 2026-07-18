@@ -16,10 +16,15 @@ plus CA certificates and nothing else: no shell, no package manager. It runs non
 65532) and is bit-for-bit reproducible. Build it locally with `task docker-build`, which
 writes `./result`, a `docker-archive`.
 
-> The image is roughly 23 MB. A residual chunk (`curl` / `openssl` / `krb5`) rides in via the
-> GHC runtime's `libdw` (elfutils) backtrace support, not application code; excising it needs
-> a static-musl build, with its own TLS caveats, and is a deliberate later trim rather than a
-> launch blocker.
+On linux/amd64, the GHC runtime links elfutils' `libdw` and `libelf` for DWARF stack
+unwinding. Nixpkgs normally co-locates those libraries with the unused `libdebuginfod`, whose
+network client retains `curl`, `libssh2`, OpenSSL, Kerberos, and the HTTP/2 and HTTP/3 stacks.
+The release binary substitutes an ABI-compatible elfutils build with debuginfod disabled: stack
+unwinding remains, while the unreachable network-client surface does not ship. GHC does not enable
+that DWARF support on the arm64 release build, so its closure needs no substitution.
+Because the amd64 variant is not Nixpkgs' default elfutils output, a cold release runner may build
+it locally when `cache.nixos.org` has no matching path; the repository's Nix cache can reuse the
+stable derivation after the first build.
 
 Publishing is a separate, tag-triggered workflow
 ([`release.yml`](../../.github/workflows/release.yml)), never part of the PR `gate`. A
@@ -83,9 +88,9 @@ digest rather than the index.
   [`sbomnix`](https://github.com/tiiuae/sbomnix) from the Nix closure of the exact binary the
   image ships (`.#ecluse-bin`), not a scan of the image, which could not see the
   statically-linked Haskell libraries. It lists the real contents (the `ecluse` binary, whose
-  Haskell dependencies are statically linked over a dynamic glibc, plus that glibc, zlib, and
-  the curl / openssl / krb5 chunk from the GHC runtime) with no dynamic-build noise to trip
-  CVE scanners, and is independently derivable because the image is reproducible.
+  Haskell dependencies are statically linked over a dynamic glibc, plus the platform runtime
+  libraries) with no dynamic-build noise to trip CVE scanners, and is independently derivable
+  because the image is reproducible.
 
 The attest-actions are used rather than cosign because cosign stores attestations under a
 single mutable `.att` tag, which the repo's immutable tags forbid; each attestation is instead
