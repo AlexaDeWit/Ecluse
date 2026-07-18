@@ -162,6 +162,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
     Ecluse.Core.Server.Pipeline.Tarball
+    Ecluse.Core.Server.Pipeline.Tarball.Relay
     Ecluse.Core.Server.Pipeline.Publish
     Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
@@ -599,7 +600,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.FaultSpec
     Ecluse.Server.MetadataSpec
     Ecluse.Server.Pipeline.InternalSpec
-    Ecluse.Server.Pipeline.TarballSpec
+    Ecluse.Server.Pipeline.Tarball.RelaySpec
     Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.Admission.BytesSpec
     Ecluse.Server.AdmissionSpec

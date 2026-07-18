@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Server.Pipeline.TarballSpec (spec) where
+module Ecluse.Server.Pipeline.Tarball.RelaySpec (spec) where
 
 import Data.Text qualified as T
 import Network.HTTP.Types (hContentLength, hContentType, status200, status304, status404, status503)
 import Test.Hspec
 
-import Ecluse.Core.Server.Pipeline.Tarball (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), relayVerdict)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), relayVerdict)
 
 spec :: Spec
 spec = describe "relayVerdict (the public relay judged from status and headers alone)" $ do
