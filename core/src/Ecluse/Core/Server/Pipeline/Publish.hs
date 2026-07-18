@@ -203,11 +203,11 @@ outOfScope replies deps name =
             <> renderPackageName name
             <> "': its name is outside the configured publish-scope allow-list (the anti-shadowing guard against publishing a name that shadows a public package)"
 
--- A @403@ for a publish whose document body declares a package name -- its @_id@,
--- top-level @name@, or a @versions[].name@ -- that disagrees with the scope-guarded
--- URL-path name. The body-name agreement leg of the anti-shadowing guard (issue #391),
--- refused before any upstream write so the identity the guard authorises is the
--- identity written.
+-- A @403@ for a publish whose document body declares a package name (read by the
+-- ecosystem's own injected extractor, 'pubDeclaredNames') that disagrees with the
+-- scope-guarded URL-path name. The body-name agreement leg of the anti-shadowing guard
+-- (issue #391), refused before any upstream write so the identity the guard authorises
+-- is the identity written.
 bodyNameMismatch :: PublishReplies response -> PublishDeps -> PackageName -> Text -> response
 bodyNameMismatch replies deps name declared =
     publishError replies status403 [] (appendHelp (pubHelp deps) message)
