@@ -14,6 +14,7 @@ import Ecluse.Core.Server.Admission (
     newServeAdmissionTuned,
     withServeAdmission,
  )
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeAdmissionInFlight, mpServeAdmissionQueued))
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Wait budgets for the tuned handles: generous where a test must observe a wait
@@ -128,3 +129,33 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         -- With a generous budget and fast jobs, the room keeps refusals to the
         -- deep-overflow band: at least slots + room requests must succeed.
         length (filter isJust results) `shouldSatisfy` (>= 8)
+
+    it "releases the slot and re-raises when the queued observer throws" $ do
+        -- The queued record runs inside the release-protected region and after the
+        -- in-flight increment, so a throw from it must propagate to the caller,
+        -- still return the held slot, and leave the gauge balanced (increments
+        -- matched by decrements). Regression for the pre-fix leak (#855).
+        gauge <- newTVarIO (0 :: Int)
+        let throwingQueued =
+                noopMetricsPort
+                    { mpServeAdmissionInFlight = \delta -> atomically (modifyTVar' gauge (+ delta))
+                    , mpServeAdmissionQueued = throwIO (ErrorCall "queued observer failed")
+                    }
+        admission <- newServeAdmissionTuned 1 1 generousWaitMicros
+        (holderGate, awaitHolder) <- holdOneSlot admission
+        waiter <- async (tryAny (withServeAdmission throwingQueued admission (pure ())))
+        threadDelay 30_000 -- let the waiter queue and block on the held slot
+        putMVar holderGate () -- free the slot: the waiter acquires, then the record throws
+        outcome <- wait waiter
+        outcome `shouldSatisfy` isLeft -- the throw propagates, not a swallowed Nothing
+        awaitHolder
+        -- The slot came back despite the throw: a fresh acquire admits at once.
+        admit admission (pure ()) `shouldReturn` Just ()
+        readTVarIO gauge `shouldReturn` (0 :: Int)
+
+    it "never runs the queued observer on the immediate-admit door path" $ do
+        -- Below capacity with no one waiting, admission takes the door path, which
+        -- records no queue: a throwing queued hook must not fire there.
+        let throwingQueued = noopMetricsPort{mpServeAdmissionQueued = throwIO (ErrorCall "must not run")}
+        admission <- newServeAdmissionTuned 1 1 shortWaitMicros
+        withServeAdmission throwingQueued admission (pure (5 :: Int)) `shouldReturn` Just 5
