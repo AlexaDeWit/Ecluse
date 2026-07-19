@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (Dropped, Retried, Succeeded),
+    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
@@ -46,13 +46,14 @@ import Ecluse.Worker.Support
 
 spec :: Spec
 spec = do
-    describe "outcomeOfFetchFault (issue #846: over-cap is terminal, not retried)" $ do
+    describe "outcomeOfFetchFault (issue #846: over-cap is terminal, dead-lettered, not retried)" $ do
         -- The pre-fix worker treated every fetch Left as a retry, so a deterministically
-        -- over-cap tarball redelivered until the queue's redrive/DLQ retired it. The
-        -- fix splits an over-cap fault (a non-retryable drop) from a transient one.
-        it "drops an over-cap artifact (a redelivery re-fetches the same over-cap bytes)" $
+        -- over-cap tarball redelivered until the queue's redrive/DLQ retired it. The fix
+        -- splits an over-cap fault (a terminal fault the backend dead-letters) from a
+        -- transient one (an ordinary redelivery).
+        it "dead-letters an over-cap artifact (it can never succeed, so it rides the terminus)" $
             outcomeOfFetchFault (ArtifactOverCap "artifact exceeded the response bound")
-                `shouldBe` Dropped "artifact exceeded the response bound"
+                `shouldBe` DeadLettered "artifact exceeded the response bound"
 
         it "retries a transient fetch fault (a redelivery may succeed)" $
             outcomeOfFetchFault (ArtifactUnavailable "artifact fetch failed: connection reset")
@@ -368,6 +369,26 @@ spec = do
                 published `shouldBe` []
                 acked <- ackedReceipts
                 acked `shouldBe` map msgReceipt messages
+
+        it "dead-letters an over-cap artifact on the memory backend: metered, never published, routed to deadLetter not ack (issue #846)" $
+            -- A fetch cap below the served bytes: the over-cap fault is terminal, so the
+            -- worker routes it to the backend's dead-letter terminus (the memory backend
+            -- drops it -- its only terminus) and meters it, rather than acking it clean or
+            -- retrying it. The artifact is never mirrored.
+            withUpstream $ \url -> do
+                (queue, deadReceipts) <- recordingDeadLetterQueue
+                (metricsPort, recordedMetrics) <- recordingWorkerMetricsPort
+                withRuntimeQueue queue (`recordingPublish` Right ()) (withArtifactCap 8 admitPolicies) metricsPort $ \runtime logRef -> do
+                    enqueue_ queue (jobWith url)
+                    messages <- receive_ queue
+                    runWM runtime (processBatch messages)
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+                    dead <- deadReceipts
+                    dead `shouldBe` map msgReceipt messages
+                    metered <- recordedMetrics
+                    metered `shouldBe` [Failed]
+
     describe "processJob: the mirror-presence dedup probe" $ do
         -- The default 'recordingPublish' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that

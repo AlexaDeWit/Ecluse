@@ -34,7 +34,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (ack, receive),
+    MirrorQueue (ack, deadLetter, receive),
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
@@ -68,7 +68,7 @@ import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (Dropped, Retried),
+    JobOutcome (DeadLettered, Dropped, Retried),
     WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
@@ -626,6 +626,24 @@ recordingAckQueue = do
     let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
     pure (recording, reverse <$> readIORef acked)
 
+{- | The test queue with its 'deadLetter' field wrapped to record each dead-lettered
+receipt, so a test asserts the worker routed a terminal fault to the backend's
+dead-letter terminus (never 'ack'). The in-memory backend's 'deadLetter' is a no-op
+drop, so the recorded receipts are the only observable signal here; the not-deleted
+redelivery consequence over a durable backend is pinned against real SQS in
+@Ecluse.MirrorQueueSpec@.
+-}
+recordingDeadLetterQueue :: IO (MirrorQueue, IO [ReceiptHandle])
+recordingDeadLetterQueue = do
+    base <- newTestMemoryQueue
+    dead <- newIORef []
+    let recording = base{deadLetter = \receipt -> atomicModifyIORef' dead (\rs -> (receipt : rs, ())) >> deadLetter base receipt}
+    pure (recording, reverse <$> readIORef dead)
+
+-- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.
+withArtifactCap :: Int -> WorkerPolicies -> WorkerPolicies
+withArtifactCap cap = Map.map (\p -> p{wpArtifactLimits = defaultLimits{maxBodyBytes = cap}})
+
 -- ── small predicates ─────────────────────────────────────────────────────────────
 
 -- Follow a path of object keys into a decoded JSON 'Value', returning the string at
@@ -654,4 +672,9 @@ isDropped = \case
 isRetried :: JobOutcome -> Bool
 isRetried = \case
     Retried _ -> True
+    _ -> False
+
+isDeadLettered :: JobOutcome -> Bool
+isDeadLettered = \case
+    DeadLettered _ -> True
     _ -> False

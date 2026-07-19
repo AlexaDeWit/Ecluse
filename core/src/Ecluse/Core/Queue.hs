@@ -33,10 +33,18 @@ handle's contract reflects that:
   serve immediately), so a failure must be logged\/metered and __never fail the
   client response__ -- the artifact is already served, and a later pull
   re-enqueues.
-* __Retry is "don't 'ack'".__ A job that fails processing is simply not acked;
-  the visibility timeout \/ ack deadline redelivers it, and the backend's native
-  dead-letter path catches the persistently failing ones. There is deliberately
-  __no @nack@__.
+* __Retry is "don't 'ack'".__ A job that fails processing __transiently__ (a flaky
+  fetch, a registry blip) is simply not acked; the visibility timeout \/ ack deadline
+  redelivers it, and it may succeed next time. There is deliberately __no @nack@__ for
+  the transient case.
+* __'deadLetter' is the terminal terminus.__ A job that can __never__ succeed (an
+  artifact past the plan-sized byte cap) is a terminal verdict, and each backend
+  realises it its own way: the in-memory backend drops the delivery (its only
+  terminus), the SQS backend returns the message with a backoff visibility timeout
+  __without deleting it__, so it rides the operator's redrive policy to the
+  dead-letter queue for forensic retention rather than being silently discarded. This
+  is not a @nack@ (a retry) and not an 'ack' (a clean retire); it is the third,
+  terminal outcome.
 * __'extendVisibility'__ lets the worker hold a long publish (a large artifact)
   past the visibility window. It is an /optimization/, not correctness-critical,
   since idempotency already makes redelivery harmless.
@@ -254,6 +262,17 @@ data MirrorQueue = MirrorQueue
     optimization, not correctness-critical (redelivery is harmless), so a 'Left'
     is absorbed silently by the caller.
     -}
+    , deadLetter :: ReceiptHandle -> IO (Either QueueFault ())
+    {- ^ Realise a __terminal__ fault: a job that can never succeed (an artifact past
+    the plan-sized byte cap), decided as a verdict at the read site. Each backend
+    routes it to its own dead-letter terminus -- the in-memory backend drops the
+    delivery (its only terminus; observability is the worker's log and metric), the
+    SQS backend returns the message with a backoff visibility timeout __without
+    deleting it__, so it rides the operator's redrive policy to the dead-letter queue
+    rather than being silently discarded. Distinct from 'ack' (a clean retire) and
+    from not-acking (a transient redelivery); see the header's terminus convention. A
+    'Left' is absorbed after logging, like 'ack'.
+    -}
     }
 
 {- | The inert queue a deployment with zero mirroring mounts carries, so the
@@ -269,6 +288,7 @@ noMirrorQueue =
         , receive = pure (Right [])
         , ack = \_ -> pure (Right ())
         , extendVisibility = \_ _ -> pure (Right ())
+        , deadLetter = \_ -> pure (Right ())
         }
   where
     inertFault =

@@ -145,24 +145,23 @@ spec =
                         length published `shouldSatisfy` (>= 2)
                         published `shouldSatisfy` all (== npmPublishPath)
 
-            it "drops an over-cap artifact terminally, without publishing or redelivering" $ \container ->
+            it "never mirrors an over-cap artifact; it dead-letters the job to ride the redrive policy (issue #846)" $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-overcap" defaultQueueOptions
                         env <- envFor queue
                         -- A fetch cap below the served artifact's size: the bounded fetch
                         -- aborts fail-closed, and the #846 classification makes that a
-                        -- terminal drop (acked) rather than a transient retry. A
-                        -- deterministically over-cap artifact can never succeed, so it must
-                        -- not churn the DLQ: the job neither publishes nor redelivers.
+                        -- terminal fault the worker dead-letters -- it rides the queue's
+                        -- redrive policy to the DLQ rather than being acked/deleted (the
+                        -- not-deleted realisation is pinned at the queue level in
+                        -- Ecluse.MirrorQueueSpec). Crucially, the over-cap artifact is
+                        -- never mirrored.
                         policies <- cappedPolicies mirrorUrl 8
                         unwrapQ (enqueue queue (job upstreamUrl))
                         runLoopFor policies env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
-                        -- Acked (dropped), so it does not redeliver.
-                        leftover <- unwrapQ (receive queue)
-                        leftover `shouldBe` []
 
             it "advances the heartbeat as the loop polls a real queue" $ \container ->
                 withUpstream $ \_upstreamUrl ->

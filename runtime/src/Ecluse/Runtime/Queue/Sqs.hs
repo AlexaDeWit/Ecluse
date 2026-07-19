@@ -9,15 +9,20 @@ Maps the handle's receive → process → ack shape onto SQS:
 * 'enqueue' → @SendMessage@ (the 'MirrorJob' encoded as the message body),
 * 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll),
 * 'ack' → @DeleteMessage@ (the message is gone, never redelivered),
-* 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish).
+* 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish),
+* 'deadLetter' → @ChangeMessageVisibility@ with the 'sqsTerminalBackoff' window and
+  __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the DLQ).
 
 The provider differences SQS embodies -- the visibility timeout, the long-poll
 window, the batch limit -- are 'SqsConfig' knobs with sane defaults, and the SQS
 receipt handle is carried opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'),
 so none of it leaks past the handle. __Retry is "don't ack"__: a job whose
-processing fails is simply not 'ack'ed, and SQS redelivers it once the visibility
-timeout lapses; persistent failures fall to the queue's native dead-letter
-(max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). Every
+processing fails transiently is simply not 'ack'ed, and SQS redelivers it once the
+visibility timeout lapses; persistent failures fall to the queue's native dead-letter
+(max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__
+fault ('deadLetter') is returned with a backoff window and never deleted, so it too
+falls to the operator's dead-letter queue rather than being discarded -- #933 assumes
+that redrive policy exists (the no-DLQ case is issue #935). Every
 operation reports its AWS failure as the handle's typed
 'Ecluse.Core.Queue.QueueFault' value, classified into the core transport
 vocabulary at this edge ("Ecluse.Runtime.Aws.Fault"), so a queue outage never
@@ -146,6 +151,15 @@ data SqsConfig = SqsConfig
     redelivers it -- the budget for processing-then-'ack', extendable per message
     via 'extendVisibility'.
     -}
+    , sqsTerminalBackoff :: Seconds
+    {- ^ The visibility timeout 'deadLetter' returns a __terminal__ message with
+    (@ChangeMessageVisibility@, never @DeleteMessage@): larger than the normal
+    processing window so a permanently-unmirrorable artifact is not re-fetched in a
+    hot loop, while it rides the operator's redrive policy to the dead-letter queue.
+    A per-attempt incremental backoff would need the @ApproximateReceiveCount@
+    attribute (deferred with the receive-count work in issue #935); this fixed
+    backoff is the conservative default.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -163,6 +177,7 @@ defaultSqsConfig queueUrl region =
         , sqsBatchSize = 10
         , sqsWaitSeconds = 20
         , sqsVisibilityTimeout = Seconds 30
+        , sqsTerminalBackoff = Seconds 300
         }
 
 {- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is constructed
@@ -179,6 +194,7 @@ newSqsQueue logEnv egressUrl cfg = do
     let run :: (AWS.AWSRequest a) => a -> IO (Either QueueFault (AWS.AWSResponse a))
         run = fmap (first (queueTransportFault . classifyAwsTransport)) . runResourceT . AWS.sendEither env
         queueUrl = sqsQueueUrl cfg
+        Seconds terminalBackoffSecs = sqsTerminalBackoff cfg
     pure
         MirrorQueue
             { enqueue = fmap void . run . SQS.newSendMessage queueUrl . encodeJob
@@ -189,6 +205,13 @@ newSqsQueue logEnv egressUrl cfg = do
             , extendVisibility = \receipt (Seconds secs) ->
                 fmap void . run $
                     SQS.newChangeMessageVisibility queueUrl (unReceiptHandle receipt) secs
+            , -- A terminal fault: return the message with the backoff visibility timeout
+              -- (@ChangeMessageVisibility@), __never__ @DeleteMessage@, so it is not
+              -- silently discarded but rides the operator's redrive policy to the
+              -- dead-letter queue -- the well-monitored terminus with forensic retention.
+              deadLetter = \receipt ->
+                fmap void . run $
+                    SQS.newChangeMessageVisibility queueUrl (unReceiptHandle receipt) terminalBackoffSecs
             }
 
 -- Build the region-scoped, optionally endpoint-overridden amazonka environment.

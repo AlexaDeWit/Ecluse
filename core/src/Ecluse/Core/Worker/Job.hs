@@ -36,7 +36,7 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
+import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
@@ -67,8 +67,9 @@ processBatch = traverse_ $ \message -> do
     processMessage message
     recordWorkerProgress
 
--- Process one message: run the job, and ack on any terminal outcome (success, or a
--- non-retryable drop). A transient failure leaves the message un-acked so the queue
+-- Process one message: run the job, then realise its terminal outcome -- ack a
+-- success or a clean non-retryable drop, dead-letter a terminal fault (the backend
+-- routes it to its own terminus), or leave a transient failure un-acked so the queue
 -- redelivers it ("retry is don't ack").
 processMessage :: QueueMessage -> WorkerM ()
 processMessage message = do
@@ -78,11 +79,19 @@ processMessage message = do
     case outcome of
         Succeeded -> ackMessage (msgReceipt message)
         Dropped reason -> do
-            -- A non-retryable fault (a tampered artifact, an unformable URL): the
-            -- job can never succeed, so it must not redeliver forever. Ack it to
-            -- retire it from the queue, having already alarmed at the fault site.
+            -- A clean non-retryable rejection (a tampered artifact, an unformable
+            -- publish URL): the job can never succeed and is not worth a dead-letter
+            -- forensic trail, so ack it to retire it, having already alarmed.
             logFM ErrorS (ls ("dropping unrecoverable mirror job: " <> reason))
             ackMessage (msgReceipt message)
+        DeadLettered reason -> do
+            -- A terminal fault the backend routes to its own dead-letter terminus: the
+            -- in-memory backend drops it (its only terminus), a durable queue returns
+            -- it to ride the operator's redrive policy to the dead-letter queue. The
+            -- alarm goes first, since on the memory backend the log and metric are the
+            -- only observability there is.
+            logFM ErrorS (ls ("dead-lettering unmirrorable mirror job (rides the backend's dead-letter terminus): " <> reason))
+            deadLetterMessage (msgReceipt message)
         Retried reason ->
             -- A transient fault: leave the message un-acked. How it is retried is
             -- backend-dependent -- a durable queue redelivers it once the visibility
@@ -92,11 +101,12 @@ processMessage message = do
 
 -- Classify a terminal job outcome into the bounded @ecluse.mirror.jobs.processed@
 -- result: a successful publish (the idempotent already-present 409 surfaces here too)
--- is published, a dropped or retried job is a failure.
+-- is published; a dropped, dead-lettered, or retried job is a failure.
 jobResultMetric :: JobOutcome -> Metric.MirrorResult
 jobResultMetric = \case
     Succeeded -> Metric.Published
     Dropped _ -> Metric.Failed
+    DeadLettered _ -> Metric.Failed
     Retried _ -> Metric.Failed
 
 -- Acknowledge a terminally-processed message. A failed ack is absorbed after a
@@ -110,6 +120,18 @@ ackMessage receipt = do
     whenLeft_ acked $ \fault ->
         logFM WarningS (ls ("ack failed; the processed message will redeliver (harmless, publishing is idempotent): " <> qfDetail fault))
 
+-- Realise a terminal fault through the queue's dead-letter capability: the in-memory
+-- backend drops it, a durable backend returns it to ride the operator's redrive policy
+-- to the dead-letter queue (never a plain delete, which would silently discard it). A
+-- 'Left' is absorbed after a warning -- the message redelivers and re-fails terminally
+-- either way, so the fault is not lost.
+deadLetterMessage :: ReceiptHandle -> WorkerM ()
+deadLetterMessage receipt = do
+    queue <- asks wrQueue
+    outcome <- liftIO (deadLetter queue receipt)
+    whenLeft_ outcome $ \fault ->
+        logFM WarningS (ls ("dead-letter realisation failed; the message redelivers and re-fails terminally (harmless): " <> qfDetail fault))
+
 {- | The terminal outcome of processing one mirror job, deciding whether the
 message is acked or left to redeliver.
 -}
@@ -121,12 +143,20 @@ data JobOutcome
       presence confirmed by the pre-fetch probe, before any bytes moved.
       -}
       Succeeded
-    | {- | A __non-retryable__ fault: the bytes did not match the re-admitted
+    | {- | A __non-retryable__ rejection: the bytes did not match the re-admitted
       artifact's digest (tamper), or the publish URL was unformable
-      (misconfiguration). Redelivery cannot help, so the job is dropped after
-      alarming. Carries the reason.
+      (misconfiguration). Redelivery cannot help, so the job is acked to retire it
+      after alarming. Carries the reason.
       -}
       Dropped Text
+    | {- | A __terminal__ fault the backend dead-letters: an artifact past the
+      plan-sized byte cap can never succeed and re-fetches identical over-cap bytes on
+      every redelivery, so it is not acked (a plain delete would silently discard it on
+      a durable queue) but handed to the queue's 'Ecluse.Core.Queue.deadLetter'
+      terminus -- the in-memory backend drops it, a durable queue rides it to the
+      dead-letter queue for forensic retention. Carries the reason.
+      -}
+      DeadLettered Text
     | {- | A __transient__ fault: a fetch failure, or a registry rejection worth
       retrying. The message is left un-acked so it redelivers. Carries the reason.
       -}
@@ -189,6 +219,7 @@ processJob receipt job = katipAddNamespace "job" $ do
     jobSpanOutcome = \case
         Succeeded -> JobSpanOutcome "succeeded" Nothing
         Dropped reason -> JobSpanOutcome "dropped" (Just reason)
+        DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
         Retried reason -> JobSpanOutcome "retried" (Just reason)
 
 -- The terminal decision of re-evaluating current policy for a job, before any artifact
@@ -338,16 +369,17 @@ readmittedDescriptor artifact digests =
 -- publish and alarms.
 
 {- | Classify a mirror-artifact fetch fault into a terminal job outcome. An artifact
-over the plan-sized byte cap is a __non-retryable drop__: it is deterministic in the
-artifact's own size, so a redelivery re-fetches the same over-cap bytes and fails
-identically, and retrying it only churns the queue's redrive/DLQ. Any other fetch
-fault (an unformable URL, a transport failure) is a transient retry, since a
-redelivery may succeed. This is issue #846's classification: an over-cap artifact
-that previously redelivered until the DLQ retired it now drops at once.
+over the plan-sized byte cap is a __terminal, dead-lettered__ fault: it is
+deterministic in the artifact's own size, so a redelivery re-fetches the same over-cap
+bytes and fails identically, and it must not silently vanish -- it is handed to the
+backend's dead-letter terminus (see 'DeadLettered'). Any other fetch fault (an
+unformable URL, a transport failure) is a transient retry, since a redelivery may
+succeed. This is issue #846's classification, reworked so an over-cap artifact rides
+the durable dead-letter path rather than being flat-dropped.
 -}
 outcomeOfFetchFault :: ArtifactFetchFault -> JobOutcome
 outcomeOfFetchFault = \case
-    ArtifactOverCap reason -> Dropped reason
+    ArtifactOverCap reason -> DeadLettered reason
     ArtifactUnavailable reason -> Retried reason
 
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
@@ -355,14 +387,9 @@ mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
     fetched <- fetchArtifactBytes (wpArtifactLimits policy) (wpBuildArtifactRequest policy) (jobArtifactUrl job)
     case fetched of
-        Left fault -> do
-            -- Alarm on the terminal over-cap drop before returning it; the outcome
-            -- itself is 'outcomeOfFetchFault' (over-cap drops, other faults retry).
-            case fault of
-                ArtifactOverCap reason ->
-                    logFM ErrorS (ls ("artifact exceeds the mirror byte cap, dropping (a redelivery cannot succeed): " <> reason))
-                ArtifactUnavailable _ -> pass
-            pure (outcomeOfFetchFault fault)
+        -- The terminal-vs-transient split is 'outcomeOfFetchFault'; the reason is
+        -- logged at the queue-realisation site in 'processMessage'.
+        Left fault -> pure (outcomeOfFetchFault fault)
         Right bytes ->
             case verifyIntegrity (maHashes admitted) bytes of
                 IntegrityMismatch detail -> do
