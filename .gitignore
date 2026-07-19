@@ -14,6 +14,8 @@ result-*
 /sbom/
 /grype.json
 /grype.sarif
+/osv-freeze.json
+/osv-freeze.md
 /semgrep.sarif
 http_cache.sqlite
 /sbom.csv

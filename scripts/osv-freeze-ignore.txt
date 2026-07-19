@@ -1,0 +1,9 @@
+# Accepted advisories for the OSV/HSEC freeze scan (scripts/osv-freeze-scan.sh),
+# one OSV id per line. Every entry needs a dated justification comment; adding
+# one is a risk-acceptance decision for the repo owner, the same bar as a
+# Semgrep or Stan ignore.
+
+# base's readFloat can exhaust memory on adversarial input. No fixed release
+# exists (the advisory covers every GHC-bundled base line); Écluse never feeds
+# readFloat untrusted input. Accepted 2026-07-18.
+HSEC-2023-0007
