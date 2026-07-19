@@ -39,8 +39,10 @@ import Ecluse.Composition (
 import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
+    mirrorArtifactBytesCap,
     planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
@@ -262,10 +264,15 @@ runProxy bootEnv = do
         -- loop, only the server (and the sync tasks when a bucket is configured;
         -- racing the server against an EMPTY task list would cancel it instantly,
         -- so the no-task shape runs the server alone).
+        -- The worker's artifact fetch cap is the memory plan's mirror-artifact tenant.
+        -- Under 'MirrorWith' (the only branch that builds a worker) the tenant is always
+        -- present; the fallback guards only the structurally-impossible absent case with
+        -- the plan's own shipped default.
+        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant plan)
         case mirrorDrain of
             Just drainEnqueueBuffer ->
                 race_
-                    (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets) builtEnv)
+                    (runServices serverConfig (workerPoliciesFor builtEnv bindings publishTargets workerArtifactMaxBytes) builtEnv)
                     (concurrently_ (superviseDrain builtEnv drainEnqueueBuffer) (mapConcurrently_ id syncTasks))
             Nothing
                 | null syncTasks -> runServer serverConfig builtEnv

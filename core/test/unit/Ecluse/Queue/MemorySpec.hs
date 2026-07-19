@@ -41,6 +41,17 @@ spec = do
             msgJob msg `shouldBe` sampleJob
             unwrap (ack q (msgReceipt msg))
 
+        it "dead-letters a received job without redelivering it (the memory terminus is a drop; issue #846)" $ do
+            -- The in-memory backend has no dead-letter queue, so a terminal fault is
+            -- realised as the drop a delivered job already is: deadLetter succeeds and
+            -- the message does not reappear (this backend never redelivers).
+            (q, _drops) <- boundedQueue 10
+            unwrap (enqueue q sampleJob)
+            [msg] <- unwrap (receive q)
+            unwrap (deadLetter q (msgReceipt msg))
+            afterDeadLetter <- unwrap (receive q)
+            afterDeadLetter `shouldBe` []
+
         it "carries every job field through unchanged from enqueue to receive" $ do
             -- The queue is a transparent carrier: each field the producer set must
             -- arrive on the consumer side byte-for-byte. Assert field-by-field

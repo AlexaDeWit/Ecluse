@@ -129,13 +129,19 @@ fought.
 The resolved posture seeds a second derivation, the **memory plan**: the effective heap ceiling is
 partitioned between named tenants whose sum it bounds (a runtime reserve, the metadata cache, the
 materialisation working space, the publish-body aggregate, the in-memory queue tenant when selected,
-and the enqueue buffer). An explicit config value wins its own bound; otherwise the shipped fallbacks
-apply. A pod too small for the tenants' floors sheds in a documented order (cache first, to zero) with
-a loud warning per step and always boots; only an explicit override that breaks the plan is refused,
-by the boot and `check-config` alike. The structural hostile-input counts (`maxVersionCount`,
-`maxNestingDepth`) stay pinned policy: they bound document shape, not bytes, and do not scale with
-RAM. The resolution is role-agnostic, binding proxy, Pilot, and Dredger alike; the Operator Manual
-carries the [per-pod arithmetic](../../USAGE.md#appendix-runtime-sizing-arithmetic).
+the enqueue buffer, and the mirror-artifact envelope when any mount mirrors). The mirror-artifact
+tenant covers the transient the back-fill worker holds while it buffers a fetched tarball and
+base64-encodes it into a publish document (the bytes, the base64 text, and the serialised document
+coexist before collection), and its worker fetch cap (`maxArtifactBytes`) is derived so that envelope
+is what the tenant charges. An explicit config value wins its own bound; otherwise the shipped
+fallbacks apply. A pod too small for the tenants' floors sheds in a documented order (the
+mirror-artifact cap first, to zero, so the background back-fill leg gives way before the serve hot
+path; then the cache, to zero) with a loud warning per step and always boots; only an explicit
+override that breaks the plan is refused, by the boot and `check-config` alike. The structural
+hostile-input counts (`maxVersionCount`, `maxNestingDepth`) stay pinned policy: they bound document
+shape, not bytes, and do not scale with RAM. The resolution is role-agnostic, binding proxy, Pilot,
+and Dredger alike; the Operator Manual carries the
+[per-pod arithmetic](../../USAGE.md#appendix-runtime-sizing-arithmetic).
 
 ### Public integrity floor
 

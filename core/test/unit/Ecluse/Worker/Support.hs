@@ -34,7 +34,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (ack, receive),
+    MirrorQueue (ack, deadLetter, receive),
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), RuleVerdict (Allow, CannotVet, Deny))
-import Ecluse.Core.Security (HostPort, Limits)
+import Ecluse.Core.Security (HostPort, Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -72,7 +72,7 @@ import Ecluse.Core.Worker (
     WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
+    WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules),
     WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
@@ -448,6 +448,9 @@ npmPolicy resolve rules =
         , wpArtifactHostHonoured = const True
         , wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
         , wpPublish = unwiredPublish
+        , -- A generous artifact cap: these tests fetch tiny fixtures, so the cap never
+          -- bites; it matches the pre-plan worker default so fetch behaviour is unchanged.
+          wpArtifactLimits = defaultLimits{maxBodyBytes = 512 * 1024 * 1024}
         , wpNow = pure epoch
         }
 
@@ -622,6 +625,24 @@ recordingAckQueue = do
     acked <- newIORef []
     let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
     pure (recording, reverse <$> readIORef acked)
+
+{- | The test queue with its 'deadLetter' field wrapped to record each dead-lettered
+receipt, so a test asserts the worker routed a terminal fault to the backend's
+dead-letter terminus (never 'ack'). The in-memory backend's 'deadLetter' is a no-op
+drop, so the recorded receipts are the only observable signal here; the not-deleted
+redelivery consequence over a durable backend is pinned against real SQS in
+@Ecluse.MirrorQueueSpec@.
+-}
+recordingDeadLetterQueue :: IO (MirrorQueue, IO [ReceiptHandle])
+recordingDeadLetterQueue = do
+    base <- newTestMemoryQueue
+    dead <- newIORef []
+    let recording = base{deadLetter = \receipt -> atomicModifyIORef' dead (\rs -> (receipt : rs, ())) >> deadLetter base receipt}
+    pure (recording, reverse <$> readIORef dead)
+
+-- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.
+withArtifactCap :: Int -> WorkerPolicies -> WorkerPolicies
+withArtifactCap cap = Map.map (\p -> p{wpArtifactLimits = defaultLimits{maxBodyBytes = cap}})
 
 -- ── small predicates ─────────────────────────────────────────────────────────────
 

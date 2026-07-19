@@ -101,12 +101,14 @@ That admits two deliberate departures from the cloud backends' contract:
   throws (it runs on the serve hot path), and each report-worthy drop invokes the
   injected drop callback with the running drop count, rate-limited by
   'memoryQueueDropReportInterval' so a flood does not spam.
-* __No redelivery; 'ack' \/ 'extendVisibility' are no-ops.__ Unlike the cloud
-  backends, there is no visibility-timeout in-flight
+* __No redelivery; 'ack' \/ 'extendVisibility' \/ 'deadLetter' are no-ops.__ Unlike
+  the cloud backends, there is no visibility-timeout in-flight
   tracking: a 'receive' removes a job for good. A job whose processing fails is
   therefore __not__ redelivered -- it is simply re-enqueued on the next demand. This
   bounds memory hardest (nothing is retained after delivery) and is admissible
-  precisely because a lost job is safe.
+  precisely because a lost job is safe. A __terminal__ fault ('deadLetter') is the
+  same drop, since this backend has no dead-letter queue to route to; its
+  observability is the worker's error log and metric, not a retained message.
 
 'receive' is a __bounded long-poll__: it waits up to 'memQueuePollWaitMicros' for a
 job, then drains up to 'memoryQueueBatchSize' without blocking, or returns @[]@ when
@@ -150,6 +152,12 @@ newBoundedInMemoryQueue cfg onDrop = do
               -- retire and a failed job redelivers via the next demand, not here.
               ack = const (pure (Right ()))
             , extendVisibility = \_ _ -> pure (Right ())
+            , -- The in-memory backend's only terminus is the drop a delivered job
+              -- already is: there is no dead-letter queue to route to, so a terminal
+              -- fault just discards the delivery (its observability is the worker's
+              -- error log and metric). A future demand re-enqueues, which re-fails and
+              -- re-alarms -- accepted, since a durable dead-letter needs a durable backend.
+              deadLetter = const (pure (Right ()))
             }
 
 -- Report the first drop, then every interval-th, so the first shed is always

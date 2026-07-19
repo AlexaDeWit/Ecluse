@@ -13,9 +13,11 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (..),
+    MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
     QueueTenantDemand (MemoryQueueTenant, MirroringWithoutMemoryQueue, NoQueueTenant),
     attributeOverrideViolations,
+    mirrorArtifactEnvelopeMultiplier,
     overrideMinShedSum,
     overrideSubstitutions,
     planCacheConfig,
@@ -84,6 +86,42 @@ spec = describe "resolveMemoryPlan" $ do
         let planFor pub = fst (resolve bareCache bareLimits bareQueue Nothing (planWith (Just (2 * gib))) NoQueueTenant pub)
         (ptAggregateBytes <$> mpPublishTenant (planFor True)) `shouldSatisfy` maybe False (> 0)
         mpPublishTenant (planFor False) `shouldBe` Nothing
+
+    describe "the mirror-artifact tenant (issue #846)" $ do
+        it "carries a mirror-artifact tenant exactly when a mount mirrors" $ do
+            let planFor demand = fst (resolve bareCache bareLimits bareQueue Nothing (planWith (Just (2 * gib))) demand False)
+            (matMaxBytes <$> mpMirrorArtifactTenant (planFor MemoryQueueTenant)) `shouldSatisfy` maybe False (> 0)
+            (matMaxBytes <$> mpMirrorArtifactTenant (planFor MirroringWithoutMemoryQueue)) `shouldSatisfy` maybe False (> 0)
+            mpMirrorArtifactTenant (planFor NoQueueTenant) `shouldBe` Nothing
+
+        it "charges the transient envelope, not just the tarball (at least the ~3.7x peak)" $
+            -- #846: the buffered tarball, its base64 text, and the serialised publish
+            -- document coexist at ~3.7x before collection; the tenant must charge at
+            -- least that (the combined invariant multiplies the cap by this), never the
+            -- bare cap, so the plan does not under-provision the peak.
+            mirrorArtifactEnvelopeMultiplier `shouldSatisfy` (>= 4)
+
+        it "sizes the worker cap from the heap share, below the 512 MiB constant on a modest pod" $ do
+            -- The pre-fix hard-coded 512 MiB fetch cap is gone: the cap is now a
+            -- plan-derived share of the heap, and a 4 GiB pod computes a far smaller one.
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (4 * gib))) MemoryQueueTenant True
+            (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 34359738
+            (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldSatisfy` maybe False (< 512 * mib)
+
+        it "sheds the mirror-artifact cap on a small mirroring pod, warning loudly" $ do
+            -- The background back-fill leg gives way first under memory pressure: the cap
+            -- sheds toward zero and the boot log names it.
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
+            mpDegradations plan `shouldSatisfy` any (T.isInfixOf "mirror artifact byte cap shed")
+            (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 0
+
+        it "refuses an explicit maxArtifactBytes that alone breaks the ceiling" $ do
+            -- A 2 GiB explicit artifact cap charges an 8 GiB envelope on a 2 GiB pod; the
+            -- override-free plan fits, so the pin is the named cause (parallels #845).
+            let limits' = bareLimits{limMaxArtifactBytes = Just (2 * gib)}
+                (plan, _) = resolve bareCache limits' bareQueue Nothing (planWith (Just (2 * gib))) MemoryQueueTenant False
+            mpOverrideViolations plan `shouldSatisfy` (not . null)
+            mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "limits.maxArtifactBytes")
 
     describe "the graceful-degradation ladder" $ do
         it "sheds the cache first on a small pod, warning loudly, and still boots" $ do
@@ -193,36 +231,47 @@ spec = describe "resolveMemoryPlan" $ do
         it "charges nothing extra for a queue depth pinned to the floor the ladder would compute" $ do
             -- queue.memoryMaxDepth at the queue-depth floor (5000) is zero-delta.
             let base = 100000000
-                atFloor = overrideMinShedSum base 26214400 False True (Nothing, Nothing, Nothing, Nothing, Just 5000)
-                unpinned = overrideMinShedSum base 26214400 False True (Nothing, Nothing, Nothing, Nothing, Nothing)
+                atFloor = overrideMinShedSum base 26214400 False True False (Nothing, Nothing, Nothing, Nothing, Just 5000, Nothing)
+                unpinned = overrideMinShedSum base 26214400 False True False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
             atFloor `shouldBe` unpinned
 
         it "charges nothing for a queue depth under a non-memory backend (queueCharge is zero)" $ do
             -- With no memory-backed queue the depth pin cannot move a byte, however large.
             let base = 100000000
-                huge = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Just 100000)
-                unpinned = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Nothing)
+                huge = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Just 100000, Nothing)
+                unpinned = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
             huge `shouldBe` unpinned
 
         it "charges an explicit cache its full value where a computed cache sheds to zero" $ do
             -- cacheReclaimable is zero for an explicit cache: it adds its whole value.
             let base = 100000000
-                withCache = overrideMinShedSum base 26214400 False False (Just 12345678, Nothing, Nothing, Nothing, Nothing)
-                without = overrideMinShedSum base 26214400 False False (Nothing, Nothing, Nothing, Nothing, Nothing)
+                withCache = overrideMinShedSum base 26214400 False False False (Just 12345678, Nothing, Nothing, Nothing, Nothing, Nothing)
+                without = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
             withCache - without `shouldBe` 12345678
+
+        it "charges an explicit artifact cap its envelope (cap x multiplier) when mirroring, nothing otherwise" $ do
+            -- An explicit limits.maxArtifactBytes never sheds; it adds cap x 4 to the
+            -- minimum when mirroring, and nothing at all when no mount mirrors.
+            let base = 100000000
+                mirroring = overrideMinShedSum base 26214400 False False True (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
+                notMirroring = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
+                unpinned = overrideMinShedSum base 26214400 False False True (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
+            mirroring - unpinned `shouldBe` 40000000
+            notMirroring `shouldBe` unpinned
 
     describe "overrideSubstitutions (the per-pin substitution)" $ do
         it "pairs each present override with the pin set that substitutes only it out" $
-            overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5)
-                `shouldBe` [ ("cache.maxBytes", (Nothing, Just 2, Just 3, Just 4, Just 5))
-                           , ("runtime.serveMaxInFlight", (Just 1, Nothing, Just 3, Just 4, Just 5))
-                           , ("limits.maxResponseBytes", (Just 1, Just 2, Nothing, Just 4, Just 5))
-                           , ("limits.maxRequestBytes", (Just 1, Just 2, Just 3, Nothing, Just 5))
-                           , ("queue.memoryMaxDepth", (Just 1, Just 2, Just 3, Just 4, Nothing))
+            overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5, Just 6)
+                `shouldBe` [ ("cache.maxBytes", (Nothing, Just 2, Just 3, Just 4, Just 5, Just 6))
+                           , ("runtime.serveMaxInFlight", (Just 1, Nothing, Just 3, Just 4, Just 5, Just 6))
+                           , ("limits.maxResponseBytes", (Just 1, Just 2, Nothing, Just 4, Just 5, Just 6))
+                           , ("limits.maxRequestBytes", (Just 1, Just 2, Just 3, Nothing, Just 5, Just 6))
+                           , ("queue.memoryMaxDepth", (Just 1, Just 2, Just 3, Just 4, Nothing, Just 6))
+                           , ("limits.maxArtifactBytes", (Just 1, Just 2, Just 3, Just 4, Just 5, Nothing))
                            ]
 
         it "yields no substitution for an absent override" $
-            map fst (overrideSubstitutions (Nothing, Just 2, Nothing, Nothing, Nothing)) `shouldBe` ["runtime.serveMaxInFlight"]
+            map fst (overrideSubstitutions (Nothing, Just 2, Nothing, Nothing, Nothing, Nothing)) `shouldBe` ["runtime.serveMaxInFlight"]
 
     it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
         -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
@@ -240,6 +289,7 @@ spec = describe "resolveMemoryPlan" $ do
                        , "memory plan: cache entry bound 983" <> ceilingClause
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
                        , "memory plan: memory-queue depth 41943" <> ceilingClause
+                       , "memory plan: mirror artifact byte cap 8589934" <> ceilingClause
                        ]
 
     describe "the combined invariant (property)" $
@@ -287,12 +337,13 @@ spec = describe "resolveMemoryPlan" $ do
             + maybe 0 ptAggregateBytes (mpPublishTenant plan)
             + mpQueueTenantBytes plan
             + mpFixedBufferBytes plan
+            + maybe 0 ((* mirrorArtifactEnvelopeMultiplier) . matMaxBytes) (mpMirrorArtifactTenant plan)
 
     bareCache :: CacheSettings
     bareCache = CacheSettings{csTtl = 60, csMaxEntries = Nothing, csMaxBytes = Nothing}
 
     bareLimits :: LimitsSettings
-    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxRequestBytes = Nothing}
+    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
 
     bareQueue :: QueueSettings
     bareQueue = QueueSettings{qsUrl = Nothing, qsMemoryMaxDepth = Nothing}

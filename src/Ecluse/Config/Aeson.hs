@@ -133,12 +133,13 @@ queueParser o = do
 
 limitsParser :: KeyMap.KeyMap Value -> Parser LimitsSettings
 limitsParser o = do
-    rejectUnknownKeys "limits" ["maxResponseBytes", "maxVersionCount", "maxNestingDepth", "maxRequestBytes"] o
+    rejectUnknownKeys "limits" ["maxResponseBytes", "maxVersionCount", "maxNestingDepth", "maxRequestBytes", "maxArtifactBytes"] o
     LimitsSettings
         <$> (o .:? "maxResponseBytes" >>= traverse (parsePositiveInt "limits.maxResponseBytes"))
         <*> (o .: "maxVersionCount" >>= parsePositiveInt "limits.maxVersionCount")
         <*> (o .: "maxNestingDepth" >>= parsePositiveInt "limits.maxNestingDepth")
         <*> (o .:? "maxRequestBytes" >>= traverse (parsePositiveInt "limits.maxRequestBytes"))
+        <*> (o .:? "maxArtifactBytes" >>= traverse (parsePositiveInt "limits.maxArtifactBytes"))
 
 cacheParser :: KeyMap.KeyMap Value -> Parser CacheSettings
 cacheParser o = do

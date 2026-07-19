@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     newMirrorPublish,
  )
-import Ecluse.Core.Security (Origin (UntrustedOrigin), defaultLimits, thgPublicHostPort)
+import Ecluse.Core.Security (Limits (maxBodyBytes), Origin (UntrustedOrigin), defaultLimits, thgPublicHostPort)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
@@ -70,10 +70,10 @@ rules, so the serve gate and the ingest re-evaluation share one prepared rule se
 is that ecosystem's codec married to the shared transport at its declared mirror
 target.
 -}
-workerPoliciesFor :: Env -> [MountBinding] -> [PublishTarget] -> WorkerPolicies
-workerPoliciesFor env bindings targets =
+workerPoliciesFor :: Env -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies
+workerPoliciesFor env bindings targets artifactMaxBytes =
     Map.fromList
-        [ (eco, workerPolicyFor env deps publish)
+        [ (eco, workerPolicyFor env deps publish artifactMaxBytes)
         | binding <- bindings
         , let prefixHead :| _ = bindingPrefix binding
         , let deps = bindingPackumentDeps binding
@@ -114,8 +114,8 @@ allowlist with certificate validation authenticating the dialled host. Its own
 failure and dropped-entry logs are elided (the
 worker logs its own re-evaluation outcome per job), while the upstream-fetch
 metrics still record through the shared instruments. -}
-workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> WorkerPolicy
-workerPolicyFor env deps publish =
+workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
+workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy
         { wpResolveVersion = fetchVersionDetails client
         , wpRules = pdRules deps
@@ -130,6 +130,12 @@ workerPolicyFor env deps publish =
           -- are fetched exactly as the serve path would fetch them.
           wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
         , wpPublish = publish
+        , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant,
+          -- not the metadata-path default: a real tarball far exceeds the packument cap,
+          -- while this cap bounds the transient publish envelope against the heap ceiling.
+          -- The other limits (version count, nesting depth) stay at their defaults; they
+          -- do not apply to an opaque tarball.
+          wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
         , wpNow = pdNow deps
         }
   where

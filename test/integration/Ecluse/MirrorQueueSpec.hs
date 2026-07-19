@@ -19,7 +19,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (
-    QueueOptions (qoVisibilityTimeout),
+    QueueOptions (qoTerminalBackoff, qoVisibilityTimeout),
     defaultQueueOptions,
     freshQueue,
     quietLogEnv,
@@ -80,6 +80,21 @@ spec =
                 stillHidden1 <- unwrapQ (receive queue)
                 stillHidden2 <- unwrapQ (receive queue)
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
+
+            it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
+                -- deadLetter must NOT DeleteMessage (that would silently discard the
+                -- terminal fault, regressing observability); it returns the message with
+                -- the terminal backoff, so it stays in the queue and rides the operator's
+                -- redrive policy to the dead-letter queue. The message's reappearance
+                -- after the deadLetter is the proof it was not deleted (an ack/delete
+                -- never redelivers); the short terminal backoff keeps that reappearance
+                -- within the poll's patience.
+                queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
+                unwrapQ (enqueue queue sampleJob)
+                [message] <- receiveUntil queue
+                unwrapQ (deadLetter queue (msgReceipt message))
+                redelivered <- receiveUntil queue
+                map msgJob redelivered `shouldBe` [sampleJob]
 
             it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
                 -- Point the backend at a loopback port with nothing listening: the

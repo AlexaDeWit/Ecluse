@@ -153,6 +153,10 @@ data LimitsSettings = LimitsSettings
     , limMaxVersionCount :: Int
     , limMaxNestingDepth :: Int
     , limMaxRequestBytes :: Maybe Int
+    , limMaxArtifactBytes :: Maybe Int
+    {- ^ The mirror worker's per-artifact fetch byte cap; computed from the memory
+    plan's mirror-artifact tenant when unset, a configured value winning.
+    -}
     }
     deriving stock (Eq, Show)
 

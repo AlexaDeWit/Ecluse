@@ -12,6 +12,7 @@ worker's ingest gate admits and the test exercises the fetch → verify → publ
 -}
 module Ecluse.Test.Worker (
     admitAllPolicies,
+    admitAllPoliciesCapped,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -27,7 +28,8 @@ import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 
 {- | An admit-everything worker policy for the npm ecosystem: every version
@@ -51,7 +53,14 @@ a test passes the true digests of the bytes its stub upstream serves for the fai
 posture, or a deliberately mismatching set to drive the tamper refusal.
 -}
 admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
-admitAllPolicies publish currentDigests =
+admitAllPolicies = admitAllPoliciesCapped (512 * 1024 * 1024)
+
+{- | 'admitAllPolicies' with an explicit artifact fetch byte cap, for tests that
+exercise the worker's over-cap drop: a body past the cap is a terminal
+'Ecluse.Core.Worker.Fetch.ArtifactOverCap' and the job is dropped, not retried.
+-}
+admitAllPoliciesCapped :: Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
+admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
     Map.singleton
         Npm
         WorkerPolicy
@@ -63,6 +72,7 @@ admitAllPolicies publish currentDigests =
               -- projects it, so the fetch path forms requests as production does.
               wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
             , wpPublish = publish
+            , wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
             , wpNow = getCurrentTime
             }
   where

@@ -138,14 +138,19 @@ data QueueOptions = QueueOptions
     -- ^ How long a received message stays hidden before SQS redelivers it.
     , qoWaitSeconds :: Int
     -- ^ The long-poll window for a @receive@.
+    , qoTerminalBackoff :: Seconds
+    {- ^ The backoff window @deadLetter@ returns a terminal message with (a short one
+    lets a test observe the not-deleted redelivery within its patience).
+    -}
     }
     deriving stock (Eq, Show)
 
 {- | A 30-second visibility timeout and a 2-second long poll: the queue-roundtrip
-default that does not stall a test on an empty poll.
+default that does not stall a test on an empty poll. The terminal backoff matches the
+production default; a test that observes dead-letter redelivery shortens it.
 -}
 defaultQueueOptions :: QueueOptions
-defaultQueueOptions = QueueOptions{qoVisibilityTimeout = Seconds 30, qoWaitSeconds = 2}
+defaultQueueOptions = QueueOptions{qoVisibilityTimeout = Seconds 30, qoWaitSeconds = 2, qoTerminalBackoff = Seconds 300}
 
 {- | A scribe-free 'LogEnv' for the integration suite: layers that need a logger (an
 SQS backend's poison-message drop line, a booted proxy) take this where the spec does
@@ -172,6 +177,7 @@ freshQueue container queueName options = do
             { sqsEndpoint = Just (endpointFor container)
             , sqsWaitSeconds = qoWaitSeconds options
             , sqsVisibilityTimeout = qoVisibilityTimeout options
+            , sqsTerminalBackoff = qoTerminalBackoff options
             }
 
 {- | Create a fresh SQS queue in the @ministack@ container and return its queue URL

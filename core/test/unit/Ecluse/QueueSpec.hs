@@ -69,6 +69,7 @@ spec = do
             , receive = pure (Right [])
             , ack = const (pure (Right ()))
             , extendVisibility = \_ _ -> pure (Right ())
+            , deadLetter = const (pure (Right ()))
             }
 
     -- Poll (1ms cadence) until the condition holds, bounded at 2s so a broken
