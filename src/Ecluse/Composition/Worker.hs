@@ -23,6 +23,7 @@ the worker rather than half-wired here.
 -}
 module Ecluse.Composition.Worker (
     workerPoliciesFor,
+    mirrorTransportFor,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -78,27 +79,36 @@ workerPoliciesFor env bindings targets artifactMaxBytes =
         , let prefixHead :| _ = bindingPrefix binding
         , let deps = bindingPackumentDeps binding
         , Just eco <- [parseEcosystem prefixHead]
-        , Just publish <- [mirrorPublishFor env targetsByEcosystem eco]
+        , Just publish <- [mirrorPublishFor env deps targetsByEcosystem eco]
         ]
   where
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
 {- Marry one ecosystem's mirror write: its adapter's protocol codec over the shared
 publish transport (the trusted private-origin manager, the target's credential
-mint, and the secure-default response bound on the probe), bound to the mount's
-declared mirror target. 'Nothing' when the ecosystem resolved no publish target or
-no adapter, so the caller wires no half-publish bundle. -}
-mirrorPublishFor :: Env -> Map.Map Ecosystem PublishTarget -> Ecosystem -> Maybe MirrorPublish
-mirrorPublishFor env targets eco = do
+mint, and the mount's own plan-resolved response bound on the probe), bound to the
+mount's declared mirror target. 'Nothing' when the ecosystem resolved no publish
+target or no adapter, so the caller wires no half-publish bundle. -}
+mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Ecosystem -> Maybe MirrorPublish
+mirrorPublishFor env deps targets eco = do
     target <- Map.lookup eco targets
     adapter <- adapterFor eco
-    let transport =
-            MirrorTransport
-                { ptManager = envPrivateManager env
-                , ptMintToken = Just . authSecret <$> currentToken (ptCredentials target)
-                , ptLimits = defaultLimits
-                }
-    pure (newMirrorPublish transport (ptMirrorUrl target) (publishCodec (adapterPublish adapter)))
+    pure (newMirrorPublish (mirrorTransportFor env deps target) (ptMirrorUrl target) (publishCodec (adapterPublish adapter)))
+
+{- | The shared mirror-write transport for one mount: the trusted private-origin
+manager, the target's credential mint, and the mount's __own__ 'pdLimits' as the
+probe's response bound, so the presence probe reads under the same boot-computed,
+operator-overridable bound every other metadata read on the mount honours (rather
+than the shipped metadata-path default, which a larger mirror packument would
+silently overrun, defeating duplicate suppression).
+-}
+mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
+mirrorTransportFor env deps target =
+    MirrorTransport
+        { ptManager = envPrivateManager env
+        , ptMintToken = Just . authSecret <$> currentToken (ptCredentials target)
+        , ptLimits = pdLimits deps
+        }
 
 {- Build one mount's worker bundle from its packument-serve dependencies and its
 married publish capability: the single-version resolver over the guarded public

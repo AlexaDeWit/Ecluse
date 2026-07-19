@@ -184,7 +184,9 @@ workerPoliciesAt mirrorUrl = do
             MirrorTransport
                 { ptManager = trusted
                 , ptMintToken = pure (Just (mkSecret "e2e-publish-token"))
-                , ptLimits = defaultLimits
+                , -- The mount's plan-resolved response bound on the probe (production
+                  -- threads 'pdLimits'); the default here since no override is set.
+                  ptLimits = defaultLimits
                 }
     pure (admitAllPolicies (newMirrorPublish transport mirrorUrl npmPublishCodec) (unsafeHash SRI sha512Integrity :| []))
 

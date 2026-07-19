@@ -210,7 +210,9 @@ policiesFor mirrorUrl digests = do
             MirrorTransport
                 { ptManager = manager
                 , ptMintToken = pure (Just (mkSecret "test-token"))
-                , ptLimits = defaultLimits
+                , -- The mount's plan-resolved response bound on the probe (production
+                  -- threads 'pdLimits'); the default here since no override is set.
+                  ptLimits = defaultLimits
                 }
     pure (admitAllPolicies (newMirrorPublish transport mirrorUrl npmPublishCodec) digests)
 
@@ -224,7 +226,9 @@ cappedPolicies mirrorUrl cap = do
             MirrorTransport
                 { ptManager = manager
                 , ptMintToken = pure (Just (mkSecret "test-token"))
-                , ptLimits = defaultLimits
+                , -- The mount's plan-resolved response bound on the probe (production
+                  -- threads 'pdLimits'); the default here since no override is set.
+                  ptLimits = defaultLimits
                 }
     pure (admitAllPoliciesCapped cap (newMirrorPublish transport mirrorUrl npmPublishCodec) (unsafeHash SRI trueSri :| []))
 
