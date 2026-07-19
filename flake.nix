@@ -265,8 +265,7 @@
         # Haskell library closure removed (justStaticExecutables). A plain dynamic
         # build drags that whole closure in and bloats the image to ~500 MB; this
         # keeps only the binary + its system C deps for the container image.
-        ecluseBinUnpruned =
-          hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+        ecluseBinUnpruned = hlib.justStaticExecutables ecluse;
 
         # GHC's x86_64 Linux RTS links libdw/libelf for DWARF stack unwinding.
         # nixpkgs puts those libraries and the unused libdebuginfod in one
@@ -324,31 +323,23 @@
           AWS_EC2_METADATA_DISABLED = "true";
         };
 
-        # ---- Tool groups -----------------------------------------------------
-        # The lists below group tools by the concern each one serves, so a tool's
-        # reason for being in the closure is documented beside it. They are
-        # documentation, not a partition: every group here is in BOTH shells, via
-        # `ciShellInputs`. `ideInputs` is the sole exception, and the only thing
-        # that distinguishes `default` from `ci`.
-        #
-        # The base group: the toolchain every CI job needs. `go-task` lives here
-        # and here only, because it is how every job is driven, so every shell
-        # already gets it through this list.
-        ciInputs = [
+        # ---- Tool tiers --------------------------------------------------------
+        # The shells compose from explicit tiers, each a strict layer on the one
+        # below: `toolchain` (compile + test), `gate` (what the gating CI jobs
+        # add), `ops` (release + vulnerability scanning), `bench`
+        # (benchmarking/profiling), `ide` (interactive-only). `ci` is
+        # toolchain ∪ gate ∪ ops ∪ bench, deliberately ONE closure (see
+        # `ciShellInputs`); `default` adds `ide` on top; `mcp` is toolchain plus
+        # the LSP bridge. A tool's reason for being in the closure stays
+        # documented beside it.
+
+        # Compiling and testing: what every build path needs before any gate
+        # tooling. `go-task` lives here and here only, because it is how every
+        # job and every dev loop is driven.
+        toolchainInputs = [
           pkgs.bashInteractive
           hpkgs.ghc
           hpkgs.cabal-install
-          hpkgs.fourmolu
-          hpkgs.hlint
-          # Run the >>> examples in Haddock comments as tests (`task doctest`),
-          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
-          # set as the compiler it stands in for. See docs/haddock.md → "Examples that
-          # run".
-          hpkgs.doctest
-          # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
-          # `coverage` target (see CONTRIBUTING.md → "Coverage").
-          hpkgs.hpc-codecov
-          pkgs.semgrep
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
@@ -361,10 +352,44 @@
           pkgs.go-task
         ];
 
-        # Site rendering: pandoc turns the repo's Markdown into the published site
-        # pages (`task site`). Both the Pages publish and the PR-tier `site-stub`
-        # gate run it, so it is part of the CI closure.
-        docsInputs = [ pkgs.pandoc ];
+        # What the gating jobs add on top of the toolchain: formatting, linting,
+        # doctests, coverage conversion, SAST, workflow linting, dead-code and
+        # static analysis, and the site build.
+        gateInputs = [
+          hpkgs.fourmolu
+          hpkgs.hlint
+          # Run the >>> examples in Haddock comments as tests (`task doctest`),
+          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
+          # set as the compiler it stands in for. See docs/haddock.md → "Examples that
+          # run".
+          hpkgs.doctest
+          # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
+          # `coverage` target (see CONTRIBUTING.md → "Coverage").
+          hpkgs.hpc-codecov
+          pkgs.semgrep
+          # GitHub Actions linting (`task lint-workflows`): actionlint for
+          # correctness (shellcheck over `run:` blocks, expression/context
+          # checks) and zizmor for security (template injection, credential
+          # persistence, excessive permissions, dangerous triggers). Mechanizes
+          # the injection-free workflow rule in AGENTS.md → "CI & Security".
+          # zizmor comes from the pinned set on the 26.05 base (the older base
+          # shipped only an ancient 0.2.1, which forced a second input alongside
+          # vulnix — no longer). See CONTRIBUTING.md → "Continuous Integration".
+          pkgs.actionlint
+          pkgs.zizmor
+          # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already
+          # runs shellcheck on workflow `run:` blocks; this lints the committed
+          # scripts too.
+          pkgs.shellcheck
+          # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
+          # through their own jobs, and both are in `task check`.
+          hpkgs.weeder
+          hpkgs.stan
+          # Site rendering: pandoc turns the repo's Markdown into the published
+          # site pages (`task site`). Both the Pages publish and the PR-tier
+          # `site-stub` gate run it, so it is part of the CI closure.
+          pkgs.pandoc
+        ];
 
         # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
         # by hash and copied into the published site (see `task site`) so diagrams
@@ -400,35 +425,32 @@
           # reports "could not execute: hspec-discover". Put it on the shell PATH
           # for HLS; from the same GHC 9.10 set, matching the build-tool-depends
           # version. CI never needs it here (cabal provides it), so it stays out
-          # of ciInputs.
+          # of the CI tiers.
           hpkgs.hspec-discover
         ];
 
-        # Release tooling: skopeo pushes the Nix-built image to a registry (no
-        # Docker daemon needed) via `task docker-push`, and sbomnix generates the
-        # Nix-native SBOM (`task sbom`), which is more accurate than scanning a
-        # distroless image, whose static Haskell deps a scanner cannot see. The
-        # provenance and SBOM attestations themselves are produced in CI by the
-        # GitHub attest-actions (immutable OCI referrers); see CONTRIBUTING.md →
-        # "Supply-chain attestations".
-        releaseInputs = [
-          pkgs.skopeo
-          pkgs.sbomnix
-        ];
-
-        # Vulnerability scanning. grype is the authority (`task scan`): it scans
-        # the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…) against
-        # its maintained DB and gives severity-rated, low-noise findings. vulnix
-        # is a secondary, Nix-native cross-check (`task scan-vulnix`): more
-        # comprehensive and patch-aware but un-graded, so not the authority. On
-        # the 26.05 base it comes straight from the pinned set (the older base's
-        # vulnix was broken against NVD's feeds, forcing a second input — no
-        # longer). Haskell-advisory (HSEC) coverage is the scheduled OSV.dev scan
-        # of cabal.project.freeze (security.yml, scripts/osv-freeze-scan.sh);
+        # Release and vulnerability-scanning tooling. skopeo pushes the Nix-built
+        # image to a registry (no Docker daemon needed) via `task docker-push`,
+        # and sbomnix generates the Nix-native SBOM (`task sbom`), which is more
+        # accurate than scanning a distroless image, whose static Haskell deps a
+        # scanner cannot see; the provenance and SBOM attestations themselves are
+        # produced in CI by the GitHub attest-actions (immutable OCI referrers),
+        # see CONTRIBUTING.md → "Supply-chain attestations". grype is the
+        # C-closure scan authority (`task scan`): it scans the sbomnix SBOM of
+        # the image's C closure (openssl/curl/glibc/…) against its maintained DB
+        # and gives severity-rated, low-noise findings. vulnix is a secondary,
+        # Nix-native cross-check (`task scan-vulnix`): more comprehensive and
+        # patch-aware but un-graded, so not the authority. On the 26.05 base it
+        # comes straight from the pinned set (the older base's vulnix was broken
+        # against NVD's feeds, forcing a second input — no longer).
+        # Haskell-advisory (HSEC) coverage is the scheduled OSV.dev scan of
+        # cabal.project.freeze (security.yml, scripts/osv-freeze-scan.sh);
         # checks.freeze-sync keeps that file equal to this flake's package set,
         # so the scan describes the closure the image ships. See CONTRIBUTING.md
         # → "Vulnerability scanning".
-        scanInputs = [
+        opsInputs = [
+          pkgs.skopeo
+          pkgs.sbomnix
           pkgs.grype
           pkgs.vulnix
           # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
@@ -443,30 +465,13 @@
           pkgs.reuse
         ];
 
-        # GitHub Actions linting (`task lint-workflows`): actionlint for
-        # correctness (shellcheck over `run:` blocks, expression/context checks)
-        # and zizmor for security (template injection, credential persistence,
-        # excessive permissions, dangerous triggers). Mechanizes the
-        # injection-free workflow rule in AGENTS.md → "CI & Security". zizmor
-        # comes from the pinned set on the 26.05 base (the older base shipped only
-        # an ancient 0.2.1, which forced the second input alongside vulnix — no
-        # longer). See CONTRIBUTING.md → "Continuous Integration".
-        workflowLintInputs = [
-          pkgs.actionlint
-          pkgs.zizmor
-          # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already runs
-          # shellcheck on workflow `run:` blocks; this lints the committed scripts too.
-          pkgs.shellcheck
-        ];
-
-        # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
-        # through their own jobs, and both are in `task check`.
-        analysisInputs = [ hpkgs.weeder hpkgs.stan ];
-
         # Benchmarking and profiling: `task bench`, `task bench-load`, and the
-        # cost-centre flame graph from `task bench-profile`.
+        # cost-centre flame graph from `task bench-profile`. ghc-prof-flamegraph
+        # comes from the same pinned ghc910 set as every other Haskell tool (the
+        # 26.05 default set happens to be 9.10 too, so this is set-consistency
+        # insurance, not a closure change).
         benchInputs = [
-          pkgs.haskellPackages.ghc-prof-flamegraph
+          hpkgs.ghc-prof-flamegraph
           pkgs.flamegraph
           pkgs.oha
         ];
@@ -500,26 +505,25 @@
         };
 
         # Opt-in only: entirely separate from default/ci so it imposes nothing on
-        # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md).
-        mcpInputs = [
-          pkgs.bashInteractive
-          hpkgs.ghc
-          hpkgs.cabal-install
+        # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md). The
+        # toolchain tier travels with it: HLS needs the GHC 9.10 compiler (and
+        # hspec-discover, same reason as ideInputs) to load the project.
+        mcpInputs = toolchainInputs ++ [
           hpkgs.hspec-discover
           hpkgs.haskell-language-server
           agent-lsp
         ];
 
-        # Every tool any CI job drives through `task`, in ONE closure. Bundling
-        # them means build-test realizes the whole thing and writes a single,
-        # comprehensive GitHub Actions cache entry, so every downstream job gets a
-        # 100% cache hit rather than substituting its own tools from
+        # Every tool any CI job drives through `task`, in ONE closure: the
+        # toolchain tier plus everything the gate, ops, and bench jobs add.
+        # Bundling them means build-test realizes the whole thing and writes a
+        # single, comprehensive GitHub Actions cache entry, so every downstream
+        # job gets a 100% cache hit rather than substituting its own tools from
         # cache.nixos.org on each run. Every gate job therefore enters `.#ci`; do
         # not add a job-specific shell without a closure that genuinely differs,
         # because a second closure means a second cache entry to warm and evict.
         ciShellInputs =
-          ciInputs ++ docsInputs ++ releaseInputs ++ scanInputs
-          ++ workflowLintInputs ++ analysisInputs ++ benchInputs;
+          toolchainInputs ++ gateInputs ++ opsInputs ++ benchInputs;
       in {
         packages = {
           default = ecluse;
@@ -585,7 +589,7 @@
         # the Taskfile, where it runs incrementally and is what actually gates.
         # doHaddock forces the Haddock pass, so a broken doc comment fails the
         # build; dontCheck skips the test suites.
-        checks.docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
+        checks.docs = hlib.doHaddock ecluse;
 
       # The two checks below clear the same bar in a different way: each compares
       # the Nix and cabal views of one pin, which only Nix evaluation can see
