@@ -427,6 +427,11 @@
           # version. CI never needs it here (cabal provides it), so it stays out
           # of the CI tiers.
           hpkgs.hspec-discover
+          # The LSP<->MCP bridge (defined below, also exposed as
+          # packages.agent-lsp); .mcp.json launches it in this shell. Its whole
+          # closure is ~53 MiB, so it rides the ide tier rather than earning a
+          # shell of its own.
+          agent-lsp
         ];
 
         # Release and vulnerability-scanning tooling. skopeo pushes the Nix-built
@@ -486,9 +491,9 @@
         # VS Code's vscode-languageclient. See AGENTS.md → "Build & Tooling".)
         # agent-lsp is not in nixpkgs, so it is built from tagged source via
         # buildGoModule; go.mod needs Go 1.26 (the 26.05 set ships go_1_26) and it
-        # is pure-Go (modernc sqlite — no cgo). HLS still needs the GHC 9.10
-        # toolchain + hspec-discover on PATH to load the Spec.hs modules (same
-        # reason as ideInputs), so they travel with it here.
+        # is pure-Go (modernc sqlite — no cgo). It rides the ide tier: the same
+        # shell already carries the GHC 9.10 toolchain and hspec-discover HLS
+        # needs to load the Spec.hs modules.
         agent-lsp = (pkgs.buildGoModule.override { go = pkgs.go_1_26; }) rec {
           pname = "agent-lsp";
           version = "0.15.0";
@@ -503,16 +508,6 @@
           doCheck = false; # its test suite spins up real language servers
           ldflags = [ "-s" "-w" "-X main.Version=${version}" ];
         };
-
-        # Opt-in only: entirely separate from default/ci so it imposes nothing on
-        # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md). The
-        # toolchain tier travels with it: HLS needs the GHC 9.10 compiler (and
-        # hspec-discover, same reason as ideInputs) to load the project.
-        mcpInputs = toolchainInputs ++ [
-          hpkgs.hspec-discover
-          hpkgs.haskell-language-server
-          agent-lsp
-        ];
 
         # Every tool any CI job drives through `task`, in ONE closure: the
         # toolchain tier plus everything the gate, ops, and bench jobs add.
@@ -641,14 +636,6 @@
           REDOC_JS = "${redocJs}";
         });
 
-        # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
-        # built by CI (the gate runs no `nix flake check`) and not part of the
-        # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`
-        # launch it. See AGENTS.md → "Build & Tooling".
-        mcp = pkgs.mkShell (shellEnv // {
-          name = "ecluse-mcp";
-          buildInputs = mcpInputs;
-        });
       };
     });
 }
