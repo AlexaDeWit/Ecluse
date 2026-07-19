@@ -433,10 +433,10 @@ data InvalidEntry = InvalidEntry
     }
     deriving stock (Eq, Show)
 
-{- | Which part of a packument a dropped 'InvalidEntry' came from. A version
-manifest drop removes a serve candidate (fail-closed for that one version); a
-dist-tag or publish-time drop loses only that advisory datum while the version it
-referred to still resolves.
+{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A version
+manifest drop removes a serve candidate (fail-closed for that one version); a dist-tag or
+publish-time drop loses only that advisory datum while the version it referred to still
+resolves.
 -}
 data InvalidEntryKind
     = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).
