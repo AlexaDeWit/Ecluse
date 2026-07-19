@@ -8,12 +8,13 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (PublishTarget, planMounts, planPublishTargets)
+import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
 import Ecluse.Composition.Support (expectConfig, expectProviders, fixedNow, staticEnvVars, testLimits)
-import Ecluse.Composition.Worker (workerPoliciesFor)
+import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Security (Limits (maxBodyBytes))
-import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdMinIntegrity))
+import Ecluse.Core.Registry.Publish (MirrorTransport (ptLimits))
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdLimits, pdMinIntegrity))
 import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
@@ -62,20 +63,49 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> maxBodyBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
+    it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ do
+        -- The probe must honour the same boot-computed, operator-overridable response
+        -- bound every other metadata read on the mount does ('pdLimits'), so a mirror
+        -- packument larger than the shipped default cannot silently defeat duplicate
+        -- suppression. A distinctive plan bound (below the default) pins that the wired
+        -- transport tracks the plan value rather than the shipped constant: were the
+        -- probe re-pinned to 'defaultLimits', 'shouldNotBe' would catch it.
+        (env, bindings, targets) <- composedFixturesWith probeLimits
+        deps <- case bindings of
+            [binding] -> pure (bindingPackumentDeps binding)
+            _ -> fail "expected exactly one served binding"
+        target <- case find ((== Npm) . ptEcosystem) targets of
+            Just t -> pure t
+            Nothing -> fail "expected an npm publish target"
+        let transport = mirrorTransportFor env deps target
+        ptLimits transport `shouldBe` pdLimits deps
+        ptLimits transport `shouldNotBe` defaultLimits
+
 -- A distinctive artifact fetch cap, so the thread-through assertion pins the exact
 -- value the composition root would pass rather than any incidental default.
 testArtifactCap :: Int
 testArtifactCap = 40 * 1024 * 1024
 
+-- A distinctive plan-resolved response bound, below the shipped default, so the
+-- probe-bound pin fails were the wiring to revert to the metadata-path default.
+probeLimits :: Limits
+probeLimits = defaultLimits{maxBodyBytes = 3 * 1024 * 1024}
+
 -- The composed inputs the production boot path derives: the served bindings and
 -- publish targets from the static single-mount environment, and an Env over
 -- no-network doubles.
 composedFixtures :: IO (Env, [MountBinding], [PublishTarget])
-composedFixtures = do
+composedFixtures = composedFixturesWith testLimits
+
+-- 'composedFixtures' with an explicit resolved 'Limits', so a test can pin that a
+-- distinctive plan-resolved bound (not the shipped default) reaches the wiring it
+-- exercises.
+composedFixturesWith :: Limits -> IO (Env, [MountBinding], [PublishTarget])
+composedFixturesWith limits = do
     config <- expectConfig staticEnvVars Nothing
     providers <- expectProviders config
     bindings <-
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits Nothing config
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets providers config)

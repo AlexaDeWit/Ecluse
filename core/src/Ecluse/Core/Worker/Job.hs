@@ -276,11 +276,17 @@ nothing caught. -}
 alreadyMirrored :: WorkerPolicy -> MirrorJob -> WorkerM Bool
 alreadyMirrored policy job = do
     probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
-    pure $ case probed of
-        Left _ -> False
+    case probed of
+        Left fault -> do
+            -- A probe that returns no usable body forfeits only duplicate suppression,
+            -- never correctness: the job falls through to the full gated pipeline.
+            -- Logged at DebugS so a persistently-failing probe (a mirror packument over
+            -- the response bound, an auth refusal, an outage) is diagnosable, not silent.
+            logFM DebugS (ls ("mirror presence probe did not confirm " <> renderJob job <> "; falling through to full re-evaluation: " <> show fault))
+            pure False
         Right response -> case mpParseVersionList (wpPublish policy) response of
-            Left _ -> False
-            Right versions -> jobVersion job `elem` versions
+            Left _ -> pure False
+            Right versions -> pure (jobVersion job `elem` versions)
 
 {- Re-run current policy for the job's single version through the shared admission
 gate ('Ecluse.Core.Package.Admission.admitArtifact' -- rules, the job's filename,
