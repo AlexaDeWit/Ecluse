@@ -32,13 +32,16 @@ tasks:
     cmds:
       - cabal update
   freeze:
-    desc: Regenerate cabal.project.freeze at the latest index-state
+    desc: Regenerate cabal.project.freeze from the Nix package set (the version authority)
+    cmds:
+      - cp --no-preserve=mode,timestamps "$(nix build .#cabal-freeze --print-out-paths --no-link)" cabal.project.freeze
+  bump-index-state:
+    desc: Advance cabal.project's index-state to the newest Hackage index (needed only when a freeze pin postdates it)
     cmds:
       - cabal update
       - |
         bash -c 'ts=$(cabal update 2>&1 | sed -n "s/.*index-state is set to \(.*\)\.$/\1/p" | tail -1); \
-        [ -n "$ts" ] && sed -i "s/^index-state:.*/index-state: $ts/" cabal.project; \
-        cabal freeze'
+        [ -n "$ts" ] && sed -i "s/^index-state:.*/index-state: $ts/" cabal.project'
   build:
     desc: Build library, executable, and all test suites
     cmds:
@@ -604,7 +607,11 @@ tasks:
     ignore_error: true
     cmds:
       - bash -c 'vulnix -C $(nix build .#ecluse-bin --no-link --print-out-paths)'
+  scan-osv:
+    desc: Query OSV.dev for HSEC advisories against the pinned Haskell closure
+    cmds:
+      - bash scripts/osv-freeze-scan.sh
   clean:
     desc: Remove build artifacts
     cmds:
-      - rm -rf dist-newstyle dist-bench-prof result sbom grype.json grype.sarif ecluse-bench.prof ecluse-bench.svg
+      - rm -rf dist-newstyle dist-bench-prof result sbom grype.json grype.sarif osv-freeze.json osv-freeze.md ecluse-bench.prof ecluse-bench.svg

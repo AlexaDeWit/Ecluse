@@ -291,6 +291,12 @@ jobs:
     # haddocks. Same validation — broken doc comments fail the build. The published,
     # source-linked styling is still built by the Pages publish (`task site`) on main.
     #
+    # The job also builds the other two flake checks, freeze-sync and
+    # amazonka-lockstep, which hold cabal.project.freeze and the amazonka rev to
+    # the Nix package set (see flake.nix). Their dependency environment (test and
+    # bench deps plus amazonka) shares this job's dedicated store; the cache cap
+    # below is sized for both closures.
+    #
     # DEDICATED Nix-store cache. The shared "nix" entry build-test writes holds the
     # `.#ci` shell closure, which lacks the dependency `-doc` outputs `checks.docs`
     # links against, so on that store this job rebuilds the whole doc closure every
@@ -313,13 +319,18 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Own the doc-closure cache (deps + their `-doc` outputs); single writer,
-          # save on main. Bigger than the `.#ci` shell, so raise the trim cap.
+          # Own the doc-closure cache (deps + their `-doc` outputs) plus the
+          # freeze-sync dependency environment; single writer, save on main.
+          # Bigger than the `.#ci` shell, so raise the trim cap.
           nix-cache-prefix: nix-docs
-          nix-gc-max-store-size: 7G
+          nix-gc-max-store-size: 9G
 
-      - name: Build library Haddock (checks.docs flake check)
-        run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs
+      - name: Flake checks (docs Haddock, freeze-sync, amazonka-lockstep)
+        run: >-
+          nix build --no-link --print-build-logs
+          .#checks.x86_64-linux.docs
+          .#checks.x86_64-linux.freeze-sync
+          .#checks.x86_64-linux.amazonka-lockstep
 
   weeder:
     name: Dead-code check (weeder)

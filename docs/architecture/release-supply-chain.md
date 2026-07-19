@@ -107,9 +107,10 @@ full build-push-attest chain runs on a `vX.Y.Z` tag or a `workflow_dispatch`, ga
 
 ## Vulnerability scanning and dependency freshness
 
-Two arms keep the image's dependency closure honest: detection and freshness.
+Three arms keep the shipped closure honest: C-closure detection, Haskell-closure detection, and
+freshness.
 
-**Detection, `grype` (the authority).** `task scan` builds the sbomnix SBOM of the application
+**Detection, `grype` (the C-closure authority).** `task scan` builds the sbomnix SBOM of the application
 closure into `sbom/`, runs `grype`, and saves the severity-rated findings in `grype.json`.
 `task scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
 cross-check, broader and Nix-patch-aware but un-graded, so not the authority. A naive closure
@@ -124,15 +125,33 @@ single tracking issue (label `security:vuln-scan`) when grype reports CVEs, clos
 clean, so CVEs disclosed after a release still surface.
 
 **Freshness, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across
-every ecosystem the repo has: flake inputs, GitHub Actions, and Hackage cabal dependencies.
-For Nix it refreshes `flake.lock` weekly, so the C-library closure picks up upstream security
-fixes; the gate validates each bump and the scan re-runs on it. Fixing a finding is usually
-just merging the Renovate PR. HSEC advisories (the Haskell Security Response Team database)
-are exported to [OSV.dev](https://osv.dev), and Renovate raises a fix-PR through
-`osvVulnerabilityAlerts` when one affects a cabal dep, because the default GitHub Advisory
-Database has no Hackage ecosystem. To cover the full resolved install plan, a custom regex
-manager parses `cabal.project.freeze`; GHC-boot libraries are left to move with the compiler
-and are covered by grype's scan of the runtime closure.
+the ecosystems the repo automates: flake inputs, GitHub Actions, and Hackage cabal
+dependencies. Renovate's `nix` manager is beta and off by default, so the config enables it
+explicitly; without that opt-in the weekly refresh does not run at all (it was silently inert
+from the Renovate migration until the single-authority rework, a config-that-does-nothing
+failure mode this document now records so it is checked, not assumed). The weekly `flake.lock`
+refresh is the single freshness lever: the flake pins the package set that supplies both the
+image's C-library closure and every Haskell dependency, and `cabal.project.freeze` is
+*generated* from that set (`task freeze`), with the `freeze-sync` flake check failing CI
+whenever the committed freeze drifts. The gate validates each bump and the scan re-runs on it;
+fixing a finding is usually merging the Renovate PR, plus one `task freeze` commit when
+Haskell versions moved.
+
+**Detection, OSV/HSEC (the Haskell-closure authority).** HSEC advisories (the Haskell Security
+Response Team database) are exported to [OSV.dev](https://osv.dev); the default GitHub
+Advisory Database has no Hackage ecosystem and never sees them. The `osv-freeze` job in
+[`security.yml`](../../.github/workflows/security.yml) queries OSV with every exact pin in
+`cabal.project.freeze` (`task scan-osv` locally); since the freeze mirrors the Nix set,
+matching describes exactly the closure the shipped image is built from, statically linked
+Haskell libraries included, which no scan of the image itself can see. Daily runs keep a
+tracking issue (label `security:hsec-scan`) in sync. Every finding is always reported: the
+repo hardcodes no ignore list, and accepting or dismissing a finding is handled in GitHub's
+security surfaces. Detection is not remediation: the fix for a Haskell advisory is a flake-side bump
+(`flake.lock` or an overlay pin) followed by `task freeze`, never a hand-edit of the generated
+freeze. Renovate's experimental `osvVulnerabilityAlerts` stays enabled as an uncredited second
+net; it raised nothing while qualifying advisories with released fixes stood against pinned
+packages (verified 2026-07-18), which is why the scheduled scan, whose runs are observable, is
+the arm of record.
 
 ## Posture scoring, OpenSSF Scorecard
 

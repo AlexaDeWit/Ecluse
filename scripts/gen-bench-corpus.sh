@@ -14,7 +14,7 @@
 # is committed and read at run time by the work-per-request micro-benches (Ecluse.Bench.Corpus)
 # and the load benchmarks harness (Ecluse.BenchLoad.Npm).
 #
-# Usage:  make gen-bench-corpus   (runs inside the Nix dev shell, which carries
+# Usage:  task gen-bench-corpus   (runs inside the Nix dev shell, which carries
 #                                  node + node-semver on NODE_PATH)
 #
 # Determinism w.r.t. the pin: for each package@version pin, the live full packument

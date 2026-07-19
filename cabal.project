@@ -3,12 +3,10 @@ packages: .
 -- amazonka, sourced from git rather than Hackage. The Hackage release is capped
 -- at 2.0 / 2023, which needs base < 4.19 (GHC ≤ 9.6) and containers < 0.7 — both
 -- incompatible with our pinned GHC 9.10. So we take amazonka from the upstream
--- monorepo at the *exact* git rev our pinned nixpkgs uses for its own
--- amazonka 2.0-unstable build (flake.lock → nixpkgs → amazonkaSrc in
--- pkgs/development/haskell-modules/configuration-common.nix). Pinning to the same
--- rev keeps the two build paths — this cabal path and the Nix/callCabal2nix path
--- that builds the shipped artifact — on identical amazonka sources. Bump this rev
--- in lockstep with `nix flake update` (never independently), then re-freeze.
+-- monorepo at the *exact* git rev flake.nix pins as `amazonkaRev` and builds its
+-- own amazonka from, so this cabal path and the Nix path that builds the shipped
+-- artifact use identical amazonka sources. checks.amazonka-lockstep fails CI
+-- whenever the two revs diverge: bump both in the same commit, then `task freeze`.
 --
 -- The monorepo is one checkout with per-package subdirs; we vendor only the ones
 -- our cloud leaves need: the umbrella `amazonka` (Env/auth/send) and its own
@@ -30,24 +28,25 @@ source-repository-package
 -- Pin the Hackage index the solver may see, so `cabal build`/`cabal test` (the
 -- dev-shell + CI path) resolve a *reproducible* plan: a package uploaded to
 -- Hackage after this instant cannot silently change the build or flip the gate
--- with no source change. Paired with cabal.project.freeze (exact versions), this
--- is the lockfile for the cabal path — the analogue of flake.lock, which locks
--- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
--- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
--- → "Dependency locking".
+-- with no source change. cabal.project.freeze holds the exact versions and is
+-- *generated* from the Nix package set (`task freeze`), so flake.lock is the one
+-- upstream lock and this line is the only index-state (the generated freeze
+-- carries none). It only needs to be recent enough to contain every pinned
+-- version; advance it with `task bump-index-state` when cabal reports a pinned
+-- version as unknown. See docs/getting-started.md → "Dependency locking".
 index-state: 2026-07-01T00:33:51Z
 
 -- Enable the test suites in the solver for *every* command, so a bare
--- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
+-- `cabal test <suite>` (as `task test` runs) resolves a tests-inclusive plan
 -- instead of failing with Cabal-7043. Without this, `cabal test` does not pass
 -- `--enable-tests` to the solver and can pick a tests-disabled plan once the
 -- library gains a non-trivial dependency closure (e.g. aeson) — even though
--- `cabal build --enable-tests` succeeds. Keeping it here makes `make build` and
--- `make test` resolve identically.
+-- `cabal build --enable-tests` succeeds. Keeping it here makes `task build` and
+-- `task test` resolve identically.
 tests: True
 
 -- Enable the benchmark component in the solver for *every* command, so a bare
--- `cabal bench ecluse-bench` (as `make bench` runs) resolves a benchmarks-inclusive
+-- `cabal bench ecluse-bench` (as `task bench` runs) resolves a benchmarks-inclusive
 -- plan instead of failing with Cabal-7043 — the same reason `tests: True` is set
 -- above. Without it `cabal bench` does not pass `--enable-benchmarks` to the solver
 -- and can pick a benchmarks-disabled plan.
@@ -58,27 +57,14 @@ benchmarks: True
 -- suite's HTTP stub uses — tears the connection down before the response is
 -- written; every stubbed request then fails with `NoResponseDataReceived`.
 -- Bisected: 3.4.9 OK, 3.4.10 through the latest at this index-state (3.4.13.1)
--- broken. 3.4.9 is also the version the nixpkgs/shipped path resolves, so this
--- keeps both locks on the same warp. This is a runtime-behaviour cap (the
+-- broken. The freeze is generated from the Nix set, so this cap is a tripwire:
+-- if a flake bump moves nixpkgs onto a broken warp, the regenerated freeze
+-- conflicts here and fails loudly. This is a runtime-behaviour cap (the
 -- library is API-compatible with later warp), so it lives here as solver
 -- guidance rather than as an upper bound in ecluse.cabal — Renovate's
 -- bound-widening can't silently undo it. Remove once upstream ships a fix
 -- (> 3.4.13.1) and re-freeze.
 constraints: warp < 3.4.10
-
--- Pin the OpenTelemetry stack to the 1.0 line. The architect chose 1.0 (the
--- May-2026 release that finally ships metrics and logs alongside tracing, with
--- OTLP export) over the older 0.x line; the library stanza's ^>=1.0 bounds drive
--- the directly-named sdk/exporter, and these constraints carry the choice down
--- to the api/api-types packages they pull, so the whole closure resolves on the
--- 1.0 line rather than the 0.x set the solver would otherwise be free to mix in.
--- The Nix path makes the same choice through a nixpkgs overlay in flake.nix
--- (the pinned set ships only 0.1.0.1). See docs/architecture/observability.md →
--- "OpenTelemetry as the substrate".
-constraints: hs-opentelemetry-api ==1.0.*,
-             hs-opentelemetry-api-types ==1.0.*,
-             hs-opentelemetry-sdk ==1.0.*,
-             hs-opentelemetry-exporter-otlp ==1.0.*
 
 -- Relax one over-tight upper bound for the benchmark path only: tasty-bench-fit
 -- pulls regression-simple, whose every release caps base < 4.20, which excludes our

@@ -60,19 +60,28 @@ in CI. Three couldn't be flake checks even in principle: `ecluse-integration` (n
 
 ### Dependency locking
 
-Two build paths, two locks, pinned **independently**:
+One version authority, two build paths:
 
 | Path | Resolver | Lock |
 |------|----------|------|
-| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.10 set | `flake.lock` |
-| `cabal` (dev shell + the CI gate) | Hackage | `index-state:` in `cabal.project` + `cabal.project.freeze` |
+| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.10 set + the flake overlay | `flake.lock` |
+| `cabal` (dev shell + the CI gate) | Hackage, held to the same versions | `cabal.project.freeze`, **generated** from the Nix set |
 
-`callCabal2nix` doesn't read `cabal.project` / `.freeze`, so the two are genuinely separate locks. The
-`index-state` caps the Hackage snapshot and the freeze pins exact versions, so a fresh Hackage upload
-can't flip the gate with no source change. Move the pins deliberately: on the cabal path,
-`task freeze` advances `index-state` and rewrites `cabal.project.freeze` (commit both); on the Nix
-path, `nix flake update` or Renovate's weekly `flake.lock` refresh. Renovate widens the *bounds* in
-`ecluse.cabal`, but moving the *pinned versions* is the manual `task freeze` step.
+`callCabal2nix` doesn't read `cabal.project` / `.freeze`; instead the freeze is generated *from* the
+Nix package set (`task freeze`, backed by the flake's `cabal-freeze` output), so the cabal path
+resolves the exact dependency closure the shipped artifact is built from, and the `freeze-sync`
+flake check fails CI whenever the committed freeze drifts from the set. The `index-state` in
+`cabal.project` caps the Hackage snapshot the solver may see; it only needs to contain every pinned
+version, so advance it with `task bump-index-state` only when cabal reports a pinned version as
+unknown. amazonka is the one source pin held in two places (`amazonkaRev` in `flake.nix`, the
+`source-repository-package` tag in `cabal.project`); the `amazonka-lockstep` flake check keeps them
+equal.
+
+Move the pins deliberately: `nix flake update` (or merging Renovate's weekly `flake.lock` refresh),
+then `task freeze`, and commit both together. When the weekly Renovate PR moves Haskell versions,
+`freeze-sync` reds it; a single `task freeze` commit on that branch completes the refresh. Renovate
+widens the *bounds* in `ecluse.cabal` (only the few explicit `>= && <` ranges its manager can
+parse); versions themselves move only through the flake.
 
 ---
 

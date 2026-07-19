@@ -1,14 +1,21 @@
 name: Security
 
-# Vulnerability scan of the image's dependency closure — **report-only**, never
-# gates a PR: the closure is fixed by a flake.lock bump (which Dependabot opens
-# weekly), not by an in-PR change. On a PR it runs only when the flake changes;
-# on a daily schedule it scans main and opens/updates a tracking issue when grype
-# reports CVEs, so CVEs disclosed after release still surface. See CONTRIBUTING.md
-# → "Vulnerability scanning".
+# Vulnerability scanning, **report-only**: it never gates a PR, because findings
+# arrive with disclosure time, not with in-PR changes. Two scanners cover the two
+# halves of the shipped closure: grype scans the image's C closure via the
+# sbomnix SBOM (statically linked Haskell libraries are invisible to it), and
+# the OSV/HSEC scan queries OSV.dev with every exact pin in
+# cabal.project.freeze, the committed projection of the Nix package set, so it
+# covers precisely the Haskell closure the image is built from. On a PR they run
+# only when the dependency plan changes; on the daily schedule they scan main
+# and keep one tracking issue per scanner in sync (open/update on findings,
+# close when clean), so advisories disclosed after a release still surface.
+# Remediation is always flake-side; Renovate's weekly flake.lock refresh carries
+# it. See CONTRIBUTING.md → "Vulnerability scanning" and
+# docs/architecture/release-supply-chain.md.
 on:
   pull_request:
-    paths: ["flake.lock", "flake.nix"]
+    paths: ["flake.lock", "flake.nix", "cabal.project.freeze"]
   schedule:
     - cron: "27 6 * * *" # daily, off-peak minute
   workflow_dispatch:
@@ -61,4 +68,28 @@ jobs:
         if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/vuln-issue.sh
+        run: bash scripts/vuln-issue.sh grype
+
+  osv-freeze:
+    name: Haskell advisories (OSV/HSEC over the freeze)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # the scheduled run opens/updates a tracking issue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Plain curl + jq against api.osv.dev; needs no Nix toolchain, so this job
+      # skips setup-toolchain entirely.
+      - name: Scan cabal.project.freeze against OSV.dev
+        run: bash scripts/osv-freeze-scan.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open/update tracking issue
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/vuln-issue.sh osv

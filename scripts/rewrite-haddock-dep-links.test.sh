@@ -4,7 +4,7 @@
 # shapes Haddock emits -- a GHC boot library, a cabal-store Hackage dependency,
 # and links that must be left untouched -- against the rewriter's --filter mode,
 # so the mapping is locked against regression without a full docs build. Run via
-# `make test-scripts` (folded into `make check`).
+# `task test-scripts` (folded into `task check`).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

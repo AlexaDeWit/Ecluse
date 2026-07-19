@@ -153,8 +153,43 @@
             } { };
         };
 
+        # amazonka, built from source at the exact rev the cabal path pins in
+        # cabal.project (source-repository-package). The Hackage release is capped
+        # at 2.0/2023 (GHC <= 9.6), so it must come from the upstream monorepo;
+        # pinning our own rev here (rather than riding nixpkgs' internal
+        # amazonkaSrc pin) means a flake.lock refresh can never move amazonka out
+        # from under the cabal path. checks.amazonka-lockstep holds this rev and
+        # cabal.project's tag together: bump both in the same commit, then run
+        # `task freeze`.
+        amazonkaRev = "7645bd335f008912b9e5257486f622b674de7afa";
+        amazonkaSrc = pkgs.fetchFromGitHub {
+          owner = "brendanhay";
+          repo = "amazonka";
+          rev = amazonkaRev;
+          hash = "sha256-ObamDnJdcLA2BlX9iGIxkaknUeL3Po3madKO4JA/em0=";
+        };
+
+        # The same subdirectory set cabal.project vendors: the umbrella package,
+        # its own dependencies, and the service leaves we call. dontCheck for the
+        # same reason as cvss above: their test suites are not ours to gate.
+        amazonkaOverlay = hself: _hsuper:
+          let
+            fromMonorepo = name: subdir:
+              hlib.dontCheck
+                (hself.callCabal2nix name "${amazonkaSrc}/${subdir}" { });
+          in {
+            amazonka = fromMonorepo "amazonka" "lib/amazonka";
+            amazonka-core = fromMonorepo "amazonka-core" "lib/amazonka-core";
+            amazonka-sso = fromMonorepo "amazonka-sso" "lib/services/amazonka-sso";
+            amazonka-sts = fromMonorepo "amazonka-sts" "lib/services/amazonka-sts";
+            amazonka-codeartifact =
+              fromMonorepo "amazonka-codeartifact" "lib/services/amazonka-codeartifact";
+            amazonka-sqs = fromMonorepo "amazonka-sqs" "lib/services/amazonka-sqs";
+            amazonka-s3 = fromMonorepo "amazonka-s3" "lib/services/amazonka-s3";
+          };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
-          overrides = otelOverlay;
+          overrides = pkgs.lib.composeExtensions otelOverlay amazonkaOverlay;
         };
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
@@ -164,18 +199,73 @@
         # package on any change, so it is poor for edit-compile cycles).
         ecluseRaw = hpkgs.callCabal2nix "ecluse" ./. { };
 
+        # Dep-extraction variant of ecluseRaw: cabal2nix omits benchmark
+        # components unless asked, and the freeze must pin the bench deps too.
+        # Only evaluated for getCabalDeps below, never built, so enabling
+        # benchmarks here costs the artifact nothing.
+        ecluseForDeps =
+          hpkgs.callCabal2nixWithOptions "ecluse" ./. "--benchmark" { };
+
+        # Every Haskell dependency of every ecluse component (library, executable,
+        # test suites, benchmarks, build tools) as one GHC package environment, so
+        # ghc-pkg can report the exact resolved closure, boot libraries included.
+        ecluseDepEnv =
+          let d = ecluseForDeps.getCabalDeps;
+          in hpkgs.ghcWithPackages (_:
+            pkgs.lib.filter (x: x != null) (pkgs.lib.concatLists [
+              (d.buildDepends or [ ])
+              (d.libraryHaskellDepends or [ ])
+              (d.executableHaskellDepends or [ ])
+              (d.testHaskellDepends or [ ])
+              (d.benchmarkHaskellDepends or [ ])
+              (d.setupHaskellDepends or [ ])
+              (d.libraryToolDepends or [ ])
+              (d.executableToolDepends or [ ])
+              (d.testToolDepends or [ ])
+              (d.benchmarkToolDepends or [ ])
+            ]));
+
+        # cabal.project.freeze, derived from this flake's package set. The Nix
+        # side is the version authority; the freeze projects it onto the cabal
+        # path so `cabal` (dev shell + CI gate) resolves the exact closure the
+        # shipped artifact is built from. Versions only: flag choices follow each
+        # side's defaults, and no index-state line is emitted (cabal.project owns
+        # the only copy). The z- ids ghc-pkg also registers are internal
+        # sublibraries of dependencies, not solver targets, hence the filter.
+        # Regenerate with `task freeze`; checks.freeze-sync keeps the committed
+        # file honest.
+        cabalFreeze = pkgs.runCommand "cabal.project.freeze" { } ''
+          ${ecluseDepEnv}/bin/ghc-pkg list --simple-output \
+            | tr ' ' '\n' \
+            | awk -F- '
+                NF >= 2 && $NF ~ /^[0-9][0-9.]*$/ {
+                  v = $NF
+                  name = $1
+                  for (i = 2; i < NF; i++) name = name "-" $i
+                  if (name != "ecluse" && name !~ /^z-/) print name " " v
+                }' \
+            | LC_ALL=C sort -u \
+            | awk '
+                BEGIN { pre = "constraints: " }
+                { lines[NR] = pre "any." $1 " ==" $2; pre = "             " }
+                END {
+                  for (i = 1; i < NR; i++) print lines[i] ","
+                  print lines[NR]
+                }' \
+            > $out
+        '';
+
         # Release artifact: library + executable only. dontCheck keeps the build
-        # from running the test suites — the pure tier is a flake check below, and
-        # the impure suites (integration → Docker, smoke → live network) never
-        # belong in a hermetic build.
+        # from running the test suites: those run on the cabal path (see
+        # docs/testing.md), and the impure suites (integration → Docker, smoke →
+        # live network) never belong in a hermetic build.
         ecluse = hlib.dontCheck ecluseRaw;
 
         # The executable alone, stripped and with its reference to the full
         # Haskell library closure removed (justStaticExecutables). A plain dynamic
         # build drags that whole closure in and bloats the image to ~500 MB; this
         # keeps only the binary + its system C deps for the container image.
-        ecluseBinUnpruned =
-          hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+        ecluseBinUnpruned = hlib.justStaticExecutables ecluse;
 
         # GHC's x86_64 Linux RTS links libdw/libelf for DWARF stack unwinding.
         # nixpkgs puts those libraries and the unused libdebuginfod in one
@@ -212,9 +302,10 @@
         # node2nix-generated `nodePackages` set; the blessed replacement is to
         # build node_modules from a committed lockfile. `importNpmLock` reads the
         # integrity hashes already in test/oracles/package-lock.json (no separate
-        # Nix hash to maintain), and Renovate's npm manager bumps that lockfile on
-        # the same cadence as every other ecosystem. Exposed on NODE_PATH below
-        # so `require("semver")` resolves.
+        # Nix hash to maintain). The oracle is deliberately outside Renovate's
+        # reach (renovate.json5 ignorePaths): it is reference test data, refreshed
+        # by hand with the fixture workflow, never auto-bumped. Exposed on
+        # NODE_PATH below so `require("semver")` resolves.
         oracleNodeModules = pkgs.importNpmLock.buildNodeModules {
           npmRoot = ./test/oracles;
           inherit (pkgs) nodejs;
@@ -232,31 +323,23 @@
           AWS_EC2_METADATA_DISABLED = "true";
         };
 
-        # ---- Tool groups -----------------------------------------------------
-        # The lists below group tools by the concern each one serves, so a tool's
-        # reason for being in the closure is documented beside it. They are
-        # documentation, not a partition: every group here is in BOTH shells, via
-        # `ciShellInputs`. `ideInputs` is the sole exception, and the only thing
-        # that distinguishes `default` from `ci`.
-        #
-        # The base group: the toolchain every CI job needs. `go-task` lives here
-        # and here only, because it is how every job is driven, so every shell
-        # already gets it through this list.
-        ciInputs = [
+        # ---- Tool tiers --------------------------------------------------------
+        # The shells compose from explicit tiers, each a strict layer on the one
+        # below: `toolchain` (compile + test), `gate` (what the gating CI jobs
+        # add), `ops` (release + vulnerability scanning), `bench`
+        # (benchmarking/profiling), `ide` (interactive-only). `ci` is
+        # toolchain ∪ gate ∪ ops ∪ bench, deliberately ONE closure (see
+        # `ciShellInputs`); `default` adds `ide` on top; `mcp` is toolchain plus
+        # the LSP bridge. A tool's reason for being in the closure stays
+        # documented beside it.
+
+        # Compiling and testing: what every build path needs before any gate
+        # tooling. `go-task` lives here and here only, because it is how every
+        # job and every dev loop is driven.
+        toolchainInputs = [
           pkgs.bashInteractive
           hpkgs.ghc
           hpkgs.cabal-install
-          hpkgs.fourmolu
-          hpkgs.hlint
-          # Run the >>> examples in Haddock comments as tests (`task doctest`),
-          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
-          # set as the compiler it stands in for. See docs/haddock.md → "Examples that
-          # run".
-          hpkgs.doctest
-          # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
-          # `coverage` target (see CONTRIBUTING.md → "Coverage").
-          hpkgs.hpc-codecov
-          pkgs.semgrep
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
@@ -269,10 +352,44 @@
           pkgs.go-task
         ];
 
-        # Site rendering: pandoc turns the repo's Markdown into the published site
-        # pages (`task site`). Both the Pages publish and the PR-tier `site-stub`
-        # gate run it, so it is part of the CI closure.
-        docsInputs = [ pkgs.pandoc ];
+        # What the gating jobs add on top of the toolchain: formatting, linting,
+        # doctests, coverage conversion, SAST, workflow linting, dead-code and
+        # static analysis, and the site build.
+        gateInputs = [
+          hpkgs.fourmolu
+          hpkgs.hlint
+          # Run the >>> examples in Haddock comments as tests (`task doctest`),
+          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
+          # set as the compiler it stands in for. See docs/haddock.md → "Examples that
+          # run".
+          hpkgs.doctest
+          # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
+          # `coverage` target (see CONTRIBUTING.md → "Coverage").
+          hpkgs.hpc-codecov
+          pkgs.semgrep
+          # GitHub Actions linting (`task lint-workflows`): actionlint for
+          # correctness (shellcheck over `run:` blocks, expression/context
+          # checks) and zizmor for security (template injection, credential
+          # persistence, excessive permissions, dangerous triggers). Mechanizes
+          # the injection-free workflow rule in AGENTS.md → "CI & Security".
+          # zizmor comes from the pinned set on the 26.05 base (the older base
+          # shipped only an ancient 0.2.1, which forced a second input alongside
+          # vulnix — no longer). See CONTRIBUTING.md → "Continuous Integration".
+          pkgs.actionlint
+          pkgs.zizmor
+          # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already
+          # runs shellcheck on workflow `run:` blocks; this lints the committed
+          # scripts too.
+          pkgs.shellcheck
+          # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
+          # through their own jobs, and both are in `task check`.
+          hpkgs.weeder
+          hpkgs.stan
+          # Site rendering: pandoc turns the repo's Markdown into the published
+          # site pages (`task site`). Both the Pages publish and the PR-tier
+          # `site-stub` gate run it, so it is part of the CI closure.
+          pkgs.pandoc
+        ];
 
         # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
         # by hash and copied into the published site (see `task site`) so diagrams
@@ -308,33 +425,37 @@
           # reports "could not execute: hspec-discover". Put it on the shell PATH
           # for HLS; from the same GHC 9.10 set, matching the build-tool-depends
           # version. CI never needs it here (cabal provides it), so it stays out
-          # of ciInputs.
+          # of the CI tiers.
           hpkgs.hspec-discover
+          # The LSP<->MCP bridge (defined below, also exposed as
+          # packages.agent-lsp); .mcp.json launches it in this shell. Its whole
+          # closure is ~53 MiB, so it rides the ide tier rather than earning a
+          # shell of its own.
+          agent-lsp
         ];
 
-        # Release tooling: skopeo pushes the Nix-built image to a registry (no
-        # Docker daemon needed) via `task docker-push`, and sbomnix generates the
-        # Nix-native SBOM (`task sbom`), which is more accurate than scanning a
-        # distroless image, whose static Haskell deps a scanner cannot see. The
-        # provenance and SBOM attestations themselves are produced in CI by the
-        # GitHub attest-actions (immutable OCI referrers); see CONTRIBUTING.md →
-        # "Supply-chain attestations".
-        releaseInputs = [
+        # Release and vulnerability-scanning tooling. skopeo pushes the Nix-built
+        # image to a registry (no Docker daemon needed) via `task docker-push`,
+        # and sbomnix generates the Nix-native SBOM (`task sbom`), which is more
+        # accurate than scanning a distroless image, whose static Haskell deps a
+        # scanner cannot see; the provenance and SBOM attestations themselves are
+        # produced in CI by the GitHub attest-actions (immutable OCI referrers),
+        # see CONTRIBUTING.md → "Supply-chain attestations". grype is the
+        # C-closure scan authority (`task scan`): it scans the sbomnix SBOM of
+        # the image's C closure (openssl/curl/glibc/…) against its maintained DB
+        # and gives severity-rated, low-noise findings. vulnix is a secondary,
+        # Nix-native cross-check (`task scan-vulnix`): more comprehensive and
+        # patch-aware but un-graded, so not the authority. On the 26.05 base it
+        # comes straight from the pinned set (the older base's vulnix was broken
+        # against NVD's feeds, forcing a second input — no longer).
+        # Haskell-advisory (HSEC) coverage is the scheduled OSV.dev scan of
+        # cabal.project.freeze (security.yml, scripts/osv-freeze-scan.sh);
+        # checks.freeze-sync keeps that file equal to this flake's package set,
+        # so the scan describes the closure the image ships. See CONTRIBUTING.md
+        # → "Vulnerability scanning".
+        opsInputs = [
           pkgs.skopeo
           pkgs.sbomnix
-        ];
-
-        # Vulnerability scanning. grype is the authority (`task scan`): it scans
-        # the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…) against
-        # its maintained DB and gives severity-rated, low-noise findings. vulnix
-        # is a secondary, Nix-native cross-check (`task scan-vulnix`): more
-        # comprehensive and patch-aware but un-graded, so not the authority. On
-        # the 26.05 base it comes straight from the pinned set (the older base's
-        # vulnix was broken against NVD's feeds, forcing a second input — no
-        # longer). Haskell-advisory coverage (cabal-audit / HSEC) is a deferred
-        # follow-up — the static Haskell deps are a lower-risk surface. See
-        # CONTRIBUTING.md → "Vulnerability scanning".
-        scanInputs = [
           pkgs.grype
           pkgs.vulnix
           # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
@@ -349,30 +470,13 @@
           pkgs.reuse
         ];
 
-        # GitHub Actions linting (`task lint-workflows`): actionlint for
-        # correctness (shellcheck over `run:` blocks, expression/context checks)
-        # and zizmor for security (template injection, credential persistence,
-        # excessive permissions, dangerous triggers). Mechanizes the
-        # injection-free workflow rule in AGENTS.md → "CI & Security". zizmor
-        # comes from the pinned set on the 26.05 base (the older base shipped only
-        # an ancient 0.2.1, which forced the second input alongside vulnix — no
-        # longer). See CONTRIBUTING.md → "Continuous Integration".
-        workflowLintInputs = [
-          pkgs.actionlint
-          pkgs.zizmor
-          # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already runs
-          # shellcheck on workflow `run:` blocks; this lints the committed scripts too.
-          pkgs.shellcheck
-        ];
-
-        # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
-        # through their own jobs, and both are in `task check`.
-        analysisInputs = [ hpkgs.weeder hpkgs.stan ];
-
         # Benchmarking and profiling: `task bench`, `task bench-load`, and the
-        # cost-centre flame graph from `task bench-profile`.
+        # cost-centre flame graph from `task bench-profile`. ghc-prof-flamegraph
+        # comes from the same pinned ghc910 set as every other Haskell tool (the
+        # 26.05 default set happens to be 9.10 too, so this is set-consistency
+        # insurance, not a closure change).
         benchInputs = [
-          pkgs.haskellPackages.ghc-prof-flamegraph
+          hpkgs.ghc-prof-flamegraph
           pkgs.flamegraph
           pkgs.oha
         ];
@@ -387,9 +491,9 @@
         # VS Code's vscode-languageclient. See AGENTS.md → "Build & Tooling".)
         # agent-lsp is not in nixpkgs, so it is built from tagged source via
         # buildGoModule; go.mod needs Go 1.26 (the 26.05 set ships go_1_26) and it
-        # is pure-Go (modernc sqlite — no cgo). HLS still needs the GHC 9.10
-        # toolchain + hspec-discover on PATH to load the Spec.hs modules (same
-        # reason as ideInputs), so they travel with it here.
+        # is pure-Go (modernc sqlite — no cgo). It rides the ide tier: the same
+        # shell already carries the GHC 9.10 toolchain and hspec-discover HLS
+        # needs to load the Spec.hs modules.
         agent-lsp = (pkgs.buildGoModule.override { go = pkgs.go_1_26; }) rec {
           pname = "agent-lsp";
           version = "0.15.0";
@@ -405,27 +509,16 @@
           ldflags = [ "-s" "-w" "-X main.Version=${version}" ];
         };
 
-        # Opt-in only: entirely separate from default/ci so it imposes nothing on
-        # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md).
-        mcpInputs = [
-          pkgs.bashInteractive
-          hpkgs.ghc
-          hpkgs.cabal-install
-          hpkgs.hspec-discover
-          hpkgs.haskell-language-server
-          agent-lsp
-        ];
-
-        # Every tool any CI job drives through `task`, in ONE closure. Bundling
-        # them means build-test realizes the whole thing and writes a single,
-        # comprehensive GitHub Actions cache entry, so every downstream job gets a
-        # 100% cache hit rather than substituting its own tools from
+        # Every tool any CI job drives through `task`, in ONE closure: the
+        # toolchain tier plus everything the gate, ops, and bench jobs add.
+        # Bundling them means build-test realizes the whole thing and writes a
+        # single, comprehensive GitHub Actions cache entry, so every downstream
+        # job gets a 100% cache hit rather than substituting its own tools from
         # cache.nixos.org on each run. Every gate job therefore enters `.#ci`; do
         # not add a job-specific shell without a closure that genuinely differs,
         # because a second closure means a second cache entry to warm and evict.
         ciShellInputs =
-          ciInputs ++ docsInputs ++ releaseInputs ++ scanInputs
-          ++ workflowLintInputs ++ analysisInputs ++ benchInputs;
+          toolchainInputs ++ gateInputs ++ opsInputs ++ benchInputs;
       in {
         packages = {
           default = ecluse;
@@ -437,6 +530,10 @@
           # SBOM and any verifier can target precisely what the image contains —
           # `nix build .#ecluse-bin` — rather than the noisier dynamic package.
           ecluse-bin = ecluseBin;
+
+          # The freeze projection of the package set (see cabalFreeze above);
+          # `task freeze` copies it over cabal.project.freeze.
+          cabal-freeze = cabalFreeze;
 
           # Lean, reproducible OCI image, built straight from the binary's Nix
           # closure — no Dockerfile, no base distro. It contains only the runtime
@@ -474,8 +571,7 @@
           };
         };
 
-        # The one flake check, and the only one CI builds
-        # (`nix build .#checks.x86_64-linux.docs`, the `docs` job).
+        # Flake checks; the CI `docs` job builds all of them.
         #
         # It is here rather than in the Taskfile because Nix can do something cabal
         # cannot: the dependency closure comes prebuilt from the pinned Haskell set
@@ -488,7 +584,33 @@
         # the Taskfile, where it runs incrementally and is what actually gates.
         # doHaddock forces the Haddock pass, so a broken doc comment fails the
         # build; dontCheck skips the test suites.
-        checks.docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
+        checks.docs = hlib.doHaddock ecluse;
+
+      # The two checks below clear the same bar in a different way: each compares
+      # the Nix and cabal views of one pin, which only Nix evaluation can see
+      # side by side.
+
+      # The committed freeze must equal the one derived from the package set.
+      checks.freeze-sync = pkgs.runCommand "freeze-sync" { } ''
+        if ! diff -u ${./cabal.project.freeze} ${cabalFreeze}; then
+          echo "cabal.project.freeze does not match the Nix package set." >&2
+          echo "Regenerate with 'task freeze' and commit the result." >&2
+          exit 1
+        fi
+        touch $out
+      '';
+
+      # cabal.project's amazonka source-repository-package tag must equal the
+      # rev this flake builds amazonka from.
+      checks.amazonka-lockstep = pkgs.runCommand "amazonka-lockstep" { } ''
+        if ! grep -Eq '^[[:space:]]*tag:[[:space:]]*${amazonkaRev}[[:space:]]*$' \
+            ${./cabal.project}; then
+          echo "cabal.project's amazonka tag differs from flake.nix amazonkaRev." >&2
+          echo "Bump both in the same commit, then run 'task freeze'." >&2
+          exit 1
+        fi
+        touch $out
+      '';
 
       devShells = {
         # The shell every CI job enters. See `ciShellInputs` for why it is one
@@ -514,14 +636,6 @@
           REDOC_JS = "${redocJs}";
         });
 
-        # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
-        # built by CI (the gate runs no `nix flake check`) and not part of the
-        # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`
-        # launch it. See AGENTS.md → "Build & Tooling".
-        mcp = pkgs.mkShell (shellEnv // {
-          name = "ecluse-mcp";
-          buildInputs = mcpInputs;
-        });
       };
     });
 }
