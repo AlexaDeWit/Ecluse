@@ -128,7 +128,6 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
     mkSriHashes,
-    renderPackageName,
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm.Wire (
@@ -137,6 +136,11 @@ import Ecluse.Core.Registry.Npm.Wire (
     VersionManifest (..),
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
+import Ecluse.Core.Registry.WireSupport (
+    NameAgreement (NameAgrees, NameDisagrees),
+    checkNameAgreement,
+    partitionLenient,
+ )
 import Ecluse.Core.Text (lastPathSegment)
 import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
@@ -171,22 +175,6 @@ instance FromJSON WirePackument where
                   -- already in ascending-key order, so the dropped-entry list is stable.
                   wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
                 }
-
-{- Partition a raw @key -> 'Value'@ map into the entries that decode and the ones that
-do not: each undecodable entry is dropped and recorded as an 'InvalidEntry' of the given
-'InvalidEntryKind', carrying its key, the __raw offending 'Value'__ (verbatim, for
-diagnostics), and the aeson decode error as the reason. The dropped list is in
-ascending-key order ('Map.foldrWithKey' visits keys ascending and each step prepends), so
-it is deterministic. This is the one place per-entry leniency and drop-tracking are
-realised, shared by the @dist-tags@\/@time@ axes (the @versions@ axis layers a domain
-decode on top). -}
-partitionLenient :: InvalidEntryKind -> (Value -> Either String a) -> Map Text Value -> (Map Text a, [InvalidEntry])
-partitionLenient kind decode =
-    Map.foldrWithKey step (Map.empty, [])
-  where
-    step key value (kept, dropped) = case decode value of
-        Right a -> (Map.insert key a kept, dropped)
-        Left err -> (kept, InvalidEntry kind key value (toText err) : dropped)
 
 {- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
 version key to 'Value', then keep only the entries that project to a 'VersionEntry',
@@ -274,18 +262,16 @@ parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
 
 {- Project + validate a decoded packument against the requested name. The genuine
-self-reported name (from 'projectPackageInfo', which fails an absent\/empty name as
-a 'ParseError') is compared to the request via 'PackageName' equality -- ecosystem-
-aware, so npm's case sensitivity is honoured. Equal yields 'Projected' carrying the
-genuine 'PackageInfo'; unequal yields 'NameMismatch' carrying what the upstream
-reported. The name is never substituted. -}
+self-reported name (from 'projectPackageInfo', which fails an absent\/empty name as a
+'ParseError') is checked against the request by the shared 'checkNameAgreement': agreement
+yields 'Projected' carrying the genuine 'PackageInfo', a disagreement a 'NameMismatch'
+carrying what the upstream reported. The name is never substituted. -}
 projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
 projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
-    pure $
-        if infoName info == requestedName
-            then Projected info
-            else NameMismatch (renderPackageName (infoName info))
+    pure $ case checkNameAgreement requestedName (infoName info) of
+        NameAgrees -> Projected info
+        NameDisagrees reported -> NameMismatch reported
 
 -- Project a decoded 'WirePackument' into the domain 'PackageInfo', taking the name
 -- from the upstream's self-reported @name@ (validated against the request by

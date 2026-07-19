@@ -106,6 +106,7 @@ library ecluse-core
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
     Ecluse.Core.InFlight
+    Ecluse.Core.Json.Lenient
     Ecluse.Core.Json.Selective
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
@@ -139,6 +140,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Publish
     Ecluse.Core.Registry.Request
+    Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Types
@@ -562,6 +564,7 @@ test-suite ecluse-core-unit
     Ecluse.Cve.SlotSpec
     Ecluse.CveSpec
     Ecluse.InFlightSpec
+    Ecluse.Json.LenientSpec
     Ecluse.Json.SelectiveSpec
     Ecluse.Package.AdmissionSpec
     Ecluse.Package.FilterSpec
@@ -589,6 +592,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.WireSpec
     Ecluse.Registry.PublishSpec
     Ecluse.Registry.RequestSpec
+    Ecluse.Registry.WireSupportSpec
     Ecluse.Test.Registry.Pypi.WireSpec
     Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec

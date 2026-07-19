@@ -79,14 +79,15 @@ module Ecluse.Core.Registry.Npm.Wire (
 import Data.Aeson (
     FromJSON (parseJSON),
     Object,
-    Value (Array, Bool, Null, Number, Object, String),
+    Value (Array, Bool, Object, String),
     withObject,
     (.!=),
     (.:),
     (.:?),
  )
-import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Parser, parseMaybe)
+
+import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 
 {- | A person associated with a package -- an author, maintainer, contributor, or
 the per-version publisher (@_npmUser@).
@@ -258,17 +259,6 @@ instance FromJSON Dist where
             <*> lenientOptional o "unpackedSize"
             <*> lenientSignatures o
 
-{- Decode an optional field __leniently__: an absent, @null@, or
-present-but-undecodable value all yield 'Nothing'. Where @(.:?)@ fails the whole
-decode on a present-but-wrong value, this degrades a hostile value (wrong-typed,
-fractional, or outside the target's range) to 'Nothing' instead. Reserved for the
-advisory @dist@ sub-fields, so one poisoned value cannot deny the whole packument;
-the load-bearing integrity fields keep @(.:?)@\/@(.:)@. -}
-lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
-lenientOptional o k = do
-    mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
-    pure (mv >>= parseMaybe parseJSON) -- but a Value that will not decode becomes Nothing
-
 {- Decode the advisory @signatures@ array __leniently__: skip any element that
 does not parse as a 'Signature' rather than failing the array, and treat a
 present-but-non-array value (or absence\/@null@) as no signatures. The 'Signature'
@@ -394,21 +384,3 @@ instance FromJSON ErrorResponse where
                     <$> o .:? "message"
                     <*> o .:? "error"
         other -> typeMismatchOneOf "ErrorResponse (object or string)" other
-
-{- Fail a lenient string-or-object decoder with a descriptive message,
-naming the accepted shapes and reporting what was actually found. A small wrapper
-that keeps the @other ->@ branch of each tolerant instance to one readable line.
--}
-typeMismatchOneOf :: String -> Value -> Parser a
-typeMismatchOneOf expected actual =
-    fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
-
--- A short, human description of a JSON value's kind, for parse-error messages.
-valueKind :: Value -> String
-valueKind = \case
-    Object{} -> "an object"
-    String{} -> "a string"
-    Array{} -> "an array"
-    Number{} -> "a number"
-    Bool{} -> "a boolean"
-    Null -> "null"
