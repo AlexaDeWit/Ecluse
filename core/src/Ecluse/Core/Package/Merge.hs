@@ -17,13 +17,13 @@ __Decision surface, not served surface.__ This module reasons over the /typed/
 'PackageInfo' but does __not__ emit a finished, re-serialisable 'PackageInfo'.
 The document Écluse serves is the raw upstream document, rebuilt from the winning
 sources so that every unmodeled wire key survives; the typed model is lossy, so
-re-encoding it would drop those keys. The serve layer holds that raw document opaquely
-(as a 'Ecluse.Core.Registry.CachedDocument.CachedDoc') and never reads it -- the rebuild
-runs through an injected adapter capability. This module therefore emits a 'MergePlan' --
-exactly which versions survive, which input each survivor came from, the reconciled
-@dist-tags@\/@time@, and the detected divergences -- that the serve layer __replays onto
-the raw documents__ through that capability. See @docs\/architecture\/registry-model.md@
-→ "Decision surface vs served surface".
+re-encoding it would drop those keys. The neutral pipeline holds that raw document opaquely
+(as a 'Ecluse.Core.Registry.CachedDocument.CachedDoc') and never reads it. This module
+therefore emits a 'MergePlan' -- exactly which versions survive, which input each survivor
+came from, the reconciled @dist-tags@\/@time@, and the detected divergences -- that an
+injected adapter capability __replays over the adapter's own projected representation__ of
+those documents (npm projects the 'CachedDoc' to a JSON @Value@ and replays there). See
+@docs\/architecture\/registry-model.md@ → "Decision surface vs served surface".
 
 The trust split is the __caller's__, expressed as a 'Provenance' tag on each
 input and applied /before/ the merge: 'TrustedSource' (private) versions are

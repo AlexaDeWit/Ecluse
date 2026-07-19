@@ -57,9 +57,10 @@ sees admitted versions (presence in the packument /is/ availability -- see
 The fused single pass is deliberate: restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times
 per request, and this transform sits on the serve path's hot loop (see
-@docs\/architecture\/performance.md@). The rewrite gates the interpolated name:
-the base document's own @name@ is validated component-wise ('safeName') before it
-is interpolated, and a document with no usable name has no URLs rewritten.
+@docs\/architecture\/performance.md@). The rewrite gates the interpolated name: the
+base document's own @name@ is validated component-wise by the shared gate
+('Ecluse.Core.Registry.Assembly.safeMountPrefix', over npm's 'npmNameComponents')
+before it is interpolated, and a document with no usable name has no URLs rewritten.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
     -- * URL rewriting
@@ -81,27 +82,28 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 
+import Lens.Micro ((%~), (^?))
+import Lens.Micro.Aeson (key, _String)
+
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
+import Ecluse.Core.Registry.Assembly (rebaseArtifactUrl, rebaseHook, replaySurvivors)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Server.Path (isSafeComponent)
-import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
+import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
-{- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
-rewritten @dist.tarball@ path: every structural component (the scope and base name
-either side of an @\@scope\/@ prefix, or the whole name when unscoped) must pass
-"Ecluse.Core.Server.Route.isSafeComponent". Splitting on the scope separator first means
-a legitimate @\@scope\/name@'s own @\'\/\'@ is not itself judged unsafe, while a
-slash anywhere else (a traversal, a path injection) is caught.
+{- | npm's __name grammar__, the one protocol fact the shared safety gate
+('Ecluse.Core.Registry.Assembly.safeMountPrefix') needs from npm: an @\@scope\/base@
+decomposes into its scope and base name, any other name is a single component.
+Splitting on the scope separator first means a legitimate @\@scope\/name@'s own
+@\'\/\'@ is not itself judged unsafe, while a slash anywhere else (a traversal, a
+path injection) leaves a component the gate rejects.
 -}
-safeName :: Text -> Bool
-safeName name = all isSafeComponent components
-  where
-    components = case T.stripPrefix "@" name of
-        Just scopeAndBase ->
-            let (scope, base) = T.breakOn "/" scopeAndBase
-             in if T.null base then [name] else [scope, T.drop 1 base]
-        Nothing -> [name]
+npmNameComponents :: Text -> [Text]
+npmNameComponents name = case T.stripPrefix "@" name of
+    Just scopeAndBase ->
+        let (scope, base) = T.breakOn "/" scopeAndBase
+         in if T.null base then [name] else [scope, T.drop 1 base]
+    Nothing -> [name]
 
 {- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the
 artifact is fetched back through this mount rather than directly from upstream.
@@ -122,21 +124,16 @@ before it reaches the prefix: 'assembleMergedPackument' performs that gate as it
 places each surviving version, and a caller building its own prefix owns it.
 -}
 rewriteVersion :: Text -> Value -> Value
-rewriteVersion prefix = \case
-    Object vo -> Object (adjustObject "dist" (rewriteDist prefix) vo)
-    other -> other
+rewriteVersion prefix v = v & tarballUrl %~ rebaseArtifactUrl (npmArtifactPath prefix)
+  where
+    -- npm's locator: where a version object keeps its artifact URL. A version with
+    -- no @dist@ object, no @tarball@, or a non-string @tarball@ has no target here,
+    -- so the traversal leaves it untouched.
+    tarballUrl = key "dist" . key "tarball" . _String
 
-{- | Rewrite a @dist@ object's @tarball@ to @{prefix}\/-\/{file}@, where @file@ is
-the existing URL's last path segment. A @dist@ with no string @tarball@, or a
-tarball with no filename segment, is left unchanged.
--}
-rewriteDist :: Text -> Value -> Value
-rewriteDist prefix = \case
-    Object dist
-        | Just url <- stringField "tarball" dist
-        , Just file <- lastPathSegment url ->
-            Object (KeyMap.insert "tarball" (String (prefix <> "/-/" <> file)) dist)
-    other -> other
+-- | npm's artifact path convention: the mount prefix, the @\/-\/@ infix, the filename.
+npmArtifactPath :: Text -> Text -> Text
+npmArtifactPath prefix file = prefix <> "/-/" <> file
 
 {- | Assemble the served packument from a 'MergePlan' and the raw source documents:
 rebuild @versions@, @dist-tags@, and @time@ from the plan onto the base document,
@@ -156,7 +153,8 @@ base document's non-version @created@\/@modified@ bookkeeping.
 The tarball rewrite applies 'rewriteVersion' to each surviving version as it is
 placed, so the versions object is built once rather than rebuilt by a second
 whole-document pass; the interpolated prefix is gated on the base document's own
-@name@ (validated by 'safeName'), with no rewrite when the name is unusable.
+@name@ through the shared 'Ecluse.Core.Registry.Assembly.rebaseHook', with no rewrite
+when the name is unusable or refuses the gate.
 
 The caller decides what to do with an empty plan; an empty 'mpSurvivors' simply
 assembles an empty @versions@ object. A non-object base document contributes no
@@ -165,51 +163,42 @@ result is always an object.
 -}
 assembleMergedPackument :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
-    Object rebuilt
+    -- The plan-owned keys win; every other key is relayed from the base document.
+    -- 'KeyMap.union' is left-biased, so naming the rebuilt keys first is what makes
+    -- them override the base's own @versions@\/@dist-tags@\/@time@.
+    Object
+        ( KeyMap.fromList
+            [ ("versions", Object survivingVersions)
+            , ("dist-tags", Object distTags)
+            , ("time", Object reconciledTime)
+            ]
+            `KeyMap.union` baseObject
+        )
   where
-    rebuilt :: KeyMap Value
-    rebuilt =
-        baseObject
-            & KeyMap.insert "versions" (Object survivingVersions)
-            & KeyMap.insert "dist-tags" (Object distTags)
-            & KeyMap.insert "time" (Object reconciledTime)
-
     baseObject :: KeyMap Value
     baseObject = case base of
         Object o -> o
         _ -> mempty
 
-    -- The per-version tarball rewrite, resolved once for the whole assembly:
-    -- 'rewriteVersion' under the @{base}/{pkg}@ prefix, over the base document's
-    -- safe-name-gated self-reported @name@. No usable or safe name -> no rewrite.
+    -- The per-version tarball rewrite, resolved once for the whole assembly: the
+    -- shared gate turns the base document's upstream-controlled self-reported @name@
+    -- into a validated @{base}/{pkg}@ prefix, and refuses (no rewrite) when it cannot.
     rewriteSurvivor :: Value -> Value
-    rewriteSurvivor = case stringField "name" baseObject of
-        Just pkg | safeName pkg -> rewriteVersion (joinUrlPath mountBase pkg)
-        _ -> id
+    rewriteSurvivor =
+        rebaseHook npmNameComponents rewriteVersion mountBase (base ^? key "name" . _String)
 
     -- Each surviving version's object, taken from the raw @Value@ of the source
-    -- that won the key (so the served bytes are the winning upstream's, unmodelled
-    -- keys and all), rewritten as it is placed. A survivor whose source object is
-    -- missing is dropped rather than fabricated.
+    -- that won its key (so the served bytes are the winning upstream's, unmodelled
+    -- keys and all), rewritten as placed. The fold and the drop-if-missing rule are
+    -- the shared skeleton's ('replaySurvivors').
     survivingVersions :: KeyMap Value
-    survivingVersions =
-        KeyMap.fromList
-            [ (Key.fromText version, rewriteSurvivor object)
-            | (version, sid) <- Map.toList (mpSurvivors plan)
-            , Just object <- [versionObjectFrom sid version]
-            ]
+    survivingVersions = replaySurvivors rewriteSurvivor versionsBySource (mpSurvivors plan)
 
-    -- Each source's raw @versions@ object, extracted once per source.
-    -- 'versionObjectFrom' runs once per surviving version (up to the packument's
-    -- version cap), so resolving the source's @versions@ object inside it would
-    -- re-extract the same object on every version; hoisting it here leaves each
-    -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
+    -- Each source's raw @versions@ object, extracted once per source, so each
+    -- survivor the skeleton places costs a single inner keymap lookup rather than
+    -- re-extracting the object. ('bySource' holds one entry per upstream.)
     versionsBySource :: Map SourceId (KeyMap Value)
     versionsBySource = Map.mapMaybe versionsObjectOf bySource
-
-    versionObjectFrom :: SourceId -> Text -> Maybe Value
-    versionObjectFrom sid version =
-        Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
 
     -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
     -- string). The plan has already resolved @latest@ and dropped absent-target
@@ -285,18 +274,3 @@ timeBookkeepingKeys = ["created", "modified"]
 -- runs once per surviving version per request.
 renderTime :: UTCTime -> Text
 renderTime = renderIso8601Utc
-
-{- | Apply a function to the value at @key@ in an object, only when that key is
-present. A missing key is left absent (no key is fabricated), preserving lossless
-passthrough; the function itself decides what to do with a non-object value.
--}
-adjustObject :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
-adjustObject key f o = case KeyMap.lookup key o of
-    Just v -> KeyMap.insert key (f v) o
-    Nothing -> o
-
--- | The 'Text' at @key@ in an object, if present and a JSON string.
-stringField :: Key.Key -> KeyMap Value -> Maybe Text
-stringField key o = case KeyMap.lookup key o of
-    Just (String s) -> Just s
-    _ -> Nothing

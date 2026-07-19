@@ -124,6 +124,7 @@ library ecluse-core
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Adapter
     Ecluse.Core.Registry.Adapter.Types
+    Ecluse.Core.Registry.Assembly
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Fault
@@ -581,6 +582,7 @@ test-suite ecluse-core-unit
     Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.AdapterSpec
+    Ecluse.Registry.AssemblySpec
     Ecluse.Registry.CachedDocumentSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
