@@ -26,7 +26,7 @@ durable memory: load detailed guidance only when the task needs it. See
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
-| Coordinate implementation slices | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
+| Coordinate implementation slices | the `orchestrate-implementation` skill and [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
 | Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md), the PR template, and the `open-pull-request` skill |
 | Run in a hosted/web execution environment | [`.agents/remote-execution.md`](.agents/remote-execution.md) |
 

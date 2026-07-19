@@ -5,6 +5,9 @@ _process_; the system design is in [`../docs/architecture.md`](../docs/architect
 development workflow and CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
 [`../docs/style.md`](../docs/style.md), and agent-facing essentials in [`../AGENTS.md`](../AGENTS.md).
 
+This document is the reference. The `orchestrate-implementation` skill is the imperative procedure a
+team lead runs: it carries the per-PR loop and the hand-off gate and links back here for depth.
+
 ## Roles
 
 - **Principal architect** (the repo owner) owns the design and the requirements and is the final
@@ -64,16 +67,22 @@ surface](../docs/architecture/registry-model.md#decision-surface-vs-served-surfa
 ```mermaid
 flowchart TD
     P["Pick a DAG node<br/>(dependencies merged)"] --> B["BUILD<br/>implementer · own worktree · TDD<br/>fast local check, not the full gate"]
-    B --> E["EVALUATE<br/>fresh reviewer · Stage A + Stage B<br/>team lead reads the diff"]
-    E -->|changes required| B
-    E -->|clean| G["GATE<br/>open the draft PR ·<br/>CI is the gate, watch it green"]
-    G --> H(["HAND OFF<br/>mark ready for review<br/>(draft until all the above is green)"])
+    B --> E["EVALUATE (mandatory)<br/>fresh-context reviewer · Stage A + Stage B<br/>team lead reads the diff"]
+    E -->|critical findings| B
+    E -->|passed| G["GATE<br/>open the draft PR ·<br/>watch the CI gate to green"]
+    G --> H(["HAND OFF<br/>flip ready for review<br/>(only after evaluation passes AND the gate is green)"])
 ```
 
-**Draft until ready.** A PR opens as a **draft** and stays one until it has cleared EVALUATE and the
-gate and the team lead is confident handing it over. Marking it **ready for review** is the hand-off
-signal: it means ready for the architect to review and potentially merge, nothing less. A PR still
-building, mid-review, gate-red, or that the team lead is simply unsure of stays a draft, so the
+> **Two gates, not one.** A PR flips **ready for review** only when both hold: the independent
+> [Stage A + Stage B evaluation](#evaluation-two-independent-passes) has passed with no open critical
+> findings, and the CI `gate` is green. A green gate is necessary but not sufficient. It verifies
+> build and test; it does not judge requirements, quality, or security, which the evaluation covers.
+> Neither substitutes for the other, and a green gate never flips a PR ready on its own.
+
+**Draft until ready.** A PR opens as a **draft** and stays one until both gates hold and the team
+lead is confident handing it over. Marking it **ready for review** is the hand-off signal: ready for
+the architect to review and potentially merge, nothing less. A PR still building, mid-review,
+evaluation-blocked, gate-red, or that the team lead is simply unsure of stays a draft, so the
 architect never spends attention on, or merges, work that was not deliberately offered. This is the
 one definition of ready-for-review; later sections reference it.
 
@@ -148,7 +157,10 @@ direnv re-evaluates on pull, so the Taskfile is left as-is.
 
 ## Evaluation: two independent passes
 
-The implementer's own "it works" does not count; evidence does.
+Independent evaluation is mandatory for every PR before it flips ready. A fresh-context reviewer runs
+both passes: no exposure to the implementer's reasoning, read-and-verify only (see [Subagents and
+isolation](#subagents-and-isolation)). The implementer's own "it works" does not count; evidence
+does. A green CI gate does not stand in for this pass.
 
 - **Stage A, requirements.** Every acceptance criterion is met _and_ backed by a deterministic,
   gating test (unit or integration); a non-gating smoke test detects drift but never stands in for a
@@ -201,12 +213,18 @@ any whose fix shipped with a `Resolved by #PR` note. An issue left open for a re
 addressed, or a follow-on tracked separately) keeps a note on what remains. The pass **gates the next
 wave**: the integrated base is made coherent first, recorded in the milestone sequence.
 
-## Verification: fast local, CI is the gate
+## Verification: fast local, CI gates build and test
 
-CI **is** the gate; local verification is for fast feedback, not a pre-push ceremony. Every CI job
-just calls `task`, and CI runs the tiers in parallel, so reproducing the slow parallelisable ones
-(Docker integration, `nix-check`, Haddock) serially on one contended host is wasted work, and
-reproducing the whole gate before pushing runs it twice.
+CI is the gate for build and test verification; local verification is for fast feedback, not a
+pre-push ceremony. The `gate` is necessary but not sufficient for hand-off: it proves the code builds
+and the tests pass, not that the slice meets its requirements or clears quality and security review.
+That judgement is the independent [Stage A + Stage B evaluation](#evaluation-two-independent-passes),
+a separate required step. A green gate never flips a PR ready on its own; the evaluation must have
+passed with no open critical findings as well. Neither substitutes for the other.
+
+Every CI job just calls `task`, and CI runs the tiers in parallel, so reproducing the slow
+parallelisable ones (Docker integration, `nix-check`, Haddock) serially on one contended host is
+wasted work, and reproducing the whole gate before pushing runs it twice.
 
 For single-slice work on an otherwise-idle host, the **fast floor** is the whole local obligation
 before pushing:
@@ -280,7 +298,8 @@ A PR reaches the architect only when **all** hold:
 
 - [ ] Every acceptance criterion met, each with passing deterministic, gating (unit/integration) test
       evidence; a non-gating smoke test never stands in for a criterion.
-- [ ] Independent review (Stage A + B) passed; no open critical issues.
+- [ ] Independent Stage A + Stage B evaluation, by a fresh-context reviewer, passed with no open
+      critical findings. Mandatory for every PR; a green CI `gate` does not substitute.
 - [ ] Local verification passed before pushing: `task check` for single-slice work, `task format`
       plus a green CI run for batch work.
 - [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop, not a
