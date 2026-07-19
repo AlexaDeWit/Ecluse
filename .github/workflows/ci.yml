@@ -280,7 +280,11 @@ jobs:
   docs:
     name: Haddock builds
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Sized for a cold run after a dependency-overlay change in flake.nix, which
+    # rebuilds the overridden closure's doc outputs from source (the nix-docs
+    # cache is written on main only, so the first PR run pays it all). Warm runs
+    # finish in a fraction of this.
+    timeout-minutes: 45
     # Builds the library Haddock so broken doc comments / missing modules are caught
     # on the PR, not after merge when the Pages deploy fails. Builds it as the
     # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
