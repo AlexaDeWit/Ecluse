@@ -16,7 +16,7 @@ category:      Network, Security
 build-type:    Simple
 
 -- Test fixtures read at runtime by the pure unit suite. The version-ordering
--- file is reference-oracle output (regenerate with `make gen-version-fixtures`);
+-- file is reference-oracle output (regenerate with `task gen-version-fixtures`);
 -- the npm/*.json bodies are captures derived from
 -- docs/research/reverse-engineering/npm.md, decoded by Ecluse.Registry.Npm.Wire.
 -- express.full.json is a real, untrimmed capture of a large trusted package's full
@@ -25,7 +25,7 @@ build-type:    Simple
 --
 -- bench/corpus/npm/*.json is the curated real-world packument corpus the benchmarks
 -- read at run time (frozen data, pinned by bench/corpus/pins.json and re-captured
--- deliberately with `make gen-bench-corpus`; see docs/architecture/performance.md).
+-- deliberately with `task gen-bench-corpus`; see docs/architecture/performance.md).
 -- bench/corpus/pins.json is the shared registry catalogue (capture pins + the smoke
 -- curated names) read by the Node capture script and Ecluse.Test.RegistryCapture.
 -- acceptance/criteria.json is the version-controlled acceptance budget for the live

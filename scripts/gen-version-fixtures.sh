@@ -14,7 +14,7 @@
 # whatever tools are installed) by the non-gating smoke test; see
 # docs/architecture/domain-model.md -> "Internal Domain Model".
 #
-# Usage:  make gen-version-fixtures   (runs inside the Nix dev shell)
+# Usage:  task gen-version-fixtures   (runs inside the Nix dev shell)
 #
 # Fixture line format (one comparison per line):  ECOSYSTEM|A|B|ORD
 # where ORD is LT | EQ | GT, the ordering of A relative to B.

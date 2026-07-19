@@ -8,7 +8,7 @@
 # purpose — each tier uploads under its own flag — but a developer reading a single
 # tier's number is under-counting every module the other tier exercises. For the
 # merged picture that matches the Codecov dashboard, run the combined report:
-#   scripts/coverage-combined.sh   (make coverage)   — needs Docker.
+#   scripts/coverage-combined.sh   (task coverage)   — needs Docker.
 # Each non-combined run prints this caveat (suppressed via
 # ECLUSE_COVERAGE_QUIET_PARTIAL=1 when the combined script drives it internally).
 #
@@ -46,7 +46,7 @@ if [ -z "${ECLUSE_COVERAGE_QUIET_PARTIAL:-}" ]; then
     echo "coverage: PARTIAL VIEW — measuring '$suite' ONLY."
     echo "  Codecov merges this with '$other' into the project total, so this number"
     echo "  under-counts every module '$other' exercises. For the merged, Codecov-matching"
-    echo "  picture run:  make coverage   (combined unit ∪ integration; needs Docker)."
+    echo "  picture run:  task coverage   (combined unit ∪ integration; needs Docker)."
   } >&2
 fi
 
