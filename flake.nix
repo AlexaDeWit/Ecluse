@@ -153,8 +153,43 @@
             } { };
         };
 
+        # amazonka, built from source at the exact rev the cabal path pins in
+        # cabal.project (source-repository-package). The Hackage release is capped
+        # at 2.0/2023 (GHC <= 9.6), so it must come from the upstream monorepo;
+        # pinning our own rev here (rather than riding nixpkgs' internal
+        # amazonkaSrc pin) means a flake.lock refresh can never move amazonka out
+        # from under the cabal path. checks.amazonka-lockstep holds this rev and
+        # cabal.project's tag together: bump both in the same commit, then run
+        # `task freeze`.
+        amazonkaRev = "7645bd335f008912b9e5257486f622b674de7afa";
+        amazonkaSrc = pkgs.fetchFromGitHub {
+          owner = "brendanhay";
+          repo = "amazonka";
+          rev = amazonkaRev;
+          hash = "sha256-ObamDnJdcLA2BlX9iGIxkaknUeL3Po3madKO4JA/em0=";
+        };
+
+        # The same subdirectory set cabal.project vendors: the umbrella package,
+        # its own dependencies, and the service leaves we call. dontCheck for the
+        # same reason as cvss above: their test suites are not ours to gate.
+        amazonkaOverlay = hself: _hsuper:
+          let
+            fromMonorepo = name: subdir:
+              hlib.dontCheck
+                (hself.callCabal2nix name "${amazonkaSrc}/${subdir}" { });
+          in {
+            amazonka = fromMonorepo "amazonka" "lib/amazonka";
+            amazonka-core = fromMonorepo "amazonka-core" "lib/amazonka-core";
+            amazonka-sso = fromMonorepo "amazonka-sso" "lib/services/amazonka-sso";
+            amazonka-sts = fromMonorepo "amazonka-sts" "lib/services/amazonka-sts";
+            amazonka-codeartifact =
+              fromMonorepo "amazonka-codeartifact" "lib/services/amazonka-codeartifact";
+            amazonka-sqs = fromMonorepo "amazonka-sqs" "lib/services/amazonka-sqs";
+            amazonka-s3 = fromMonorepo "amazonka-s3" "lib/services/amazonka-s3";
+          };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
-          overrides = otelOverlay;
+          overrides = pkgs.lib.composeExtensions otelOverlay amazonkaOverlay;
         };
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
@@ -164,10 +199,66 @@
         # package on any change, so it is poor for edit-compile cycles).
         ecluseRaw = hpkgs.callCabal2nix "ecluse" ./. { };
 
+        # Dep-extraction variant of ecluseRaw: cabal2nix omits benchmark
+        # components unless asked, and the freeze must pin the bench deps too.
+        # Only evaluated for getCabalDeps below, never built, so enabling
+        # benchmarks here costs the artifact nothing.
+        ecluseForDeps =
+          hpkgs.callCabal2nixWithOptions "ecluse" ./. "--benchmark" { };
+
+        # Every Haskell dependency of every ecluse component (library, executable,
+        # test suites, benchmarks, build tools) as one GHC package environment, so
+        # ghc-pkg can report the exact resolved closure, boot libraries included.
+        ecluseDepEnv =
+          let d = ecluseForDeps.getCabalDeps;
+          in hpkgs.ghcWithPackages (_:
+            pkgs.lib.filter (x: x != null) (pkgs.lib.concatLists [
+              (d.buildDepends or [ ])
+              (d.libraryHaskellDepends or [ ])
+              (d.executableHaskellDepends or [ ])
+              (d.testHaskellDepends or [ ])
+              (d.benchmarkHaskellDepends or [ ])
+              (d.setupHaskellDepends or [ ])
+              (d.libraryToolDepends or [ ])
+              (d.executableToolDepends or [ ])
+              (d.testToolDepends or [ ])
+              (d.benchmarkToolDepends or [ ])
+            ]));
+
+        # cabal.project.freeze, derived from this flake's package set. The Nix
+        # side is the version authority; the freeze projects it onto the cabal
+        # path so `cabal` (dev shell + CI gate) resolves the exact closure the
+        # shipped artifact is built from. Versions only: flag choices follow each
+        # side's defaults, and no index-state line is emitted (cabal.project owns
+        # the only copy). The z- ids ghc-pkg also registers are internal
+        # sublibraries of dependencies, not solver targets, hence the filter.
+        # Regenerate with `task freeze`; checks.freeze-sync keeps the committed
+        # file honest.
+        cabalFreeze = pkgs.runCommand "cabal.project.freeze" { } ''
+          ${ecluseDepEnv}/bin/ghc-pkg list --simple-output \
+            | tr ' ' '\n' \
+            | awk -F- '
+                NF >= 2 && $NF ~ /^[0-9][0-9.]*$/ {
+                  v = $NF
+                  name = $1
+                  for (i = 2; i < NF; i++) name = name "-" $i
+                  if (name != "ecluse" && name !~ /^z-/) print name " " v
+                }' \
+            | LC_ALL=C sort -u \
+            | awk '
+                BEGIN { pre = "constraints: " }
+                { lines[NR] = pre "any." $1 " ==" $2; pre = "             " }
+                END {
+                  for (i = 1; i < NR; i++) print lines[i] ","
+                  print lines[NR]
+                }' \
+            > $out
+        '';
+
         # Release artifact: library + executable only. dontCheck keeps the build
-        # from running the test suites — the pure tier is a flake check below, and
-        # the impure suites (integration → Docker, smoke → live network) never
-        # belong in a hermetic build.
+        # from running the test suites: those run on the cabal path (see
+        # docs/testing.md), and the impure suites (integration → Docker, smoke →
+        # live network) never belong in a hermetic build.
         ecluse = hlib.dontCheck ecluseRaw;
 
         # The executable alone, stripped and with its reference to the full
@@ -212,9 +303,10 @@
         # node2nix-generated `nodePackages` set; the blessed replacement is to
         # build node_modules from a committed lockfile. `importNpmLock` reads the
         # integrity hashes already in test/oracles/package-lock.json (no separate
-        # Nix hash to maintain), and Renovate's npm manager bumps that lockfile on
-        # the same cadence as every other ecosystem. Exposed on NODE_PATH below
-        # so `require("semver")` resolves.
+        # Nix hash to maintain). The oracle is deliberately outside Renovate's
+        # reach (renovate.json5 ignorePaths): it is reference test data, refreshed
+        # by hand with the fixture workflow, never auto-bumped. Exposed on
+        # NODE_PATH below so `require("semver")` resolves.
         oracleNodeModules = pkgs.importNpmLock.buildNodeModules {
           npmRoot = ./test/oracles;
           inherit (pkgs) nodejs;
@@ -331,9 +423,11 @@
         # comprehensive and patch-aware but un-graded, so not the authority. On
         # the 26.05 base it comes straight from the pinned set (the older base's
         # vulnix was broken against NVD's feeds, forcing a second input — no
-        # longer). Haskell-advisory coverage (cabal-audit / HSEC) is a deferred
-        # follow-up — the static Haskell deps are a lower-risk surface. See
-        # CONTRIBUTING.md → "Vulnerability scanning".
+        # longer). Haskell-advisory (HSEC) coverage is the scheduled OSV.dev scan
+        # of cabal.project.freeze (security.yml, scripts/osv-freeze-scan.sh);
+        # checks.freeze-sync keeps that file equal to this flake's package set,
+        # so the scan describes the closure the image ships. See CONTRIBUTING.md
+        # → "Vulnerability scanning".
         scanInputs = [
           pkgs.grype
           pkgs.vulnix
@@ -438,6 +532,10 @@
           # `nix build .#ecluse-bin` — rather than the noisier dynamic package.
           ecluse-bin = ecluseBin;
 
+          # The freeze projection of the package set (see cabalFreeze above);
+          # `task freeze` copies it over cabal.project.freeze.
+          cabal-freeze = cabalFreeze;
+
           # Lean, reproducible OCI image, built straight from the binary's Nix
           # closure — no Dockerfile, no base distro. It contains only the runtime
           # closure plus CA certificates: no shell, no package manager, runs
@@ -474,8 +572,7 @@
           };
         };
 
-        # The one flake check, and the only one CI builds
-        # (`nix build .#checks.x86_64-linux.docs`, the `docs` job).
+        # Flake checks; the CI `docs` job builds all of them.
         #
         # It is here rather than in the Taskfile because Nix can do something cabal
         # cannot: the dependency closure comes prebuilt from the pinned Haskell set
@@ -489,6 +586,32 @@
         # doHaddock forces the Haddock pass, so a broken doc comment fails the
         # build; dontCheck skips the test suites.
         checks.docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
+
+      # The two checks below clear the same bar in a different way: each compares
+      # the Nix and cabal views of one pin, which only Nix evaluation can see
+      # side by side.
+
+      # The committed freeze must equal the one derived from the package set.
+      checks.freeze-sync = pkgs.runCommand "freeze-sync" { } ''
+        if ! diff -u ${./cabal.project.freeze} ${cabalFreeze}; then
+          echo "cabal.project.freeze does not match the Nix package set." >&2
+          echo "Regenerate with 'task freeze' and commit the result." >&2
+          exit 1
+        fi
+        touch $out
+      '';
+
+      # cabal.project's amazonka source-repository-package tag must equal the
+      # rev this flake builds amazonka from.
+      checks.amazonka-lockstep = pkgs.runCommand "amazonka-lockstep" { } ''
+        if ! grep -Eq '^[[:space:]]*tag:[[:space:]]*${amazonkaRev}[[:space:]]*$' \
+            ${./cabal.project}; then
+          echo "cabal.project's amazonka tag differs from flake.nix amazonkaRev." >&2
+          echo "Bump both in the same commit, then run 'task freeze'." >&2
+          exit 1
+        fi
+        touch $out
+      '';
 
       devShells = {
         # The shell every CI job enters. See `ciShellInputs` for why it is one
