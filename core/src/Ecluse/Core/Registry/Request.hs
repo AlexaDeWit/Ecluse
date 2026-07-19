@@ -71,7 +71,7 @@ Redirect-following for a nonstandard upstream (a presigned/redirecting object st
 explicit, per-upstream opt-in, never the default.
 -}
 finaliseRequest :: (Request -> Request) -> Request -> Request
-finaliseRequest attachCredential request = attachCredential request{redirectCount = 0}
+finaliseRequest attachCredential request = (attachCredential request){redirectCount = 0}
 
 {- | The conditional-GET validators to relay on a metadata fetch. Replaying an
 upstream's @ETag@ as @If-None-Match@ (or its @Last-Modified@ as @If-Modified-Since@) lets

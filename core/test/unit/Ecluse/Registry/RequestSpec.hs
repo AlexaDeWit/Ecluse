@@ -54,6 +54,10 @@ finaliseRequestSpec = describe "finaliseRequest pins the redirect count for ever
         req <- parseOrFail "https://reg.test/x"
         lookup "Authorization" (Client.requestHeaders (finaliseRequest id req)) `shouldBe` Nothing
 
+    it "pins the redirect count even when the injected attach itself sets one (un-bypassable)" $ do
+        req <- parseOrFail "https://reg.test/x"
+        Client.redirectCount (finaliseRequest overrideRedirects req) `shouldBe` 0
+
 artifactByUrlSpec :: Spec
 artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, by url)" $ do
     it "addresses the authoritative URL verbatim (host, path, query) and never decompresses" $ do
@@ -119,6 +123,10 @@ parseOrFail = Client.parseRequest . toString
 
 addAuth :: ByteString -> Client.Request -> Client.Request
 addAuth value req = req{Client.requestHeaders = ("Authorization", value) : Client.requestHeaders req}
+
+-- An attach that (wrongly) reopens redirect following; the finaliser's pin must still win.
+overrideRedirects :: Client.Request -> Client.Request
+overrideRedirects req = req{Client.redirectCount = 10}
 
 urlErrorWas :: UrlFormationError -> Either UrlFormationError a -> Bool
 urlErrorWas expected = either (== expected) (const False)
