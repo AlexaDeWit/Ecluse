@@ -67,9 +67,13 @@ module Ecluse.Core.Registry.Npm.Filter (
 
     -- * Assembling the served document
     assembleMergedPackument,
+
+    -- * The served-document boundary (npm's 'CachedDoc' capabilities)
+    assembleMergedDocument,
+    serialiseMergedDocument,
 ) where
 
-import Data.Aeson (Value (Object, String))
+import Data.Aeson (Value (Object, String), encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -78,6 +82,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
@@ -240,6 +245,30 @@ assembleMergedPackument mountBase bySource plan base =
                 , Just value <- [KeyMap.lookup k timeObject]
                 ]
         _ -> mempty
+
+{- | npm's served-document __assemble__ capability
+('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'): project each per-source
+'CachedDoc' and the precedence-winning base document into npm's 'Value', replay the plan
+through 'assembleMergedPackument', and inject the assembled 'Value' back. The neutral
+pipeline threads the documents opaquely; the projection\/injection is npm's boundary.
+-}
+assembleMergedDocument :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
+assembleMergedDocument mountBase bySource plan base =
+    fst npmCached (assembleMergedPackument mountBase (Map.map npmValue bySource) plan (maybe (Object mempty) npmValue base))
+
+{- | npm's served-document __serialise__ capability
+('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'): project the assembled
+'CachedDoc' to npm's 'Value' and encode it compactly to the wire bytes.
+-}
+serialiseMergedDocument :: CachedDoc -> LByteString
+serialiseMergedDocument = encode . npmValue
+
+-- Project a served document back to npm's 'Value'. The single disposition for the
+-- projection boundary: a document npm did not inject falls back to the empty object (a
+-- benign miss that contributes no keys and no versions). npm is the only injector, so
+-- this default is never taken in practice.
+npmValue :: CachedDoc -> Value
+npmValue = fromMaybe (Object mempty) . snd npmCached
 
 -- A source document's raw @versions@ object, when the document carries one.
 versionsObjectOf :: Value -> Maybe (KeyMap Value)

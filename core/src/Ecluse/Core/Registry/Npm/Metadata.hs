@@ -58,6 +58,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (enforceArtifactScheme, enforceArtifactSchemeDetails)
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
@@ -143,7 +144,9 @@ fetchNpmManifest tracing config name =
                             <$> projectNpmManifest (npmLimits config) name body
                         )
   where
-    manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = raw, manifestDigest = digest}
+    -- Inject npm's raw packument 'Value' into the opaque served-document carrier at the
+    -- fetch boundary: the neutral pipeline and cache thread it without reading it.
+    manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = fst npmCached raw, manifestDigest = digest}
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.

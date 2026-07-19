@@ -54,7 +54,6 @@ module Ecluse.Core.Server.Context (
     runHandler,
 ) where
 
-import Data.Aeson (Value)
 import Data.IP (IPRange)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
@@ -72,6 +71,7 @@ import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy, MergePlan, SourceId)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
@@ -272,11 +272,17 @@ data PackumentDeps = PackumentDeps
     -}
     , pdBuildArtifactRequestByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
     -- ^ Build an artifact request by authoritative URL for the public leg.
-    , pdAssemble :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
-    {- ^ Assemble the served document from a merge plan and the raw source
-    documents: rebuild the plan-owned keys onto the base document from the winning
-    sources, rewriting each surviving version's artifact URL under the given mount
-    base in the same pass.
+    , pdAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
+    {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
+    documents: rebuild the plan-owned keys onto the precedence-winning base document
+    ('Nothing' when there is none) from the winning sources, rewriting each surviving
+    version's artifact URL under the given mount base in the same pass. The adapter reads
+    the documents; the pipeline threads them opaquely.
+    -}
+    , pdSerialise :: CachedDoc -> LByteString
+    {- ^ Encode an assembled served document ('CachedDoc') to its wire bytes, through the
+    adapter's own representation, so the serve tail materialises the served body without
+    reading the document.
     -}
     , pdEgressUrl :: Text -> Either Text RegistryUrl
     {- ^ Form the validated egress witness for an artifact URL about to leave the

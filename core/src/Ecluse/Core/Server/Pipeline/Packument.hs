@@ -81,8 +81,6 @@ module Ecluse.Core.Server.Pipeline.Packument (
 ) where
 
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
-import Data.Aeson (Value (Object))
-import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -111,6 +109,7 @@ import Ecluse.Core.Package.Merge (
     applyDivergencePolicy,
     mergePackuments,
  )
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest (manifestDigest, manifestInfo, manifestRaw),
@@ -461,9 +460,9 @@ projectDecisions info =
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
--- The fully-edited served body: the raw @Value@ to encode and answer against the
--- conditional request.
-newtype ServedBody = ServedBody {servedValue :: Value}
+-- The fully-assembled served body: the served document ('CachedDoc') to serialise
+-- and answer against the conditional request.
+newtype ServedBody = ServedBody {servedDoc :: CachedDoc}
 
 {- Merge the resolved sources into the serve plan, or 'Nothing' when no version
 survives the merge (no source resolved, or every public version was excluded and no
@@ -542,39 +541,36 @@ servedBytes rt deps sources plan etag =
     resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
         markRenderEscape $
             pure $!
-                LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
+                LBS.toStrict (pdSerialise deps (servedDoc (renderServedBody deps sources plan)))
   where
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
 {- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
-@Value@s.
+documents, through the mount's injected 'pdAssemble'.
 
-The merge decides over the typed 'PackageInfo's; the served body is built from the
-raw @Value@s so unmodeled keys survive. For each surviving @(version, SourceId)@
-the version object is taken from that source's raw @Value@; @dist-tags@ and @time@
-come from the plan (with @time@'s non-version bookkeeping keys retained from the
-sources); every other top-level key is relayed from the precedence-winning
-document. Tarball URLs are rewritten under the mount base so artifacts route back
-through the gate. Runs only on a 'Modified' outcome -- a @304@ never pays for it. -}
+The merge decides over the typed 'PackageInfo's; the served body is built from the raw
+documents so unmodeled keys survive. The pipeline hands the per-source documents and the
+precedence-winning base document ('CachedDoc', opaque here) to 'pdAssemble', which reads
+them in the adapter's own representation, rebuilds @versions@ / @dist-tags@ / @time@ from
+the plan onto the base, rewrites each surviving version's tarball under the mount base,
+and returns the assembled document. Runs only on a 'Modified' outcome -- a @304@ never
+pays for it. -}
 renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
 renderServedBody deps sources plan =
     ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources))
   where
-    bySource :: Map SourceId Value
+    bySource :: Map SourceId CachedDoc
     bySource = Map.fromList (zip [0 ..] (map srcValue sources))
 
 {- The document whose unmodeled top-level keys are relayed into the served body:
-the precedence-winning source's raw @Value@ -- the first trusted source if any,
-else the first source. (The merge takes its identity from the first input
-likewise.) An empty source list never reaches here. -}
-baseDocument :: [Contribution] -> Value
+the precedence-winning source's raw document -- the first trusted source if any, else the
+first source. (The merge takes its identity from the first input likewise.) 'Nothing'
+only for an empty source list, which never reaches here; the injected assembly then has
+no base document to relay. -}
+baseDocument :: [Contribution] -> Maybe CachedDoc
 baseDocument sources =
-    case find ((== TrustedSource) . srcProvenance) sources of
-        Just s -> srcValue s
-        Nothing -> case sources of
-            s : _ -> srcValue s
-            [] -> Object mempty
+    srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
 
 {- The per-version serve decisions weighed for the no-survivors status: the
 public-set exclusions, plus the per-origin signals each upstream contributes.

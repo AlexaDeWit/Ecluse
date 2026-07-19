@@ -41,7 +41,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Rules (PreparedRule)
@@ -86,7 +86,8 @@ npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
             newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch (NpmClientConfig baseUrl manager token limits)
         , pdBuildArtifactRequestByFile = \_limits _manager base token -> artifactRequestByFile base token
         , pdBuildArtifactRequestByUrl = \_limits _manager base token -> artifactRequestByUrl base token
-        , pdAssemble = assembleMergedPackument
+        , pdAssemble = assembleMergedDocument
+        , pdSerialise = serialiseMergedDocument
         , pdEgressUrl = mkRegistryUrl
         }
 

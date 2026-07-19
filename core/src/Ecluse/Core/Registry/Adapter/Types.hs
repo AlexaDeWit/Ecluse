@@ -39,7 +39,6 @@ module Ecluse.Core.Registry.Adapter.Types (
     AdapterPublish (..),
 ) where
 
-import Data.Aeson (Value)
 import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
@@ -51,6 +50,7 @@ import Ecluse.Core.Registry (
     PublishRelayResponse,
     UrlFormationError,
  )
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
@@ -137,10 +137,17 @@ data AdapterMetadata = AdapterMetadata
     runtime parameters; the adapter closes over the ecosystem's raw fetch
     primitives.
     -}
-    , metadataAssemble :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
-    {- ^ Assemble the served document from a merge plan and the raw source
-    documents, rewriting each surviving version's artifact URL under the given
-    mount base.
+    , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
+    {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
+    documents, rewriting each surviving version's artifact URL under the given mount
+    base. The adapter projects each source and the precedence-winning base document
+    ('Nothing' when there is none) into its own representation, merges, and injects the
+    result back, so the neutral pipeline threads the documents without reading them.
+    -}
+    , metadataSerialise :: CachedDoc -> LByteString
+    {- ^ Encode an assembled served document ('CachedDoc') to its wire bytes. The
+    adapter projects the document to its own representation and serialises it, so the
+    neutral serve tail turns a served document into bytes without knowing its shape.
     -}
     }
 

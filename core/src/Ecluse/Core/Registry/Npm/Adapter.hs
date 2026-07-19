@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig),
     relayPublishDocument,
  )
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
@@ -57,7 +57,8 @@ npmAdapter =
             AdapterMetadata
                 { metadataNewClient = \tracing metrics upstream caching logFailure logInvalid logFetch limits manager baseUrl token ->
                     newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch (NpmClientConfig baseUrl manager token limits)
-                , metadataAssemble = assembleMergedPackument
+                , metadataAssemble = assembleMergedDocument
+                , metadataSerialise = serialiseMergedDocument
                 }
         , adapterArtifact =
             AdapterArtifact

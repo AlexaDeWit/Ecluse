@@ -24,6 +24,7 @@ import Ecluse.Core.Package (
     Trust (TrustUnknown),
     mkPackageName,
  )
+import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
@@ -219,7 +220,7 @@ paired with a marker raw 'Value' (so a test can confirm a hit returned the cache
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right Manifest{manifestInfo = info, manifestRaw = String "raw", manifestDigest = digestOf "raw-bytes"})
+    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached (String "raw"), manifestDigest = digestOf "raw-bytes"})
 
 {- | A counting single-version fetch: bumps the call counter, then selects the version from
 the given manifest (so an absent version is a 'Nothing'), as the npm selective fetch would.

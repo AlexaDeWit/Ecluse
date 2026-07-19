@@ -36,7 +36,6 @@ module Ecluse.Core.Server.Pipeline.Origin (
     withPublicMetadataClient,
 ) where
 
-import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
 import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Client (Manager)
@@ -46,6 +45,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Merge (Provenance)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest,
@@ -64,15 +64,17 @@ import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFa
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 {- | A successfully resolved upstream contribution: the parsed packument used to
-decide, alongside the raw @Value@ that is edited in place to serve, and the
+decide, alongside the raw document ('CachedDoc') the served body is rebuilt from, and the
 origin body's 'ContentDigest' for the derived validator. Pairing the views is
 the decision-surface\/served-surface contract -- every stage carries the raw
-@Value@ next to the typed view so losslessness survives the pipeline.
+document next to the typed view so losslessness survives the pipeline. The raw document
+is threaded opaquely: the pipeline hands it to the injected adapter capabilities and
+never reads it.
 -}
 data Contribution = Contribution
     { srcProvenance :: Provenance
     , srcInfo :: PackageInfo
-    , srcValue :: Value
+    , srcValue :: CachedDoc
     , srcDigest :: ContentDigest
     }
 
