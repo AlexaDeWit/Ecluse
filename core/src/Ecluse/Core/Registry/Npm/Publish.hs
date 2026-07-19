@@ -27,7 +27,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
-import Data.List.NonEmpty qualified as NE
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
@@ -35,12 +34,13 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName, renderPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, renderPackageName)
 import Ecluse.Core.Registry (
-    MirrorArtifact (maFilename, maHashes),
+    MirrorArtifact (maFilename),
     PublishError (PublishError),
     PublishFault (PublishRejected),
     UrlFormationError,
+    firstHashValue,
  )
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, noValidators, packageUrl, parseRequestEither, withToken)
@@ -86,10 +86,6 @@ sriOf = firstHashValue SRI
 -- Pick the SHA-1 shasum from the admitted digests, if present.
 sha1Of :: MirrorArtifact -> Maybe Text
 sha1Of = firstHashValue SHA1
-
-firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
-firstHashValue alg artifact =
-    fmap hashValue (find ((== alg) . hashAlg) (NE.toList (maHashes artifact)))
 
 {- | Build the publish @PUT /{pkg}@ request: the body is the npm publish
 document (a packument carrying the version manifest and the base64 tarball under
