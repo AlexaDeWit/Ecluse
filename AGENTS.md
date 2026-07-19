@@ -74,8 +74,10 @@ docs/     architecture and design documents
 
 ## Build and tooling
 
-- Nix with flakes is mandatory. Use the pinned dev shell; system GHC/Cabal is unsupported. Run work
-  through `task` inside the flake, and when the ambient shell may be stale, invoke it as:
+- Nix with flakes is mandatory in every environment, hosted agents included; there is no Nix-less
+  path ([README → Development](README.md#development) is the official statement). Use the pinned
+  dev shell; system GHC/Cabal is unsupported. Run work through `task` inside the flake, and when
+  the ambient shell may be stale, invoke it as:
 
   ```bash
   env -u IN_NIX_SHELL nix develop --command task <target>
@@ -87,7 +89,6 @@ docs/     architecture and design documents
   and see `0` before trusting a fix. CI is the authoritative gate. In the CI-verified batch mode the
   PR's own CI run is the verification loop; see
   [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md).
-- Nix-less web agents must still verify locally: bootstrap with `scripts/setup-jules.sh`.
 - Use one worktree per agent. Create it with `task new-worktree BRANCH=<branch>` (warms the local
   HLS index) and retire it with `task rm-worktree BRANCH=<branch>`, which reclaims the roughly 1 GB
   HLS cache a bare `git worktree remove` strands; `task worktree-clean` sweeps up after
@@ -125,12 +126,12 @@ docs/     architecture and design documents
 
 - Reusable procedures live in [`.agents/skills/`](.agents/skills/), one directory per skill with a
   `SKILL.md`, following the [Agent Skills](https://agentskills.io/specification) standard. Codex,
-  Gemini CLI, and GitHub Copilot discover this location natively.
+  and GitHub Copilot discover this location natively.
 - Claude Code discovers project skills only from `.claude/skills/`, so each skill is bridged there by
   a tracked relative symlink. Update the matching symlink in the same commit as any skill add,
   rename, or removal.
-- `CLAUDE.md` (an `@AGENTS.md` import) and `.gemini/settings.json` (`context.fileName`) exist only to
-  point those harnesses at this file. Keep shared guidance here, never in per-agent files.
+- `CLAUDE.md` (an `@AGENTS.md` import) exists only to point that harness at this file. Keep shared
+  guidance here, never in per-agent files.
 
 ## Context discipline
 

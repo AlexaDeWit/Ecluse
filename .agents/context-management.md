@@ -58,8 +58,6 @@ re-retrieve referenced sources only when the next decision needs them.
 
 - **Claude Code:** `/compact` takes inline instructions; direct it to follow
   `.agents/compact-prompt.md`.
-- **Gemini CLI:** `/compress` uses a fixed summariser; write the checkpoint per
-  `.agents/compact-prompt.md` into the conversation before compressing.
 - **Codex CLI:** this repo ships no tracked Codex config. A Codex user can point automatic
   compaction at the prompt with their own `.codex/config.toml` (relative paths resolve from
   `.codex/`):
