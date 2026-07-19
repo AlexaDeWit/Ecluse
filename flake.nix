@@ -2,11 +2,8 @@
   description = "ecluse: supply-chain resilience proxy for package registries";
 
   inputs = {
-    # Single pinned nixpkgs. The 26.05 base is current enough that every tool —
-    # including vulnix and zizmor, which historically forced a second
-    # newer-nixpkgs input on the 24.11 base (broken vulnix 1.10.1, ancient
-    # zizmor 0.2.1) — comes from this one set. See CONTRIBUTING.md →
-    # "Vulnerability scanning".
+    # Single pinned nixpkgs: every tool comes from this one set. See
+    # docs/architecture/release-supply-chain.md.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -372,9 +369,6 @@
           # checks) and zizmor for security (template injection, credential
           # persistence, excessive permissions, dangerous triggers). Mechanizes
           # the injection-free workflow rule in AGENTS.md → "CI & Security".
-          # zizmor comes from the pinned set on the 26.05 base (the older base
-          # shipped only an ancient 0.2.1, which forced a second input alongside
-          # vulnix — no longer). See CONTRIBUTING.md → "Continuous Integration".
           pkgs.actionlint
           pkgs.zizmor
           # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already
@@ -440,26 +434,28 @@
         # accurate than scanning a distroless image, whose static Haskell deps a
         # scanner cannot see; the provenance and SBOM attestations themselves are
         # produced in CI by the GitHub attest-actions (immutable OCI referrers),
-        # see CONTRIBUTING.md → "Supply-chain attestations". grype is the
-        # C-closure scan authority (`task scan`): it scans the sbomnix SBOM of
-        # the image's C closure (openssl/curl/glibc/…) against its maintained DB
-        # and gives severity-rated, low-noise findings. vulnix is a secondary,
-        # Nix-native cross-check (`task scan-vulnix`): more comprehensive and
-        # patch-aware but un-graded, so not the authority. On the 26.05 base it
-        # comes straight from the pinned set (the older base's vulnix was broken
-        # against NVD's feeds, forcing a second input — no longer).
-        # Haskell-advisory (HSEC) coverage is the scheduled OSV.dev scan of
-        # cabal.project.freeze (security.yml, scripts/osv-freeze-scan.sh);
-        # checks.freeze-sync keeps that file equal to this flake's package set,
-        # so the scan describes the closure the image ships. See CONTRIBUTING.md
-        # → "Vulnerability scanning".
+        # see docs/architecture/release-supply-chain.md → "Supply-chain
+        # attestations". grype is the C-closure scan authority (`task scan`): it
+        # scans the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…)
+        # against its maintained DB, emitting the SARIF security.yml uploads to
+        # code scanning. vulnix is a secondary, Nix-native cross-check
+        # (`task scan-vulnix`): more comprehensive and patch-aware but un-graded,
+        # so not the authority. osv-scanner is the Haskell-closure
+        # (HSEC) scan authority (`task scan-osv`): HSEC advisories are published
+        # to OSV.dev, and the scan reads cabal.project.freeze natively, which
+        # checks.freeze-sync keeps equal to this flake's package set, so it
+        # describes the closure the image ships; its SARIF goes to code scanning
+        # too. See docs/architecture/release-supply-chain.md → "Vulnerability
+        # scanning and dependency freshness".
         opsInputs = [
           pkgs.skopeo
           pkgs.sbomnix
           pkgs.grype
           pkgs.vulnix
-          # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
-          # GitHub code scanning; pinned here rather than relying on the runner's.
+          pkgs.osv-scanner
+          # jq: scripts/sarif-locations.sh post-processes both scanners' SARIF
+          # for GitHub code scanning; pinned here rather than relying on the
+          # runner's.
           pkgs.jq
           # reuse: per-file SPDX licence headers (`task lint-spdx` stamps and
           # gates via `reuse lint-file` / `reuse annotate`). A Python tool,

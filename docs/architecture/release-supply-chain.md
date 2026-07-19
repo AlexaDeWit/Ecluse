@@ -111,7 +111,8 @@ Three arms keep the shipped closure honest: C-closure detection, Haskell-closure
 freshness.
 
 **Detection, `grype` (the C-closure authority).** `task scan` builds the sbomnix SBOM of the application
-closure into `sbom/`, runs `grype`, and saves the severity-rated findings in `grype.json`.
+closure into `sbom/`, runs `grype`, and writes the severity-rated findings as `grype.sarif`
+(with a table in the log).
 `task scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
 cross-check, broader and Nix-patch-aware but un-graded, so not the authority. A naive closure
 scan with distro-advisory matchers reports around a thousand mostly-irrelevant CVEs; the
@@ -119,17 +120,17 @@ grype-over-SBOM view is the curated one. Both scanners come from the single pinn
 (26.05).
 
 The [`security.yml`](../../.github/workflows/security.yml) workflow is report-only and never
-gates a PR, since the closure is fixed by a `flake.lock` bump, not an in-PR change. On a PR it
-runs only when the flake changes; on a daily schedule it scans `main` and opens or updates a
-single tracking issue (label `security:vuln-scan`) when grype reports CVEs, closing it when
-clean, so CVEs disclosed after a release still surface.
+gates a PR, since the closure is fixed by a `flake.lock` bump, not an in-PR change. Both of its
+jobs upload SARIF to GitHub code scanning (categories `grype` and `osv-hsec`), so findings are
+triaged in the Security tab alongside Semgrep and Scorecard, the issue tracker holds only
+human-filed work, and an alert closes itself once a later scan no longer reports it. On a PR
+the workflow runs only when the dependency plan changes; on a daily schedule it scans `main`,
+so CVEs disclosed after a release still surface.
 
 **Freshness, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across
 the ecosystems the repo automates: flake inputs, GitHub Actions, and Hackage cabal
 dependencies. Renovate's `nix` manager is beta and off by default, so the config enables it
-explicitly; without that opt-in the weekly refresh does not run at all (it was silently inert
-from the Renovate migration until the single-authority rework, a config-that-does-nothing
-failure mode this document now records so it is checked, not assumed). The weekly `flake.lock`
+explicitly; without that opt-in the weekly refresh does not run at all. The weekly `flake.lock`
 refresh is the single freshness lever: the flake pins the package set that supplies both the
 image's C-library closure and every Haskell dependency, and `cabal.project.freeze` is
 *generated* from that set (`task freeze`), with the `freeze-sync` flake check failing CI
@@ -140,18 +141,19 @@ Haskell versions moved.
 **Detection, OSV/HSEC (the Haskell-closure authority).** HSEC advisories (the Haskell Security
 Response Team database) are exported to [OSV.dev](https://osv.dev); the default GitHub
 Advisory Database has no Hackage ecosystem and never sees them. The `osv-freeze` job in
-[`security.yml`](../../.github/workflows/security.yml) queries OSV with every exact pin in
-`cabal.project.freeze` (`task scan-osv` locally); since the freeze mirrors the Nix set,
-matching describes exactly the closure the shipped image is built from, statically linked
-Haskell libraries included, which no scan of the image itself can see. Daily runs keep a
-tracking issue (label `security:hsec-scan`) in sync. Every finding is always reported: the
+[`security.yml`](../../.github/workflows/security.yml) runs
+[osv-scanner](https://google.github.io/osv-scanner/), from the pinned nixpkgs like every other
+scan tool, over every exact pin in `cabal.project.freeze` (`task scan-osv` locally); since the
+freeze mirrors the Nix set, matching describes exactly the closure the shipped image is built
+from, statically linked Haskell libraries included, which no scan of the image itself can see.
+Findings upload as SARIF under the `osv-hsec` code-scanning category. Every finding is
+always reported: the
 repo hardcodes no ignore list, and accepting or dismissing a finding is handled in GitHub's
 security surfaces. Detection is not remediation: the fix for a Haskell advisory is a flake-side bump
 (`flake.lock` or an overlay pin) followed by `task freeze`, never a hand-edit of the generated
 freeze. Renovate's experimental `osvVulnerabilityAlerts` stays enabled as an uncredited second
-net; it raised nothing while qualifying advisories with released fixes stood against pinned
-packages (verified 2026-07-18), which is why the scheduled scan, whose runs are observable, is
-the arm of record.
+net; it has empirically raised nothing against pinned packages, which is why the scheduled
+scan, whose runs are observable, is the arm of record.
 
 ## Posture scoring, OpenSSF Scorecard
 

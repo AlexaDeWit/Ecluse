@@ -4,18 +4,19 @@ name: Security
 # arrive with disclosure time, not with in-PR changes. Two scanners cover the two
 # halves of the shipped closure: grype scans the image's C closure via the
 # sbomnix SBOM (statically linked Haskell libraries are invisible to it), and
-# the OSV/HSEC scan queries OSV.dev with every exact pin in
-# cabal.project.freeze, the committed projection of the Nix package set, so it
-# covers precisely the Haskell closure the image is built from. On a PR they run
-# only when the dependency plan changes; on the daily schedule they scan main
-# and keep one tracking issue per scanner in sync (open/update on findings,
-# close when clean), so advisories disclosed after a release still surface.
-# Remediation is always flake-side; Renovate's weekly flake.lock refresh carries
-# it. See CONTRIBUTING.md → "Vulnerability scanning" and
-# docs/architecture/release-supply-chain.md.
+# osv-scanner matches every exact pin in cabal.project.freeze, the committed
+# projection of the Nix package set, against OSV.dev, home of the HSEC
+# advisories the GitHub Advisory Database lacks. Both upload SARIF to GitHub
+# code scanning, so every finding is triaged in the Security tab and the issue
+# tracker holds only human-filed work. On a PR they run only when the dependency
+# plan changes; on the daily schedule they scan main, so advisories disclosed
+# after a release still surface. Remediation is always flake-side; Renovate's
+# weekly flake.lock refresh carries it. See
+# docs/architecture/release-supply-chain.md → "Vulnerability scanning and
+# dependency freshness".
 on:
   pull_request:
-    paths: ["flake.lock", "flake.nix", "cabal.project.freeze"]
+    paths: ["flake.lock", "flake.nix", "cabal.project.freeze", ".github/workflows/security.yml"]
   schedule:
     - cron: "27 6 * * *" # daily, off-peak minute
   workflow_dispatch:
@@ -34,7 +35,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      issues: write # the scheduled run opens/updates a tracking issue
       security-events: write # upload the grype SARIF to code scanning
     steps:
       - name: Checkout
@@ -45,7 +45,8 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
-      # grype scans the sbomnix SBOM of .#ecluse-bin → grype.json (+ a table).
+      # grype scans the sbomnix SBOM of .#ecluse-bin → grype.sarif (+ a table
+      # in the log).
       - name: Scan image closure (grype)
         run: nix develop .#ci --command task scan
 
@@ -58,38 +59,32 @@ jobs:
           sarif_file: grype.sarif
           category: grype
 
-      - name: Report to job summary
-        if: always()
-        run: bash scripts/vuln-report.sh grype.json >> "$GITHUB_STEP_SUMMARY"
-
-      # Only on the daily scan, and only if the scan succeeded: keep a single
-      # tracking issue in sync (open/update on findings, close when clean).
-      - name: Open/update tracking issue
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/vuln-issue.sh grype
-
   osv-freeze:
     name: Haskell advisories (OSV/HSEC over the freeze)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
-      issues: write # the scheduled run opens/updates a tracking issue
+      security-events: write # upload the osv-scanner SARIF to code scanning
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      # Plain curl + jq against api.osv.dev; needs no Nix toolchain, so this job
-      # skips setup-toolchain entirely.
-      - name: Scan cabal.project.freeze against OSV.dev
-        run: bash scripts/osv-freeze-scan.sh >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
 
-      - name: Open/update tracking issue
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/vuln-issue.sh osv
+      # osv-scanner (from the pinned nixpkgs, like grype) reads the freeze
+      # natively; findings are report-only, so only a scanner error fails here.
+      - name: Scan cabal.project.freeze (osv-scanner)
+        run: nix develop .#ci --command task scan-osv
+
+      - name: Upload osv-scanner SARIF to code scanning
+        # Surface the HSEC advisories in the Security tab (code scanning),
+        # alongside grype + Semgrep + Scorecard.
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        with:
+          sarif_file: osv-freeze.sarif
+          category: osv-hsec

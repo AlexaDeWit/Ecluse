@@ -56,8 +56,8 @@
   // option is experimental in Renovate and empirically raised nothing on the
   // hosted Mend app despite qualifying HSEC advisories with released fixes
   // (verified 2026-07-18; see release-supply-chain.md), so the Haskell
-  // detection arm of record is the scheduled OSV.dev scan in security.yml
-  // (scripts/osv-freeze-scan.sh), not this flag. It stays enabled because it
+  // detection arm of record is the scheduled osv-scanner scan in security.yml
+  // (`task scan-osv`), not this flag. It stays enabled because it
   // costs nothing and may begin working; if it ever raises a fix-PR that edits
   // one line of the generated freeze, that PR fails checks.freeze-sync by
   // design, and the real fix is a flake-side bump plus `task freeze`.

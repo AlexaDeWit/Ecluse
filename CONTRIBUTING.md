@@ -37,16 +37,11 @@ contributor commands are **`task coverage`** (combined, matches the dashboard, n
 **`task coverage-unit`** (fast, unit-only, Docker-free, a partial view); the full strategy and
 Codecov knobs are in [Testing Strategy](docs/testing.md) → "Coverage".
 
-## Releases, attestations, and vulnerability scanning
+## Releases and attestations
 
 Écluse ships as a reproducible OCI image built by Nix and published on GitHub Releases and Docker
-Hub. Image CVEs and Haskell (HSEC) advisories are scanned report-only, and Renovate keeps
-dependency freshness by refreshing
-`flake.lock` weekly, the version authority for the image closure and the Haskell set alike
-(`cabal.project.freeze` is generated from it; see
-[Getting Started](docs/getting-started.md) → "Dependency locking"), and by bumping the Actions
-pins. The full operational detail (image
-contents, the publish/attest chain, token handling, scanning) is in
+Hub. The full operational detail (image contents, the publish/attest chain, token handling,
+vulnerability scanning) is maintainer territory and lives in
 [Release and Supply-Chain Operations](docs/architecture/release-supply-chain.md); consumers verify an
 image with `gh attestation verify`, per the [README](README.md#verifying-the-image).
 
