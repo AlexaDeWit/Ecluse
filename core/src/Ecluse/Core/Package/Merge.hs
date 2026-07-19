@@ -15,12 +15,14 @@ written once and reused by every ecosystem, and never imports a registry adapter
 
 __Decision surface, not served surface.__ This module reasons over the /typed/
 'PackageInfo' but does __not__ emit a finished, re-serialisable 'PackageInfo'.
-The document Écluse serves is the raw upstream JSON (@Value@), edited in place by
-the serve layer, so that every unmodeled wire key survives. The typed model
-is lossy, so re-encoding it would drop those keys. This module therefore emits a
-'MergePlan' -- exactly which versions survive, which input each survivor came from,
-the reconciled @dist-tags@\/@time@, and the detected divergences -- that the serve
-layer __replays onto the raw @Value@s__. See @docs\/architecture\/registry-model.md@
+The document Écluse serves is the raw upstream document, rebuilt from the winning
+sources so that every unmodeled wire key survives; the typed model is lossy, so
+re-encoding it would drop those keys. The serve layer holds that raw document opaquely
+(as a 'Ecluse.Core.Registry.CachedDocument.CachedDoc') and never reads it -- the rebuild
+runs through an injected adapter capability. This module therefore emits a 'MergePlan' --
+exactly which versions survive, which input each survivor came from, the reconciled
+@dist-tags@\/@time@, and the detected divergences -- that the serve layer __replays onto
+the raw documents__ through that capability. See @docs\/architecture\/registry-model.md@
 → "Decision surface vs served surface".
 
 The trust split is the __caller's__, expressed as a 'Provenance' tag on each

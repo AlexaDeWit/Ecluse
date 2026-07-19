@@ -53,17 +53,17 @@ served -- only when /nothing/ resolves does the request error.
 
 == Decision surface vs served surface
 
-The merge and filter reason over the /typed/ 'PackageInfo' but the document served
-is the __raw upstream JSON__, so every unmodeled wire key survives (see
+The merge and filter reason over the /typed/ 'PackageInfo' but the document served is the
+__raw upstream document__, held opaquely here as a 'Ecluse.Core.Registry.CachedDocument.CachedDoc'
+and rebuilt from the winning sources, so every unmodeled wire key survives (see
 @docs\/architecture\/registry-model.md@ → "Decision surface vs served surface").
-The 'MergePlan' names, for each surviving version, the source that won it; the
-served body is assembled in one pass by the mount's assembly hook
-('Ecluse.Core.Registry.Npm.Filter.assembleMergedPackument' for npm): each
-survivor's object is taken from the /raw @Value@/ of its winning source with its
-tarball URL rewritten under the mount base as it is placed, the reconciled
-@dist-tags@ and @time@ are carried from the plan, and every other top-level key is
-relayed from the precedence-winning document. The typed model is never
-re-serialised. The two fields the merge /owns/ as a decision -- @dist-tags.latest@
+The 'MergePlan' names, for each surviving version, the source that won it; the served body
+is assembled in one pass by the mount's injected assembly capability
+('Ecluse.Core.Registry.Npm.Filter.assembleMergedDocument' for npm), which reads the raw
+documents in the adapter's own representation: each survivor's object is taken from its
+winning source with its tarball URL rewritten under the mount base as it is placed, the
+reconciled @dist-tags@ and @time@ are carried from the plan, and every other top-level key
+is relayed from the precedence-winning document. The typed model is never re-serialised. The two fields the merge /owns/ as a decision -- @dist-tags.latest@
 and the @time@ instants -- are re-rendered from that decision (the times as
 normalised ISO-8601), so they may differ byte-for-byte from any single upstream
 while denoting the same value; integrity-bearing fields (@dist.integrity@,
@@ -194,8 +194,8 @@ origin anonymous -- each parse failure or unavailable upstream degrading to a mi
 contribution rather than an error. Private versions are trusted as-is; public
 versions are gated through the rules and the structural filter (the 'FilterPlan');
 the surviving sets are merged ('mergePackuments') and the 'MergePlan' assembled
-onto the raw upstream @Value@s to build the served body,
-which is then answered against the client's conditional request with our own ETag.
+onto the raw upstream documents, through the mount's injected assembly capability, to build
+the served body, which is then answered against the client's conditional request with our own ETag.
 When nothing survives, the status follows the most recoverable cause via
 'packumentStatus'. An origin whose self-reported packument name disagrees with the
 route is validated out -- dropped as untrusted for this request and logged -- so a
@@ -399,7 +399,7 @@ rules engine ('Ecluse.Core.Rules.evalRules' -- the boot order walked to the firs
 result), the resulting decisions handed to the agnostic
 'filterPlanFromDecisions', and the plan consumed directly: a plan with survivors
 yields a gated 'Contribution' -- the typed view restricted to the survivors beside
-the __unrestricted raw @Value@__ (the assembly takes only plan-surviving version
+the __unrestricted raw document__ (the assembly takes only plan-surviving version
 objects from it, so restricting the raw document here would rebuild a many-version
 object only for the assembly to rebuild it again); a plan with no survivors yields
 no contribution and the per-version 'ServeDecision's, each excluded
@@ -414,7 +414,7 @@ IO; with only pure rules it short-circuits without launching any IO.
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__:
 'mergePackuments' treats a 'GatedSource' as the already-filtered set and never
 re-filters, so feeding it the unfiltered view would let a denied version reach the
-merge plan (and skew the reconciled @latest@\/@time@). The raw @Value@ needs no
+merge plan (and skew the reconciled @latest@\/@time@). The raw document needs no
 matching restriction: only versions named by the plan's survivors are ever taken
 from it at assembly, so a denied version's object is unreachable by construction.
 

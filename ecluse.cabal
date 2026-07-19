@@ -581,6 +581,7 @@ test-suite ecluse-core-unit
     Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.AdapterSpec
+    Ecluse.Registry.CachedDocumentSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec

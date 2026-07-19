@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The cached and served raw document as an __opaque carrier with private constructors__.
+{- | The cached and served raw document as an __opaque carrier with a private constructor__.
 
 The serve path caches an upstream packument's raw document and rebuilds the served body
 from it, but the neutral pipeline and the metadata cache must /hold/ that document
@@ -28,10 +28,12 @@ module Ecluse.Core.Registry.CachedDocument (
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as BSL
 
-{- | A raw document the metadata cache holds and the neutral serve pipeline threads. One
-representation today: an npm packument as a JSON 'Value'. Exported __abstract__ -- the
-constructor is private, so only this module's boundary pairs cross it and the neutral core
-cannot read the document a 'CachedDoc' carries.
+{- | A raw document the metadata cache holds and the neutral serve pipeline threads. The
+representation: an npm packument as a JSON 'Value'. Exported __abstract__ -- the constructor
+is private, so only this module's boundary pairs cross it and the neutral core cannot read
+the document a 'CachedDoc' carries. The derived 'Show' and 'Eq' are a debug and test
+affordance (a failure message, a round-trip assertion), not a projection: they give the
+neutral core no way to recover the underlying document to assemble or serialise it.
 -}
 newtype CachedDoc = CachedNpm Value
     deriving stock (Eq, Show)

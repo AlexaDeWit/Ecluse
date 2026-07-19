@@ -41,10 +41,12 @@ path, never in this store.
 
 == Coherent pair
 
-An entry holds the parsed 'PackageInfo' __and__ the raw 'Value' it was decoded
-from, so a hit returns a typed view and the exact bytes that produced it. The
-packument serve path needs both: it decides over the typed view but serves the raw
-document edited in place, and the two must describe the same fetch.
+An entry holds the parsed 'PackageInfo' __and__ the raw document ('CachedDoc') it was
+decoded from, so a hit returns a typed view and the exact bytes that produced it. The
+packument serve path needs both: it decides over the typed view but rebuilds the served
+body from the raw document, and the two must describe the same fetch. The store holds the
+raw document opaquely -- it never reads it, only hands it back to the injected adapter
+capabilities that assemble and serialise the served body.
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules

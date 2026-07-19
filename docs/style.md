@@ -237,8 +237,8 @@ a domain rule depend on the *specific* shape, or only that *some* instance exist
   identity.
 - **Wire contract (`ToJSON`/`FromJSON`)** couples the wire shape to the record structure, so a
   rename is a silent breaking change for clients you can't recompile; for an owned response, derive
-  the schema from the *same* codec, or design the coupling away (the served packument relays the raw
-  upstream `Value`, edited in place).
+  the schema from the *same* codec, or design the coupling away (the served packument is rebuilt from
+  the raw upstream document the serve layer holds opaquely, never re-encoded from a typed model).
 
 Prefer designing the coupling away over testing a fragile derivation. Which derived lines the
 coverage gate treats as accepted partials is in [`docs/testing.md`](testing.md) → "Coverage".
