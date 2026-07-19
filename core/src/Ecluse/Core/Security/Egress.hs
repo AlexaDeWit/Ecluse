@@ -23,8 +23,9 @@ load-bearing egress-policy control (the proxy dials only configured upstream
 @host:port@ pairs), and
 the pure literal internal-range block ('Ecluse.Core.Security.isBlockedTarget'), kept as
 cheap defence-in-depth on the @dist.tarball@ host gate. No data-plane request follows an
-upstream redirect ('Ecluse.Core.Registry.Npm.withToken' pins @redirectCount = 0@), so there
-is no hop that could downgrade the scheme or escape the allowlist after the URL is built.
+upstream redirect (the shared 'Ecluse.Core.Registry.Request.finaliseRequest' pins
+@redirectCount = 0@ on every request), so there is no hop that could downgrade the scheme
+or escape the allowlist after the URL is built.
 
 A test- and dev-only loopback constructor lives in "Ecluse.Core.Security.Egress.DevHttp",
 compiled only under the @dev-http-egress@ Cabal flag, so the loopback test suites can dial

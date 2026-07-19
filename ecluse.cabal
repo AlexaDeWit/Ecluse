@@ -138,6 +138,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Publish
+    Ecluse.Core.Registry.Request
     Ecluse.Core.Rules
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Types
@@ -587,6 +588,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.Registry.PublishSpec
+    Ecluse.Registry.RequestSpec
     Ecluse.Test.Registry.Pypi.WireSpec
     Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
