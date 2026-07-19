@@ -42,6 +42,7 @@ import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
+    mirrorArtifactBytesCap,
     planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
@@ -266,8 +267,8 @@ runProxy bootEnv = do
         -- The worker's artifact fetch cap is the memory plan's mirror-artifact tenant.
         -- Under 'MirrorWith' (the only branch that builds a worker) the tenant is always
         -- present; the fallback guards only the structurally-impossible absent case with
-        -- the plan's own shipped default (512 MiB).
-        let workerArtifactMaxBytes = maybe (512 * 1024 * 1024) matMaxBytes (mpMirrorArtifactTenant plan)
+        -- the plan's own shipped default.
+        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant plan)
         case mirrorDrain of
             Just drainEnqueueBuffer ->
                 race_

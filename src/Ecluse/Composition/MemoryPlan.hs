@@ -85,6 +85,7 @@ module Ecluse.Composition.MemoryPlan (
     attributeOverrideViolations,
     planCacheConfig,
     mirrorArtifactEnvelopeMultiplier,
+    mirrorArtifactBytesCap,
 ) where
 
 import Data.Text qualified as T

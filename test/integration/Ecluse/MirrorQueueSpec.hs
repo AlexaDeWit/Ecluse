@@ -85,10 +85,10 @@ spec =
                 -- deadLetter must NOT DeleteMessage (that would silently discard the
                 -- terminal fault, regressing observability); it returns the message with
                 -- the terminal backoff, so it stays in the queue and rides the operator's
-                -- redrive policy to the dead-letter queue. A 30s visibility with a 1s
-                -- terminal backoff proves both: the message would stay hidden for 30s but
-                -- for the deadLetter, which resets it to reappear within ~1s -- so its
-                -- reappearance is proof it was neither deleted nor merely left in-flight.
+                -- redrive policy to the dead-letter queue. The message's reappearance
+                -- after the deadLetter is the proof it was not deleted (an ack/delete
+                -- never redelivers); the short terminal backoff keeps that reappearance
+                -- within the poll's patience.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
                 unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue

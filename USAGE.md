@@ -106,8 +106,11 @@ you have a specific reason to diverge.
    **write-only** to the mirror store and keep `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION`
    short: it's Écluse's only standing credential and it writes the trusted store. Scope the mirror
    queue the same way, granting only the serve role `SendMessage` and only the worker
-   `ReceiveMessage`/delete, because anyone who can write the queue can force a write to the trusted
-   store.
+   `ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`, because anyone who can write the queue
+   can force a write to the trusted store. `ChangeMessageVisibility` is load-bearing, not optional:
+   the worker uses it both to hold a long publish and to back a **dead-lettered** poison message off
+   so it rides your redrive policy to the DLQ; without the grant an over-cap artifact silently churns
+   on the ordinary visibility cadence instead.
 4. **Let the edge own access; leave `ECLUSE_SERVER__AUTH_TOKEN` off.** Écluse is not your access
    boundary. Front it with a gateway, mesh, or IAP, and restrict reachability **both** north-south
    and east-west (pod-to-pod): an ingress-only allow-list that leaves the pod reachable inside the
@@ -216,7 +219,7 @@ a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud bo
 
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend**. A real SQS URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, region from the host, validated in full (https, single-label region, 12-digit account, one queue segment, no port/query/fragment). A Pub/Sub resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot. **Unset with a mirroring mount ⇒ the bounded in-process queue**: non-durable, best-effort (single-node, trial, or air-gapped), warned loudly at boot. Never consulted serve-only. |
+| `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend**. A real SQS URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, region from the host, validated in full (https, single-label region, 12-digit account, one queue segment, no port/query/fragment). A Pub/Sub resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot. **Unset with a mirroring mount ⇒ the bounded in-process queue**: non-durable, best-effort (single-node, trial, or air-gapped), warned loudly at boot. Never consulted serve-only. **On SQS, attach a redrive policy (a dead-letter queue) to the mirror queue:** a poison message the worker can never mirror -- an over-cap artifact, an undecodable payload -- is left undeleted so it rides that policy to the DLQ for inspection instead of cycling. Écluse assumes the redrive policy is present; gracefully handling its absence is tracked in issue #935. |
 | `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Depth cap, computed by the memory plan (`50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and re-mirrors on next demand. Positive integer. |
 | `AWS_REGION` | Depends | AWS backends only | Region for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (a real SQS URL carries its own region), and for the S3 advisory client. **Never consulted for CodeArtifact** (the mint's region is parsed from the mirror-target host). Ambient AWS-SDK environment, read from the process env, **not** a document key: `awsRegion:` in the document is rejected as unknown. |
 | `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, scoped by `AWS_REGION`, signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Ambient, like `AWS_REGION`. |
@@ -228,7 +231,7 @@ a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud bo
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Computed by the memory plan, floored at 12 MiB so real packuments fit, unless set. Positive integer. |
 | `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before refusal. Computed by the memory plan (25 MiB with no ceiling datapoint) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES` | No | Memory budget | Largest **mirror-worker artifact** (tarball) buffered before the back-fill fetch aborts fail-closed. Computed by the memory plan's mirror-artifact tenant (512 MiB with no ceiling datapoint) so the transient publish envelope stays within the heap ceiling. An over-cap artifact is dropped, not retried. Raising it may be refused if the pod cannot hold the envelope. Positive integer. |
+| `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES` | No | Memory budget | Largest **mirror-worker artifact** (tarball) buffered before the back-fill fetch aborts fail-closed. Computed by the memory plan's mirror-artifact tenant (512 MiB with no ceiling datapoint) so the transient publish envelope stays within the heap ceiling. An over-cap artifact is **dead-lettered**: on the durable SQS backend the message is left undeleted to ride the operator's redrive policy to the dead-letter queue (never silently dropped); the in-memory backend, which has no DLQ, drops it with an error log and a failure metric. Raising the cap may be refused if the pod cannot hold the envelope. Positive integer. |
 | `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before refusal. Bounds per-version rule evaluation. Pinned policy. Positive integer. |
 | `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before refusal. Bounds CPU/stack. Pinned policy. Positive integer. |
 

@@ -68,7 +68,7 @@ import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (DeadLettered, Dropped, Retried),
+    JobOutcome (Dropped, Retried),
     WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
@@ -672,9 +672,4 @@ isDropped = \case
 isRetried :: JobOutcome -> Bool
 isRetried = \case
     Retried _ -> True
-    _ -> False
-
-isDeadLettered :: JobOutcome -> Bool
-isDeadLettered = \case
-    DeadLettered _ -> True
     _ -> False

@@ -21,8 +21,8 @@ processing fails transiently is simply not 'ack'ed, and SQS redelivers it once t
 visibility timeout lapses; persistent failures fall to the queue's native dead-letter
 (max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__
 fault ('deadLetter') is returned with a backoff window and never deleted, so it too
-falls to the operator's dead-letter queue rather than being discarded -- #933 assumes
-that redrive policy exists (the no-DLQ case is issue #935). Every
+falls to the operator's dead-letter queue rather than being discarded; this assumes
+the operator's redrive policy exists (the no-DLQ case is issue #935). Every
 operation reports its AWS failure as the handle's typed
 'Ecluse.Core.Queue.QueueFault' value, classified into the core transport
 vocabulary at this edge ("Ecluse.Runtime.Aws.Fault"), so a queue outage never

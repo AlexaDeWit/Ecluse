@@ -374,8 +374,7 @@ deterministic in the artifact's own size, so a redelivery re-fetches the same ov
 bytes and fails identically, and it must not silently vanish -- it is handed to the
 backend's dead-letter terminus (see 'DeadLettered'). Any other fetch fault (an
 unformable URL, a transport failure) is a transient retry, since a redelivery may
-succeed. This is issue #846's classification, reworked so an over-cap artifact rides
-the durable dead-letter path rather than being flat-dropped.
+succeed.
 -}
 outcomeOfFetchFault :: ArtifactFetchFault -> JobOutcome
 outcomeOfFetchFault = \case
