@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
+    JobOutcome (DeadLettered, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
