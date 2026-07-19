@@ -20,13 +20,15 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
+    InvalidEntry (invalidKind),
+    InvalidEntryKind (InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Package.Filter (FilterPlan (..))
+import Ecluse.Core.Package.Filter (FilterPlan (..), enforceArtifactScheme, enforceArtifactSchemeDetails)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
@@ -42,6 +44,8 @@ spec = do
     latestSpec
     decisionsSpec
     propertiesSpec
+    enforceArtifactSchemeSpec
+    enforceArtifactSchemeDetailsSpec
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic.
 now :: UTCTime
@@ -268,3 +272,70 @@ isApproved = \case
 -- | Whether a raw npm version string parses to a stable (non-prerelease) release.
 isStableRaw :: Text -> Bool
 isStableRaw raw = either (const False) isStable (parseVersionKey Npm raw)
+
+{- | The https-only artifact-URL normalisation the egress-scheme fold applies as a
+projection post-step: a same-host @http@ URL is upgraded to https, an https URL is kept, a
+foreign-host @http@ URL drops its version and records an 'InvalidVersionManifest' (the #486
+drop-and-record contract), and a non-https (test\/dev loopback) upstream leaves every URL
+untouched. The input is built from typed fixtures, so the fold is exercised over the domain
+model directly, no wire format in sight.
+-}
+enforceArtifactSchemeSpec :: Spec
+enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact-URL normalisation)" $ do
+    let httpsUpstream = "https://registry.npmjs.org"
+        urlOf info = (\(art :| _) -> artUrl art) . pkgArtifacts <$> Map.lookup "1.0.0" (infoVersions info)
+
+    it "upgrades a same-host http artifact URL to https (https upstream)" $
+        urlOf (enforceArtifactScheme httpsUpstream (infoWithArtifact "http://registry.npmjs.org/thing/-/thing-1.0.0.tgz"))
+            `shouldBe` Just "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
+
+    it "keeps an https artifact URL unchanged (https upstream)" $
+        urlOf (enforceArtifactScheme httpsUpstream (infoWithArtifact "https://cdn.example.net/thing-1.0.0.tgz"))
+            `shouldBe` Just "https://cdn.example.net/thing-1.0.0.tgz"
+
+    it "drops a foreign-host http artifact URL and records it (https upstream)" $ do
+        let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact "http://evil.example.test/thing-1.0.0.tgz")
+        Map.lookup "1.0.0" (infoVersions enforced) `shouldBe` Nothing
+        map invalidKind (infoInvalidEntries enforced) `shouldBe` [InvalidVersionManifest]
+
+    it "leaves artifact URLs untouched for a non-https (loopback) upstream" $
+        urlOf (enforceArtifactScheme "http://127.0.0.1:8080" (infoWithArtifact "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"))
+            `shouldBe` Just "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"
+
+{- | The single-version 'enforceArtifactSchemeDetails' form the selective-decode path uses:
+a same-host @http@ URL is upgraded, a foreign-host @http@ URL drops the whole version
+('Nothing'), and a non-https upstream leaves the version untouched.
+-}
+enforceArtifactSchemeDetailsSpec :: Spec
+enforceArtifactSchemeDetailsSpec = describe "enforceArtifactSchemeDetails (single-version form)" $ do
+    let httpsUpstream = "https://registry.npmjs.org"
+        urlOf = fmap ((\(art :| _) -> artUrl art) . pkgArtifacts)
+
+    it "upgrades a same-host http artifact URL to https" $
+        urlOf (enforceArtifactSchemeDetails httpsUpstream (detailsWithArtifact "http://registry.npmjs.org/thing/-/thing-1.0.0.tgz"))
+            `shouldBe` Just "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
+
+    it "drops the version when its artifact URL is http on a foreign host" $
+        enforceArtifactSchemeDetails httpsUpstream (detailsWithArtifact "http://evil.example.test/thing-1.0.0.tgz")
+            `shouldBe` Nothing
+
+    it "leaves the version untouched for a non-https (loopback) upstream" $
+        urlOf (enforceArtifactSchemeDetails "http://127.0.0.1:8080" (detailsWithArtifact "http://127.0.0.1:8080/thing-1.0.0.tgz"))
+            `shouldBe` Just "http://127.0.0.1:8080/thing-1.0.0.tgz"
+
+{- | A one-version 'PackageInfo' whose sole artifact carries the given URL. The egress
+fold reads only 'artUrl', so the remaining fields ride along inert.
+-}
+infoWithArtifact :: Text -> PackageInfo
+infoWithArtifact url =
+    PackageInfo
+        { infoName = name
+        , infoVersions = Map.singleton "1.0.0" (detailsWithArtifact url)
+        , infoDistTags = Map.empty
+        , infoInvalidEntries = []
+        }
+
+-- | A 'PackageDetails' whose sole artifact carries the given URL (age\/install-signal inert).
+detailsWithArtifact :: Text -> PackageDetails
+detailsWithArtifact url =
+    (detailsAt "1.0.0" 30 False){pkgArtifacts = inertArtifact{artUrl = url} :| []}
