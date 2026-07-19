@@ -144,9 +144,9 @@ Advisory Database has no Hackage ecosystem and never sees them. The `osv-freeze`
 `cabal.project.freeze` (`task scan-osv` locally); since the freeze mirrors the Nix set,
 matching describes exactly the closure the shipped image is built from, statically linked
 Haskell libraries included, which no scan of the image itself can see. Daily runs keep a
-tracking issue (label `security:hsec-scan`) in sync; accepted advisories are recorded with a
-dated justification in `scripts/osv-freeze-ignore.txt`, the same approval bar as a Semgrep
-ignore. Detection is not remediation: the fix for a Haskell advisory is a flake-side bump
+tracking issue (label `security:hsec-scan`) in sync. Every finding is always reported: the
+repo hardcodes no ignore list, and accepting or dismissing a finding is handled in GitHub's
+security surfaces. Detection is not remediation: the fix for a Haskell advisory is a flake-side bump
 (`flake.lock` or an overlay pin) followed by `task freeze`, never a hand-edit of the generated
 freeze. Renovate's experimental `osvVulnerabilityAlerts` stays enabled as an uncredited second
 net; it raised nothing while qualifying advisories with released fixes stood against pinned

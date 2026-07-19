@@ -25,7 +25,7 @@ case "$scanner" in
     n=$(jq 'length' osv-freeze.json 2>/dev/null || echo 0)
     title="HSEC scan: $n package(s) in the Haskell closure carry advisories"
     report() { cat osv-freeze.md; }
-    remediation="Remediation is flake-side (a \`flake.lock\` refresh or an overlay pin in flake.nix) followed by \`task freeze\`, never a hand-edit of the generated freeze. Accepted advisories are recorded in \`scripts/osv-freeze-ignore.txt\`. This issue is refreshed by the daily scan and closed automatically when the closure is clean."
+    remediation="Remediation is flake-side (a \`flake.lock\` refresh or an overlay pin in flake.nix) followed by \`task freeze\`, never a hand-edit of the generated freeze. This issue is refreshed by the daily scan and closed automatically when the closure is clean."
     clean_msg="✅ Latest OSV scan found no advisories against the pinned Haskell closure. Closing."
     ;;
   *)
