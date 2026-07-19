@@ -31,6 +31,7 @@ concurrency:
 # Least privilege: read-only is all this workflow needs.
 permissions:
   contents: read
+  id-token: write # authenticate to FlakeHub Cache (OIDC)
 
 jobs:
   perf-acceptance:

@@ -39,6 +39,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the grype SARIF to code scanning
     steps:
       - name: Checkout
@@ -48,6 +49,10 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
+        with:
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       # grype scans the sbomnix SBOM of .#ecluse-bin → grype.sarif (+ a table
       # in the log).
@@ -69,6 +74,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the osv-scanner SARIF to code scanning
     steps:
       - name: Checkout
@@ -78,6 +84,10 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
+        with:
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       # osv-scanner (from the pinned nixpkgs, like grype) reads the freeze
       # natively; findings are report-only, so only a scanner error fails here.

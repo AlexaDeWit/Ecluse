@@ -257,6 +257,17 @@
         # rebuilding each tool's own dependency graph against every pin. Same
         # compiler as hpkgs, so the .hie-consuming tools (stan, weeder) and
         # doctest stay compatible.
+        #
+        # Standalone tools enter the shells as STATIC executables, never as
+        # set packages: a dynamically linked tool drags its whole Haskell
+        # library universe into the shell closure, and with two sets in play
+        # (hpkgs for the app, this one for tools) that closure bloat is what
+        # pushes the CI Nix-store past its cache trim caps (setup-toolchain's
+        # nix-gc-max-store-size), turning every cache save partial. Tools with
+        # a top-level nixpkgs attribute (pkgs.hlint, pkgs.fourmolu, ...) are
+        # already static and Hydra-cached; the rest are wrapped in
+        # justStaticExecutables below. Only the genuinely set-coupled tools
+        # (ghc, doctest, hspec-discover) stay as set packages.
         toolHpkgs = pkgs.haskell.packages.ghc910;
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
@@ -406,7 +417,7 @@
         toolchainInputs = [
           pkgs.bashInteractive
           toolHpkgs.ghc
-          toolHpkgs.cabal-install
+          pkgs.cabal-install
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
@@ -423,8 +434,8 @@
         # doctests, coverage conversion, SAST, workflow linting, dead-code and
         # static analysis, and the site build.
         gateInputs = [
-          toolHpkgs.fourmolu
-          toolHpkgs.hlint
+          pkgs.fourmolu
+          pkgs.hlint
           # Run the >>> examples in Haddock comments as tests (`task doctest`),
           # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
           # set as the compiler it stands in for. See docs/haddock.md → "Examples that
@@ -432,7 +443,7 @@
           toolHpkgs.doctest
           # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
           # `coverage` target (see CONTRIBUTING.md → "Coverage").
-          toolHpkgs.hpc-codecov
+          (hlib.justStaticExecutables toolHpkgs.hpc-codecov)
           pkgs.semgrep
           # GitHub Actions linting (`task lint-workflows`): actionlint for
           # correctness (shellcheck over `run:` blocks, expression/context
@@ -447,8 +458,8 @@
           pkgs.shellcheck
           # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
           # through their own jobs, and both are in `task check`.
-          toolHpkgs.weeder
-          toolHpkgs.stan
+          (hlib.justStaticExecutables toolHpkgs.weeder)
+          (hlib.justStaticExecutables toolHpkgs.stan)
           # Site rendering: pandoc turns the repo's Markdown into the published
           # site pages (`task site`). Both the Pages publish and the PR-tier
           # `site-stub` gate run it, so it is part of the CI closure.
@@ -478,10 +489,10 @@
         # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
         # search (see AGENTS.md).
         ideInputs = [
-          toolHpkgs.haskell-language-server
-          toolHpkgs.ghcid
-          toolHpkgs.hoogle
-          toolHpkgs.cabal-plan
+          pkgs.haskell-language-server
+          pkgs.ghcid
+          (hlib.justStaticExecutables toolHpkgs.hoogle)
+          (hlib.justStaticExecutables toolHpkgs.cabal-plan)
           # The Spec.hs entry points carry `-pgmF hspec-discover`, a source
           # preprocessor GHC shells out to. cabal supplies it during a build via
           # build-tool-depends, but HLS runs the same preprocessor when it loads
@@ -542,7 +553,7 @@
         # 26.05 default set happens to be 9.10 too, so this is set-consistency
         # insurance, not a closure change).
         benchInputs = [
-          toolHpkgs.ghc-prof-flamegraph
+          (hlib.justStaticExecutables toolHpkgs.ghc-prof-flamegraph)
           pkgs.flamegraph
           pkgs.oha
         ];

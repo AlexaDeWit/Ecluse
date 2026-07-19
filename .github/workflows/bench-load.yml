@@ -43,6 +43,7 @@ concurrency:
 # the run's own artifact service (the runtime token), not the GITHUB_TOKEN.
 permissions:
   contents: read
+  id-token: write # authenticate to FlakeHub Cache (OIDC)
 
 jobs:
   bench-load:
