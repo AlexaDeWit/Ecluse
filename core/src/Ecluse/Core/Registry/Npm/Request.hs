@@ -2,7 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Request shaping and URL building for the npm data plane.
+{- | Request shaping and URL building for the npm data plane. The ecosystem-agnostic
+mechanics (the redirect-pin finaliser, conditional-GET validators, URL parsing, the
+path join, the opaque-artifact request core) live in "Ecluse.Core.Registry.Request";
+this module holds only npm's own protocol facts and composes them through that shared home.
 
 Three details of the wire protocol are load-bearing and handled here:
 
@@ -17,17 +20,17 @@ Three details of the wire protocol are load-bearing and handled here:
   leading @\@@ is not. 'metadataRequest' builds this from an
   __already-parsed__ 'PackageName', never from raw client path segments.
 * __Streaming and buffering.__ The artifact builders ('artifactRequestByFile',
-  'artifactRequestByUrl') mark their request __non-decompressing__ ('decompress'
-  returns 'False'): a tarball is opaque binary that must reach the client
-  byte-for-byte, so the @.tgz@ is never gunzipped in flight (and its
-  @dist.integrity@ stays valid).
+  'artifactRequestByUrl') mark their request __non-decompressing__ so a @.tgz@ is opaque
+  binary that reaches the client byte-for-byte (its @dist.integrity@ stays valid);
+  'artifactRequestByUrl' composes npm's bearer attach with the shared
+  'Ecluse.Core.Registry.Request.artifactRequestByUrl'.
 -}
 module Ecluse.Core.Registry.Npm.Request (
     -- * Content negotiation
     MetadataForm (..),
     metadataAccept,
 
-    -- * Conditional-GET validators
+    -- * Conditional-GET validators (re-exported from the shared request home)
     Validators (..),
     noValidators,
 
@@ -37,24 +40,22 @@ module Ecluse.Core.Registry.Npm.Request (
     artifactRequestByUrl,
     artifactFileUrl,
     packageUrl,
-    joinPath,
 
     -- * Shared internals
     encodePackagePath,
     withToken,
-    addValidators,
     parseRequestEither,
 ) where
 
-import Data.Text qualified as T
-import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), applyBearerAuth, parseRequest)
-import Network.HTTP.Types.Header (hAccept, hAcceptEncoding, hIfModifiedSince, hIfNoneMatch)
+import Network.HTTP.Client (Request (decompress, requestHeaders), applyBearerAuth)
+import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
 
 import Ecluse.Core.Credential (Secret, unSecret)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
-import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
+import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry.Request (Validators (..), addValidators, finaliseRequest, joinPath, noValidators, parseRequestEither)
+import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
-import Ecluse.Core.Text (joinUrlPath)
 
 {- | Which of npm's two metadata documents to request, selected by the @Accept@
 header (see 'metadataAccept').
@@ -83,26 +84,6 @@ metadataAccept :: MetadataForm -> ByteString
 metadataAccept = \case
     Abbreviated -> "application/vnd.npm.install-v1+json"
     Full -> "application/json"
-
-{- | The conditional-GET validators to relay on a metadata fetch. Replaying an
-upstream's @ETag@ as @If-None-Match@ (or its @Last-Modified@ as
-@If-Modified-Since@) lets the upstream answer @304 Not Modified@ with no body:
-the cheap freshness check the proxy uses on a cache revalidation. Both are
-forwarded only when present.
--}
-data Validators = Validators
-    { validatorIfNoneMatch :: Maybe ByteString
-    -- ^ An entity tag to send as @If-None-Match@ (an upstream @ETag@).
-    , validatorIfModifiedSince :: Maybe ByteString
-    {- ^ An RFC-1123 date to send as @If-Modified-Since@ (an upstream
-    @Last-Modified@).
-    -}
-    }
-    deriving stock (Eq, Show)
-
--- | No conditional-GET validators: an unconditional fetch.
-noValidators :: Validators
-noValidators = Validators{validatorIfNoneMatch = Nothing, validatorIfModifiedSince = Nothing}
 
 {- | Build the metadata @GET@ request for a package: the URL is
 @{baseUrl}/{encoded-name}@ with the @Accept@ header for the chosen
@@ -169,34 +150,22 @@ artifactRequestByFile baseUrl token name filename = do
               decompress = const False
             }
 
-{- | Build the artifact @GET@ request addressing a tarball at its __authoritative
-upstream location__: the absolute @url@ the projection preserved from the
-upstream's @dist.tarball@: rather than reconstructing it from @(base, package,
-file)@.
+{- | Build npm's artifact @GET@ request addressing a tarball at its __authoritative
+upstream location__: the absolute @url@ the projection preserved from the upstream's
+@dist.tarball@. The @baseUrl@ is ignored (the location is absolute); npm's bearer
+credential is attached through the shared
+'Ecluse.Core.Registry.Request.artifactRequestByUrl', which marks the request
+non-decompressing and pins the redirect count. See that symbol for the opaque-bytes
+rationale.
 
-The artifact location is server-chosen data, not a derivable fact: a registry may
-serve a version's tarball from a different host or a path the npm @/-/@ convention
-cannot rebuild. Honouring the preserved location is what lets Écluse front those
-registries; the URL it fetches is the same one the served packument's
-@dist.integrity@ is paired with, so the bytes still verify.
-
-The request is marked __non-decompressing__ for the same reason as
-'artifactRequestByFile': a @.tgz@ is opaque binary streamed byte-for-byte. Fails
-with a 'UrlFormationError' only when the @url@ cannot be parsed into a request.
+Fails with a 'UrlFormationError' only when the @url@ cannot be parsed into a request.
 -}
 artifactRequestByUrl ::
     Text ->
     Maybe Secret ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByUrl _baseUrl token url = do
-    base <- parseRequestEither url
-    pure
-        . withToken token
-        $ base
-            { -- A tarball must never be gunzipped in flight (see 'artifactRequestByFile').
-              decompress = const False
-            }
+artifactRequestByUrl _baseUrl = Request.artifactRequestByUrl . attachBearer
 
 {- The metadata/publish URL for a package: @{baseUrl}/{encoded-name}@, with
 the scoped-name separator percent-encoded (@\@scope/name@ -> @\@scope%2Fname@).
@@ -219,16 +188,6 @@ artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> encodeComponent filename)
 
-{- Join a base URL and an already-encoded path, tolerating one trailing slash
-on the base so the join never doubles it. An empty base URL is refused with a
-'UrlFormationError': the read- and write-path builders share this report, so an
-unformable URL is never mislabelled as a publish failure.
--}
-joinPath :: Text -> Text -> Either UrlFormationError Text
-joinPath baseUrl path
-    | T.null baseUrl = Left EmptyBaseUrl
-    | otherwise = Right (joinUrlPath baseUrl path)
-
 {- Encode a package name as its on-the-wire path segment. Each name component
 (scope, base name) is percent-encoded ('Ecluse.Core.Server.Route.encodeComponent')
 around the structural delimiters this builder writes: a scoped @\@scope/name@
@@ -245,60 +204,15 @@ encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
 
-{- Finalize an npm data-plane request: __disable redirect following__ ('redirectCount'
-= 0) on __every__ request, and attach a bearer token when one is injected.
-
-This is the single request-finalization point for the whole npm data plane: every
-builder and call site funnels through it (it is also the only 'applyBearerAuth'): so
-pinning @redirectCount = 0@ here makes one invariant universal: __Écluse never follows an
-upstream redirect__, on the credentialed and the anonymous plane alike.
-
-Two dangers it forecloses, one per plane:
-
-\* __Credential leakage__ (credentialed plane). http-client's default ('redirectCount' =
-  10) re-sends the @Authorization@ header to the redirect's @Location@, and its
-  @shouldStripHeaderOnRedirect@ does not strip it cross-host: so a hostile or
-  misconfigured upstream could @302@ a forwarded/minted credential to an attacker-chosen
-  host. That is especially dangerous on the __trusted private manager__, where a redirect
-  could exfiltrate the credential to an attacker-chosen target; pinning @redirectCount = 0@
-  removes the hop entirely rather than relying on the per-hop egress controls.
-
-\* __SSRF via redirect__ (anonymous plane). The host allowlist is enforced when the URL is
-  built, not per redirect hop, so following a @302@ would let an allowlisted upstream
-  steer an anonymous fetch to __any__ host: an internal/cloud-metadata address or any
-  off-allowlist host: re-gated by nothing. Not following the redirect removes the hop
-  there is to gate.
-
-The accepted consequence, symmetric across both planes: a read no longer follows an
-upstream's CDN @302@: it returns the @3xx@ to the serve path rather than chasing it. That
-is the safer posture, and the proxy already honours the __packument's__ @dist.tarball@
-location explicitly, gated by the egress policy, rather than relying on redirects.
-Redirect-following for a nonstandard upstream (a presigned/redirecting object store) is an
-explicit, per-upstream opt-in, never the default.
+{- npm's data-plane request finalisation: attach npm's @Bearer@ credential (when a token
+is injected) through the shared 'finaliseRequest', which pins @redirectCount = 0@. The
+redirect invariant and its full rationale live with 'finaliseRequest'; this composes npm's
+scheme onto it, so every npm builder reaches the wire through the shared pin.
 -}
 withToken :: Maybe Secret -> Request -> Request
-withToken Nothing request = request{redirectCount = 0}
-withToken (Just secret) request =
-    applyBearerAuth (encodeUtf8 (unSecret secret)) request{redirectCount = 0}
+withToken = finaliseRequest . attachBearer
 
--- Add the present conditional-GET validators as request headers.
-addValidators :: Validators -> Request -> Request
-addValidators validators request =
-    request{requestHeaders = newHeaders <> requestHeaders request}
-  where
-    newHeaders =
-        catMaybes
-            [ (,) hIfNoneMatch <$> validatorIfNoneMatch validators
-            , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
-            ]
-
-{- Parse a built URL into a 'Request', mapping a parse failure into a
-'UrlFormationError'. The URL is derived from configuration and an already-safe
-name, so a failure here is a configuration fault, reported uniformly with the
-other URL-formation errors.
--}
-parseRequestEither :: Text -> Either UrlFormationError Request
-parseRequestEither url =
-    case parseRequest (toString url) of
-        Just request -> Right request
-        Nothing -> Left (UnparseableUrl url)
+-- Attach npm's @Bearer@ credential to a request, or leave it unchanged when anonymous.
+attachBearer :: Maybe Secret -> Request -> Request
+attachBearer Nothing = id
+attachBearer (Just secret) = applyBearerAuth (encodeUtf8 (unSecret secret))

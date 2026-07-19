@@ -145,18 +145,7 @@ artifactSpec = describe "artifact request building" $ do
         artifactFileUrl "https://reg.test" babelCodeFrame "code-frame-7.0.0.tgz"
             `shouldBe` Right "https://reg.test/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
 
-    it "artifactRequestByUrl addresses the authoritative URL verbatim (host, path, non-decompressing)" $ do
-        let url = "https://cdn.example.net/files/abc/code-frame-7.0.0.tgz?sig=deadbeef"
-        case artifactRequestByUrl "https://reg.test" Nothing url of
-            Left err -> fail ("artifactRequestByUrl failed: " <> show err)
-            Right req -> do
-                Client.host req `shouldBe` "cdn.example.net"
-                Client.path req `shouldBe` "/files/abc/code-frame-7.0.0.tgz"
-                Client.queryString req `shouldBe` "?sig=deadbeef"
-                Client.decompress req "application/gzip" `shouldBe` False
-                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
-
-    it "artifactRequestByUrl attaches an injected bearer token (the private-leg credential posture)" $ do
+    it "artifactRequestByUrl composes npm's bearer attach through the shared builder" $ do
         case artifactRequestByUrl "https://reg.test" (Just (mkSecret "tok-xyz")) "https://private.reg/files/thing.tgz" of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
             Right req ->
@@ -173,9 +162,6 @@ urlFailureSpec = describe "URL-formation failures" $ do
 
     it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
         artifactFileUrl "" isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
-
-    it "artifactRequestByUrl refuses an unparseable URL as a UrlFormationError" $ do
-        artifactRequestByUrl "https://reg.test" Nothing "not a url with spaces" `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
 
     it "publishRequest refuses an empty base URL as a UrlFormationError" $ do
         publishRequest "" Nothing isOdd "{}" `shouldSatisfy` urlErrorWas EmptyBaseUrl

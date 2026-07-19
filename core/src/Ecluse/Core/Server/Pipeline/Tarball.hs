@@ -21,8 +21,8 @@ client's requested filename, __without a private-packument fetch__ -- the stable
 cacheable shape an @npm ci@ install issues, so a worst-case lockfile fan-out pays one
 artifact round-trip per tarball rather than a packument fetch+decode per tarball it
 would only discard. The request __forwards the client's credential__ over the
-__trusted__ manager, attached at the single bearer-attach point
-('Ecluse.Core.Registry.Npm.withToken'), which pins @redirectCount = 0@: this
+__trusted__ manager, attached by npm's bearer scheme and finalised through the shared
+redirect pin ('Ecluse.Core.Registry.Request.finaliseRequest', @redirectCount = 0@): this
 credential-bearing read __never follows a redirect__ (a private CDN @302@ is returned to
 the serve path, not chased with the bearer). The constructed URL is on the private base
 host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is satisfied
@@ -313,9 +313,10 @@ fetching the private packument first__. This is the stable, cacheable shape an @
 install issues; a worst-case lockfile fan-out therefore pays one artifact round-trip per
 tarball rather than an uncached packument fetch+decode it would only discard.
 
-The request __forwards the client's credential__ over the trusted manager, attached at
-the single bearer-attach point ('Ecluse.Core.Registry.Npm.withToken'), which pins
-@redirectCount = 0@: the credential-bearing read __never follows a redirect__ (a private
+The request __forwards the client's credential__ over the trusted manager, attached by
+npm's bearer scheme and finalised through the shared redirect pin
+('Ecluse.Core.Registry.Request.finaliseRequest', @redirectCount = 0@): the
+credential-bearing read __never follows a redirect__ (a private
 CDN @302@ is returned here, not chased with the bearer). The constructed URL is on the
 private base host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is
 satisfied __same-host__ (the host check is still applied, simply trivially met), and the
