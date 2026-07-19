@@ -32,7 +32,11 @@ jobs:
   scan:
     name: Vulnerability scan (grype)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Sized for a cold run after a dependency-overlay change in flake.nix:
+    # sbomnix builds .#ecluse-bin, so the job pays the full source rebuild of
+    # the overridden closure that the main-written cache does not yet hold.
+    # Warm runs finish in a fraction of this.
+    timeout-minutes: 60
     permissions:
       contents: read
       security-events: write # upload the grype SARIF to code scanning

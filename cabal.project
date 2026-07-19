@@ -16,7 +16,7 @@ packages: .
 source-repository-package
   type:     git
   location: https://github.com/brendanhay/amazonka.git
-  tag:      7645bd335f008912b9e5257486f622b674de7afa
+  tag:      b562aa3f24845e34b95748daae671860017426be
   subdir:   lib/amazonka
             lib/amazonka-core
             lib/services/amazonka-sso
@@ -74,7 +74,16 @@ constraints: warp < 3.4.10
 -- package's base dependency. This mirrors what the Nix/Hackage haskell set already
 -- does for the package; the constraint is the cabal-path equivalent. Drop it once
 -- regression-simple widens its bound upstream, then re-freeze.
-allow-newer: regression-simple:base
+--
+-- The two aeson entries mirror the advisory overlay in flake.nix: the freeze
+-- pins aeson 2.3 (HSEC-2026-0007), and no insert-ordered-containers or openapi3
+-- release or revision admits it yet, so the Nix path jailbreaks them and this
+-- is the cabal path's equivalent. Drop both when upstream widens, then
+-- re-freeze.
+allow-newer:
+  regression-simple:base,
+  insert-ordered-containers:aeson,
+  openapi3:aeson
 
 -- Warnings are errors for our own package, in CI and locally. GHC is pinned by
 -- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
