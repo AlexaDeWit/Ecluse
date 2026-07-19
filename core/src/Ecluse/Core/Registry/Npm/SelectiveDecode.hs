@@ -16,6 +16,9 @@ version's tokens without allocating them__. The win is on the /parse/, not the f
 the full bytes are still read (npm carries @time@ only in the full document), but they
 are parsed selectively -- O(1 version) work and residency rather than O(N).
 
+The generic bounded token-walk engine this decode drives lives in
+"Ecluse.Core.Json.Selective"; this module adds npm's packument key selection on top.
+
 == Faithful to the whole-document decode
 
 The skip is not a shortcut past validation. The walk consumes the __entire__ token
@@ -61,13 +64,18 @@ module Ecluse.Core.Registry.Npm.SelectiveDecode (
 ) where
 
 import Data.Aeson (Value)
-import Data.Aeson.Decoding (toEitherValue)
 import Data.Aeson.Decoding.ByteString (bsToTokens)
-import Data.Aeson.Decoding.Tokens (TkArray (..), TkRecord (..), Tokens (..))
+import Data.Aeson.Decoding.Tokens (TkRecord (..), Tokens (TkRecordOpen))
 import Data.Aeson.Key qualified as Key
-import Data.ByteString qualified as BS
 
-import Ecluse.Core.Security (withinNestingBudget)
+import Ecluse.Core.Json.Selective (
+    SelectiveError (..),
+    findInRecord,
+    materialiseWithinBudget,
+    skipValue,
+    trailingWhitespace,
+    withRecord,
+ )
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | The pieces a selective decode pulls out of a packument for one requested version:
@@ -97,17 +105,6 @@ data SelectedVersion = SelectedVersion
     , svVersionCount :: Int
     -- ^ The number of entries in the @versions@ object (@0@ when @versions@ is absent).
     }
-    deriving stock (Eq, Show)
-
-{- | Why a selective decode could not yield a 'SelectedVersion' -- the two refusal causes
-the whole-document decode would also raise, so the caller maps them onto the same
-'Ecluse.Core.Registry.Metadata.MetadataError' the full path does.
--}
-data SelectiveError
-    = -- | The body was not a well-formed JSON object (or carried trailing non-whitespace).
-      SelectiveUndecodable
-    | -- | Some value nested deeper than the depth budget allowed.
-      SelectiveTooDeeplyNested
     deriving stock (Eq, Show)
 
 {- | Selectively decode a packument's bytes for one version: walk the token stream,
@@ -199,87 +196,3 @@ walkTop childBudget target = fmap wsSelection . go initialWalk
     captureName st valueToks = do
         (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
         pure (st{wsSelection = (wsSelection st){svName = Just nameValue}, wsSeenName = True}, cont)
-
-{- Find one key in a record, materialising __only__ the __first__ occurrence of that key's
-value (a 'Value') and skipping every other entry's tokens unallocated: @aeson@'s object
-decode keeps the first of duplicate keys, so a later duplicate of the target is walked (for
-the malformed\/over-deep checks) but not re-materialised. Returns the found value (if any),
-the __raw__ number of entries scanned, and the record's continuation. @childBudget@ is the
-depth budget the record's values sit at; each is depth-bounded there so a deeply-nested
-sibling still breaches. The scan runs to the record's end (it never stops early), so a later
-duplicate key, a malformed entry, or an over-deep sibling is still seen. -}
-findInRecord :: Int -> Text -> TkRecord k String -> Either SelectiveError (Maybe Value, Int, k)
-findInRecord childBudget target = go Nothing 0
-  where
-    go found !count = \case
-        TkRecordEnd cont -> Right (found, count, cont)
-        TkRecordErr _ -> Left SelectiveUndecodable
-        TkPair key valueToks
-            | Key.toText key == target
-            , Nothing <- found -> do
-                (value, cont) <- materialiseWithinBudget childBudget valueToks
-                go (Just value) (count + 1) cont
-            | otherwise -> skipValue childBudget valueToks >>= go found (count + 1)
-
-{- Materialise one value from its tokens -- the same 'Value' decode the whole-document
-path uses -- bounded at @budget@: malformed tokens are 'SelectiveUndecodable', a value
-past the depth budget is 'SelectiveTooDeeplyNested'. The single materialisation point of
-the walk, so every built 'Value' passes the same depth gate. -}
-materialiseWithinBudget :: Int -> Tokens k String -> Either SelectiveError (Value, k)
-materialiseWithinBudget budget toks = case toEitherValue toks of
-    Left _ -> Left SelectiveUndecodable
-    Right (value, cont)
-        | withinNestingBudget budget value -> Right (value, cont)
-        | otherwise -> Left SelectiveTooDeeplyNested
-
-{- Run @k@ on a record token, refusing a non-record (the @versions@\/@time@ value must be
-an object, exactly as the whole-document decode reads each as a @Map@) and refusing the
-container outright when the depth budget is already spent (a record is itself one level).
--}
-withRecord :: Int -> Tokens k String -> (TkRecord k String -> Either SelectiveError a) -> Either SelectiveError a
-withRecord budget toks k
-    | budget < 1 = Left SelectiveTooDeeplyNested
-    | otherwise = case toks of
-        TkRecordOpen rec -> k rec
-        TkErr _ -> Left SelectiveUndecodable
-        _ -> Left SelectiveUndecodable
-
-{- Consume one value's tokens without allocating a 'Value', returning the continuation.
-Bounds nesting at @budget@ levels exactly as 'Ecluse.Core.Security.withinNestingBudget'
-does over a built 'Value' -- a value occupies one level (refused at @budget < 1@) and a
-container's children are bounded one level deeper -- so skipping reproduces the depth check
-the whole-document path runs. Malformed tokens are 'SelectiveUndecodable'. -}
-skipValue :: Int -> Tokens k String -> Either SelectiveError k
-skipValue budget toks
-    | budget < 1 = Left SelectiveTooDeeplyNested
-    | otherwise = case toks of
-        TkLit _ cont -> Right cont
-        TkText _ cont -> Right cont
-        TkNumber _ cont -> Right cont
-        TkArrayOpen arr -> skipArray (budget - 1) arr
-        TkRecordOpen rec -> skipRecord (budget - 1) rec
-        TkErr _ -> Left SelectiveUndecodable
-
--- Skip an array's items (each at @budget@), returning the continuation after its end.
-skipArray :: Int -> TkArray k String -> Either SelectiveError k
-skipArray budget = \case
-    TkItem toks -> skipValue budget toks >>= skipArray budget
-    TkArrayEnd cont -> Right cont
-    TkArrayErr _ -> Left SelectiveUndecodable
-
--- Skip a record's values (each at @budget@), returning the continuation after its end.
-skipRecord :: Int -> TkRecord k String -> Either SelectiveError k
-skipRecord budget = \case
-    TkPair _ toks -> skipValue budget toks >>= skipRecord budget
-    TkRecordEnd cont -> Right cont
-    TkRecordErr _ -> Left SelectiveUndecodable
-
-{- Whether the bytes after the top-level value are JSON whitespace only -- the
-end-of-input check @eitherDecodeStrict@ applies, so a body with trailing non-whitespace is
-refused identically (space, tab, newline, carriage return are the four JSON whitespace
-bytes). -}
-trailingWhitespace :: ByteString -> Bool
-trailingWhitespace = BS.all isJsonSpace
-  where
-    isJsonSpace :: Word8 -> Bool
-    isJsonSpace w = w == 0x20 || w == 0x0a || w == 0x0d || w == 0x09

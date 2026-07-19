@@ -106,6 +106,7 @@ library ecluse-core
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
     Ecluse.Core.InFlight
+    Ecluse.Core.Json.Selective
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
     Ecluse.Core.Osv.Retry
@@ -560,6 +561,7 @@ test-suite ecluse-core-unit
     Ecluse.Cve.SlotSpec
     Ecluse.CveSpec
     Ecluse.InFlightSpec
+    Ecluse.Json.SelectiveSpec
     Ecluse.Package.AdmissionSpec
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
