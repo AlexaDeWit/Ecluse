@@ -158,12 +158,12 @@
         # from under the cabal path. checks.amazonka-lockstep holds this rev and
         # cabal.project's tag together: bump both in the same commit, then run
         # `task freeze`.
-        amazonkaRev = "7645bd335f008912b9e5257486f622b674de7afa";
+        amazonkaRev = "b562aa3f24845e34b95748daae671860017426be";
         amazonkaSrc = pkgs.fetchFromGitHub {
           owner = "brendanhay";
           repo = "amazonka";
           rev = amazonkaRev;
-          hash = "sha256-ObamDnJdcLA2BlX9iGIxkaknUeL3Po3madKO4JA/em0=";
+          hash = "sha256-zeA69byUJv59avBMfstNuHzeG8V09o87Fp9N98aioII=";
         };
 
         # The same subdirectory set cabal.project vendors: the umbrella package,
@@ -185,9 +185,79 @@
             amazonka-s3 = fromMonorepo "amazonka-s3" "lib/services/amazonka-s3";
           };
 
+        # HSEC advisory pins: the 26.05 set resolves lines that carry Haskell
+        # advisories with released fixes, so the fixed versions are pinned here
+        # until the base set carries them, same mechanism as the OTel overlay
+        # above. HSEC-2026-0007 (aeson + text-iso8601): decode-time denial of
+        # service, and untrusted registry JSON is the serve hot path.
+        # HSEC-2026-0008 (crypton-x509 + crypton-x509-validation): X.509 Name
+        # Constraints not enforced, and certificate validation is the guarantor
+        # of the HTTPS-only egress posture. The x509 family, tls, and
+        # crypton-connection move as one coherent set: tls 2.3 is the first
+        # line accepting x509 1.9, crypton-connection 0.4.6 the first accepting
+        # tls 2.3, and crypton 1.1 is required by both tls 2.3 and x509 1.9.
+        # aeson-pretty 0.8.11 is the first release admitting aeson 2.3.
+        # dontCheck for the same reason as cvss above.
+        advisoryOverlay = hself: hsuper:
+          let
+            fromHackage = pkg: ver: sha256:
+              hlib.dontCheck (hself.callHackageDirect { inherit pkg ver sha256; } { });
+          in {
+            aeson = fromHackage "aeson" "2.3.0.0"
+              "sha256-nIUIE+wLCHTxhiKimKb1v8iTFxpQrzgyF8yY+27BrXY=";
+            text-iso8601 = fromHackage "text-iso8601" "0.2.0.0"
+              "sha256-EGwbQnjRumL2ztwXman6uEEvB0oRspEUB1tl0NyjAGI=";
+            aeson-pretty = fromHackage "aeson-pretty" "0.8.11"
+              "sha256-SmMKRymEU239HsYJL5oVh5eJpFqHoQdKTcw/jyWLeAU=";
+            crypton-x509 = fromHackage "crypton-x509" "1.9.1"
+              "sha256-8VZ64FbEiLj4o+Nm9ZzpNH7ZYs9w6rTkLvT9p2PgBf4=";
+            crypton-x509-store = fromHackage "crypton-x509-store" "1.9.0"
+              "sha256-GQcCEDOYh9N42GSh/A0pYGuIRqk3zwZ/lpOGxFrnClQ=";
+            crypton-x509-system = fromHackage "crypton-x509-system" "1.9.0"
+              "sha256-a3rnvpO1xYVFxxIKhp7aObh+oVj49KJqGcv2NuaAgPs=";
+            crypton-x509-validation = fromHackage "crypton-x509-validation" "1.9.1"
+              "sha256-YKufVgXC8qz80tScE3vENVrwJD1MgZYRNnjqirscrLA=";
+            tls = fromHackage "tls" "2.3.0"
+              "sha256-kip1dltP9SvauoTYSJ7Hi0bwM6bg5nVJnjTgQlZByhI=";
+            crypton-connection = fromHackage "crypton-connection" "0.4.6"
+              "sha256-B+fGwEBaChFx9mrrG5JbIjTnCSfiwuPetOOoua5FMGA=";
+            crypton = fromHackage "crypton" "1.1.4"
+              "sha256-tJSK0HoDabSqcUGORs856Jl6aWZnrqyXPSAh66HsKMM=";
+            hpke = fromHackage "hpke" "0.1.0"
+              "sha256-7bZvdB8unUZxBjrp0CSHn6dIMEJpJ20GrsbRLCT62B0=";
+            http-client-tls = fromHackage "http-client-tls" "0.4.0"
+              "sha256-OvQMk+ewLWN+zMrWc6hphID9DQ32FnasXNeMG/+A/OE=";
+            # attoparsec-aeson 2.2.2.0 revision 1 is Hackage's own widening to
+            # aeson <2.4; the set builds the tarball's original <2.3 file.
+            attoparsec-aeson = hlib.overrideCabal hsuper.attoparsec-aeson (_drv: {
+              revision = "1";
+              editedCabalFile = "sha256-CJSPRbiSxXWNLELiL+L71BpPbcOV+wpDwr9Fih8pVzY=";
+            });
+            # cborg's library has no aeson dependency; only its test suite caps
+            # aeson <2.3, so dropping the suite drops the conflict.
+            cborg = hlib.dontCheck hsuper.cborg;
+            # No insert-ordered-containers or openapi3 release or revision
+            # admits aeson 2.3 yet; they compile against it (this build and the
+            # suites prove it), so strip the stale caps until upstream widens.
+            insert-ordered-containers = hlib.doJailbreak hsuper.insert-ordered-containers;
+            openapi3 = hlib.doJailbreak hsuper.openapi3;
+          };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
-          overrides = pkgs.lib.composeExtensions otelOverlay amazonkaOverlay;
+          overrides = pkgs.lib.composeManyExtensions [
+            otelOverlay
+            amazonkaOverlay
+            advisoryOverlay
+          ];
         };
+
+        # Shell tooling resolves from the unmodified ghc910 set: the tools do
+        # not ship in the app closure, so the overlays above do not apply to
+        # them, and the pristine set keeps them binary-cached instead of
+        # rebuilding each tool's own dependency graph against every pin. Same
+        # compiler as hpkgs, so the .hie-consuming tools (stan, weeder) and
+        # doctest stay compatible.
+        toolHpkgs = pkgs.haskell.packages.ghc910;
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
         # resolves dependencies from the nixpkgs GHC 9.10 set (pinned by
@@ -335,8 +405,8 @@
         # job and every dev loop is driven.
         toolchainInputs = [
           pkgs.bashInteractive
-          hpkgs.ghc
-          hpkgs.cabal-install
+          toolHpkgs.ghc
+          toolHpkgs.cabal-install
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
@@ -353,16 +423,16 @@
         # doctests, coverage conversion, SAST, workflow linting, dead-code and
         # static analysis, and the site build.
         gateInputs = [
-          hpkgs.fourmolu
-          hpkgs.hlint
+          toolHpkgs.fourmolu
+          toolHpkgs.hlint
           # Run the >>> examples in Haddock comments as tests (`task doctest`),
           # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
           # set as the compiler it stands in for. See docs/haddock.md → "Examples that
           # run".
-          hpkgs.doctest
+          toolHpkgs.doctest
           # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
           # `coverage` target (see CONTRIBUTING.md → "Coverage").
-          hpkgs.hpc-codecov
+          toolHpkgs.hpc-codecov
           pkgs.semgrep
           # GitHub Actions linting (`task lint-workflows`): actionlint for
           # correctness (shellcheck over `run:` blocks, expression/context
@@ -377,8 +447,8 @@
           pkgs.shellcheck
           # Dead-code (weeder) and HIE-based static analysis (stan). Both gate CI
           # through their own jobs, and both are in `task check`.
-          hpkgs.weeder
-          hpkgs.stan
+          toolHpkgs.weeder
+          toolHpkgs.stan
           # Site rendering: pandoc turns the repo's Markdown into the published
           # site pages (`task site`). Both the Pages publish and the PR-tier
           # `site-stub` gate run it, so it is part of the CI closure.
@@ -408,10 +478,10 @@
         # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
         # search (see AGENTS.md).
         ideInputs = [
-          hpkgs.haskell-language-server
-          hpkgs.ghcid
-          hpkgs.hoogle
-          hpkgs.cabal-plan
+          toolHpkgs.haskell-language-server
+          toolHpkgs.ghcid
+          toolHpkgs.hoogle
+          toolHpkgs.cabal-plan
           # The Spec.hs entry points carry `-pgmF hspec-discover`, a source
           # preprocessor GHC shells out to. cabal supplies it during a build via
           # build-tool-depends, but HLS runs the same preprocessor when it loads
@@ -420,7 +490,7 @@
           # for HLS; from the same GHC 9.10 set, matching the build-tool-depends
           # version. CI never needs it here (cabal provides it), so it stays out
           # of the CI tiers.
-          hpkgs.hspec-discover
+          toolHpkgs.hspec-discover
           # The LSP<->MCP bridge (defined below, also exposed as
           # packages.agent-lsp); .mcp.json launches it in this shell. Its whole
           # closure is ~53 MiB, so it rides the ide tier rather than earning a
@@ -472,7 +542,7 @@
         # 26.05 default set happens to be 9.10 too, so this is set-consistency
         # insurance, not a closure change).
         benchInputs = [
-          hpkgs.ghc-prof-flamegraph
+          toolHpkgs.ghc-prof-flamegraph
           pkgs.flamegraph
           pkgs.oha
         ];
