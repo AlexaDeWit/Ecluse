@@ -15,6 +15,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), digestOf)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
@@ -93,7 +94,14 @@ info name =
 so a test can assert which exact (typed view, raw bytes) pair a hit returned.
 -}
 entry :: PackageName -> Text -> CacheEntry
-entry name marker = CacheEntry{entryInfo = info name, entryRaw = String marker, entryDigest = digestOf (encodeUtf8 marker)}
+entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryDigest = digestOf (encodeUtf8 marker)}
+
+{- | A marker raw document: inject a tagged JSON string through npm's boundary pair, so a
+test builds and asserts on the opaque 'CachedDoc' the cache holds without the private
+constructor.
+-}
+cachedRaw :: Text -> CachedDoc
+cachedRaw = fst npmCached . String
 
 {- | A cache config with the given TTL (seconds) and maximum entry count, with a resident
 budget generous enough that the entry count is the binding bound.
@@ -162,7 +170,7 @@ spec = do
             c <- freshCache
             result <- resolveMetadata c publicSource (pkg "is-odd") (pure (entry (pkg "is-odd") "raw"))
             infoName (entryInfo result) `shouldBe` pkg "is-odd"
-            entryRaw result `shouldBe` String "raw"
+            entryRaw result `shouldBe` cachedRaw "raw"
 
         it "serves a second resolution from cache without re-fetching" $ do
             c <- freshCache
@@ -178,7 +186,7 @@ spec = do
             c <- freshCache
             _ <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "first"))
             hit <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "second"))
-            entryRaw hit `shouldBe` String "first"
+            entryRaw hit `shouldBe` cachedRaw "first"
             infoName (entryInfo hit) `shouldBe` pkg "coherent"
 
         it "caches per package, not globally (distinct keys both fetch)" $ do
@@ -217,8 +225,8 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "shared") (pure (entry (pkg "shared") "public-doc"))
             priv <- cachedMetadata c privateSource (pkg "shared")
             pub <- cachedMetadata c publicSource (pkg "shared")
-            (entryRaw <$> priv) `shouldBe` Just (String "private-doc")
-            (entryRaw <$> pub) `shouldBe` Just (String "public-doc")
+            (entryRaw <$> priv) `shouldBe` Just (cachedRaw "private-doc")
+            (entryRaw <$> pub) `shouldBe` Just (cachedRaw "public-doc")
 
         it "fetches once per source even for the same package" $ do
             c <- freshCache
@@ -236,7 +244,7 @@ spec = do
             -- The private entry is warm, but a public resolution still fetches its own.
             _ <- resolveMetadata c publicSource (pkg "iso") (countingFetch calls (pkg "iso") "pub")
             cachedMetadata c publicSource (pkg "iso") >>= \pub ->
-                (entryRaw <$> pub) `shouldBe` Just (String "pub")
+                (entryRaw <$> pub) `shouldBe` Just (cachedRaw "pub")
             readIORef calls `shouldReturn` 2
 
     describe "resolveMetadata -- TTL" $

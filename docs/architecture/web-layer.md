@@ -97,7 +97,12 @@ rather than by the `Autohead` middleware.
 ## Metadata cache
 
 The parsed packument metadata is held in a short-TTL, size-bounded, in-memory cache keyed by
-package, so concurrent resolutions of a popular package collapse to one upstream call.
+package, so concurrent resolutions of a popular package collapse to one upstream call. Each entry is
+the coherent pair of the typed `PackageInfo` and the raw document it was decoded from; the cache
+holds that raw document as an
+[opaque carrier](registry-model.md#decision-surface-vs-served-surface)
+([`CachedDoc`](../../core/src/Ecluse/Core/Registry/CachedDocument.hs)), sizing it without reading it,
+so the cache stays ecosystem-agnostic.
 
 What is cached is the metadata, **not the verdict**: rules are re-evaluated each request, so
 time-sensitive rules (`AllowIfOlderThan`) stay correct. This is in-memory metadata only; on-disk

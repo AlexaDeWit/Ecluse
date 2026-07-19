@@ -179,7 +179,7 @@ The packument is therefore merged, above the [protocol boundary](#registry-abstr
 ecosystem-agnostic fold over `PackageInfo` that a new ecosystem does not re-implement. The merge is
 **order-independent**: private wins a collision and divergence is flagged regardless of fetch order,
 and only positional labels track which input a survivor came from so the serve layer can index back
-to the raw `Value`.
+to the raw document.
 
 - **Fetch in parallel.** Private (passthrough) and public (anonymous) concurrently.
 - **Trust split by provenance.** Private versions enter unfiltered; public versions are gated by
@@ -261,11 +261,19 @@ win the union with a divergent `name`.
 
 ### Decision surface vs served surface
 
-The merge decides over the typed `PackageInfo` but serves the raw upstream JSON (`Value`) edited in
-place: only surviving versions taken, their tarball URLs rewritten, `latest` carried from the plan,
-every unmodeled key relayed unchanged. The body is never re-serialised from the lossy typed model,
-which is why its schema is
+The merge decides over the typed `PackageInfo` but serves the raw upstream document rebuilt from the
+winning sources: only surviving versions taken, their tarball URLs rewritten, `latest` carried from
+the plan, every unmodeled key relayed unchanged. The body is never re-serialised from the lossy typed
+model, which is why its schema is
 [owned by the API surface](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
+
+The neutral pipeline and the metadata cache hold that raw document as an **opaque carrier with a
+private constructor** ([`CachedDoc`](../../core/src/Ecluse/Core/Registry/CachedDocument.hs)): they
+cache, merge-plan, and thread it but the module boundary forbids them from reading it. An ecosystem
+crosses that boundary through its own inject/project pair at its injected capabilities: it injects the
+fetched document, and its assembly and serialisation capabilities project it back into the
+representation the ecosystem works in (npm's is a JSON `Value`). The pipeline's opacity to the served
+document is thus a property the compiler enforces, not a discipline the neutral code must keep.
 
 ### Graceful degradation: per-version, not per-package
 

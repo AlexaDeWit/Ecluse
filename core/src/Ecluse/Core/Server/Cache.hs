@@ -41,10 +41,12 @@ path, never in this store.
 
 == Coherent pair
 
-An entry holds the parsed 'PackageInfo' __and__ the raw 'Value' it was decoded
-from, so a hit returns a typed view and the exact bytes that produced it. The
-packument serve path needs both: it decides over the typed view but serves the raw
-document edited in place, and the two must describe the same fetch.
+An entry holds the parsed 'PackageInfo' __and__ the raw document ('CachedDoc') it was
+decoded from, so a hit returns a typed view and the exact bytes that produced it. The
+packument serve path needs both: it decides over the typed view but rebuilds the served
+body from the raw document, and the two must describe the same fetch. The store holds the
+raw document opaquely -- it never reads it, only hands it back to the injected adapter
+capabilities that assemble and serialise the served body.
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules
@@ -147,9 +149,7 @@ module Ecluse.Core.Server.Cache (
     resolveAssembled,
 ) where
 
-import Data.Aeson (Value, encode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 
@@ -162,6 +162,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderScope,
  )
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
@@ -231,16 +232,18 @@ is, never blurring the split.
 newtype Source = Source Text
     deriving stock (Eq, Ord, Show)
 
-{- | A coherent cache entry: the parsed 'PackageInfo' paired with the raw 'Value' it
-was decoded from. A hit returns both, so a caller gets a typed view to decide over
-and the exact bytes that produced it: the packument serve path edits the raw 'Value'
-in place and must keep its typed decision coherent with those bytes.
+{- | A coherent cache entry: the parsed 'PackageInfo' paired with the raw document
+('CachedDoc') it was decoded from. A hit returns both, so a caller gets a typed view to
+decide over and the exact bytes that produced it: the packument serve path rebuilds the
+served body from the raw document and must keep its typed decision coherent with those
+bytes. The store holds the raw document opaquely -- it never reads it, only weighs it
+('weighCachedDoc') and hands it back to the injected adapter capabilities.
 -}
 data CacheEntry = CacheEntry
     { entryInfo :: PackageInfo
     -- ^ The typed packument view the rules and merge reason over.
-    , entryRaw :: Value
-    -- ^ The raw upstream document the served body is built from, edited in place.
+    , entryRaw :: CachedDoc
+    -- ^ The raw upstream document the served body is built from.
     , entryDigest :: ContentDigest
     {- ^ Digest of the wire bytes both views were decoded from, computed once at the
     leader's fetch -- the public origin's contribution to the serve path's derived
@@ -250,15 +253,16 @@ data CacheEntry = CacheEntry
     deriving stock (Eq, Show)
 
 {- | Estimate a 'CacheEntry'\'s resident footprint in bytes as a fixed multiple of its raw
-document's compact-encoded byte length. The resident cost (the parsed 'PackageInfo' plus the
-raw 'Value') is a near-constant multiple of the document's size, so re-encoding the raw
-'Value' and scaling it estimates the footprint without measuring the parsed structure. The
-encode is an @O(document)@ pass run only on a leader's insert (the cold path after a fetch),
-never on a hit. The multiplier is set at the high end of the observed resident-to-encoded
-ratio so the estimate is an upper bound: a memory budget must not systematically under-count.
+document's compact-encoded byte length ('weighCachedDoc'). The resident cost (the parsed
+'PackageInfo' plus the raw document) is a near-constant multiple of the document's size, so
+scaling the document's encoded length estimates the footprint without measuring the parsed
+structure. The encode is an @O(document)@ pass run only on a leader's insert (the cold path
+after a fetch), never on a hit. The multiplier is set at the high end of the observed
+resident-to-encoded ratio so the estimate is an upper bound: a memory budget must not
+systematically under-count.
 -}
 weighCacheEntry :: CacheEntry -> Int
-weighCacheEntry e = weighEncodedBytes (BSL.length (encode (entryRaw e)))
+weighCacheEntry e = weighEncodedBytes (weighCachedDoc (entryRaw e))
 
 {- | Estimate a single-version entry's resident footprint in bytes. A present version's
 'PackageDetails' is a single bounded manifest, so it is weighted at a flat per-version

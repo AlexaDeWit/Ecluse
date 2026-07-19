@@ -53,7 +53,6 @@ module Ecluse.Core.Registry.Metadata (
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
-import Data.Aeson (Value)
 import Data.ByteArray qualified as BA
 
 import Ecluse.Core.Fault (TransportFault)
@@ -62,6 +61,7 @@ import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
  )
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
@@ -89,8 +89,8 @@ derived ETag is built over ('Ecluse.Core.Server.Conditional').
 data Manifest = Manifest
     { manifestInfo :: PackageInfo
     -- ^ The typed packument view the rules and merge reason over.
-    , manifestRaw :: Value
-    -- ^ The raw upstream document the served body is built from.
+    , manifestRaw :: CachedDoc
+    -- ^ The raw upstream document ('CachedDoc') the served body is built from.
     , manifestDigest :: ContentDigest
     -- ^ Digest of the wire bytes 'manifestInfo' and 'manifestRaw' were decoded from.
     }
@@ -103,8 +103,9 @@ proxy core, exactly as the publish-side handle does.
 data MetadataClient = MetadataClient
     { fetchFullManifest :: PackageName -> IO (Either MetadataError Manifest)
     {- ^ Fetch and project a package's __full manifest__: the packument-level
-    'PackageInfo' (every version), the raw 'Value' it was decoded from (so the serve
-    path can edit and re-serialize the document), and the wire bytes' 'ContentDigest'
+    'PackageInfo' (every version), the raw document ('CachedDoc') it was decoded from (so
+    the serve path can rebuild and re-serialize the document through injected adapter
+    capabilities), and the wire bytes' 'ContentDigest'
     (so the serve path can fingerprint the document without re-hashing it). Every
     failure -- fetch, transport, parse, or policy -- is a 'MetadataError' value.
     -}

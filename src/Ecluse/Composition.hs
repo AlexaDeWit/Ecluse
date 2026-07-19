@@ -78,6 +78,7 @@ import Ecluse.Core.Registry.Adapter (
     artifactHosts,
     metadataAssemble,
     metadataNewClient,
+    metadataSerialise,
     publishCanonicaliseName,
     publishDeclaredNames,
     publishRelay,
@@ -254,6 +255,7 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
                 , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
                 , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
                 , pdAssemble = metadataAssemble (adapterMetadata adapter)
+                , pdSerialise = metadataSerialise (adapterMetadata adapter)
                 , pdEgressUrl = mkRegistryUrl
                 }
 
