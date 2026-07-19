@@ -7,8 +7,9 @@ registry-facing capability shares.
 
 This is the __ecosystem (protocol) axis__' common ground (see
 @docs\/architecture\/registry-model.md@ → "Registry Abstraction"): the raw fetched
-document ('RegistryResponse'), the mirror-write descriptor ('MirrorArtifact'),
-and one typed fault channel per exchange -- 'FetchFault' for a metadata read,
+document ('RegistryResponse'), the mirror-write descriptor ('MirrorArtifact') and
+the digest selector ('firstHashValue') that reads it, and one typed fault channel
+per exchange -- 'FetchFault' for a metadata read,
 'PublishFault' for the mirror write, 'PublishRelayFault' for the first-party
 relay, with 'UrlFormationError' the protocol-independent request-formation
 failure they all share. The capabilities that speak a protocol over these types
@@ -36,6 +37,7 @@ module Ecluse.Core.Registry (
 
     -- * Publish descriptor
     MirrorArtifact (..),
+    firstHashValue,
 
     -- * Errors
     ParseError (..),
@@ -48,7 +50,7 @@ module Ecluse.Core.Registry (
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (Hash)
+import Ecluse.Core.Package (Hash, HashAlg, hashAlg, hashValue)
 import Ecluse.Core.Security (LimitError)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
@@ -89,6 +91,16 @@ data MirrorArtifact = MirrorArtifact
     -}
     }
     deriving stock (Eq, Show)
+
+{- | The digest value of the first admitted 'Hash' computed with the given
+'HashAlg', or 'Nothing' when the artifact carries none. It reads only 'maHashes'
+and consults no ecosystem, so it lives beside the descriptor: npm's publish codec
+picks the @SRI@ and @SHA1@ entries this way to fill @dist.integrity@ and
+@dist.shasum@.
+-}
+firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
+firstHashValue alg artifact =
+    fmap hashValue (find ((== alg) . hashAlg) (maHashes artifact))
 
 {- | Why parsing a 'RegistryResponse' into a domain type failed. Parsing is the
 boundary that turns untrusted wire data into the proxy's precise types, so a

@@ -49,28 +49,18 @@ module Ecluse.Core.Registry.Npm (
     relayPublishDocument,
 ) where
 
-import Data.ByteString.Lazy qualified as LBS
-import Network.HTTP.Client (
-    BodyReader,
-    Manager,
-    Response (responseStatus),
-    responseBody,
-    withResponse,
- )
-import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (try)
+import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
-    PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable),
-    PublishRelayResponse (..),
-    RegistryResponse (RegistryResponse),
+    PublishRelayFault (RelayUrlUnformable),
+    PublishRelayResponse,
+    RegistryResponse,
  )
 
-import Ecluse.Core.Registry.Exchange (boundedFetch, readBoundedBody)
+import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm,
@@ -145,25 +135,4 @@ relayPublishDocument config name document =
     case publishRequest (npmBaseUrl config) (npmToken config) name document of
         Left urlErr -> pure (Left (RelayUrlUnformable urlErr))
         Right request ->
-            -- The transport wrap covers the whole exchange, the bounded body
-            -- read included: the relay buffers the target's response before
-            -- anything is answered, so a mid-body reset is still a pre-commit
-            -- fault with a value representation.
-            try (withResponse request (npmManager config) (readRelayResponse (npmLimits config)))
-                <&> \case
-                    Left httpErr -> Left (RelayTransport (classifyTransport httpErr))
-                    Right relayed -> relayed
-
-{- Buffer the publication target's response to a relayed publish: the body read
-bounded against the budget (an overstep is the typed 'RelayBoundExceeded'),
-paired with the status the target answered. -}
-readRelayResponse :: Limits -> Response BodyReader -> IO (Either PublishRelayFault PublishRelayResponse)
-readRelayResponse limits response =
-    readBoundedBody limits (responseBody response) <&> \case
-        Left limitErr -> Left (RelayBoundExceeded limitErr)
-        Right (RegistryResponse body) ->
-            Right
-                PublishRelayResponse
-                    { relayStatus = statusCode (responseStatus response)
-                    , relayBody = LBS.fromStrict body
-                    }
+            boundedRelay (npmManager config) (npmLimits config) request
