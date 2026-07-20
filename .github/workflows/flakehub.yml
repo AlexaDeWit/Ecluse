@@ -1,0 +1,38 @@
+name: FlakeHub
+
+# Publish the flake to FlakeHub as a rolling release on every main push, so
+# FlakeHub Cache serves this repository's closures (setup-toolchain's FlakeHub
+# Cache step is the consumer). Metadata-only: include-output-paths is off, so
+# no build happens here; store paths reach the cache from the jobs that build
+# them.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish flake (rolling)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub (OIDC)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Push flake to FlakeHub
+        uses: DeterminateSystems/flakehub-push@71f57208810a5d299fc6545350981de98fdbc860 # v6
+        with:
+          name: "AlexaDeWit/Ecluse"
+          rolling: true
+          visibility: "public"
+          include-output-paths: false

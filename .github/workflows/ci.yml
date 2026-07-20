@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # OIDC for tokenless Codecov upload (no stored token)
+      id-token: write # OIDC: tokenless Codecov upload + FlakeHub Cache
     env:
       # Pin the cabal store to a deterministic, cacheable location.
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -145,6 +145,9 @@ jobs:
     name: Smoke tests (live registries — non-gating)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Hits public npm/PyPI to catch protocol drift when those registries change
     # their wire behaviour — a correctness signal we want visible on EVERY PR. NOT a
     # `gate` dependency and continue-on-error, so a transient live-registry blip
@@ -166,6 +169,9 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       - name: Update package index
         run: nix develop .#ci --command task update
@@ -178,6 +184,9 @@ jobs:
     runs-on: ubuntu-latest
     # Sanity bound, not a budget: ~15 min warm, but a cold Nix closure adds half an hour (#836).
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
     # docker network and drives it with the real npm CLI (S53). Catches composition-root
     # and cross-component regressions nothing else does. It is heavy (a Nix image build,
@@ -250,6 +259,7 @@ jobs:
     # or orphaned page fails the PR here instead of the Pages deploy after merge.
     permissions:
       contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the Semgrep SARIF to code scanning
     steps:
       - name: Checkout
@@ -259,6 +269,10 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
+        with:
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       - name: Static checks
         env:
@@ -285,6 +299,9 @@ jobs:
     # cache is written on main only, so the first PR run pays it all). Warm runs
     # finish in a fraction of this.
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Builds the library Haddock so broken doc comments / missing modules are caught
     # on the PR, not after merge when the Pages deploy fails. Builds it as the
     # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
@@ -325,9 +342,13 @@ jobs:
         with:
           # Own the doc-closure cache (deps + their `-doc` outputs) plus the
           # freeze-sync dependency environment; single writer, save on main.
-          # Bigger than the `.#ci` shell, so raise the trim cap.
+          # The cap covers the store this job accumulates (restored epoch +
+          # build-time inputs + outputs, ~10.5 GB observed), not just the
+          # checks' output closure: a cap below the store trims live paths
+          # before saving, and every later run then rebuilds them off a
+          # partial hit.
           nix-cache-prefix: nix-docs
-          nix-gc-max-store-size: 9G
+          nix-gc-max-store-size: 13G
 
       - name: Flake checks (docs Haddock, freeze-sync, amazonka-lockstep)
         run: >-
@@ -340,6 +361,9 @@ jobs:
     name: Dead-code check (weeder)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Fails on any finding (a red signal) and IS a `gate` dependency, so a finding
     # blocks the merge. weeder reports library code not reachable from the application
     # entry point. Runs on EVERY PR so a newly-introduced unreachable definition is
@@ -358,6 +382,9 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       # dist-analysis (the shared -fwrite-ide-info builddir that `task weeder` builds
       # via analysis-build) is deliberately NOT cached: it is rebuilt from scratch
@@ -399,6 +426,9 @@ jobs:
     name: Haskell static analysis (stan)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Fails on any finding above the floor (a red signal) and IS a `gate` dependency,
     # so a finding blocks the merge. Stan analyses GHC HIE files for partial functions +
     # potential bugs that Semgrep (no Haskell) and hlint (no type info) can't see, scoped
@@ -417,6 +447,9 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
+          # Restore-only for the shared Nix store: build-test is its single
+          # writer.
+          save-nix-store: "false"
 
       # dist-analysis is deliberately NOT cached here either, for the reason spelled
       # out on the weeder job above: stan scans every .hie under the builddir, cabal

@@ -45,8 +45,15 @@ inputs:
       Cap the Nix store is trimmed to before saving (cache-nix-action
       gc-max-store-size-linux). A closure larger than the cap is trimmed away before
       saving and never fully persists, so the cap must EXCEED the closure the job
-      realizes. Default "10G": the `.#ci` dev-shell closure measures 9.41 GB. The
-      `docs` job overrides to "7G" for its ~6.55 GB doc closure.
+      realizes. Default "10G": the `.#ci` dev-shell closure measures ~5.5 GB
+      (shell tools are static executables, so no tool drags a Haskell library
+      universe into it), leaving headroom for build residue. The `docs` job
+      overrides to "13G" for the store it accumulates (~10.5 GB observed).
+
+      The cap must cover the STORE the job accumulates (restored epoch plus
+      build-time inputs plus outputs), not just an output closure: a cap below
+      the store trims live paths before saving, and every later run then
+      rebuilds them off a partial hit.
 
       This cap is on the UNCOMPRESSED Nix store; the 10 GB Actions-cache quota is on
       the COMPRESSED entry, and the two are not the same number. The store compresses
@@ -124,6 +131,16 @@ runs:
           connect-timeout = 10
           download-attempts = 5
 
+    # FlakeHub Cache: the store-path-granular binary cache in front of the
+    # Actions-cache entries below. Authenticates via the job's OIDC token
+    # (`id-token: write`; no stored secrets), substitutes on every run, and
+    # pushes newly built paths from trusted runs, so a closure change is built
+    # once and substituted everywhere after, including PR runs the Actions
+    # cache cannot yet serve. A run without an OIDC token (a fork PR) degrades
+    # to the Actions cache + cache.nixos.org path below.
+    - name: FlakeHub Cache
+      uses: DeterminateSystems/flakehub-cache-action@3be0931021788e3bb4df65f59a555039c2fa2d46 # v3.21.7
+
     # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
     # warm runs are fast and immune to cache.nixos.org flakiness. Most gate jobs
     # realize the same `.#ci` shell, so the default "nix" prefix serves them from
@@ -132,9 +149,10 @@ runs:
     #
     # save is gated to main AND to the save-nix-store input: PR runs restore (from
     # main's entry, via the base-branch fallback) but never write, so they can't
-    # each leave a ~1.3 GB copy behind; and a non-writer main job (Pages, which sets
-    # save-nix-store: false) restores the shared store but never races build-test —
-    # the single writer — for the one nix-<os>-<flakehash> entry. gc-max-store-size
+    # each leave a ~1.3 GB copy behind; and every non-writer job sets
+    # save-nix-store: false, so build-test alone writes the shared
+    # nix-<os>-<flakehash> entry and its content is deterministic (the `.#ci`
+    # shell closure, never a bystander job's store). gc-max-store-size
     # trims the store to its live closure before saving, so the cached entry can't
     # balloon past that job's closure. Stale older-flake.lock entries are pruned
     # by the cache-cleanup workflow (this token is read-only; purging in-action
