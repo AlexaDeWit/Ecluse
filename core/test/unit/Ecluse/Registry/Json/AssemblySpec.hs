@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Registry.AssemblySpec (spec) where
+module Ecluse.Registry.Json.AssemblySpec (spec) where
 
 import Data.Aeson (Value (Bool, Object, String))
 import Data.Aeson.Key (Key)
@@ -13,7 +13,8 @@ import Data.Text qualified as T
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Package.Merge (SourceId)
-import Ecluse.Core.Registry.Assembly (
+import Ecluse.Core.Registry.Json.Assembly (
+    plannedKeysOver,
     rebaseArtifactUrl,
     rebaseHook,
     replaySurvivors,
@@ -32,9 +33,30 @@ shared mechanics in isolation.
 spec :: Spec
 spec = do
     replaySurvivorsSpec
+    plannedKeysOverSpec
     safeMountPrefixSpec
     rebaseArtifactUrlSpec
     rebaseHookSpec
+
+plannedKeysOverSpec :: Spec
+plannedKeysOverSpec = describe "plannedKeysOver (the plan's keys win)" $ do
+    it "overrides a same-named base key with the plan's rebuilt one" $
+        -- The load-bearing assertion: if this inverted, a version the plan denied
+        -- would be served from the upstream's own map.
+        lookupKey "versions" (plannedKeysOver [("versions", String "planned")] baseDoc)
+            `shouldBe` Just (String "planned")
+
+    it "relays every base key the plan does not name" $
+        lookupKey "extra" (plannedKeysOver [("versions", String "planned")] baseDoc)
+            `shouldBe` Just (String "kept")
+
+    it "adds a planned key the base does not carry" $
+        lookupKey "dist-tags" (plannedKeysOver [("dist-tags", String "new")] baseDoc)
+            `shouldBe` Just (String "new")
+
+    it "yields an object over an empty base" $
+        plannedKeysOver [("versions", String "planned")] mempty
+            `shouldBe` Object (KeyMap.singleton "versions" (String "planned"))
 
 replaySurvivorsSpec :: Spec
 replaySurvivorsSpec = describe "replaySurvivors" $ do
@@ -93,7 +115,7 @@ rebaseArtifactUrlSpec = describe "rebaseArtifactUrl (the shared rebase disciplin
 
     it "carries the filename over verbatim under a different convention" $
         rebaseArtifactUrl filesInfix "https://files.test/ab/cd/thing-1.0.0.whl"
-            `shouldBe` "https://proxy.test/pypi/thing/files/thing-1.0.0.whl"
+            `shouldBe` "https://proxy.test/other/thing/files/thing-1.0.0.whl"
 
 rebaseHookSpec :: Spec
 rebaseHookSpec = describe "rebaseHook (gate and rewrite, fail-closed)" $ do
@@ -113,6 +135,18 @@ rebaseHookSpec = describe "rebaseHook (gate and rewrite, fail-closed)" $ do
 mountBase :: Text
 mountBase = "https://proxy.test/npm"
 
+{- | A base document carrying a key the plan rebuilds (@versions@) and one it does not
+(@extra@), so both halves of the overlay are observable.
+-}
+baseDoc :: KeyMap Value
+baseDoc = KeyMap.fromList [("versions", String "upstream"), ("extra", String "kept")]
+
+-- | Look a key up in a 'Value' expected to be an object.
+lookupKey :: Key -> Value -> Maybe Value
+lookupKey k = \case
+    Object o -> KeyMap.lookup k o
+    _ -> Nothing
+
 -- | A single-component name grammar: the whole name, as an unscoped ecosystem reads it.
 single :: Text -> [Text]
 single name = [name]
@@ -131,7 +165,7 @@ dashDash file = "https://proxy.test/npm/thing/-/" <> file
 
 -- | A second, differently-shaped convention, to witness the builder is the only variable.
 filesInfix :: Text -> Text
-filesInfix file = "https://proxy.test/pypi/thing/files/" <> file
+filesInfix file = "https://proxy.test/other/thing/files/" <> file
 
 -- | A rewrite that records the prefix it was handed, so the gate's decision is observable.
 stamp :: Text -> Value -> Value

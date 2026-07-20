@@ -59,7 +59,7 @@ separate whole-document edits would rebuild a many-version packument several tim
 per request, and this transform sits on the serve path's hot loop (see
 @docs\/architecture\/performance.md@). The rewrite gates the interpolated name: the
 base document's own @name@ is validated component-wise by the shared gate
-('Ecluse.Core.Registry.Assembly.safeMountPrefix', over npm's 'npmNameComponents')
+('Ecluse.Core.Registry.Json.Assembly.safeMountPrefix', over npm's 'npmNameComponents')
 before it is interpolated, and a document with no usable name has no URLs rewritten.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
@@ -74,7 +74,7 @@ module Ecluse.Core.Registry.Npm.Filter (
     serialiseMergedDocument,
 ) where
 
-import Data.Aeson (Value (Object, String), encode)
+import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -86,13 +86,19 @@ import Lens.Micro ((%~), (^?))
 import Lens.Micro.Aeson (key, _String)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
-import Ecluse.Core.Registry.Assembly (rebaseArtifactUrl, rebaseHook, replaySurvivors)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Json.Assembly (
+    plannedKeysOver,
+    rebaseArtifactUrl,
+    rebaseHook,
+    replaySurvivors,
+ )
+import Ecluse.Core.Registry.Json.Boundary (assembleThroughBoundary, serialiseThroughBoundary)
 import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | npm's __name grammar__, the one protocol fact the shared safety gate
-('Ecluse.Core.Registry.Assembly.safeMountPrefix') needs from npm: an @\@scope\/base@
+('Ecluse.Core.Registry.Json.Assembly.safeMountPrefix') needs from npm: an @\@scope\/base@
 decomposes into its scope and base name, any other name is a single component.
 Splitting on the scope separator first means a legitimate @\@scope\/name@'s own
 @\'\/\'@ is not itself judged unsafe, while a slash anywhere else (a traversal, a
@@ -119,9 +125,10 @@ relayed unchanged. Rewriting is __idempotent__ -- a second pass derives the same
 @{file}@ and so produces the same URL.
 
 A @{pkg}@ read from a document's own @name@ is __upstream-controlled__, so it
-must be gated component-wise through "Ecluse.Core.Server.Route.isSafeComponent"
-before it reaches the prefix: 'assembleMergedPackument' performs that gate as it
-places each surviving version, and a caller building its own prefix owns it.
+must be gated component-wise through
+'Ecluse.Core.Registry.Json.Assembly.safeMountPrefix' before it reaches the prefix:
+'assembleMergedPackument' performs that gate as it places each surviving version,
+and a caller building its own prefix owns it.
 -}
 rewriteVersion :: Text -> Value -> Value
 rewriteVersion prefix v = v & tarballUrl %~ rebaseArtifactUrl (npmArtifactPath prefix)
@@ -153,7 +160,7 @@ base document's non-version @created@\/@modified@ bookkeeping.
 The tarball rewrite applies 'rewriteVersion' to each surviving version as it is
 placed, so the versions object is built once rather than rebuilt by a second
 whole-document pass; the interpolated prefix is gated on the base document's own
-@name@ through the shared 'Ecluse.Core.Registry.Assembly.rebaseHook', with no rewrite
+@name@ through the shared 'Ecluse.Core.Registry.Json.Assembly.rebaseHook', with no rewrite
 when the name is unusable or refuses the gate.
 
 The caller decides what to do with an empty plan; an empty 'mpSurvivors' simply
@@ -163,17 +170,12 @@ result is always an object.
 -}
 assembleMergedPackument :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
-    -- The plan-owned keys win; every other key is relayed from the base document.
-    -- 'KeyMap.union' is left-biased, so naming the rebuilt keys first is what makes
-    -- them override the base's own @versions@\/@dist-tags@\/@time@.
-    Object
-        ( KeyMap.fromList
-            [ ("versions", Object survivingVersions)
-            , ("dist-tags", Object distTags)
-            , ("time", Object reconciledTime)
-            ]
-            `KeyMap.union` baseObject
-        )
+    plannedKeysOver
+        [ ("versions", Object survivingVersions)
+        , ("dist-tags", Object distTags)
+        , ("time", Object reconciledTime)
+        ]
+        baseObject
   where
     baseObject :: KeyMap Value
     baseObject = case base of
@@ -236,28 +238,18 @@ assembleMergedPackument mountBase bySource plan base =
         _ -> mempty
 
 {- | npm's served-document __assemble__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'): project each per-source
-'CachedDoc' and the precedence-winning base document into npm's 'Value', replay the plan
-through 'assembleMergedPackument', and inject the assembled 'Value' back. The neutral
-pipeline threads the documents opaquely; the projection\/injection is npm's boundary.
+('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'): the shared JSON boundary over
+npm's 'npmCached' pair and npm's own 'assembleMergedPackument'.
 -}
 assembleMergedDocument :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleMergedDocument mountBase bySource plan base =
-    fst npmCached (assembleMergedPackument mountBase (Map.map npmValue bySource) plan (maybe (Object mempty) npmValue base))
+assembleMergedDocument = assembleThroughBoundary npmCached assembleMergedPackument
 
 {- | npm's served-document __serialise__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'): project the assembled
-'CachedDoc' to npm's 'Value' and encode it compactly to the wire bytes.
+('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'): the shared JSON boundary over
+npm's projection.
 -}
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = encode . npmValue
-
--- Project a served document back to npm's 'Value'. The single disposition for the
--- projection boundary: a document npm did not inject falls back to the empty object (a
--- benign miss that contributes no keys and no versions). npm is the only injector, so
--- this default is never taken in practice.
-npmValue :: CachedDoc -> Value
-npmValue = fromMaybe (Object mempty) . snd npmCached
+serialiseMergedDocument = serialiseThroughBoundary (snd npmCached)
 
 -- A source document's raw @versions@ object, when the document carries one.
 versionsObjectOf :: Value -> Maybe (KeyMap Value)

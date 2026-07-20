@@ -124,10 +124,11 @@ library ecluse-core
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Adapter
     Ecluse.Core.Registry.Adapter.Types
-    Ecluse.Core.Registry.Assembly
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Fault
+    Ecluse.Core.Registry.Json.Assembly
+    Ecluse.Core.Registry.Json.Boundary
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
@@ -582,8 +583,9 @@ test-suite ecluse-core-unit
     Ecluse.Queue.Support
     Ecluse.QueueSpec
     Ecluse.Registry.AdapterSpec
-    Ecluse.Registry.AssemblySpec
     Ecluse.Registry.CachedDocumentSpec
+    Ecluse.Registry.Json.AssemblySpec
+    Ecluse.Registry.Json.BoundarySpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec

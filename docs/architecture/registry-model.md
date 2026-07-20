@@ -130,11 +130,10 @@ packument **rebased** every surviving version's `dist.tarball` under the mount, 
 `{mount-base}/{pkg}/-/{file}` as the document was assembled, so a client resolving metadata through
 the proxy downloads the bytes back through the gate rather than straight from upstream; the version's
 original upstream location, which the rebase replaced in the served view, is what this leg then
-honours. That lets Écluse front a registry serving bytes from a separate host (the PyPI-files-host
-shape) or a signed CDN URL: such hosts are declared on the ecosystem's adapter and the same-host
-gate admits them, with no operator knob to widen the surface. The rebase is thus what makes the
-adapter's declared artifact hosts load-bearing: it routes clients back through Écluse, and the
-honoured upstream location may then sit on one of those foreign hosts.
+honours. That is what makes the adapter's declared artifact hosts load-bearing: the rebase routes
+clients back through Écluse, and the location this leg then honours may sit on a separate host (the
+PyPI-files-host shape) or a signed CDN URL. Such hosts are declared on the ecosystem's adapter and
+the same-host gate admits them, with no operator knob to widen the surface.
 That location is gated, not trusted: the allowlist and same-host gate bound where it may be
 fetched, https-only egress with certificate validation authenticates the host, and a legacy `http`
 tarball is upgraded (same host) or dropped (see

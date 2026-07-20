@@ -27,9 +27,9 @@ polymorphic over the producing monad so the streaming data plane can run it in
 'IO' while tests drive it purely. They are __primitives__: the fetch and serve
 layers compose them at the boundary (see @docs\/architecture\/registry-model.md@
 → "Registry Abstraction" and @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
-mounts"). Path-component safety is
-shared with the router's "Ecluse.Core.Server.Route" ('isSafeComponent'); the threat
-model these guards answer is recorded there too.
+mounts"). Path-component safety lives in "Ecluse.Core.Server.Path"
+('Ecluse.Core.Server.Path.isSafeComponent'), which the router and the served-URL
+rebase gate both apply; the threat model these guards answer is recorded there too.
 -}
 module Ecluse.Core.Security (
     module Ecluse.Core.Security.Host,
