@@ -58,7 +58,7 @@ jobs:
         # Surface the closure CVEs in the Security tab (code scanning), alongside
         # Semgrep + Scorecard, via sarif upload
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           sarif_file: grype.sarif
           category: grype
@@ -88,7 +88,7 @@ jobs:
         # Surface the HSEC advisories in the Security tab (code scanning),
         # alongside grype + Semgrep + Scorecard.
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           sarif_file: osv-freeze.sarif
           category: osv-hsec
