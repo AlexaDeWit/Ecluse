@@ -247,7 +247,7 @@ library ecluse-core
     , text                  ^>=2.1
     , text-short            ^>=0.1.6
     , time                  ^>=1.12
-    , tls                   >=2.1      && <2.4
+    , tls >=2.1 && <2.5
     , universe-base         ^>=1.1
     , unliftio              ^>=0.2.25
     , vector                ^>=0.13
@@ -669,7 +669,7 @@ test-suite ecluse-core-unit
     , text              ^>=2.1
     , text-short        ^>=0.1.6
     , time              ^>=1.12
-    , tls               >=2.1  && <2.4
+    , tls >=2.1 && <2.5
     , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
