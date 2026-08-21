@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (DeadLettered, Retried, Succeeded),
+    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
@@ -309,6 +309,13 @@ spec = do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isDropped
+                -- The reason names the authority the fetch would dial, never the URL:
+                -- a queue payload's location can carry userinfo or a signed query.
+                case outcome of
+                    Dropped reason -> do
+                        reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
+                        reason `shouldSatisfy` (not . T.isInfixOf "/thing/-/thing-1.0.0.tgz")
+                    other -> expectationFailure ("expected a Dropped outcome, got " <> show other)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 

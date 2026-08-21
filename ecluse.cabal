@@ -373,6 +373,11 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry.Resolve
     Ecluse.Runtime.Telemetry.Tracing
 
+  -- The generated version module: the resolved telemetry identity falls back to the
+  -- running binary's own build version (Ecluse.Runtime.Telemetry.Resolve).
+  other-modules:   Paths_ecluse
+  autogen-modules: Paths_ecluse
+
   build-depends:
     , ecluse:ecluse-core
     , aeson                           >=2.2 && <2.4
@@ -807,7 +812,9 @@ test-suite ecluse-runtime-unit
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec
+    Paths_ecluse
 
+  autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , ecluse:ecluse-core

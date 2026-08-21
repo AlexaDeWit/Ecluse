@@ -65,9 +65,10 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
@@ -141,9 +142,17 @@ logUpstreamUnformable name origin urlErr =
         sl "module" pipelineInternalModule
             <> sl "package" (renderPackageName name)
             <> sl "origin" origin
-            <> sl "urlError" (show urlErr :: Text)
+            <> sl "urlError" (renderUrlFormationError urlErr)
     message :: Text
     message = "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
+
+{- The url-formation fault as a log field, with any URL it carries reduced to its
+authority ('authorityLabel'): a configured base URL can carry userinfo or a query
+string, and neither may reach a log line. -}
+renderUrlFormationError :: UrlFormationError -> Text
+renderUrlFormationError = \case
+    EmptyBaseUrl -> "EmptyBaseUrl"
+    UnparseableUrl url -> "UnparseableUrl " <> authorityLabel url
 
 {- | Log an unreachable upstream at 'WarningS' before the contribution degrades: the
 transport failed before a usable body returned (a timeout, a refused connection, a TLS

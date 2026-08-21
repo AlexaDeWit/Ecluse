@@ -26,7 +26,7 @@ import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
-import Ecluse.Runtime.Log (LogFormat (JsonLog), newLogEnv)
+import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -255,7 +255,7 @@ captureBreachLog privateBody = do
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
             metadataCache <- newMetadataCache defaultCacheConfig
-            logEnv <- newLogEnv JsonLog (Environment "test")
+            logEnv <- newLogEnv JsonLog InfoLevel (DdContext "ecluse" Nothing Nothing Nothing) (Environment "test")
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
             env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
@@ -278,23 +278,23 @@ boundsLogSpec :: Spec
 boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
     it "logs a WARNING naming the version-count bound, distinct from a plain parse failure" $ do
         logged <- captureBreachLog versionFloodPackument
-        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"version-count\""
         logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
 
     it "logs a WARNING naming the body-size bound on an oversized body" $ do
         logged <- captureBreachLog (oversizedPackument "9.9.9")
-        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"body-size\""
 
     it "logs a WARNING naming the nesting-depth bound on a deeply-nested body" $ do
         logged <- captureBreachLog deeplyNestedBody
-        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"nesting-depth\""
 
     it "logs a WARNING on an undecodable upstream body (the case the bound guards leave silent)" $ do
         logged <- captureBreachLog undecodableBody
-        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "did not decode"
 
     it "tags every serve-path log line with the emitting module" $ do

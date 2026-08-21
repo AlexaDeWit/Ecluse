@@ -46,7 +46,7 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl))
+import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
@@ -141,6 +141,19 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
             logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
             logged `shouldSatisfy` T.isInfixOf "could not be formed"
+
+    describe "logUpstreamUnformable (url minimisation)" $
+        it "reduces the offending URL to its authority, dropping userinfo and query" $ do
+            -- A configured base URL can carry a credential in its userinfo or query, so
+            -- the rendered fault names the authority alone.
+            let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
+            logged <- captureStdout $ do
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "http://upstream.test" offending)
+                void (closeScribes logEnv)
+            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
+            logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
+            logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
 
     -- The pure metric-label projections that classify a serve outcome into the bounded
     -- labels the catalogue records. Every branch is asserted directly, so the

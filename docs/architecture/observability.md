@@ -12,7 +12,7 @@ measurement rather than a branch.
 
 Datadog is a first-class, tested target, what the maintainer runs, but never required and not a
 lock-in: nothing in the core depends on it, and switching backends is a config change. Its
-Datadog-specific pieces (`dd.*` log fields, Agent-side sampling, the
+Datadog-specific pieces (the `dd` trace-correlation object on a log line, Agent-side sampling, the
 [Operator recipe](../../USAGE.md#datadog-on-kubernetes)) are optional add-ons on the OTLP baseline.
 
 ## What gets traced
@@ -73,16 +73,37 @@ explosion. Two guarantees hold it and the telemetry safe:
 Logs stay structured JSON via `katip`, stitched to traces by trace-ID injection. The production
 format is one compact JSON object per line to stdout (JSONL), which the Datadog Agent's stdout
 autodiscovery consumes. Set the shape with `ECLUSE_OBSERVABILITY__LOG_FORMAT`: `json` (the
-in-container default) or `console` (human-readable, for development). Each line carries a `dd` object
-for correlation and unified service tagging:
+in-container default) or `console` (human-readable, for development).
+
+Every JSON line carries the reserved attribute names a log backend indexes without a custom
+pipeline:
 
 ```json
-{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"}
+{"timestamp":"2026-06-22T09:14:03.118Z","status":"warn","message":"denied","service":"ecluse","env":"prod","version":"0.1.0","dd":{"trace_id":"…","span_id":"…"},"data":{"module":"Ecluse.Server.Pipeline.Internal","package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"},"katip":{"ns":["ecluse","serve"],"app":["ecluse"],"host":"…","pid":"1","thread":"…","loc":null}}
 ```
 
-`dd.service` / `dd.env` / `dd.version` come from the same config as the traces, so logs and traces
-share one identity and log-to-trace pivots line up. The ids appear only while a span is in scope, and
-Datadog needs them as low-64-bit decimal for OTLP-ingested traces to match.
+`status` folds `katip`'s eight syslog severities onto the four an operator acts on: `debug`, `info`,
+`warn`, `error`. `service`, `env`, and `version` come from the same resolved identity as the traces,
+so a log-to-trace pivot lines up; the formatter stamps that identity, so a line raised outside any
+request scope carries it too. With no `DD_ENV` or `deployment.environment` set, `env` falls back to
+the deployment label the process boots under, and `version` to the binary's own build version. The
+`dd` object appears only while a span is in scope, and Datadog needs those ids as low-64-bit decimal
+for OTLP-ingested traces to match. The emitting call's own fields sit under `data`, the `katip`
+emitter fields under `katip`.
+
+`ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the severity floor: `debug`, `info` (the default), `warn`, or
+`error`. The scribe drops anything below the floor before rendering it, so `debug` instrumentation
+costs nothing at `info`. An unrecognised value is a boot error, like every other configuration enum.
+
+### URL minimisation
+
+No log line and no span attribute renders a URL. An artifact location is upstream-supplied and an
+advisory export URL is operator-supplied; either can carry a credential in its userinfo or in a
+pre-signed query string, and both logs and spans leave the node. Every site that names a location
+names its validated `host:port` instead, through the one shared reduction in
+`Ecluse.Core.Security.Authority`; a value with no dialable authority renders as `<unresolved>`,
+never as a fragment of the input. The span attributes say so in their names:
+`ecluse.mirror.artifact_host` and `ecluse.osv.source_host`.
 
 ## Configuration and deployment
 

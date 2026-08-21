@@ -78,6 +78,8 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
+import Data.Version (showVersion)
+import Paths_ecluse (version)
 import System.Environment (setEnv)
 
 import Katip (LogEnv, Severity (WarningS), logFM, ls)
@@ -110,9 +112,10 @@ data TelemetryEndpoint = TelemetryEndpoint
     deriving stock (Eq, Show)
 
 {- | The telemetry identity resolved from the environment: the single source of
-truth for both the SDK configuration and the @dd@ log object. 'rtEnvironment' and
-'rtVersion' are 'Nothing' when the operator named neither dialect's form -- they are
-genuinely optional resource attributes, not defaulted to a placeholder.
+truth for both the SDK configuration and the @dd@ log object. 'rtEnvironment' is
+'Nothing' when the operator named neither dialect's form: a deployment environment
+cannot be known from inside the process, so it stays a genuinely optional resource
+attribute rather than being defaulted to a placeholder.
 -}
 data ResolvedTelemetry = ResolvedTelemetry
     { rtServiceName :: Text
@@ -120,7 +123,7 @@ data ResolvedTelemetry = ResolvedTelemetry
     , rtEnvironment :: Maybe Text
     -- ^ @deployment.environment@ \/ @dd.env@, when configured.
     , rtVersion :: Maybe Text
-    -- ^ @service.version@ \/ @dd.version@, when configured.
+    -- ^ @service.version@ \/ @dd.version@ (defaults to the build version).
     , rtEndpoint :: TelemetryEndpoint
     -- ^ The resolved OTLP export endpoint.
     }
@@ -129,8 +132,9 @@ data ResolvedTelemetry = ResolvedTelemetry
 {- | Resolve the telemetry identity from an environment list, each field
 __Datadog-value-wins → vanilla OpenTelemetry → default__. @service.name@ falls
 @DD_SERVICE@ → @OTEL_SERVICE_NAME@ → @service.name@ in @OTEL_RESOURCE_ATTRIBUTES@ →
-@ecluse@; @deployment.environment@ and @service.version@ fall @DD_ENV@\/@DD_VERSION@
-→ the matching @OTEL_RESOURCE_ATTRIBUTES@ key → unset; the endpoint is @DD_AGENT_HOST@
+@ecluse@; @deployment.environment@ falls @DD_ENV@ → the matching
+@OTEL_RESOURCE_ATTRIBUTES@ key → unset, and @service.version@ the same way → the
+running binary's own build version; the endpoint is @DD_AGENT_HOST@
 (as @http:\/\/{host}:4318@) → @OTEL_EXPORTER_OTLP_ENDPOINT@ → @http:\/\/localhost:4318@.
 
 A value present but blank is treated as unset, so an empty @DD_ENV=@ does not stamp an
@@ -147,7 +151,7 @@ resolveTelemetry environment =
     ResolvedTelemetry
         { rtServiceName = fromMaybe defaultServiceName serviceName
         , rtEnvironment = lk "DD_ENV" <|> attr "deployment.environment"
-        , rtVersion = lk "DD_VERSION" <|> attr "service.version"
+        , rtVersion = lk "DD_VERSION" <|> attr "service.version" <|> Just buildVersion
         , rtEndpoint = endpoint
         }
   where
@@ -172,6 +176,12 @@ resolveTelemetry environment =
 
 defaultServiceName :: Text
 defaultServiceName = "ecluse"
+
+{- The running binary's own version, the fallback @service.version@. An operator who
+names no version still gets one identity on every trace and every log line, and it is
+a fact about the process rather than a placeholder. -}
+buildVersion :: Text
+buildVersion = toText (showVersion version)
 
 defaultEndpointUrl :: Text
 defaultEndpointUrl = "http://localhost:4318"
