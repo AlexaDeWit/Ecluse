@@ -41,8 +41,8 @@ Codecov knobs are in [Testing Strategy](docs/testing.md) → "Coverage".
 
 Écluse ships as a reproducible OCI image built by Nix and published to GitHub Container Registry
 (`ghcr.io/alexadewit/ecluse`), with each version's digest pinned in its GitHub Release. A publish
-runs only from a version tag matching `ecluse.cabal`'s `version:` field, and waits on the `release`
-environment's required review and wait timer. The operational detail (image contents, the publish
+runs only at a version matching `ecluse.cabal`'s `version:` field (a tag push, or a manual dispatch
+at that same version), and waits on the `release` environment's required review and wait timer. The operational detail (image contents, the publish
 and attest chain, that environment's protection rules, vulnerability scanning) is maintainer
 territory and lives in
 [Release and supply-chain operations](docs/architecture/release-supply-chain.md); consumers verify

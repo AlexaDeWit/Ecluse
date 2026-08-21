@@ -54,15 +54,15 @@ posture, in a fork or after a repository rebuild, means recreating three protect
   attestation. Because self-review is prevented, the account that pushed the tag cannot approve
   its own deployment. Repository administrators can bypass the protection rules, which is what
   keeps a single-maintainer release from deadlocking on that constraint.
-- **A wait timer of 4320 minutes (72 hours).** The deployment is held for three days on top of
-  the review, so a tag pushed with a stolen credential sits in a long, visible window where it
-  can be noticed and cancelled before anything is published.
+- **A wait timer of 4320 minutes (72 hours).** Approval is not the only thing a publish waits on:
+  the deployment is also held for that timer, so a tag pushed with a stolen credential sits in a
+  long, visible window where it can be noticed and cancelled before anything is published.
 - **A deployment branch policy** admitting only the `main` branch and the `v*` tag pattern, so a
   publish cannot be dispatched from an arbitrary branch.
 
 The environment carries no secrets and no variables, and needs none. The only credential a
 publish uses is the ephemeral `GITHUB_TOKEN` GitHub issues to the job, so there is no registry
-password to store, no machine account to own, and nothing to rotate.
+password to store and nothing to rotate.
 
 ### Publishing the capability manifest
 

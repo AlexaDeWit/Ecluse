@@ -314,8 +314,11 @@ Each key resolves independently, strongest last: the built-in default, then this
 environment. The document therefore carries only what you change, and an unknown key anywhere in it
 is a boot error rather than a silent no-op.
 
-A worked document for a mirrored npm deployment, reading a private CodeArtifact repository and
-mirroring approved public packages back into it, with the quarantine widened to fourteen days:
+A worked document for a mirrored npm deployment: reads resolve against a private CodeArtifact
+endpoint, approved public packages mirror into a separate CodeArtifact store, and the quarantine
+widens to fourteen days. Keeping the read endpoint and the mirror store distinct is
+[the Golden Path](#the-golden-path) posture, and Écluse logs a boot warning for any two of a mount's
+endpoints that resolve to the same registry.
 
 ```yaml
 server:
@@ -332,7 +335,7 @@ mounts:
   npm:
     privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     publicUpstream: https://registry.npmjs.org
-    mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
 
 rules:
   min-age:
@@ -387,9 +390,11 @@ edge token never becomes the upstream one. Reads run **passthrough**: the caller
 forwarded to the private upstream, which stays the authority on what that caller may see, and is
 stripped before the anonymous public fetch, so a client token never leaves for a public registry.
 The private origin is never cached across callers, so one caller's read can never answer another's.
-The only credential of Écluse's own is a mirrored mount's write to the mirror target, derived from
-the mirror-target URL. An `npm publish` forwards the publisher's own token the same way. The
-reasoning, the invariants, and the planned extensions are in
+By default the only credential of Écluse's own is a mirrored mount's write to the mirror target,
+derived from the mirror-target URL. An `npm publish` forwards the publisher's own token the same way
+as a read, unless you opt into a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, under which
+Écluse publishes as itself; that combination is refused at boot without an edge token Écluse can
+verify. The reasoning, the invariants, and the planned extensions are in
 [access model](docs/architecture/access-model.md).
 
 ## Securing network egress (required)
