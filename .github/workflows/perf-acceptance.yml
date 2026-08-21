@@ -37,7 +37,8 @@ jobs:
   perf-acceptance:
     name: Performance acceptance (live, non-blocking)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Observed ~13 min mean, 21 min worst; sized to clear a cold-cache run.
+    timeout-minutes: 35
     env:
       # Pin the cabal store to a deterministic, cacheable location, as the other
       # Haskell jobs do.
