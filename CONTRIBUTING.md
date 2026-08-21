@@ -39,11 +39,14 @@ Codecov knobs are in [Testing Strategy](docs/testing.md) → "Coverage".
 
 ## Releases and attestations
 
-Écluse ships as a reproducible OCI image built by Nix and published on GitHub Releases and Docker
-Hub. The full operational detail (image contents, the publish/attest chain, token handling,
-vulnerability scanning) is maintainer territory and lives in
-[Release and Supply-Chain Operations](docs/architecture/release-supply-chain.md); consumers verify an
-image with `gh attestation verify`, per the [README](README.md#verifying-the-image).
+Écluse ships as a reproducible OCI image built by Nix and published to GitHub Container Registry
+(`ghcr.io/alexadewit/ecluse`), with each version's digest pinned in its GitHub Release. A publish
+runs only from a version tag matching `ecluse.cabal`'s `version:` field, and waits on the `release`
+environment's required review and wait timer. The operational detail (image contents, the publish
+and attest chain, that environment's protection rules, vulnerability scanning) is maintainer
+territory and lives in
+[Release and supply-chain operations](docs/architecture/release-supply-chain.md); consumers verify
+an image with `gh attestation verify`, per the [README](README.md#verifying-the-image).
 
 ## AI-assisted contributions
 

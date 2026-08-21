@@ -31,10 +31,10 @@ Publishing is a separate, tag-triggered workflow
 `vX.Y.Z` tag must match `ecluse.cabal`'s `version:` field or the release fails fast at a
 verify-version step. On a match it builds the image natively for `linux/amd64` and
 `linux/arm64` (see [Multi-architecture image](#multi-architecture-image)), assembles them
-into one multi-arch index under a single immutable tag, attaches keyless provenance and SBOM
-attestations, and publishes a GitHub Release carrying the image digest, the
-`gh attestation verify` recipe, and the generated changelog. A pre-release tag (`vX.Y.Z-rc.N`)
-is flagged as a prerelease.
+into one multi-arch index, pushes it to GitHub Container Registry under a single immutable
+tag, attaches keyless provenance and SBOM attestations, and publishes a GitHub Release carrying
+the image digest, the `gh attestation verify` recipe, and the generated changelog. A pre-release
+tag (`vX.Y.Z-rc.N`) is flagged as a prerelease. GHCR is the only registry Écluse publishes to.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces
 immutable tags, so every push is a fresh, never-reused tag: the release publishes
@@ -42,6 +42,27 @@ immutable tags, so every push is a fresh, never-reused tag: the release publishe
 amd64 or arm64 automatically. There is no moving pointer, so pin deployments by digest
 (`ghcr.io/alexadewit/ecluse@sha256:…`, the index digest), which is the stronger posture
 regardless. Each version's digest is published in its GitHub Release.
+
+### The release environment
+
+The `publish` job runs in the GitHub Environment `release`, and that environment, not the
+workflow file, is where a release is gated. Reproducing this repository's publishing
+posture, in a fork or after a repository rebuild, means recreating three protection rules on it.
+
+- **A required reviewer, `AlexaDeWit`, with self-review prevented.** A tag push builds and then
+  stops: the `publish` job holds for a human approval before it can reach the registry or mint an
+  attestation. Because self-review is prevented, the account that pushed the tag cannot approve
+  its own deployment. Repository administrators can bypass the protection rules, which is what
+  keeps a single-maintainer release from deadlocking on that constraint.
+- **A wait timer of 4320 minutes (72 hours).** The deployment is held for three days on top of
+  the review, so a tag pushed with a stolen credential sits in a long, visible window where it
+  can be noticed and cancelled before anything is published.
+- **A deployment branch policy** admitting only the `main` branch and the `v*` tag pattern, so a
+  publish cannot be dispatched from an arbitrary branch.
+
+The environment carries no secrets and no variables, and needs none. The only credential a
+publish uses is the ephemeral `GITHUB_TOKEN` GitHub issues to the job, so there is no registry
+password to store, no machine account to own, and nothing to rotate.
 
 ### Publishing the capability manifest
 
@@ -98,12 +119,12 @@ its own immutable referrer. A separate image signature is unnecessary: the prove
 attestation already binds the digest to the builder identity. Consumers verify by digest with
 `gh attestation verify` (see the [README](../../README.md#verifying-the-image)).
 
-**Authentication.** Écluse is published to GHCR with no long-lived static credentials, using
-the ephemeral, repository-scoped `GITHUB_TOKEN` (`packages: write`), which exists only for the
-job's duration and is constrained to this repository. The keyless attestations above (via
-GitHub OIDC, `id-token: write` + `attestations: write`) offset the static-token weakness. The
-full build-push-attest chain runs on a `vX.Y.Z` tag or a `workflow_dispatch`, gated by the
-`release` environment's required reviewer.
+**Authentication.** A publish holds no long-lived registry credential. It authenticates to GHCR
+with the ephemeral, repository-scoped `GITHUB_TOKEN` (`packages: write`), which exists only for
+the job's duration and reaches no other repository, and it signs the attestations through GitHub
+OIDC (`id-token: write` plus `attestations: write`) with no stored key. The whole
+build-push-attest chain runs on a `vX.Y.Z` tag or a `workflow_dispatch`, behind
+[the release environment](#the-release-environment).
 
 ## Vulnerability scanning and dependency freshness
 
