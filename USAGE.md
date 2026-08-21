@@ -310,14 +310,53 @@ vars above and need no document. Schema and examples:
 [Configuration and authentication](docs/architecture/configuration.md#configuration). Deployments
 derive their initial policy from the [default baseline configuration](config/default.yaml).
 
+Each key resolves independently, strongest last: the built-in default, then this document, then the
+environment. The document therefore carries only what you change, and an unknown key anywhere in it
+is a boot error rather than a silent no-op.
+
+A worked document for a mirrored npm deployment, reading a private CodeArtifact repository and
+mirroring approved public packages back into it, with the quarantine widened to fourteen days:
+
+```yaml
+server:
+  publicUrl: https://ecluse.example.internal
+  helpMessage: Contact the ACME platform team for access
+
+queue:
+  url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
+
+advisories:
+  bucket: acme-ecluse-advisories
+
+mounts:
+  npm:
+    privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    publicUpstream: https://registry.npmjs.org
+    mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+
+rules:
+  min-age:
+    ageSeconds: 1209600
+```
+
+That mount is mirrored because it declares `mirrorTarget`, and for no other reason: there is no mode
+key to set. Delete that one line and the same mount is serve-only, still merging the private
+upstream with the gated public registry but never writing, and `queue` then goes unread. Delete
+`privateUpstream` as well and the mount is the pure public gate of
+[the two-variable start](#the-two-variable-start-serve-only-gate) in document form: `enabled: true`
+is then the only key it needs, since `publicUpstream` already has a default.
+
+No token appears above. The mirror-target write credential is minted from the CodeArtifact host, and
+every other secret is an environment variable.
+
 ### Secrets
 
 Secrets never live in the config document. Client and registry tokens are always env vars, and
 cloud-managed registries (CodeArtifact, Artifact Registry) derive short-lived tokens from ambient
 cloud credentials. A **mirrored** mount holds a mirror-target **write** credential; a serve-only
-mount never writes and holds none. Reads use the default passthrough strategy: the caller's own
-credential is forwarded to the private upstream and stripped before the public one. The credential
-model, including the planned per-mount strategies, is in
+mount never writes and holds none. What Écluse does with a client's own token is under
+[Connecting your clients](#connecting-your-clients). The credential model, including the planned
+per-mount strategies, is in
 [access model](docs/architecture/access-model.md) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
@@ -342,6 +381,16 @@ Edge authentication to the proxy has two shipped modes:
 A third mode, a **trusted edge identity** honoured over a verifiable binding to a fronting
 gateway/IAP/mesh, is planned; see
 [access model → edge authentication](docs/architecture/access-model.md#edge-authentication).
+
+Authenticating at the edge is separate from how Écluse reaches the registries behind it, and the
+edge token never becomes the upstream one. Reads run **passthrough**: the caller's own credential is
+forwarded to the private upstream, which stays the authority on what that caller may see, and is
+stripped before the anonymous public fetch, so a client token never leaves for a public registry.
+The private origin is never cached across callers, so one caller's read can never answer another's.
+The only credential of Écluse's own is a mirrored mount's write to the mirror target, derived from
+the mirror-target URL. An `npm publish` forwards the publisher's own token the same way. The
+reasoning, the invariants, and the planned extensions are in
+[access model](docs/architecture/access-model.md).
 
 ## Securing network egress (required)
 
@@ -498,15 +547,19 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
 - **Pre-warming the cache.** A cold `npm install` against an empty cache hits the proxy with dozens
   of heavy requests at once, causing latency spikes or `503` backpressure. Run an `npm install`
   after starting Écluse, before production traffic; once warm, request coalescing absorbs spikes.
-- **Health probes.** `GET /livez` reports process liveness (on a mirroring deployment a stalled
-  mirror worker fails it; a serve-only deployment's liveness is the listener alone). `GET /readyz`
-  reports config loaded and the listener serving; it is deliberately lenient about public-upstream
-  reachability, so a transient blip doesn't pull a healthy pod from rotation. With an advisory bucket
-  configured, readiness also waits for each ecosystem's first advisory sync (a one-way flip, so it
-  never flaps), so mounting an ecosystem whose artifact Pilot never publishes leaves the pod never
-  ready. The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`, and
-  `GET /npm/-/v1/search` returns `501` by design (search is a discovery convenience, not an install
-  path). Pilot and Dredger export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
+- **Health probes.** `GET /livez` reports process liveness, `200` while the process is healthy and
+  `503` when it is not; on a mirroring deployment a stalled mirror worker fails it, while a
+  serve-only deployment's liveness is the listener alone. `GET /readyz` reports config loaded and
+  the listener serving. It is deliberately lenient about public-upstream reachability, so a
+  transient blip doesn't pull a healthy pod from rotation, and it answers `503` in exactly two
+  cases: the instance is draining, or it has not finished starting up. With an advisory bucket
+  configured, that startup gate also waits for each ecosystem's first advisory sync (a one-way flip,
+  so it never flaps back), so give a cold pod room to finish that first database download with a
+  Kubernetes `startupProbe` or a readiness `failureThreshold` sized for it. Mounting an ecosystem
+  whose artifact Pilot never publishes leaves the pod never ready. The npm liveness probe
+  `GET /npm/-/ping` answers locally with `200 {}`, and `GET /npm/-/v1/search` returns `501` by
+  design (search is a discovery convenience, not an install path). Pilot and Dredger export the same
+  `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 - **Graceful shutdown and pod drain.** On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. `GET /readyz` flips to `503` (the signal a load balancer or mesh watches to stop routing new traffic here) while `GET /livez` stays `200`, so an orchestrator does not kill a still-draining instance early. Every response then carries `Connection: close`, so a keep-alive pool reconnects to a ready instance, and the process finishes in-flight requests and in-progress artifact streams (a half-delivered tarball runs to completion) before exiting, bounded by `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` (default 30 seconds). **Set the platform's termination grace period above `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT`** so the orchestrator does not `SIGKILL` mid-drain: on Kubernetes, set `terminationGracePeriodSeconds` comfortably above it. When Écluse is attached to an interactive terminal, a second `Ctrl+C` (or `Ctrl+D`) forces an immediate halt that bypasses the drain; this is gated on standard input being a TTY, so production has no such bypass.
 - **Process exit codes.** The exit status states how a run ended, so an orchestrator can branch
   without parsing logs:
