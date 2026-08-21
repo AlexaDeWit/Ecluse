@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Select GitHub Actions cache ids to delete — for .github/workflows/cache-cleanup.yml.
+# Select GitHub Actions cache ids to delete, for .github/workflows/cache-cleanup.yml.
 #
 # Reads cache rows on stdin, one TSV row per cache:
 #
@@ -12,16 +12,16 @@
 #
 #   * ref != refs/heads/main          -> delete. PRs restore caches but never save (see
 #                                        the setup-toolchain action), so any non-main
-#                                        entry is a straggler — e.g. left by a deleted
-#                                        branch.
+#                                        entry is a straggler, for example one left by
+#                                        a deleted branch.
 #   * on main, beyond the newest N     -> delete. Once a dependency epoch advances
 #     per key prefix                     (flake.lock / cabal.project[.freeze] change),
 #                                        the previous epoch's immutable-keyed entries are
 #                                        dead weight.
 #
 # Prefix = the key with a trailing `-<16+ hex>` (a hashFiles digest) stripped, so every
-# epoch of one logical cache groups together. N defaults to 2 (current + one fallback for
-# in-flight runs / quick rollback); override via KEEP_PER_PREFIX.
+# epoch of one logical cache groups together. N defaults to 2: the current epoch plus
+# one fallback for in-flight runs and quick rollback. Override it via KEEP_PER_PREFIX.
 #
 # The heavy single-epoch caches keep only KEEP_DOCS (default 1) per prefix instead:
 #
@@ -30,15 +30,15 @@
 #   * the Nix-store closures (prefixes starting with `nix-`: the shared `nix-*` store
 #     and the docs job's `nix-docs-*` doc closure).
 #
-# These are the biggest entries (each Nix store is ~1 GB compressed; the doc-variant
-# closures a few hundred MB more), they change only on a real dependency / flake bump,
-# and each has a single writer (Pages serializes via its `pages` concurrency group; the
-# Nix entries are written once per flake epoch — cache-nix-action no-ops on an existing
-# key). So the "fallback for an in-flight parallel run" that justifies keeping 2
-# elsewhere buys little: keeping one steady epoch holds the ~10 GB Actions-cache quota
-# comfortably (a flake bump otherwise strands a ~1 GB stale `nix-*` entry per epoch).
-# The previous epoch survives as a restore-keys / substituter fallback until this daily
-# sweep runs, so a bump still gets partial warmth before the stale epoch is pruned.
+# These are the biggest entries. Each Nix store is ~1 GB compressed, and the doc-variant
+# closures a few hundred MB more. They change only on a real dependency or flake bump,
+# and each has a single writer. Pages serialises via its `pages` concurrency group, and
+# cache-nix-action writes a Nix entry once per flake epoch, then no-ops on an existing
+# key. So the "fallback for an in-flight parallel run" that justifies keeping 2 elsewhere
+# buys little. Keeping one steady epoch holds the ~10 GB Actions-cache quota comfortably,
+# where a flake bump otherwise strands a ~1 GB stale `nix-*` entry per epoch. The previous
+# epoch survives as a restore-keys or substituter fallback until this daily sweep runs. A
+# bump still gets partial warmth before the sweep prunes the stale epoch.
 #
 # Bash + awk/sort (no interval regexes) so it runs on the plain runner without the Nix
 # shell. Try it against a sample:
@@ -50,11 +50,11 @@ keep="${KEEP_PER_PREFIX:-2}"
 keep_docs="${KEEP_DOCS:-1}"
 rows="$(cat)"
 
-# Off-main rows are stragglers — delete them all (emitted in input order).
+# Off-main rows are stragglers. Delete them all, in input order.
 printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "refs/heads/main" { print $1 }'
 
 # On-main rows: keep the newest per key prefix ($keep, or $keep_docs for the heavy
-# single-epoch prefixes — `nix-*` and `-docs-`), delete the rest. Emit
+# single-epoch prefixes `nix-*` and `-docs-`), delete the rest. Emit
 # "prefix<TAB>created<TAB>id", sort by prefix then created (id breaks created ties)
 # descending, then drop everything past the newest allowance of each prefix.
 printf '%s\n' "$rows" | awk -F'\t' '

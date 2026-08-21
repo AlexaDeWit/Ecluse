@@ -1,13 +1,13 @@
 -- Expand a ```threat-register fence into the project's threat register, rendered
 -- from the OWASP Threat Dragon model at `make site` time. The model
--- (threat-modelling/ecluse.json) is the single source of truth: the register is
--- generated on every Pages build and never hand-copied into prose, so the docs
+-- (threat-modelling/ecluse.json) is the single source of truth. Every Pages build
+-- regenerates the register, and nobody hand-copies it into prose, so the docs
 -- cannot drift from the model.
 --
--- This mirrors web/mermaid.lua — a CodeBlock carrying a known class is replaced
--- during the pandoc pass. No commit-back and no extra dependency: pandoc (>= 3.1)
+-- This mirrors web/mermaid.lua: the pandoc pass replaces a CodeBlock that carries
+-- a known class. No commit-back and no extra dependency, because pandoc (>= 3.1)
 -- decodes the JSON itself via pandoc.json.decode. The owning fence may name an
--- alternate model path as its body; an empty fence uses the default below.
+-- alternate model path as its body. An empty fence uses the default below.
 
 local DEFAULT_PATH = "threat-modelling/ecluse.json"
 
@@ -19,7 +19,7 @@ local function read_model(path)
 end
 
 -- Flatten every threat across all diagrams, tagging each with the diagram element
--- it hangs off (a Threat Dragon threat is nested under the cell it threatens).
+-- it hangs off. Threat Dragon nests a threat under the cell it threatens.
 local function collect(model)
   local threats = {}
   for _, diagram in ipairs(model.detail.diagrams or {}) do
@@ -45,7 +45,7 @@ end
 
 local function status_text(s) return s == "NA" and "N/A" or (s or "") end
 
--- Threat Dragon numbers decode as Lua floats; render them as plain integers.
+-- Threat Dragon numbers decode as Lua floats. Render them as plain integers.
 local function numstr(t)
   if t.number == nil then return "?" end
   return string.format("%d", t.number)
@@ -85,9 +85,9 @@ local function overview_table(threats)
     pandoc.SimpleTable({}, aligns, widths, headers, rows))
 end
 
--- The description/mitigation fields are authored as Markdown so the register corpus
--- can carry emphasis, `code` identifiers, and links; parse them to inlines (a labelled
--- run is prepended) rather than dropping the raw string in verbatim.
+-- The description and mitigation fields are Markdown, so the register corpus can
+-- carry emphasis, `code` identifiers, and links. Parse them to inlines and prepend
+-- a labelled run, rather than drop the raw string in verbatim.
 local function md_inlines(s)
   return pandoc.utils.blocks_to_inlines(pandoc.read(s, "markdown").blocks)
 end

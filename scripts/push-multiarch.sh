@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 #
 # Assemble the two per-arch Nix-built OCI archives into ONE multi-arch image index
-# and push it under a single canonical immutable tag — so a consumer pulls
+# and push it under a single canonical immutable tag. A consumer then pulls
 # `<image>:<tag>` and the registry serves amd64 or arm64 automatically, with no
 # lingering per-arch tags. The two platform images land in the registry as
-# digest-addressed blobs referenced by the index, not as named tags.
+# digest-addressed blobs the index references, not as named tags.
 #
 # The assembly is fully DAEMONLESS and rootless-safe: skopeo writes each archive
-# into an on-disk OCI image layout (plain files — no container engine, no
-# containers-storage, so no user namespace, which is what ubuntu-24.04's AppArmor
-# blocks for /nix/store binaries), and `regctl` (regclient) builds the index from
-# those layouts and copies it to the registry. No podman, no sudo.
+# into an on-disk OCI image layout of plain files. That means no container engine
+# and no containers-storage, and so no user namespace, which is what ubuntu-24.04's
+# AppArmor blocks for /nix/store binaries. `regctl` (regclient) then builds the
+# index from those layouts and copies it to the registry. No podman, no sudo.
 #
-# Run by release.yml after the matrix build; needs skopeo, regctl, jq (the
-# `.#ci` shell) and an active ghcr.io login (release.yml's docker/login-action
-# writes ~/.docker/config.json, which both skopeo and regctl read). See
+# Run by release.yml after the matrix build. Needs skopeo, regctl, and jq (the
+# `.#ci` shell), plus an active ghcr.io login: release.yml's docker/login-action
+# writes ~/.docker/config.json, which both skopeo and regctl read. See
 # docs/architecture/release-supply-chain.md → "Multi-architecture image".
 #
 # Emits the resolved digests to stdout as `key=value` lines (index-digest,
-# amd64-digest, arm64-digest) — and nothing else — so release.yml can append them
-# to $GITHUB_OUTPUT for the attest steps. All tool chatter goes to stderr.
+# amd64-digest, arm64-digest), and nothing else. That lets release.yml append
+# them to $GITHUB_OUTPUT for the attest steps. All tool chatter goes to stderr.
 #
 # Usage: scripts/push-multiarch.sh <image> <tag> <amd64-archive> <arm64-archive>
 set -euo pipefail
@@ -39,8 +39,8 @@ layout="$workdir/layout"
 skopeo copy "docker-archive:${amd64_archive}" "oci:${layout}:amd64" >&2
 skopeo copy "docker-archive:${arm64_archive}" "oci:${layout}:arm64" >&2
 
-# Build the multi-arch index from the two single-platform layout entries (regctl
-# reads each entry's image config for its platform), then copy the index + both
+# Build the multi-arch index from the two single-platform layout entries. regctl
+# reads each entry's image config for its platform. Then copy the index and both
 # platform images to the registry under the single canonical tag.
 regctl index create "ocidir://${layout}:multi" \
   --ref "ocidir://${layout}:amd64" \

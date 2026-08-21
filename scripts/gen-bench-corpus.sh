@@ -3,38 +3,42 @@
 # Capture the real-world packument corpus that drives both benchmark layers
 # (docs/architecture/performance.md) from pinned npm registry packuments.
 #
-# The corpus packages and their capture pins live in bench/corpus/pins.json (a plain
-# data file — NOT an npm project, NOT Renovate-managed). That file is the shared
-# registry catalogue: this script reads its `pins` (npm name -> captured version),
-# while the Haskell Ecluse.Test.RegistryCapture reads the same file (its `pins` and
-# its `smokeNames`) — one curated source for both. The committed captures are
-# FROZEN benchmark data: this script is the regeneration tool (the analogue of
-# scripts/gen-version-fixtures.sh), run DELIBERATELY when the pins or the capture
-# policy change — never on an automatic bump. Its output (bench/corpus/npm/*.full.json)
-# is committed and read at run time by the work-per-request micro-benches (Ecluse.Bench.Corpus)
-# and the load benchmarks harness (Ecluse.BenchLoad.Npm).
+# The corpus packages and their capture pins live in bench/corpus/pins.json, a
+# plain data file: NOT an npm project, NOT Renovate-managed. That file is the
+# shared registry catalogue. This script reads its `pins` (npm name -> captured
+# version). The Haskell Ecluse.Test.RegistryCapture reads the same file, its
+# `pins` and its `smokeNames`, so both sides have one curated source.
+#
+# The committed captures are FROZEN benchmark data. This script is the
+# regeneration tool, the analogue of scripts/gen-version-fixtures.sh. Run it
+# DELIBERATELY when the pins or the capture policy change, never on an automatic
+# bump. Its output (bench/corpus/npm/*.full.json) is committed, and the
+# work-per-request micro-benches (Ecluse.Bench.Corpus) and the load benchmarks
+# harness (Ecluse.BenchLoad.Npm) read it at run time.
 #
 # Usage:  task gen-bench-corpus   (runs inside the Nix dev shell, which carries
 #                                  node + node-semver on NODE_PATH)
 #
-# Determinism w.r.t. the pin: for each package@version pin, the live full packument
-# is fetched and reduced to the versions at or below the pinned version, so a re-run
-# without a pin change reproduces the same fixture (versions published after the pin
-# are excluded) — the dataset stays committed and deterministic and only moves when a
-# pin is deliberately edited and the script re-run.
+# Determinism against the pin: for each package@version pin, this script fetches
+# the live full packument. It then reduces the packument to the versions at or
+# below the pin. A re-run without a pin change reproduces the same fixture,
+# because it drops every version published after the pin. The dataset stays
+# committed and deterministic, and moves only when someone edits a pin and
+# re-runs the script.
 #
-# Capture policy (preserve real shape; trim only noise):
+# Capture policy (preserve the real shape, trim only noise):
 #   * KEEP every stable release (no prerelease tag) at or below the pin, with its
-#     full per-version manifest — the heterogeneous dependency / peerDependencies /
-#     engines / deprecated / scripts / dist shape the hot paths read and re-serialise.
-#   * DROP the degenerate nightly/canary/dev/insiders PRERELEASE versions: they are
-#     near-identical day-to-day builds (the synthetic generator's degeneracy), and
-#     for typescript/react they are the bulk of the size while adding no real shape.
+#     full per-version manifest. That manifest carries the heterogeneous shape the
+#     hot paths read and re-serialise: dependency, peerDependencies, engines,
+#     deprecated, scripts, and dist.
+#   * DROP the degenerate nightly/canary/dev/insiders PRERELEASE versions. They are
+#     near-identical day-to-day builds (the synthetic generator's degeneracy). For
+#     typescript/react they are the bulk of the size while adding no real shape.
 #   * DROP pure-noise fields no hot path reads: top-level readme/users/_attachments,
 #     and per-version readme / npm operational internals.
-# express.full.json is deliberately NOT regenerated here: it is the pre-existing
-# untrimmed anchor under core/test/unit/fixtures/npm/, reused in place by the bench
-# and shared with the unit suite.
+# This script deliberately does NOT regenerate express.full.json. That is the
+# pre-existing untrimmed anchor under core/test/unit/fixtures/npm/, reused in
+# place by the bench and shared with the unit suite.
 set -euo pipefail
 
 pins_file="${1:-bench/corpus/pins.json}"

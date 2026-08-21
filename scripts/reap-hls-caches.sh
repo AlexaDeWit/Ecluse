@@ -3,28 +3,28 @@
 # Reap the HLS build caches left behind by worktrees that no longer exist, and prune the
 # stale worktree registrations that point at them. See AGENTS.md -> "Build and tooling".
 #
-# Why this exists: `task new-worktree` warms each agent worktree's HLS index, which
-# cabal writes to its own directory under the hie-bios cache (~1 GB per worktree, since
-# it holds a full dist-newstyle for this project). `git worktree remove` deletes the
-# checkout but knows nothing about that cache, so every retired agent slice strands a
-# gigabyte. Across a few dozen slices that silently becomes tens of gigabytes, which is
-# exactly the disk the *live* worktrees need to breathe.
+# Why this exists: `task new-worktree` warms each agent worktree's HLS index, and cabal
+# writes that index to its own directory under the hie-bios cache. Each one is ~1 GB,
+# because it holds a full dist-newstyle for this project. `git worktree remove` deletes
+# the checkout but knows nothing about that cache, so every retired agent slice strands
+# a gigabyte. Across a few dozen slices that silently becomes tens of gigabytes, exactly
+# the disk the *live* worktrees need to breathe.
 #
-# The hie-bios cache is shared by every Haskell project on the machine, so "no live
-# worktree owns this directory" is on its own an unsafe reason to delete: another
-# project's cache looks identical from the outside. Each cabal cache instead records the
-# source it was built from, in `cache/plan.json` under the local package's `pkg-src`
-# path. We reap a directory only when that recorded path
+# Every Haskell project on the machine shares the hie-bios cache. So "no live worktree
+# owns this directory" is on its own an unsafe reason to delete. Another project's cache
+# looks identical from the outside. Each cabal cache instead records the source it was
+# built from, in `cache/plan.json` under the local package's `pkg-src` path. We reap a
+# directory only when that recorded path
 #
 #   1. lies inside THIS repository (so a foreign project is never a candidate), and
 #   2. no longer exists on disk (so the worktree that owned it is genuinely gone).
 #
-# Anything we cannot attribute (an interrupted warm-up with no readable plan.json, or a
-# worktree created outside the repo root via `new-worktree.sh`'s DIR argument) is
-# reported and left alone. Leaving a stray gigabyte is always preferable to deleting a
-# cache we did not positively identify as dead.
+# The script reports anything it cannot attribute and leaves it alone. That covers an
+# interrupted warm-up with no readable plan.json, and a worktree created outside the repo
+# root via `new-worktree.sh`'s DIR argument. Leaving a stray gigabyte is always
+# preferable to deleting a cache we did not positively identify as dead.
 #
-# Safe to run at any time, including while other worktrees have builds in flight: a live
+# Safe to run at any time, including while other worktrees have builds in flight. A live
 # worktree's source directory exists, so its cache is never a candidate.
 #
 # Usage: scripts/reap-hls-caches.sh [--dry-run]
@@ -88,7 +88,7 @@ for dist in "$cache_dir"/dist-*; do
     continue
   fi
 
-  # Scope to this repository. A cache belonging to any other project is left untouched.
+  # Scope to this repository, and never touch another project's cache.
   case "$src" in
     "$repo_root" | "$repo_root"/*) ;;
     *)

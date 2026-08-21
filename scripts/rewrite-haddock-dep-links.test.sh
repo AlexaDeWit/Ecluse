@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Deterministic unit test for rewrite-haddock-dep-links.sh. Exercises the link
-# shapes Haddock emits -- a GHC boot library, a cabal-store Hackage dependency,
-# and links that must be left untouched -- against the rewriter's --filter mode,
-# so the mapping is locked against regression without a full docs build. Run via
+# Deterministic unit test for rewrite-haddock-dep-links.sh. It runs the rewriter's
+# --filter mode over the link shapes Haddock emits. Those are a GHC boot library,
+# a cabal-store Hackage dependency, and links that must stay untouched. That locks
+# the mapping against regression without a full docs build. Run via
 # `task test-scripts` (folded into `task check`).
 set -euo pipefail
 
@@ -41,10 +41,10 @@ check "boot lib, no hash (legacy GHC dir layout)" \
   'href="${pkgroot}/../../../../1nf74pkvqh2222f62f6a5gmy24miipxp-ghc-9.6.6-doc/share/doc/ghc/html/libraries/base-4.18.2.1/Data-Bool.html#t:Bool"' \
   'href="https://hackage.haskell.org/package/base/docs/Data-Bool.html#t:Bool"'
 
-# All-digit abbreviated hash: the version group must NOT swallow it (regression for
-# #468 -- real on GHC 9.10.3: process-1.6.26.1-2190, haskeline-0.8.2.1-2435,
-# hpc-0.7.0.2-9331; an all-letter hash masked the bug, and the build guard cannot
-# catch it because the mis-rewrite is a well-formed-looking Hackage URL).
+# All-digit abbreviated hash: the version group must NOT swallow it. These are
+# real on GHC 9.10.3: process-1.6.26.1-2190, haskeline-0.8.2.1-2435,
+# hpc-0.7.0.2-9331. An all-letter hash masks the bug, and the build guard cannot
+# catch it, because the mis-rewrite is a well-formed-looking Hackage URL.
 
 check "boot lib, all-digit hash, contrived (version not folded)" \
   'href="${pkgroot}/../../../../n36vfz6wsiv35jxmfybic39cpqq38vyi-ghc-9.10.3-doc/share/doc/ghc/html/libraries/base-4.20.2.0-1234/Data-Bool.html#t:Bool"' \
@@ -86,13 +86,13 @@ check "nix-store dep, hyphenated name" \
   'href="/nix/store/p4873mabc-amazonka-core-2.0-doc/share/doc/html/Amazonka-Prelude.html#t:Text"' \
   'href="https://hackage.haskell.org/package/amazonka-core/docs/Amazonka-Prelude.html#t:Text"'
 
-# --- JSON search index: the href is escaped (\"); the escape must survive ---
+# --- JSON search index: the href is escaped (\"), and the escape must survive ---
 
 check "doc-index.json escaped href" \
   '"display":"<a href=\"${pkgroot}/../../../../n36vfz6wsiv35jxmfybic39cpqq38vyi-ghc-9.10.3-doc/share/doc/ghc/html/libraries/base-4.20.2.0-4d66/System-IO.html#t:IO\">IO</a>"' \
   '"display":"<a href=\"https://hackage.haskell.org/package/base/docs/System-IO.html#t:IO\">IO</a>"'
 
-# --- Links that must be left untouched ---
+# --- Links that must stay untouched ---
 
 check "external template link (fonts) untouched" \
   'href="https://fonts.googleapis.com/css?family=PT+Sans:400,400i,700"' \

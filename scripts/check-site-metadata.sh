@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Check the public Pages entry points for the metadata search engines and link
-# previews use. The sitemap is the authoritative page list: every URL it names
-# must exist in the assembled site and carry a title, a description, and the
-# matching canonical and Open Graph URLs. This runs against the assembled site,
+# Check the public Pages entry points for the metadata that search engines and
+# link previews use. The sitemap is the authoritative page list. Every URL it
+# names must exist in the assembled site and carry a title, a description, and
+# the matching canonical and Open Graph URLs. This checks the assembled site,
 # not the source templates.
 set -euo pipefail
 

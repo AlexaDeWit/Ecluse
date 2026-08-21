@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Check the assembled site's link graph for correctness, against five failure modes:
-#   1. a hand-authored page carries a relative href/src that resolves to nothing,
-#      or an internal anchor its target page does not define;
-#   2. a page the sitemap advertises is unreachable by following internal links
-#      from the home page (an orphan — readers and crawlers both arrive there);
-#   3. a top-level page exists but the sitemap does not advertise it;
-#   4. a GitHub blob link (the web/links.lua fallback) names a repo path that no
-#      longer exists in this checkout;
-#   5. a GitHub blob link into a Markdown file carries an anchor no heading in
+# Check the assembled site's link graph against five failure modes.
+#   1. A hand-authored page carries a relative href or src that resolves to
+#      nothing, or an internal anchor its target page does not define.
+#   2. No internal link from the home page reaches a page the sitemap
+#      advertises. Readers and crawlers both arrive by following links, so such
+#      a page is an orphan.
+#   3. A top-level page exists but the sitemap does not advertise it.
+#   4. A GitHub blob link (the web/links.lua fallback) names a repo path that no
+#      longer exists in this checkout.
+#   5. A GitHub blob link into a Markdown file carries an anchor no heading in
 #      that file generates.
-# The Haddock trees under api/ecluse and api/ecluse-core are machine-generated
-# and already gated by the docs-site leaky-link sweep, so their interiors are
-# exempt from resolution here (their hub links still count for reachability).
+# The Haddock trees under api/ecluse and api/ecluse-core are machine-generated,
+# and the docs-site leaky-link sweep already gates them. Their interiors are
+# exempt from resolution here. Their hub links still count for reachability.
 set -euo pipefail
 
 site="${1:-_site}"
@@ -61,10 +62,10 @@ has_id() { # file fragment -> success if the page defines the anchor
   grep -q -E "(id|name)=\"$2\"" "$1"
 }
 
-# GitHub's heading slugger, closely enough for this repository's headings:
-# strip Markdown emphasis/code markers, lowercase, drop everything that is not
-# a word character, space, or hyphen, then turn spaces into hyphens (without
-# squeezing runs — "a & b" slugs to "a--b").
+# GitHub's heading slugger, close enough for this repository's headings. Strip
+# the Markdown emphasis and code markers, lowercase the text, then drop every
+# character that is not a word character, space, or hyphen. Turn each space into
+# a hyphen. It does not squeeze runs, so "a & b" slugs to "a--b".
 md_slugs() { # markdown-file -> one heading slug per line
   grep -E '^#{1,6} ' "$1" \
     | sed -E -e 's/^#{1,6} +//' -e 's/[`*_]//g' -e 's/\[([^]]*)\]\([^)]*\)/\1/g' \
@@ -86,9 +87,9 @@ for page in "${pages[@]}"; do
     frag=""
     if [[ "$target" == *'#'* ]]; then frag="${target#*#}"; fi
 
-    # GitHub blob links are minted by web/links.lua from in-repo paths: the
-    # path must exist in this checkout, and a Markdown anchor must match a
-    # heading, or the link 404s (or lands nowhere) the moment it is clicked.
+    # web/links.lua mints GitHub blob links from in-repo paths. The path must
+    # exist in this checkout, and a Markdown anchor must match a heading.
+    # Otherwise the link 404s, or lands nowhere, on the first click.
     if [[ "$target" == "$blob"* ]]; then
       rel="${target#"$blob"}"
       rel="${rel%%#*}"
@@ -130,7 +131,7 @@ while [[ ${#queue[@]} -gt 0 ]]; do
     abs="$(resolve "$dir" "$target")"
     if [[ -n "${seen[$abs]:-}" || ! -f "$abs" ]]; then continue; fi
     seen["$abs"]=1
-    # Walk on through hand-authored HTML only; the Haddock interiors are huge
+    # Walk on through hand-authored HTML only. The Haddock interiors are huge,
     # and their hubs are the reachability targets that matter.
     if [[ "$abs" == *.html ]] && ! exempt "$abs"; then
       queue+=("$abs")
@@ -149,7 +150,7 @@ for url in "${urls[@]}"; do
   [[ -n "${seen[$file]:-}" ]] || fail "$url is not reachable from the home page (orphaned)"
 done
 
-# --- 3. every top-level page is advertised in the sitemap --------------------
+# --- 3. the sitemap advertises every top-level page --------------------------
 for page in "$site_abs"/*.html; do
   name="$(basename "$page")"
   url="$domain$name"
