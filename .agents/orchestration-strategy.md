@@ -1,66 +1,65 @@
 # Implementation orchestration strategy
 
-How **Écluse** (package `ecluse`) is built as a coordinated multi-agent effort. This document owns
-_process_; the system design is in [`../docs/architecture.md`](../docs/architecture.md), the
+How a coordinated multi-agent effort builds **Écluse** (package `ecluse`). This document owns the
+_process_. The system design is in [`../docs/architecture.md`](../docs/architecture.md), the
 development workflow and CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
-[`../docs/style.md`](../docs/style.md), and agent-facing essentials in [`../AGENTS.md`](../AGENTS.md).
+[`../docs/style.md`](../docs/style.md), and the agent-facing essentials in
+[`../AGENTS.md`](../AGENTS.md).
 
-This document is the reference. The `orchestrate-implementation` skill is the imperative procedure a
-team lead runs: it carries the per-PR loop and the hand-off gate and links back here for depth.
+This document is the reference. The `orchestrate-implementation` skill is the procedure a team lead
+runs. It carries the per-PR loop and the hand-off gate, and links back here for depth.
 
 ## Roles
 
-- **Principal architect** (the repo owner) owns the design and the requirements and is the final
-  decision-maker on both. Reviews and merges every PR.
-- **Team lead** (the coordinating agent) decomposes the finalised architecture into PR-sized work,
-  dispatches and supervises implementation subagents, evaluates their output, runs a fast local
-  check, and hands review-ready PRs to the architect. The team lead never merges and, during
-  implementation, never pushes to `main`: all code lands through PRs the architect reviews.
+- **Principal architect** (the repo owner) owns the design and the requirements and decides both.
+  The architect reviews and merges every PR.
+- **Team lead** (the coordinating agent) decomposes the finalised architecture into PR-sized work.
+  It dispatches and supervises the implementation subagents and evaluates their output. It runs a
+  fast local check and hands review-ready PRs to the architect. The team lead never merges, and
+  during implementation it never pushes to `main`: all code lands through PRs the architect reviews.
 
 ## Operating principle: escalate, don't guess
 
-The single most important rule. When an agent is stuck, unsure, blocked, or facing an ambiguous,
-missing, or contradictory spec, it stops and surfaces the problem rather than inventing a way past
-it. Agents make a _bounded_ attempt against the existing specs first, then escalate; they do not
-thrash or paper over uncertainty. An implementation agent must never:
+The single most important rule. An agent that is stuck, unsure, blocked, or facing an ambiguous,
+missing, or contradictory spec stops and surfaces the problem. It does not invent a way past it. An
+agent makes a _bounded_ attempt against the existing specs first, then escalates. It does not thrash
+or paper over uncertainty. An implementation agent must never:
 
-- fabricate a config key, path, value, or **API behaviour** (verify via `hoogle` or the docs, or
-  escalate);
-- silently weaken, skip, or `xfail` a test to reach green;
-- add a `.semgrepignore` entry or `nosemgrep` comment (those need the architect's approval, always);
-- sprawl beyond the slice's file scope to route around a blocker, rather than staying in scope or
-  justifying the exception;
-- leave a `TODO`, `undefined`, or stub and call the work done.
+- fabricate a config key, path, value, or **API behaviour** (verify it with `hoogle` or the docs, or
+  escalate)
+- silently weaken, skip, or `xfail` a test to reach green
+- add a `.semgrepignore` entry or a `nosemgrep` comment (those always need the architect's approval)
+- sprawl beyond the slice's file scope to route around a blocker, instead of staying in scope or
+  justifying the exception
+- leave a `TODO`, `undefined`, or stub and call the work done
 
-A leftover stub or a quietly-relaxed test is a blocker, not a delivery, and how guessing hides; the
-team lead scans for exactly that in review. Surfacing is also **proactive**: concerns, limitations,
-and risks are raised as warranted, not only at a hard block.
+A leftover stub or a quietly-relaxed test is a blocker, not a delivery. It is how guessing hides, so
+the team lead scans for exactly that in review. Surfacing is also **proactive**. Raise a concern, a
+limitation, or a risk as soon as it is warranted. A hard block is not the only trigger.
 
 ## Phase 0: architecture to delivery plan
 
 Done once, when the architecture is frozen. The team lead turns the design into a
 **dependency-ordered DAG of PR-sized slices**, recorded in the issue tracker:
 
-- **Walking skeleton first:** the thinnest end-to-end path, then capabilities layered onto it.
-- **Handles before consumers:** the Handle-pattern records (`MetadataClient`, `MirrorQueue`,
-  `CredentialProvider`) are defined as interfaces early so downstream slices can be built in parallel
-  against them.
-- **Each slice is one coherent, reviewable-in-a-sitting capability**, with acceptance criteria traced
-  to specific architecture sections, the test tier(s) it owes, a limited file scope, and its
-  dependencies.
+- **Walking skeleton first:** build the thinnest end-to-end path, then layer capabilities onto it.
+- **Handles before consumers:** define the Handle-pattern records (`MetadataClient`, `MirrorQueue`,
+  `CredentialProvider`) as interfaces early, so downstream slices build against them in parallel.
+- **Each slice is one coherent capability a reviewer can read in a sitting.** It carries acceptance
+  criteria traced to specific architecture sections, the test tier(s) it owes, a limited file scope,
+  and its dependencies.
 
-The architect signs off on this breakdown before any code is written.
+The architect signs off on this breakdown before anyone writes code.
 
 ## Convergence slices: contract before construction
 
-The DAG encodes _ordering_ (`depends-on`) but not the **shape** of what crosses each edge. Where
+The DAG encodes the _ordering_ (`depends-on`), not the **shape** of what crosses each edge. Where
 several producer slices converge on one consumer (the packument pipeline, launch composition),
-specify the consumer's interface, the types crossing the boundary, before building the producers, so
-producers build _to_ a known contract instead of the consumer reverse-engineering whatever they emit.
-That interface is a deliverable of this planning pass, not a discovery of the build pass; skipping it
-is how the packument pipeline's typed-decision-vs-served-`Value` contract surfaced late (see
-[Registry model: decision vs served
-surface](../docs/architecture/registry-model.md#decision-surface-vs-served-surface)).
+specify the consumer's interface first: the types that cross the boundary. The producers then build
+_to_ a known contract, and the consumer does not reverse-engineer whatever they emit. That interface
+is a deliverable of this planning pass, not a discovery of the build pass. Skipping it is how the
+packument pipeline's typed-decision-vs-served-`Value` contract surfaced late (see [Registry model:
+decision vs served surface](../docs/architecture/registry-model.md#decision-surface-vs-served-surface)).
 
 ## The per-PR loop
 
@@ -73,28 +72,29 @@ flowchart TD
     G --> H(["HAND OFF<br/>flip ready for review<br/>(only after evaluation passes AND the gate is green)"])
 ```
 
-> **Two gates, not one.** A PR flips **ready for review** only when both hold: the independent
-> [Stage A + Stage B evaluation](#evaluation-two-independent-passes) has passed with no open critical
-> findings, and the CI `gate` is green. A green gate is necessary but not sufficient. It verifies
-> build and test; it does not judge requirements, quality, or security, which the evaluation covers.
-> Neither substitutes for the other, and a green gate never flips a PR ready on its own.
+> **Two gates, not one.** A PR flips **ready for review** only when both hold. The independent
+> [Stage A + Stage B evaluation](#evaluation-two-independent-passes) has passed with no open
+> critical findings, and the CI `gate` is green. A green gate is necessary but not sufficient. It
+> verifies build and test. It does not judge requirements, quality, or security, which the
+> evaluation covers. Neither substitutes for the other, and a green gate never flips a PR ready on
+> its own.
 
-**Draft until ready.** A PR opens as a **draft** and stays one until both gates hold and the team
+**Draft until ready.** A PR opens as a **draft**. It stays one until both gates hold and the team
 lead is confident handing it over. Marking it **ready for review** is the hand-off signal: ready for
-the architect to review and potentially merge, nothing less. Marking it is the act of handing off:
-the team lead verifies that the reviewer's head commit is the one the gate ran on and that every
-context the ruleset requires passes, flips it with `gh pr ready`, and only then reports it to the
-architect; a draft is never reported as done. A PR still building, mid-review, evaluation-blocked,
-gate-red, or that the team lead is simply unsure of stays a draft, so the architect never spends
-attention on, or merges, work that was not deliberately offered. This is the one definition of
-ready-for-review; later sections reference it.
+the architect to review and potentially merge, nothing less. Before the flip, the team lead checks
+that the gate ran on the reviewer's head commit. The team lead also checks that every context the
+ruleset requires passes. Only then does the team lead flip the PR with `gh pr ready` and report it
+to the architect. Never report a draft as done. A PR stays a draft while it is still building,
+mid-review, evaluation-blocked, or gate-red, and while the team lead is unsure of it. The architect
+then never spends attention on, or merges, work nobody deliberately offered. This is the one
+definition of ready-for-review, and later sections reference it.
 
-**Fix routing.** A reviewer's "changes required" routes one of three ways. A **background**
-implementer agent can be **resumed** (`SendMessage` to its agent ID) with its full build context
-intact, the natural first choice for a fix that continues what it just built. Or the team lead
-applies a small, reviewer-specified fix **directly** (then re-runs the gate); or, for a larger
-rework, briefs a **fresh** build agent with the review. Either way the fix lands as a distinct,
-separately-reviewable commit.
+**Fix routing.** A reviewer's "changes required" routes one of three ways. **Resume** a background
+implementer agent (`SendMessage` to its agent ID) with its full build context intact. That is the
+natural first choice for a fix that continues what it just built. Or the team lead applies a small,
+reviewer-specified fix **directly**, then re-runs the gate. Or, for a larger rework, it briefs a
+**fresh** build agent with the review. Either way the fix lands as a distinct, separately-reviewable
+commit.
 
 ## Subagents and isolation
 
@@ -102,92 +102,96 @@ separately-reviewable commit.
 - **Reviewer:** evaluates a slice with **fresh context** (no exposure to the implementer's
   reasoning), read-and-verify only.
 
-**One git worktree per agent**, each on its own branch, is a hard rule: it keeps parallel slices from
-colliding on a shared tree and contains each agent's blast radius. It is hard for a mechanical reason
-too: HLS keys its `hiedb` by workspace path, so agents sharing one checkout contend on a single
-database and stall each other. Concurrency is capped at **2-3 slices in flight** in the
-local-verification mode so evaluation quality holds; the [CI-verified batch
+**One git worktree per agent**, each on its own branch, is a hard rule. It keeps parallel slices
+from colliding on a shared tree and contains each agent's blast radius. A mechanical reason makes it
+hard too. HLS keys its `hiedb` by workspace path, so agents that share one checkout contend on a
+single database and stall each other. The local-verification mode caps concurrency at **2-3 slices
+in flight**, so evaluation quality holds. The [CI-verified batch
 mode](#ci-verified-batches-the-wide-parallel-mode) runs wider, bounded by disjoint file ownership
-rather than local compute. After every merge, the team lead rebases the dependent worktrees onto the
-new base and re-runs their gate, so integration drift surfaces immediately. Slices that cannot be
-split become **stacked PRs**; otherwise they stay small and independent.
+rather than by local compute. After every merge, the team lead rebases the dependent worktrees onto
+the new base and re-runs their gate, so integration drift surfaces at once. A slice that cannot be
+split becomes a **stacked PR**. Otherwise slices stay small and independent.
 
 **Match the worktree flavour to the verification mode.** A CI-verified batch agent navigates by grep
-and never builds locally, so it uses a plain `git worktree add <path> -b <branch> origin/main`:
-nothing warms, and a bare `git worktree remove` retires it. An agent that will use HLS or run local
-tiers wants a warm worktree: create it with `task new-worktree BRANCH=<branch>`, which adds the
-worktree and kicks off a background `task build` so the interface files HLS reuses are on disk before
-the agent arrives. Stagger the creations so parallel cold typechecks don't thrash the CPU, and re-run
+and never builds locally. It uses a plain `git worktree add <path> -b <branch> origin/main`: nothing
+warms, and a bare `git worktree remove` retires it. An agent that will use HLS or run local tiers
+wants a warm worktree. Create it with `task new-worktree BRANCH=<branch>`, which adds the worktree
+and starts a background `task build`. The interface files HLS reuses are then on disk before the
+agent arrives. Stagger the creations so parallel cold typechecks don't thrash the CPU, and re-run
 `task build` after a post-merge rebase. Retire a warmed worktree with `task rm-worktree
-BRANCH=<branch>`: its HLS index is roughly 1 GB and cabal keeps it _outside_ the checkout under the
-hie-bios cache, so a bare `git worktree remove` strands the gigabyte and a few dozen retired slices
-consume the disk live worktrees need. `rm-worktree` removes both halves and keeps the branch;
-`task worktree-clean` sweeps up caches stranded by hand-removed worktrees.
+BRANCH=<branch>`. Its HLS index is roughly 1 GB, and cabal keeps that index _outside_ the checkout
+under the hie-bios cache. A bare `git worktree remove` strands the gigabyte, and a few dozen retired
+slices eat the disk that live worktrees need. `rm-worktree` removes both halves and keeps the
+branch. `task worktree-clean` sweeps up caches stranded by hand-removed worktrees.
 
 **A brief is not a summary: carry the architect's full acceptance criteria into it.** An implementer
 never sees the alignment conversation that shaped a slice, so the brief is its only window into it.
-When requirements were settled through back-and-forth (a type's exact fields, an edge case's
-disposition, a value preserved verbatim, the _why_ behind a constraint), the brief transcribes all of
-it in its final agreed form, not a paraphrase that drops the nuance. A too-terse brief narrows the
-target without anyone deciding to: the implementer guesses past the gap (the failure _escalate, don't
-guess_ exists to prevent) or surfaces it late, costing a round-trip. So when the architect has done
-the alignment work, **over-specify**. The design-checkpoint (the implementer proposes its design, the
-team lead confirms before deep work) is a backstop for genuine forks, not licence for a thin brief.
+Back-and-forth settles some requirements: a type's exact fields, an edge case's disposition, a value
+preserved verbatim, the _why_ behind a constraint. The brief transcribes all of that in its final
+agreed form. A paraphrase drops the nuance. A too-terse brief narrows the target without
+anyone deciding to. The implementer then guesses past the gap, the failure _escalate, don't guess_
+exists to prevent, or surfaces it late and costs a round-trip. So when the architect has done the
+alignment work, **over-specify**. The design-checkpoint is a backstop for a genuine fork, not licence
+for a thin brief. In it the implementer proposes its design and the team lead confirms before deep
+work.
 
-**Pin the model; there is no effort dial.** The Agent tool's `model` argument, left unset, takes the
-general-purpose agent's default, which may be lighter than the team lead's own model, and the tool
+**Pin the model. There is no effort dial.** Left unset, the Agent tool's `model` argument takes the
+general-purpose agent's default, which may be lighter than the team lead's own model. The tool
 exposes no thinking-effort parameter, so `model` is the only capability lever. A lighter default
-heads straight to implementation and skips the exploration a slice needs, so for **design-bearing or
-security-sensitive** work (a shared type, the credential-discipline serve path, a parse-don't-validate
-boundary) pin it to the strongest available; reserve the default for mechanical slices.
+heads straight to implementation and skips the exploration a slice needs. For **design-bearing or
+security-sensitive** work (a shared type, the credential-discipline serve path, a
+parse-don't-validate boundary), pin `model` to the strongest available. Reserve the default for a
+mechanical slice.
 
 **Have agents bootstrap their tools, the LSP MCP especially.** The HLS-over-MCP navigation tools
-(`start_lsp`, `go_to_definition`, `find_references`, and friends, from `agent-lsp`) are _deferred_:
-an agent must load them before it can call them, and a less-exploratory agent skips that and falls
-back to `grep`. Direct the agent to **first call `start_lsp` with `root_dir` set to its worktree
-root** (without it, agent-lsp drops to single-file mode and HLS reports "Could not find module ...",
-because a worktree's `.git` is a file), then use find-references for blast radius, go-to-definition
-across re-exports, and type-at-point to confirm a signature, all higher-precision than `grep` over
-this codebase's qualified imports. Confirm the MCP is wired into the agent's environment; an
-instruction to use a tool it cannot reach is decoration.
+(`start_lsp`, `go_to_definition`, `find_references`, and friends, from `agent-lsp`) are _deferred_.
+An agent must load them before it can call them, and a less exploratory agent skips that step and
+falls back to `grep`. Direct the agent to **first call `start_lsp` with `root_dir` set to its
+worktree root**. Without `root_dir`, agent-lsp drops to single-file mode and HLS reports "Could not
+find module ...", because a worktree's `.git` is a file. The agent then uses find-references for
+blast radius, go-to-definition across re-exports, and type-at-point to confirm a signature. All
+three are more precise than `grep` over this codebase's qualified imports. Confirm that the MCP is wired into the
+agent's environment. An instruction to use a tool the agent cannot reach is decoration.
 
 **Invoke the toolchain through the current flake, never the ambient shell.** A long-lived agent
-session enters `nix develop` once; if a flake upgrade merges mid-session (a new GHC, fourmolu, or
+session enters `nix develop` once. If a flake upgrade merges mid-session (a new GHC, fourmolu, or
 dependency pin), that ambient shell goes stale while the code on disk moves on. Run every command as
 `env -u IN_NIX_SHELL nix develop --command task <target>`, which rebuilds the shell from the on-disk
-flake. This is an agent-workflow rule, not a repo one: CI enters the shell fresh per run and humans'
-direnv re-evaluates on pull, so the Taskfile is left as-is.
+flake. This is an agent-workflow rule, not a repo rule. CI enters the shell fresh per run, and a
+human's direnv re-evaluates on pull, so the Taskfile stays as it is.
 
 ## Evaluation: two independent passes
 
 Independent evaluation is mandatory for every PR before it flips ready. A fresh-context reviewer runs
 both passes: no exposure to the implementer's reasoning, read-and-verify only (see [Subagents and
-isolation](#subagents-and-isolation)). The implementer's own "it works" does not count; evidence
+isolation](#subagents-and-isolation)). The implementer's own "it works" does not count. Evidence
 does. A green CI gate does not stand in for this pass.
 
-- **Stage A, requirements.** Every acceptance criterion is met _and_ backed by a deterministic,
-  gating test (unit or integration); a non-gating smoke test detects drift but never stands in for a
-  criterion (see [Testing strategy: what gates, and what
-  doesn't](../docs/testing.md#what-gates-and-what-doesnt)). Nothing in the slice's architecture scope
-  is silently dropped; changes stay within the slice's file scope (touching others needs strong
-  justification); documentation is updated in the _same_ PR (per [`../AGENTS.md`](../AGENTS.md)).
-- **Stage B, quality and security.** Idiomatic Haskell per [`../docs/style.md`](../docs/style.md); totality;
-  `-Werror`-clean; no unsafe or partial functions; a **security review** appropriate to a
-  supply-chain tool (input parsing, deny-by-default invariants, injection-free workflows); **test
-  quality** (properties present where required, e.g. rules-engine deny-precedence, not tautological
-  assertions, with the foreseeable branches tested by intent; `codecov/patch` ≥ 85% is a CI backstop,
-  not a number to chase); and **comment appropriateness** (Haddock documents the timeless contract
-  and the _why_, never project/roadmap/slice narration, per [`../docs/haddock.md`](../docs/haddock.md) §11).
+- **Stage A, requirements.** The slice meets every acceptance criterion, _and_ a deterministic,
+  gating test (unit or integration) backs each one. A non-gating smoke test detects drift but never
+  stands in for a criterion (see [Testing strategy: what gates, and what
+  doesn't](../docs/testing.md#what-gates-and-what-doesnt)). Nothing in the slice's architecture
+  scope is silently dropped. Changes stay within the slice's file scope, and touching another file
+  needs strong justification. The _same_ PR updates the documentation (per [`../AGENTS.md`](../AGENTS.md)).
+- **Stage B, quality and security.** Idiomatic Haskell per [`../docs/style.md`](../docs/style.md):
+  total, `-Werror`-clean, and free of unsafe or partial functions. A **security review** appropriate
+  to a supply-chain tool: input parsing, deny-by-default invariants, injection-free workflows.
+  **Test quality**: the required properties are present (rules-engine deny-precedence, for example),
+  the assertions are not tautological, and the foreseeable branches are tested by intent.
+  `codecov/patch` ≥ 85% is a CI backstop, not a number to chase. **Comment appropriateness**:
+  Haddock documents the timeless contract and the _why_, never project, roadmap, or slice narration,
+  per [`../docs/haddock.md`](../docs/haddock.md) §11.
 
-Critical findings block; the fix is routed per **Fix routing** above, then re-verified.
+A critical finding blocks. Route the fix per **Fix routing** above, then re-verify it.
 
 ## Inter-wave quality and alignment pass
 
-Per-PR review judges each slice **in isolation** and cannot see the whole that parallel slices
-compose into. Slices built concurrently against the handles drift (divergent idioms, duplicated
-helpers, inconsistent Haddock, type-conversion churn at the boundaries), and none of that fails a
-single-slice review. So **between waves**, once a wave's PRs are all merged and before the next is
-dispatched, a dedicated agent audits the integrated tree (fresh context, read-and-verify) for:
+Per-PR review judges each slice **in isolation**. It cannot see the whole that parallel slices
+compose into. Slices built concurrently against the handles drift: divergent idioms, duplicated
+helpers, inconsistent Haddock, type-conversion churn at the boundaries. None of that fails a
+single-slice review. So a dedicated agent audits the integrated tree **between waves**, with fresh
+context and read-and-verify only. It runs once a wave's PRs are all merged, before the team lead
+dispatches the next wave. It looks for:
 
 - **Structural improvements:** cross-slice duplication, misplaced or mis-sized modules, abstractions
   to share or split, leaky handles, and error/idiom patterns that diverged.
@@ -195,39 +199,43 @@ dispatched, a dedicated agent audits the integrated tree (fresh context, read-an
   in), inconsistent voice or cross-references.
 - **Performance problems likely to surface:** needless type conversions (the
   `String`/`Text`/`ByteString` bounce), avoidable re-parsing or re-allocation, lazy/strict
-  mismatches, accidentally-quadratic patterns, before later slices build on them. Once the benchmark
-  harness exists this is measured against the informational trend (which never gates), not eyeballed.
+  mismatches, and accidentally-quadratic patterns, before later slices build on them. Once the
+  benchmark harness exists, measure this against the informational trend, which never gates, instead
+  of eyeballing it.
 - **Spec and doc reconciliation:** for each merged slice, reconcile the as-built code against its
-  slice file and architecture document(s), folding learnings, discoveries, and deviations back into
-  the tracker and the architecture doc so the design of record matches what shipped. **Material
-  design changes escalate to the architect** (they may reshape later slices), not silently rewritten.
+  slice file and its architecture document(s). Fold the learnings, discoveries, and deviations back
+  into the tracker and the architecture doc, so the design of record matches what shipped. **A
+  material design change escalates to the architect**, because it may reshape a later slice. Never
+  rewrite one silently.
 
-The team lead triages the report: safe, in-scope, behaviour-preserving fixes (rename, dedupe,
+The team lead triages the report. Safe, in-scope, behaviour-preserving fixes (rename, dedupe,
 Haddock, a localised conversion, doc reconciliation) land together as one reviewed, gated
-`refactor`/`docs` PR through the same loop; design-level or far-reaching findings escalate to the
-architect as new slices or issues.
+`refactor`/`docs` PR through the same loop. A design-level or far-reaching finding escalates to the
+architect as a new slice or issue.
 
 The pass also does **housekeeping**. Prune the spent worktrees and merged branches so
-`git worktree list` stays an accurate map; a worktree carrying uncommitted or unmerged work is
-surfaced to the architect, never force-removed. It also **closes out the tracker**: a squash-merge
-can drop a `Closes #N` keyword, so as each PR lands, confirm its issue closed and close it manually
-if the keyword did not fire, and as a backstop scan open issues against the wave's merged PRs, closing
-any whose fix shipped with a `Resolved by #PR` note. An issue left open for a real reason (partially
-addressed, or a follow-on tracked separately) keeps a note on what remains. The pass **gates the next
-wave**: the integrated base is made coherent first, recorded in the milestone sequence.
+`git worktree list` stays an accurate map. Surface a worktree that carries uncommitted or unmerged
+work to the architect, and never force-remove one. The pass also **closes out the tracker**. A
+squash-merge can drop a `Closes #N` keyword. As each PR lands, confirm that its issue closed, and
+close it by hand if the keyword did not fire. As a backstop, scan the open issues against the wave's
+merged PRs and close any whose fix shipped, with a `Resolved by #PR` note. An issue left open for a
+real reason (partly addressed, or a follow-on tracked separately) keeps a note on what remains. The
+pass **gates the next wave**: make the integrated base coherent first, and record that in the
+milestone sequence.
 
 ## Verification: fast local, CI gates build and test
 
-CI is the gate for build and test verification; local verification is for fast feedback, not a
-pre-push ceremony. The `gate` is necessary but not sufficient for hand-off: it proves the code builds
-and the tests pass, not that the slice meets its requirements or clears quality and security review.
-That judgement is the independent [Stage A + Stage B evaluation](#evaluation-two-independent-passes),
-a separate required step. A green gate never flips a PR ready on its own; the evaluation must have
-passed with no open critical findings as well. Neither substitutes for the other.
+CI is the gate for build and test verification. Local verification is for fast feedback, not a
+pre-push ceremony. The `gate` is necessary but not sufficient for hand-off. It proves that the code
+builds and the tests pass. It does not prove that the slice meets its requirements or clears quality
+and security review. That judgement is the independent [Stage A + Stage B
+evaluation](#evaluation-two-independent-passes), a separate required step. A green gate never flips
+a PR ready on its own. The evaluation must also pass with no open critical findings. Neither
+substitutes for the other.
 
-Every CI job just calls `task`, and CI runs the tiers in parallel, so reproducing the slow
-parallelisable ones (Docker integration, `nix-check`, Haddock) serially on one contended host is
-wasted work, and reproducing the whole gate before pushing runs it twice.
+Every CI job just calls `task`, and CI runs the tiers in parallel. Reproducing the slow parallel
+tiers (Docker integration, `nix-check`, Haddock) one after another on one contended host is wasted
+work. Reproducing the whole gate before you push runs it twice.
 
 For single-slice work on an otherwise-idle host, the **fast floor** is the whole local obligation
 before pushing:
@@ -240,31 +248,31 @@ task check
 **and** dead-code (`weeder`) plus Haskell static analysis (`stan`). The hard stops within it are
 **Semgrep clean** (zero findings, no new ignores without the architect's approval) and a clean
 weeder/stan floor. Then push early, let CI parallelise the Docker and Haddock tiers, and watch the
-real run to green (`gh pr checks --watch`). A red gate is root-caused, not patched over.
+real run to green (`gh pr checks --watch`). Root-cause a red gate. Do not patch over it.
 
 ### CI-verified batches: the wide parallel mode
 
-When several implementation agents run in parallel on one host, the fast floor does not scale: each
+When several implementation agents run in parallel on one host, the fast floor does not scale. Each
 agent's `task check` contends for the cores every sibling needs. In this mode the floor shrinks to
-formatting and the PR's CI run is the whole verification loop:
+formatting, and the PR's CI run is the whole verification loop:
 
 - The one build-adjacent local command is `env -u IN_NIX_SHELL nix develop --command task format`,
   run as the last edit before every commit (CI gates on format-check).
-- No local `task check`, builds, test tiers, Docker, or HLS; agents navigate by grep and read, in a
+- No local `task check`, builds, test tiers, Docker, or HLS. Agents navigate by grep and read, in a
   plain worktree (see [Subagents and isolation](#subagents-and-isolation)).
-- Verification is watching the PR: `gh pr checks <pr> --watch`; on a red,
-  `gh run view <run-id> --log-failed`, fix, format, commit, push, re-watch. An agent supersedes only
-  its own branch's runs.
+- Verification is watching the PR: `gh pr checks <pr> --watch`. On a red, run
+  `gh run view <run-id> --log-failed`, fix, format, commit, push, and re-watch. An agent supersedes
+  only its own branch's runs.
 - The invariant that makes the width safe: **disjoint file sets per batch, one owner per file across
   every open PR**. An issue whose files collide with an in-flight branch waits for that merge and
   starts from the new base.
-- Each green draft is reviewed by the lead, then flipped ready.
+- The lead reviews each green draft, then flips it ready.
 
-This is the default for batch work; the fast floor above serves single-slice work on an idle host.
+This is the default for batch work. The fast floor above serves single-slice work on an idle host.
 
-Reproduce a tier locally **only to debug a red**: map the red CI job to its `task` target and run
-just that one, never the whole gate. The canonical tier and gate semantics live in
-[`../docs/testing.md`](../docs/testing.md); the gating jobs are the `needs` of the terminal `gate`
+Reproduce a tier locally **only to debug a red**. Map the red CI job to its `task` target and run
+that one target, never the whole gate. The canonical tier and gate semantics live in
+[`../docs/testing.md`](../docs/testing.md). The gating jobs are the `needs` of the terminal `gate`
 job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they map:
 
 | Gating CI job | Local command |
@@ -278,45 +286,46 @@ job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they ma
 | `gate` | green iff every job above is green |
 | `smoke` (live registries) | `task test-smoke`, **non-gating, never blocks** |
 
-`task nix-check` is worth a _proactive_ local run when you have touched the flake or added a module:
-it catches `-Werror` warnings and the _flakes only see git-tracked files_ trap, so a new module must
-be `git add`-ed (and listed in the `.cabal` file) before it runs, a failure a plain `task build`
-misses.
+`task nix-check` is worth a _proactive_ local run when you have touched the flake or added a module.
+It catches `-Werror` warnings and the _flakes only see git-tracked files_ trap. A new module must be
+`git add`-ed, and listed in the `.cabal` file, before `nix-check` runs. A plain `task build` misses
+that failure.
 
-Coverage takes the same posture: `codecov/patch` is a CI backstop (≥ 85% on changed lines), so write
-the behaviour tests you would write anyway and let it flag genuine gaps rather than pre-running
-`task coverage` to colour a number up. Coverage comes only from the **unit ∪ integration** tiers; the
-E2E and Smoke suites surface none (no HPC, no Codecov flag), so a changed line flagged by
-`codecov/patch` wants a unit or integration test, not the assumption that an e2e run covers it. See
-[Testing strategy: coverage](../docs/testing.md#coverage-codecov-gating).
+Coverage takes the same posture. `codecov/patch` is a CI backstop: ≥ 85% on changed lines. Write the
+behaviour tests you would write anyway, and let it flag a genuine gap. Do not pre-run
+`task coverage` to colour a number up. Coverage comes only from the **unit ∪ integration** tiers.
+The E2E and Smoke suites surface none: no HPC, no Codecov flag. So a changed line that
+`codecov/patch` flags wants a unit or integration test, not the assumption that an e2e run covers
+it. See [Testing strategy: coverage](../docs/testing.md#coverage-codecov-gating).
 
 **Scale verification to the change.** Light by default. Reserve heavier local reproduction and
 exhaustive case-enumeration for the risky surfaces: the parsers and identifier canonicalisation, the
-credential path, deny-by-default rule precedence, and egress/SSRF, where a regression is costly and a
-fast unit pass under-covers the threat. A small refactor must not cost an hour of ceremony.
+credential path, deny-by-default rule precedence, and egress/SSRF. On those surfaces a regression is
+costly, and a fast unit pass under-covers the threat. A small refactor must not cost an hour of
+ceremony.
 
 ## Definition of done
 
 A PR reaches the architect only when **all** hold:
 
 - [ ] Every acceptance criterion met, each with passing deterministic, gating (unit/integration) test
-      evidence; a non-gating smoke test never stands in for a criterion.
+      evidence. A non-gating smoke test never stands in for a criterion.
 - [ ] Independent Stage A + Stage B evaluation, by a fresh-context reviewer, passed with no open
-      critical findings. Mandatory for every PR; a green CI `gate` does not substitute.
+      critical findings. Mandatory for every PR. A green CI `gate` does not substitute.
 - [ ] Local verification passed before pushing: `task check` for single-slice work, `task format`
       plus a green CI run for batch work.
-- [ ] Foreseeable branches tested by intent; `codecov/project` (a context the ruleset requires)
-      green; `codecov/patch` (≥ 85% on changed lines) read as a prompt for a unit or integration
-      test, not as a gate.
+- [ ] Foreseeable branches tested by intent. `codecov/project` is a context the ruleset requires,
+      so it must be green. `codecov/patch` (≥ 85% on changed lines) prompts a unit or integration
+      test. It is not a gate.
 - [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11).
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
 - [ ] CI `gate` (and every job it needs) green on the PR.
-- [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with
+- [ ] Docs updated in the same PR. Changes limited to the slice's file scope (another file only with
       strong justification).
-- [ ] The slice-completing PR names the issue it resolves (`Closes #N`) and folds in the as-built
-      delta (design decisions, discoveries, deviations from the acceptance criteria) in the same PR;
-      an issue left open after its PR merged is a hand-off defect, caught at GATE.
+- [ ] The slice-completing PR names the issue it resolves (`Closes #N`). It folds the as-built delta
+      (design decisions, discoveries, deviations from the acceptance criteria) into the same PR. An
+      issue left open after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed and DCO `Signed-off-by` (`git commit -s`), Conventional Commits, AI help
       disclosed with `Assisted-by:`. The
       [`open-pull-request`](skills/open-pull-request/SKILL.md) skill is the recipe.
@@ -328,18 +337,19 @@ A PR reaches the architect only when **all** hold:
 The team lead is a filter, not a megaphone: the architect should not see noise but must see every
 real fork.
 
-**Handled silently by the team lead:** idiomatic choices among equivalent options; formatting, lint,
-build wiring, and test plumbing; flaky-CI reruns; worktree or rebase conflicts; anything answerable
-from the existing specs.
+**Handled silently by the team lead:** an idiomatic choice among equivalent options, formatting,
+lint, build wiring, test plumbing, a flaky-CI rerun, a worktree or rebase conflict, and anything the
+existing specs answer.
 
 **Escalated to the architect:**
 
-- ambiguous, missing, or contradictory **spec or requirement**;
-- a requirement that proves infeasible, or materially costlier or riskier than it looked;
-- a **security or correctness trade-off** with no clear right answer;
-- a design assumption that turns out false, or a scope question ("is X in this slice?");
-- external blockers (a missing secret or credential; an upstream API that behaves unlike the spec);
-- an agent genuinely stuck after its bounded attempt.
+- an ambiguous, missing, or contradictory **spec or requirement**
+- a requirement that proves infeasible, or materially costlier or riskier than it looked
+- a **security or correctness trade-off** with no clear right answer
+- a design assumption that turns out false, or a scope question ("is X in this slice?")
+- an external blocker: a missing secret or credential, or an upstream API that behaves unlike the
+  spec
+- an agent genuinely stuck after its bounded attempt
 
 Escalations arrive **decision-ready**:
 
@@ -352,23 +362,24 @@ Escalations arrive **decision-ready**:
 The [per-PR loop](#the-per-pr-loop) and [Definition of done](#definition-of-done) carry the per-PR
 checklist. These are the standing rules it does not capture:
 
-- Implementation work lands via **PRs only**; the team lead never merges and never pushes to `main`.
-- Generated artifacts (e.g. version-ordering fixtures via `task gen-version-fixtures`) are
-  regenerated with their tooling, never hand-edited.
-- **Cross-cutting invariants live in one helper.** When the same invariant is enforced by more than
-  one slice (`latest` resolution in the npm filter and the packument merge; lossless `Value`
-  passthrough across filter, merge, and serve), extract it into a single shared helper the slices
-  call. Duplicated invariant logic drifts and gets fixed N times.
+- Implementation work lands through **PRs only**. The team lead never merges and never pushes to
+  `main`.
+- Regenerate a generated artifact with its tooling (version-ordering fixtures through
+  `task gen-version-fixtures`, for example). Never hand-edit one.
+- **Cross-cutting invariants live in one helper.** More than one slice can enforce the same
+  invariant. Two examples: `latest` resolution in the npm filter and in the packument merge, and
+  lossless `Value` passthrough across filter, merge, and serve. Extract that invariant into a single
+  shared helper the slices call. Duplicated invariant logic drifts and gets fixed N times.
 - **Surface decisions one at a time, paced by a task list.** When several design questions are open
   at once, the team lead does not front-load them in one message. The series goes on a task list
-  first (one entry per question: the harness task list where available, otherwise a short-lived
-  `design-queue.md` under `.agents/`, spun up when decisions accumulate and removed once drained
-  into `docs/` and issues), and each question is brought alone, lead-with-a-recommendation,
-  resolved and recorded before the next is asked. This complements _escalate, don't guess_:
-  surface proactively, but serialised.
+  first, one entry per question. Use the harness task list where available, otherwise a short-lived
+  `design-queue.md` under `.agents/`. Spin that file up when decisions accumulate, and remove it
+  once they drain into `docs/` and issues. Bring each question alone, leading with a recommendation.
+  Resolve and record it before you ask the next. This complements _escalate, don't guess_: surface
+  proactively, but in series.
 - **Reference work by identifiers the architect can see.** Name a piece of work by its PR or issue
-  number (`#168`) or a short descriptive title, never an internal task-tracker ID the architect's
-  view does not render.
+  number (`#168`), or by a short descriptive title. Never use an internal task-tracker ID the
+  architect's view does not render.
 - **The Handle pattern is the canonical name for the records-of-functions abstraction.**
   `MetadataClient`, `MirrorQueue`, and `CredentialProvider` are the Handle pattern. Say "the Handle
   pattern" for the abstraction and "integration boundary" / "interface contract" / "abstraction
@@ -377,6 +388,6 @@ checklist. These are the standing rules it does not capture:
 ## What lives under `.agents/`
 
 Everything agent-facing: this strategy, the context-management and remote-execution guides, the
-compaction prompt, the skills, and, when design questions accumulate, a short-lived
-`design-queue.md` holding area (worked one at a time, then drained into `docs/` and issues, and
-removed once empty). Design lives in `docs/`; process lives here.
+compaction prompt, and the skills. When design questions accumulate, a short-lived `design-queue.md`
+holding area joins them. Work it one question at a time, drain it into `docs/` and issues, and
+remove it once it is empty. Design lives in `docs/`. Process lives here.

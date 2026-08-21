@@ -1,5 +1,5 @@
-Preserve the active task state and decisions; aggressively discard reproducible repository
-content and chronological narration.
+Keep the active task state and the decisions. Discard reproducible repository content and
+chronological narration. When in doubt, discard.
 
 Produce a compact checkpoint with these headings:
 
@@ -13,9 +13,9 @@ Produce a compact checkpoint with these headings:
 - Sources to retrieve next (paths and headings only)
 
 Do not copy AGENTS.md, architecture prose, style rules, successful command logs, discarded
-hypotheses, or old status. Repository files remain authoritative and can be retrieved on demand.
-Mark any volatile git, GitHub, CI, or slice status as needing live verification on resume.
+hypotheses, or old status. Repository files stay authoritative and you can retrieve them on demand.
+Mark every volatile git, GitHub, CI, or slice status as needing live verification on resume.
 
-For a team-lead orchestration thread, also preserve the active slices, assigned worktrees or
-agents, review state, and next dispatchable work. End that checkpoint with: "Resume with the
-resume-orchestration skill and verify volatile state before acting."
+For a team-lead orchestration thread, also keep the active slices, the assigned worktrees or
+agents, the review state, and the next dispatchable work. End that checkpoint with: "Resume with
+the resume-orchestration skill and verify volatile state before acting."

@@ -26,7 +26,7 @@ Build and CI automation is **Bash**: one language to read and review. Scripts li
 in a multiline YAML block, so it stays reviewable and runs outside CI. Scripts must pass
 `shellcheck` (`task lint-scripts`). Reach for `awk` or `sort` before a heavier runtime.
 
-Use another language only when one is forced, and say why in review. The pandoc filters in
+Use another language only when the tool forces it, and say why in review. The pandoc filters in
 [`web/`](web/) are **Lua**, because pandoc's filter API is Lua. A new build-time dependency on
 Python, Node, or similar needs a strong, stated reason. "It reads a little cleaner" is not one.
 
@@ -76,7 +76,7 @@ Signed-off-by: Your Name <you@example.com>
 - It is **separate from the GPG signature**. `-S` proves who committed. `-s` certifies your right
   to contribute. Use both: `git commit -S -s`.
 - **We squash-merge, so sign off every commit.** The DCO check verifies each branch commit, and
-  the squash message is assembled from them. Editing the PR description does not sign your commits.
+  GitHub assembles the squash message from those commits. Editing the PR description does not sign your commits.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit.
   `git rebase --signoff main` signs off a whole branch.
 
