@@ -3,22 +3,24 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
-{- | The domain-span tracing ports: the abstract interfaces the core serve path and
-mirror worker open their hand-added spans through, decoupled from any tracing backend.
+{- | The domain-span tracing ports: the abstract interfaces the core serve path, the
+mirror worker, and the advisory sync task open their hand-added spans through, decoupled
+from any tracing backend.
 
-The serve path brackets two domain spans an operator cares about -- the per-version
-rule verdict and the synchronous-to-asynchronous mirror hand-off -- and the mirror
-worker brackets one -- the per-job fetch → verify → publish. This module defines those
-bracket operations as records of functions (the Handle pattern), each parametric in the
-bracketed action's result so the span wraps the real work without seeing its shape. A
+The serve path brackets two domain spans an operator cares about (the per-version rule
+verdict and the synchronous-to-asynchronous mirror hand-off), the mirror worker brackets
+one (the per-job fetch → verify → publish), and the advisory sync task brackets one per
+sync attempt. This module defines those bracket operations as records of functions (the
+Handle pattern), each parametric in the bracketed action's result so the span wraps the
+real work without seeing its shape. A
 consumer records through its port and never names an OpenTelemetry tracer; the
 application supplies the OTel-backed implementations behind them (see
 @Ecluse.Runtime.Telemetry.Tracing@), and a test supplies a pass-through double that simply runs
 the body.
 
-Two ports are defined: 'TracingPort' for the serve path's two spans and
-'WorkerTracingPort' for the worker's mirror-job span; each carries exactly the spans its
-consumer opens.
+Three ports are defined: 'TracingPort' for the serve path's two spans,
+'WorkerTracingPort' for the worker's mirror-job span, and 'AdvisorySyncTracingPort' for the
+advisory sync task's per-attempt span; each carries exactly the spans its consumer opens.
 -}
 module Ecluse.Core.Telemetry.Span (
     -- * The serve-path tracing port
@@ -27,11 +29,16 @@ module Ecluse.Core.Telemetry.Span (
     -- * The worker tracing port
     WorkerTracingPort (..),
     JobSpanOutcome (..),
+
+    -- * The advisory sync tracing port
+    AdvisorySyncTracingPort (..),
 ) where
 
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (RemoteSpanContext)
 import Ecluse.Core.Server.Response (ServeDecision)
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult)
 import Ecluse.Core.Version (Version)
 
 {- | The domain-span tracing port -- a record of bracket operations over a backend
@@ -117,3 +124,21 @@ data JobSpanOutcome = JobSpanOutcome
     -- ^ The failure detail when the job did not publish; 'Nothing' on success.
     }
     deriving stock (Eq, Show)
+
+{- | The advisory sync task's domain-span tracing port: one span per sync attempt. The
+single field is rank-2 (parametric in the result) so one port value serves the call site
+whatever the body yields, and the projection names the attempt's bounded result once the
+body finishes, so the span says which of the five outcomes it observed. The bounded result
+is the same 'AdvisorySyncResult' the attempt metrics are labelled by, so a trace and a
+series join on one vocabulary. The implementation is inert when tracing is off, so the sync
+loop brackets unconditionally.
+-}
+newtype AdvisorySyncTracingPort = AdvisorySyncTracingPort
+    { astpSyncAttemptSpan ::
+        forall a.
+        Ecosystem ->
+        (a -> AdvisorySyncResult) ->
+        IO a ->
+        IO a
+    -- ^ Bracket one advisory sync attempt for an ecosystem, recording the projected result.
+    }

@@ -14,11 +14,11 @@ through its port and never names an OpenTelemetry instrument; the application su
 the OTel-backed implementations behind them (see @Ecluse.Runtime.Telemetry.Instruments@). A test
 supplies an inert or recording double.
 
-Two ports are defined: 'MetricsPort' for the serve path (serve decisions, the rule gate,
-the data-plane upstream fetch, the metadata cache, and mirror enqueue) and
-'WorkerMetricsPort' for the mirror worker (jobs processed, publish latency). The
-credential signals stay in the application instrument set; each port carries exactly the
-signals its consumer emits.
+Three ports are defined: 'MetricsPort' for the serve path (serve decisions, the rule gate,
+the data-plane upstream fetch, the metadata cache, and mirror enqueue), 'WorkerMetricsPort'
+for the mirror worker (jobs processed, publish latency), and 'AdvisorySyncMetricsPort' for
+the advisory sync task (attempts and their latency). The credential signals stay in the
+application instrument set; each port carries exactly the signals its consumer emits.
 -}
 module Ecluse.Core.Telemetry.Record (
     -- * The serve-path recording port
@@ -27,13 +27,18 @@ module Ecluse.Core.Telemetry.Record (
     -- * The worker recording port
     WorkerMetricsPort (..),
 
+    -- * The advisory sync recording port
+    AdvisorySyncMetricsPort (..),
+
     -- * Timing
     timedSeconds,
 ) where
 
 import GHC.Clock (getMonotonicTime)
 
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult,
     CacheResult,
     Cause,
     Decision,
@@ -140,11 +145,27 @@ data WorkerMetricsPort = WorkerMetricsPort
     -- ^ Record one mirror publish-latency sample (@ecluse.mirror.publish.duration@).
     }
 
+{- | The advisory sync task's metric-recording port, the third consumer's analogue of
+'MetricsPort' and 'WorkerMetricsPort'. The sync loop ("Ecluse.Runtime.Cve.Sync") records one
+attempt and one latency sample per attempt, each under the ecosystem it synced and the
+bounded result it reached, so an operator sees both the rate and the shape of the advisory
+refresh per ecosystem without a high-cardinality label. Both fields return 'IO', so the
+loop records through the port without naming a telemetry backend.
+-}
+data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
+    { asmpSyncAttempt :: Ecosystem -> AdvisorySyncResult -> IO ()
+    -- ^ Record one advisory sync attempt (@ecluse.advisory.sync.attempts@) by ecosystem and result.
+    , asmpSyncDuration :: Ecosystem -> AdvisorySyncResult -> Double -> IO ()
+    {- ^ Record one advisory sync attempt's latency in seconds
+    (@ecluse.advisory.sync.duration@) by ecosystem and result.
+    -}
+    }
+
 {- | Run an action and return its result alongside the wall-clock seconds it took,
 measured on the monotonic clock so a system-clock step never yields a negative or
 absurd duration. The seconds are what the latency histograms record (through
-'mpRuleEvalDuration' \/ 'mpUpstreamFetch'). Pure of any backend, so it lives beside the
-port the durations feed.
+'mpRuleEvalDuration' \/ 'mpUpstreamFetch' \/ 'asmpSyncDuration'). Pure of any backend, so it
+lives beside the port the durations feed.
 -}
 timedSeconds :: (MonadIO m) => m a -> m (a, Double)
 timedSeconds action = do

@@ -52,6 +52,7 @@ import Ecluse.Core.Server.Response (
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
  )
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryRefused))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Telemetry (
     Telemetry (TelemetryEnabled),
@@ -62,6 +63,7 @@ import Ecluse.Runtime.Telemetry.Tracing (
     JobSpanOutcome (JobSpanOutcome),
     dataPlaneInstrumentationConfig,
     ruleVerdictFields,
+    withAdvisorySyncSpan,
     withMirrorEnqueueSpan,
     withMirrorJobSpan,
     withRuleEvalSpan,
@@ -85,6 +87,7 @@ spec = do
     verdictMappingSpec
     gatingSpec
     scrubSpec
+    advisorySyncSpanSpec
     crossAsyncLinkSpec
     enqueueStatusSpec
     traceparentInjectionSpec
@@ -136,14 +139,20 @@ verdictMappingSpec = describe "ruleVerdictFields" $ do
                        ]
 
 gatingSpec :: Spec
-gatingSpec = describe "withRuleEvalSpan (telemetry disabled)" $
-    it "runs the body and returns its result, opening no span" $ do
+gatingSpec = describe "domain-span brackets (telemetry disabled)" $ do
+    it "runs the rule-eval body and returns its result, opening no span" $ do
         -- With the disabled handle there is no tracer to reach for, so the helper must
         -- simply run the body and thread its result through, never demanding a provider.
         result <-
             withRuleEvalSpan telemetryDisabled (mkPackageName Npm Nothing "left-pad") (mkVersion Npm "1.0.0") $
                 pure (42 :: Int, Admit)
         result `shouldBe` 42
+
+    it "runs the advisory-sync attempt and returns its result, opening no span" $ do
+        -- The sync loop brackets unconditionally, so the disabled bracket must never
+        -- reach for a provider and never change what the attempt concluded.
+        result <- withAdvisorySyncSpan telemetryDisabled Npm (const AdvisoryRefused) (pure (7 :: Int))
+        result `shouldBe` 7
 
 scrubSpec :: Spec
 scrubSpec = describe "secret scrubbing" $ do
@@ -214,6 +223,26 @@ samplePackage = mkPackageName Npm Nothing "left-pad"
 
 sampleVersion :: Version
 sampleVersion = mkVersion Npm "1.3.0"
+
+{- One advisory sync attempt must produce exactly one @ecluse.advisory.sync.attempt@ span
+carrying exactly the ecosystem and the attempt's bounded result: the two bounded
+attributes the metric labels join on. Driven through the in-memory exporter so the span's
+real name and attribute set are asserted, not a port double's projection. -}
+advisorySyncSpanSpec :: Spec
+advisorySyncSpanSpec = describe "advisory sync span" $
+    it "opens one span per attempt carrying the ecosystem and the attempt's result" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        withAdvisorySyncSpan telemetry Npm (const AdvisoryRefused) pass
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        spans <- readIORef ref
+        names <- traverse (fmap hotName . readIORef . spanHot) spans
+        names `shouldBe` ["ecluse.advisory.sync.attempt"]
+        dump <- attributeDump ref
+        traverse_
+            (\field -> (field `T.isInfixOf` dump) `shouldBe` True)
+            ["ecluse.ecosystem", "npm", "ecluse.advisory.sync.result", "refused"]
 
 {- The true cross-async span link: capture the originating request's (enqueue) span
 context exactly as the serve path does, hand it to the worker's per-job span exactly as

@@ -47,6 +47,8 @@ module Ecluse.Core.Telemetry.Metrics (
     CacheResult (..),
     MirrorResult (..),
     CredentialResult (..),
+    AdvisorySyncResult (..),
+    advisorySyncResultName,
     BreakerSource (..),
     RequestFaultCause (..),
     RelayAnomaly (..),
@@ -87,8 +89,7 @@ through 'metricName'; a typed enum so the catalogue is enumerable (and asserted 
 in the tests) rather than a scatter of string literals.
 
 Queue backlog and DLQ depth are deliberately absent -- those are cloud-native metrics
-(CloudWatch, Cloud Monitoring), not signals Écluse re-emits. Advisory-sync metrics are
-deferred until the advisory subsystem exists.
+(CloudWatch, Cloud Monitoring), not signals Écluse re-emits.
 -}
 data MetricName
     = -- | @http.server.request.duration@ -- server request latency (histogram).
@@ -143,6 +144,10 @@ data MetricName
       CredentialRefresh
     | -- | @ecluse.credential.token.ttl.seconds@ -- remaining token lifetime by provider (gauge).
       CredentialTokenTtlSeconds
+    | -- | @ecluse.advisory.sync.attempts@ -- advisory sync attempts by ecosystem and result (counter).
+      AdvisorySyncAttempts
+    | -- | @ecluse.advisory.sync.duration@ -- advisory sync attempt latency by ecosystem and result (histogram).
+      AdvisorySyncDuration
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Universe MetricName where universe = universeGeneric
@@ -176,6 +181,8 @@ metricName = \case
     MirrorPublishDuration -> "ecluse.mirror.publish.duration"
     CredentialRefresh -> "ecluse.credential.refresh"
     CredentialTokenTtlSeconds -> "ecluse.credential.token.ttl.seconds"
+    AdvisorySyncAttempts -> "ecluse.advisory.sync.attempts"
+    AdvisorySyncDuration -> "ecluse.advisory.sync.duration"
 
 {- | The closed set of metric label keys. Every label Écluse attaches is one of these
 bounded-domain keys. High-cardinality identifiers (@package@, @version@, @scope@, a
@@ -300,6 +307,38 @@ data CredentialResult = Refreshed | RefreshFailed
 
 instance Universe CredentialResult where universe = universeGeneric
 
+{- | What one advisory sync attempt concluded, the closed result vocabulary the
+@ecluse.advisory.sync.*@ signals are labelled by and the advisory sync span records.
+It mirrors the sync step's own outcomes ("Ecluse.Runtime.Cve.Sync"), one bounded value
+each, so the series count per ecosystem is five.
+-}
+data AdvisorySyncResult
+    = -- | A new artifact verified and swapped into the read path.
+      AdvisorySwapped
+    | -- | The remote artifact matches the last seen one.
+      AdvisoryUnchanged
+    | -- | No artifact exists in the bucket yet.
+      AdvisoryNonePublished
+    | -- | The fetch itself did not deliver the object.
+      AdvisoryFetchFailed
+    | -- | The artifact was downloaded and refused by verification.
+      AdvisoryRefused
+    deriving stock (Eq, Generic, Show)
+
+instance Universe AdvisorySyncResult where universe = universeGeneric
+
+{- | The wire value of an advisory sync result. Named rather than inlined because the
+metric label and the sync span's result attribute must read identically for the two
+signals to join on it.
+-}
+advisorySyncResultName :: AdvisorySyncResult -> Text
+advisorySyncResultName = \case
+    AdvisorySwapped -> "swapped"
+    AdvisoryUnchanged -> "unchanged"
+    AdvisoryNonePublished -> "none_published"
+    AdvisoryFetchFailed -> "fetch_failed"
+    AdvisoryRefused -> "refused"
+
 -- | Which circuit breaker a state gauge concerns.
 data BreakerSource = EffectfulRule | CredentialMint
     deriving stock (Eq, Generic, Show)
@@ -339,6 +378,7 @@ data Label
     | LCacheResult CacheResult
     | LMirrorResult MirrorResult
     | LCredentialResult CredentialResult
+    | LAdvisorySyncResult AdvisorySyncResult
     | LProvider Provider
     | LCause Cause
     | LBreakerSource BreakerSource
@@ -360,6 +400,7 @@ labelKey = \case
     LCacheResult{} -> KeyResult
     LMirrorResult{} -> KeyResult
     LCredentialResult{} -> KeyResult
+    LAdvisorySyncResult{} -> KeyResult
     LProvider{} -> KeyProvider
     LCause{} -> KeyCause
     LBreakerSource{} -> KeyBreakerSource
@@ -403,6 +444,7 @@ labelValue = \case
     LCredentialResult c -> case c of
         Refreshed -> "refreshed"
         RefreshFailed -> "failed"
+    LAdvisorySyncResult r -> advisorySyncResultName r
     LProvider p -> case p of
         CodeArtifact -> "codeartifact"
         Static -> "static"

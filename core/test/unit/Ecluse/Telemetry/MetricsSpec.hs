@@ -12,6 +12,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult (AdvisoryFetchFailed, AdvisorySwapped),
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (..),
     CredentialResult (..),
@@ -73,6 +74,8 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.mirror.publish.duration"
                             , "ecluse.credential.refresh"
                             , "ecluse.credential.token.ttl.seconds"
+                            , "ecluse.advisory.sync.attempts"
+                            , "ecluse.advisory.sync.duration"
                             ]
         names `shouldContain` ["http.server.request.duration"]
 
@@ -149,10 +152,15 @@ renderSpec = describe "renderLabel" $ do
     it "buckets a denial reason into a bounded class, never the message" $
         renderLabel (LReasonClass ReasonMissingIntegrity) `shouldBe` ("reason_class", "missing_integrity")
 
-    it "shares the result key across cache/mirror/credential outcomes" $ do
+    it "renders an advisory sync attempt's outcome, never the artifact it fetched" $ do
+        renderLabel (LAdvisorySyncResult AdvisorySwapped) `shouldBe` ("result", "swapped")
+        renderLabel (LAdvisorySyncResult AdvisoryFetchFailed) `shouldBe` ("result", "fetch_failed")
+
+    it "shares the result key across cache/mirror/credential/advisory-sync outcomes" $ do
         fst (renderLabel (LCacheResult Hit)) `shouldBe` "result"
         fst (renderLabel (LMirrorResult Published)) `shouldBe` "result"
         fst (renderLabel (LCredentialResult Refreshed)) `shouldBe` "result"
+        fst (renderLabel (LAdvisorySyncResult AdvisorySwapped)) `shouldBe` "result"
 
 -- The bounded-label universe: every label constructible from a finite value domain
 -- (the operator-bounded `rule` excepted, since its domain is configuration, not an
@@ -169,6 +177,7 @@ allBoundedLabels =
         , LCacheResult <$> universe
         , LMirrorResult <$> universe
         , LCredentialResult <$> universe
+        , LAdvisorySyncResult <$> universe
         , LProvider <$> universe
         , LCause <$> universe
         , LBreakerSource <$> universe

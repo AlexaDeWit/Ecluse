@@ -57,7 +57,7 @@ import Data.Conduit.Combinators qualified as C
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
-import UnliftIO (MonadUnliftIO)
+import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, catchAny, mask, onException, throwIO)
 
@@ -70,6 +70,11 @@ import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..
 import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
+ )
+import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, asmpSyncDuration), timedSeconds)
+import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
@@ -243,6 +248,11 @@ gives up after the schedule with a warning. The proxy serves regardless, since
 an empty slot only ever abstains into deny-by-default, and the poll keeps
 trying.
 
+Each attempt is bracketed by its advisory-sync span and counted and timed through the
+metrics port, both labelled by the ecosystem and the attempt's bounded result; the ports
+are inert when telemetry is off, so the loop observes unconditionally and its scheduling
+is unchanged either way.
+
 A fetch fault arrives as a value in the step's outcome and is logged here;
 residue (a filesystem fault on the temp path, a contract escape) propagates to
 the supervision the composition root wraps this task in
@@ -250,12 +260,21 @@ the supervision the composition root wraps this task in
 resumes from the remote artifact. @notifyFirstSync@ runs after each successful
 swap (its consumer, the readiness signal, is an idempotent one-way flip).
 -}
-runCveSync :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> SyncSchedule -> IO () -> m ()
-runCveSync env schedule notifyFirstSync = do
+runCveSync ::
+    (MonadUnliftIO m, KatipContext m) =>
+    AdvisorySyncMetricsPort ->
+    AdvisorySyncTracingPort ->
+    SyncEnv ->
+    SyncSchedule ->
+    IO () ->
+    m ()
+runCveSync metrics tracing env schedule notifyFirstSync = do
     seen <- burst
     poll seen
   where
     eco = show (syncEcosystem env) :: Text
+
+    step = observedStep metrics tracing env eco notifyFirstSync
 
     -- The boot burst under 'Control.Retry': an immediate first attempt, then a
     -- retry on each not-settled outcome per 'bootBurstPolicy' until an artifact
@@ -268,7 +287,7 @@ runCveSync env schedule notifyFirstSync = do
             retrying
                 (bootBurstPolicy (schedBootBackoff schedule))
                 (\_ (done, _) -> pure (not done))
-                (\_ -> loggedStep env eco notifyFirstSync Nothing)
+                (\_ -> step Nothing)
         unless settled $
             -- The boot budget is spent without an artifact. This ecosystem stays
             -- not-ready (the readiness gate reads 'csReady'), so its rules deny by
@@ -281,37 +300,61 @@ runCveSync env schedule notifyFirstSync = do
 
     poll lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (_, seen') <- loggedStep env eco notifyFirstSync lastSeen
+        (_, seen') <- step lastSeen
         poll seen'
 
--- One logged step: (the burst may stop, the ETag now last seen). 'syncStep' is
--- total over the fetch and over verification, so this is a plain fold over
--- 'SyncOutcome' -- nothing is caught, and residue propagates to the task's
--- supervision at the composition root.
-loggedStep :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> Text -> IO () -> Maybe DbEtag -> m (Bool, Maybe DbEtag)
-loggedStep env eco notifyFirstSync lastSeen =
-    liftIO (syncStep env lastSeen) >>= \case
-        SyncFetchFaulted fault -> do
-            -- Nothing was learned about the remote artifact: keep the last seen
-            -- ETag, let the burst retry (or the poll try again next interval).
-            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
-            pure (False, lastSeen)
-        SyncSwapped etag meta -> do
-            logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show meta))
-            liftIO notifyFirstSync
-            pure (True, Just etag)
-        SyncUnchanged -> do
-            logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
-            pure (True, lastSeen)
-        SyncAbsent -> do
-            logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
-            pure (False, lastSeen)
-        SyncRejected etag rejection -> do
-            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
-            -- Remembered so the same bad artifact is not re-downloaded
-            -- every poll; a fixed re-publish carries a new ETag. The burst
-            -- stops: retrying identical bytes cannot end differently.
-            pure (True, Just etag)
+{- One observed step: (the burst may stop, the ETag now last seen), with the attempt
+bracketed by its span and metered by its two signals. 'syncStep' is total over the fetch
+and over verification, so the fold over 'SyncOutcome' catches nothing, and residue
+propagates to the task's supervision at the composition root. The span and the histogram
+cover the same bracket, so a trace's duration and the series agree. -}
+observedStep ::
+    (MonadUnliftIO m, KatipContext m) =>
+    AdvisorySyncMetricsPort ->
+    AdvisorySyncTracingPort ->
+    SyncEnv ->
+    Text ->
+    IO () ->
+    Maybe DbEtag ->
+    m (Bool, Maybe DbEtag)
+observedStep metrics tracing env eco notifyFirstSync lastSeen =
+    withRunInIO $ \runInIO ->
+        snd <$> astpSyncAttemptSpan tracing ecosystem fst (metered (runInIO attempt))
+  where
+    ecosystem = syncEcosystem env
+
+    -- Residue escaping the attempt bypasses these records: an attempt that never
+    -- concluded has no result to label, and the supervision above reports it.
+    metered :: IO (AdvisorySyncResult, (Bool, Maybe DbEtag)) -> IO (AdvisorySyncResult, (Bool, Maybe DbEtag))
+    metered act = do
+        (attempted, seconds) <- timedSeconds act
+        asmpSyncAttempt metrics ecosystem (fst attempted)
+        asmpSyncDuration metrics ecosystem (fst attempted) seconds
+        pure attempted
+
+    attempt =
+        liftIO (syncStep env lastSeen) >>= \case
+            SyncFetchFaulted fault -> do
+                -- Nothing was learned about the remote artifact: keep the last seen
+                -- ETag, let the burst retry (or the poll try again next interval).
+                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
+                pure (AdvisoryFetchFailed, (False, lastSeen))
+            SyncSwapped etag meta -> do
+                logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show meta))
+                liftIO notifyFirstSync
+                pure (AdvisorySwapped, (True, Just etag))
+            SyncUnchanged -> do
+                logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
+                pure (AdvisoryUnchanged, (True, lastSeen))
+            SyncAbsent -> do
+                logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
+                pure (AdvisoryNonePublished, (False, lastSeen))
+            SyncRejected etag rejection -> do
+                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
+                -- Remembered so the same bad artifact is not re-downloaded
+                -- every poll; a fixed re-publish carries a new ETag. The burst
+                -- stops: retrying identical bytes cannot end differently.
+                pure (AdvisoryRefused, (True, Just etag))
 
 {- | An S3-backed advisory-fetch source: the @amazonka@ 'AWS.Env' is built once at
 'newS3CveSource' and captured, so 's3CveFetchFor' yields a 'CveFetch' per (bucket,

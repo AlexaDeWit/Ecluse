@@ -27,7 +27,11 @@ the decisions operators care about:
 - **Mirror enqueue to worker**: the serve-time enqueue and the worker's probe-to-publish run under
   linked spans, so a worker poll mixing jobs from many requests links each back to its own triggering
   request. A job enqueued with tracing off bears no link.
-- **Advisory sync**: one span per [advisory-dataset sync](rules-engine.md#cve-subsystem) run.
+- **Advisory sync**: one `ecluse.advisory.sync.attempt` span per
+  [advisory-dataset sync](rules-engine.md#cve-subsystem) attempt, carrying the ecosystem and which of
+  the five outcomes the attempt reached. The bucket, object key, ETag, and provenance stay off it.
+  That same bounded result labels the attempt metrics below, so a trace and a series join on one
+  value.
 
 Sampling is head-based and always-on by default, so rare denial and error traces are never dropped;
 `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code change, and
@@ -49,6 +53,12 @@ collector and is planned.
   [threat model](https://ecluse-proxy.com/threat-model.html).
 - `ecluse.credential.token.ttl.seconds` alarms a stuck refresh; `ecluse.credential.refresh` carries
   (result, provider).
+- `ecluse.advisory.sync.attempts` (a counter) and `ecluse.advisory.sync.duration` (a histogram, in
+  seconds) both carry (ecosystem, result), where result is one of `swapped`, `unchanged`,
+  `none_published`, `fetch_failed`, or `refused`. A run of `fetch_failed` or `refused` means that
+  ecosystem is gating against an ageing advisory database or none at all, so its rules deny by
+  default: check the bucket, the object key, and the IAM the sync task reads under. The artifact's
+  own identifiers stay on the sync log line, never a label.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate dashboards;
 all export over the same OTLP push pipeline as traces. A Prometheus scrape endpoint

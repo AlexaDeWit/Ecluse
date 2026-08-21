@@ -58,6 +58,7 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
+import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
@@ -106,7 +107,7 @@ spec =
                                         }
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000}
                             app <- proxyApp ruleDeps privateUrl publicUrl
-                            withAsync (runQuiet (runCveSync syncEnv schedule pass)) $ \_ -> do
+                            withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule pass)) $ \_ -> do
                                 -- Phase 1 (control): same configuration, no database.
                                 -- The fix is too young for the quarantine and the fast
                                 -- lane can only abstain, so the packument has no
