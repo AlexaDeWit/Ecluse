@@ -94,9 +94,9 @@ spec :: Spec
 spec = do
     describe "logDecodeFailure" $
         it "logs a WARNING tagged with this module and the package, naming the decode failure" $ do
-            -- Drive the real JSONL stdout scribe and capture the line, so the
-            -- structured `module` / `package` fields and the severity are asserted on
-            -- the exact bytes an operator would see.
+            -- Drive the real JSONL stdout scribe and capture the line. The assertions
+            -- then see the structured `module` and `package` fields and the severity in
+            -- the exact bytes an operator reads.
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDecodeFailure (mkPackageName Npm Nothing "is-odd"))
@@ -108,12 +108,12 @@ spec = do
 
     describe "logNameMismatch" $
         it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
-            -- The serve path drives this through the request's ambient katip context;
-            -- here it is run against a real JSONL scribe so the warning's actual bytes --
-            -- the requested name, the upstream's reported name, and the origin -- are
-            -- pinned against what an operator reads. No span is active, so no @dd@ object
-            -- is added: the dd-correlation that goes live on the serve path is the only
-            -- delta to these lines.
+            -- The serve path drives this through the request's ambient katip context.
+            -- This case runs it against a real JSONL scribe. That pins the warning's
+            -- actual bytes against what an operator reads: the requested name, the
+            -- upstream's reported name, and the origin. No span is active, so the line
+            -- carries no @dd@ object. The dd-correlation that goes live on the serve
+            -- path is the only difference from these lines.
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logNameMismatch (mkPackageName Npm Nothing "thing") "http://upstream.test" "other")
@@ -128,9 +128,9 @@ spec = do
     describe "logUpstreamUnformable" $
         it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
             -- The config-fault warning an operator sees when a mount's base URL cannot be
-            -- formed into a request. Run against a real JSONL scribe so the origin and the
-            -- rendered UrlFormationError are pinned against the bytes an operator reads;
-            -- distinct from a decode failure or a plain outage.
+            -- formed into a request. A real JSONL scribe pins the origin and the rendered
+            -- UrlFormationError against the bytes an operator reads. It is distinct from
+            -- a decode failure or a plain outage.
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "http://upstream.test" EmptyBaseUrl)
@@ -153,7 +153,7 @@ spec = do
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
             -- The origin is the operator's configured base URL, which mkRegistryUrl
-            -- accepts with userinfo, so it is reduced on the same line.
+            -- accepts with userinfo, so the log reduces it on the same line.
             logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
             logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
             logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
@@ -161,9 +161,9 @@ spec = do
             logged `shouldSatisfy` (not . T.isInfixOf "k=v")
 
     -- The pure metric-label projections that classify a serve outcome into the bounded
-    -- labels the catalogue records. Every branch is asserted directly, so the
-    -- bounded-cardinality mapping is pinned independently of the serve path that drives
-    -- it (the call sites are exercised in PipelineSpec).
+    -- labels the catalogue records. These cases assert every branch directly, so the
+    -- bounded-cardinality mapping holds independently of the serve path that drives it.
+    -- PipelineSpec exercises the call sites.
     describe "packumentServeDecision (no-survivors -> decision)" $ do
         it "an admit in the set is an admit" $
             packumentServeDecision [Admit] `shouldBe` Metric.Admit
@@ -218,7 +218,7 @@ spec = do
             transienceCause WontResolve `shouldBe` Metric.OtherCause
 
     -- The thin emit helpers that fold a serve outcome into the catalogue counters,
-    -- driven against an inert metrics port: they exercise the per-decision branches
+    -- driven against an inert metrics port. They exercise the per-decision branches
     -- (record vs skip) and the projection calls without a telemetry backend.
     describe "recordDenials" $
         it "records a denial per reject and nothing for an admit" $
@@ -270,18 +270,18 @@ spec = do
         it "buckets refusals below-floor before missing-integrity, keeping the floor-clearing versions" $ do
             let (admissible, refusals) =
                     admitByIntegrity defaultMinIntegrity belowFloorMarker missingMarker mixedIntegrityInfo
-            -- Only the SHA-256 version clears the default floor; the SHA-1 and digestless
-            -- versions are dropped from the served listing.
+            -- Only the SHA-256 version clears the default floor. The SHA-1 and digestless
+            -- versions drop out of the served listing.
             Map.keys (infoVersions admissible) `shouldBe` ["1.5.0"]
             -- Two below-floor (SHA-1) versions, then two missing-integrity (no digest)
-            -- versions -- the bucket order the fold must hold, not the key order.
+            -- versions: the bucket order the fold must hold, not the key order.
             refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
 
-{- | A packument whose versions interleave the three integrity classes by key: two clear
+{- | A packument whose versions interleave the three integrity classes by key. Two clear
 the floor only with SHA-1 (below floor), two carry no digest at all (missing), and one
-carries a SHA-256 digest (admissible). The keys are arranged so the two refused classes
-alternate in ascending order, so the assertion pins the /bucket/ order (below floor before
-missing) rather than incidentally tracking the key order.
+carries a SHA-256 digest (admissible). The two refused classes alternate in ascending key
+order. The assertion therefore pins the /bucket/ order, below floor before missing, and
+not the key order.
 -}
 mixedIntegrityInfo :: PackageInfo
 mixedIntegrityInfo =
@@ -299,19 +299,19 @@ mixedIntegrityInfo =
         , infoInvalidEntries = []
         }
 
--- | The package the admission fixture is built around; its identity is inert to the gate.
+-- | The package the admission fixture is built around. Its identity is inert to the gate.
 mixedPkg :: PackageName
 mixedPkg = mkPackageName Npm Nothing "leftpad"
 
-{- | The two context-worded refusals admitByIntegrity projects the dropped versions to;
-kept distinct so the bucket order is observable in the refusal list.
+{- | The two context-worded refusals admitByIntegrity projects the dropped versions to.
+They stay distinct, so the bucket order is observable in the refusal list.
 -}
 belowFloorMarker, missingMarker :: ServeDecision
 belowFloorMarker = Reject (Rejection BelowIntegrityFloor "below the integrity floor")
 missingMarker = Reject (Rejection MissingIntegrity "no integrity digest")
 
-{- | A per-version snapshot carrying exactly the given integrity digests; every other field
-is an inert default, since admitByIntegrity reads only the version's artifacts.
+{- | A per-version snapshot carrying exactly the given integrity digests. Every other
+field is an inert default, since admitByIntegrity reads only the version's artifacts.
 -}
 detailsWith :: Text -> [Hash] -> PackageDetails
 detailsWith raw hashes =
@@ -341,10 +341,10 @@ artifactWith hashes =
         , artProvenance = Nothing
         }
 
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning
-everything written -- so a scribe's output is assertable with no network. The original
-'stdout' is restored on every exit path. (Mirrors the local helper in "Ecluse.LogSpec"
-and "Ecluse.Server.PipelineSpec"; kept local to avoid exporting a test-only utility.)
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning everything
+written, so a scribe's output is assertable with no network. The helper restores the
+original 'stdout' on every exit path. It mirrors the local helper in "Ecluse.LogSpec" and
+"Ecluse.Server.PipelineSpec", and stays local to avoid exporting a test-only utility.
 -}
 captureStdout :: IO () -> IO Text
 captureStdout act =
@@ -362,11 +362,12 @@ captureStdout act =
         hDuplicateTo saved stdout
         hClose saved
 
-{- | A @katip@-direct JSON fixture: one stdout scribe over @katip@'s own @jsonFormat@,
-colour off and every severity admitted, so a warning's serialised @data@ fields are
-assertable from the core side of the boundary (the application's own scribe, which
-renders a different line shape, is built in @Ecluse.Runtime.Log@ and is not reachable
-here). The assertions below read the structured payload, which both shapes carry.
+{- | A JSON fixture built from @katip@ directly: one stdout scribe over @katip@'s own
+@jsonFormat@, colour off and every severity admitted. A test can therefore assert a
+warning's serialised @data@ fields from the core side of the boundary. The application
+builds its own scribe in @Ecluse.Runtime.Log@, which is not reachable here and renders a
+different line shape. The assertions below read the structured payload, which both
+shapes carry.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do

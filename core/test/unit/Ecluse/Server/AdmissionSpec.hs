@@ -17,9 +17,9 @@ import Ecluse.Core.Server.Admission (
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeAdmissionInFlight, mpServeAdmissionQueued))
 import Ecluse.Test.Port (noopMetricsPort)
 
-{- | Wait budgets for the tuned handles: generous where a test must observe a wait
-complete on a loaded runner, small where a test must observe a wait expire without
-slowing the suite.
+{- | Wait budgets for the tuned handles. The generous budget lets a test observe a
+wait complete on a loaded runner. The short one lets a test observe a wait expire
+without slowing the suite.
 -}
 generousWaitMicros :: Int
 generousWaitMicros = 5_000_000
@@ -31,8 +31,8 @@ shortWaitMicros = 50_000
 admit :: ServeAdmission -> IO a -> IO (Maybe a)
 admit = withServeAdmission noopMetricsPort
 
-{- | Occupy the handle's one slot from another thread: returns once the slot is
-held, together with the gate that releases it and the holder's handle.
+{- | Occupy the handle's one slot from another thread. Returns once the slot is held,
+with the gate that releases it and the holder's handle.
 -}
 holdOneSlot :: ServeAdmission -> IO (MVar (), IO ())
 holdOneSlot admission = do
@@ -63,8 +63,7 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         admission <- newServeAdmissionTuned 1 1 generousWaitMicros
         (holderGate, awaitHolder) <- holdOneSlot admission
         waiter <- async (admit admission (pure (7 :: Int)))
-        -- Give the waiter time to have shed if it were going to (a refusal is
-        -- instant), then free the slot and expect admission.
+        -- A refusal is instant, so this delay proves the waiter queued rather than shed.
         threadDelay 30_000
         putMVar holderGate ()
         wait waiter `shouldReturn` Just 7
@@ -75,8 +74,8 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         (holderGate, awaitHolder) <- holdOneSlot admission
         waiter <- async (admit admission (pure ()))
         threadDelay 30_000 -- let the waiter take the one room place
-        -- The room is full, so a third arrival is refused without waiting out
-        -- any budget: it must come back well inside the generous budget.
+        -- The room is full, so admission refuses a third arrival without waiting out
+        -- any budget. It must come back well inside the generous budget.
         refusal <- timeout 1_000_000 (admit admission (pure ()))
         refusal `shouldBe` Just Nothing
         putMVar holderGate ()
@@ -88,9 +87,8 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         (holderGate, awaitHolder) <- holdOneSlot admission
         firstTry <- admit admission (pure ())
         firstTry `shouldBe` Nothing
-        -- The expired wait surrendered its room place: a later arrival waits
-        -- again (rather than being refused at a leaked-full room) and sheds the
-        -- same way.
+        -- The expired wait surrendered its room place, so a later arrival waits again
+        -- rather than meeting a leaked-full room, and sheds the same way.
         secondTry <- admit admission (pure ())
         secondTry `shouldBe` Nothing
         putMVar holderGate ()
@@ -132,9 +130,9 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
 
     it "releases the slot and re-raises when the queued observer throws" $ do
         -- The queued record runs inside the release-protected region and after the
-        -- in-flight increment, so a throw from it must propagate to the caller,
-        -- still return the held slot, and leave the gauge balanced (increments
-        -- matched by decrements). Regression for the pre-fix leak (#855).
+        -- in-flight increment. A throw from it must propagate to the caller, still
+        -- return the held slot, and leave the gauge balanced: increments matched by
+        -- decrements. This is regression cover for a slot leak.
         gauge <- newTVarIO (0 :: Int)
         let throwingQueued =
                 noopMetricsPort

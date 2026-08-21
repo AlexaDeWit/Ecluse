@@ -36,13 +36,12 @@ spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
     it "admits weights that fit and sheds a weight the capacity cannot hold within the wait" $ do
         ba <- newBudget 100
         holding ba 60 (pure ("held" :: Text)) `shouldReturn` Just "held"
-        -- Nothing is held between calls (released on completion), so a second
-        -- large weight fits again.
+        -- Each call releases its weight on completion, so a second large weight fits.
         holding ba 90 (pure ("held" :: Text)) `shouldReturn` Just "held"
 
     it "keeps the aggregate held bytes within the capacity under concurrent holders" $ do
-        -- Capacity for two 40-byte holders; a gauge recording every delta proves
-        -- the reserved sum never exceeds the capacity while a third waits or sheds.
+        -- Capacity for two 40-byte holders. A gauge recording every delta proves the
+        -- reserved sum never exceeds the capacity while a third waits or sheds.
         held <- newIORef (0 :: Int)
         peak <- newIORef (0 :: Int)
         let port =
@@ -70,7 +69,7 @@ spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
         ba <- newBudget 100
         release <- newEmptyMVar
         holder <- async (holding ba 100 (takeMVar release))
-        -- Give the holder the whole capacity, then cancel it mid-hold.
+        -- Let the holder take the whole capacity, then cancel it mid-hold.
         threadDelay 10_000
         cancel holder
         -- The full capacity is back: an immediate full-weight acquire admits.

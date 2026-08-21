@@ -39,8 +39,7 @@ spec = do
 
         it "renders as a quoted strong validator" $ do
             let rendered = renderETag tagA
-            -- A strong validator is the opaque tag wrapped in double quotes, with
-            -- no weakness (W/) prefix.
+            -- A strong validator is the opaque tag in double quotes, with no W/ prefix.
             rendered `shouldSatisfy` ("\"" `T.isPrefixOf`)
             rendered `shouldSatisfy` ("\"" `T.isSuffixOf`)
             rendered `shouldNotSatisfy` ("W/" `T.isPrefixOf`)
@@ -78,8 +77,8 @@ spec = do
 
         it "matches our ETag across two separate If-None-Match header lines" $ do
             -- A client may legally repeat If-None-Match as distinct header lines
-            -- rather than one comma-joined value; the match must scan every line
-            -- (the lookupAll/any path), not just the first.
+            -- rather than one comma-joined value. The match must scan all the lines,
+            -- through the lookupAll/any path, rather than the first alone.
             let etag = tagA
                 req =
                     [ (hIfNoneMatch, "\"deadbeef\"")
@@ -105,7 +104,7 @@ spec = do
                 Modified _ -> expectationFailure "a wildcard validator is a 304"
 
         it "matches a weakly-prefixed client validator against our strong ETag" $ do
-            -- Clients may echo back our validator with a W/ weakness prefix; the
+            -- Clients may echo back our validator with a W/ weakness prefix. The
             -- comparison is on the opaque tag, so it still matches.
             let etag = tagA
                 req = [(hIfNoneMatch, "W/" <> encodeUtf8 (renderETag etag))]

@@ -37,16 +37,16 @@ data LeaderEscaped = LeaderEscaped
 
 instance Exception LeaderEscaped
 
-{- | Every value in these cases is weighted at this flat figure, so a byte budget
-reads as a count of entries.
+{- | The store weighs every value in these cases at this flat figure, so a byte
+budget reads as a count of entries.
 -}
 flatWeight :: Int
 flatWeight = 100
 
 {- | A store over 'Text' keys and values with the given TTL (seconds), entry-count
 bound, and resident-byte budget, weighing every value at 'flatWeight'. The store is
-generic in all three; these cases pin them to 'Text' so the machinery is exercised
-without any domain vocabulary.
+generic in all three types. These cases pin them to 'Text', so they exercise the
+machinery without any domain vocabulary.
 -}
 newStore :: NominalDiffTime -> Int -> Int -> IO (SingleFlight StoreFault Text Text)
 newStore ttl maxEntries maxBytes = newSingleFlight ttl maxEntries maxBytes (const flatWeight)
@@ -65,32 +65,32 @@ resolve = resolveSingleFlight (pure ()) (const pass) (const pass)
 resolveWith :: IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
 resolveWith afterClaim = resolveSingleFlight afterClaim (const pass) (const pass)
 
-{- | As 'resolveWith', but recording each request's hit\/miss result (newest first), so a
-case can assert how many times the request counter fired across an orphan-driven retry.
+{- | As 'resolveWith', but recording each request's hit\/miss result, newest first. A case
+then asserts how many times the request counter fired across an orphan-driven retry.
 -}
 resolveWithRequests :: IORef [Metric.CacheResult] -> IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
 resolveWithRequests seen afterClaim =
     resolveSingleFlight afterClaim (\r -> atomicModifyIORef' seen (\rs -> (r : rs, ()))) (const pass)
 
-{- | The success-path adapter: these cases drive the store with fetches that cannot
-fail, so the wrapper lifts them into the typed channel and a 'Left' is a test bug
-surfaced as 'UnexpectedFault' (the typed-failure cases call 'resolve' directly).
+{- | The success-path adapter. These cases drive the store with fetches that cannot
+fail, so the wrapper lifts them into the typed channel. A 'Left' is a test bug, and
+surfaces as 'UnexpectedFault'. The typed-failure cases call 'resolve' directly.
 -}
 resolveOk :: SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOk sf key fetch = either (throwIO . UnexpectedFault) pure =<< resolve sf key (Right <$> fetch)
 
-{- | As 'resolveOk', but recording each leader insert's post-insert 'CacheOccupancy', so a
-test observes the store's held-entry count and resident bytes through the same callback the
-app wires to its occupancy gauges rather than polling the store directly.
+{- | As 'resolveOk', but recording each leader insert's post-insert 'CacheOccupancy'.
+A test then observes the held-entry count and resident bytes through the same callback
+the app wires to its occupancy gauges. It never polls the store directly.
 -}
 resolveOkRecording :: IORef (Maybe CacheOccupancy) -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOkRecording seen sf key fetch =
     either (throwIO . UnexpectedFault) pure
         =<< resolveSingleFlight (pure ()) (const pass) (writeIORef seen . Just) sf key (Right <$> fetch)
 
-{- | As 'resolveOkRecording', but accumulating __every__ post-insert occupancy, so a
-concurrency case can assert that no insert, however interleaved, ever left the store
-past its budget.
+{- | As 'resolveOkRecording', but accumulating __every__ post-insert occupancy. A
+concurrency case then asserts that no insert, however interleaved, left the store past
+its budget.
 -}
 resolveOkAccumulating :: IORef [CacheOccupancy] -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOkAccumulating seen sf key fetch =
@@ -110,41 +110,40 @@ spec = do
             started <- newEmptyMVar
             release <- newEmptyMVar
             -- The fetch blocks until released, so every concurrent resolver is in
-            -- flight at once; if collapse fails, more than one enters the fetch and
+            -- flight at once. If collapse fails, more than one enters the fetch and
             -- the call counter exceeds one.
             let fetch = do
                     atomicModifyIORef' calls (\n -> (n + 1, ()))
-                    _ <- tryPutMVar started () -- signal the first fetch has begun
-                    takeMVar release -- block until the test releases it
+                    _ <- tryPutMVar started ()
+                    takeMVar release
                     pure "raw"
             (results, ()) <-
                 concurrently
                     (mapConcurrently (const (resolveOk sf "hot" fetch)) [1 .. 8 :: Int])
                     ( do
-                        takeMVar started -- wait until a fetch has begun
+                        takeMVar started
                         threadDelay 30000 -- give the others time to coalesce
-                        putMVar release () -- let the single fetch complete
+                        putMVar release ()
                     )
             results `shouldBe` replicate 8 ("raw" :: Text)
             readIORef calls `shouldReturn` 1
 
         it "has the value in the store the instant the leader's fetch returns" $ do
             -- The leader inserts into the store *before* de-registering its in-flight
-            -- slot, so by the time the resolve returns the value is already
-            -- discoverable via the store (not merely via the now-removed marker).
-            -- A caller racing the de-register therefore finds the store entry rather
-            -- than re-leading a redundant fetch. The window between insert and
-            -- de-register is internal to the leader's run (under mask, no injection
-            -- handle), so this asserts the observable post-condition the ordering
-            -- guarantees: the store is populated as soon as the call completes.
+            -- slot. The moment the resolve returns, the store holds the value and the
+            -- marker is already gone. A caller racing the de-register finds the store
+            -- entry rather than re-leading a redundant fetch. That window is internal to
+            -- the leader's run (under mask, no injection handle). So this case asserts
+            -- the post-condition that ordering guarantees: the store holds the value as
+            -- soon as the call completes.
             sf <- roomyStore
             _ <- resolveOk sf "fresh" (pure "raw")
             lookupStore sf "fresh" `shouldReturn` Just "raw"
 
         it "does not re-fetch for a caller arriving right after the fetch returns" $ do
-            -- Sequential mirror of the collapse property at the post-fetch boundary:
-            -- the second resolution lands after the first has fully returned, and is
-            -- served from the store with no second fetch.
+            -- Sequential mirror of the collapse property at the post-fetch boundary.
+            -- The second resolution lands after the first returns, and the store serves
+            -- it with no second fetch.
             sf <- roomyStore
             calls <- newIORef 0
             _ <- resolveOk sf "back-to-back" (countingFetch calls "raw")
@@ -153,9 +152,9 @@ spec = do
 
     describe "resolveSingleFlight -- typed failure channel" $ do
         it "hands the leader's Left to every coalesced follower, caching nothing" $ do
-            -- The leader's fetch reports a typed failure; every concurrent waiter must
-            -- receive that same value (never an exception, never a re-lead), and the
-            -- store must stay empty so the next resolution fetches afresh.
+            -- The leader's fetch reports a typed failure. Every concurrent waiter must
+            -- receive that same value: never an exception, never a re-lead. The store
+            -- must stay empty, so the next resolution fetches afresh.
             sf <- roomyStore
             calls <- newIORef (0 :: Int)
             started <- newEmptyMVar
@@ -179,8 +178,8 @@ spec = do
 
         it "re-raises a synchronously escaping leader to its followers (the invariant channel)" $ do
             -- The fetch's contract is total, so a synchronous escape is an invariant
-            -- break: the follower must see the exception re-raised, not a value, and
-            -- the slot must still free for a later caller.
+            -- break. The follower must see the exception re-raised, not a value, and the
+            -- slot must still free for a later caller.
             result <- timeout 5_000_000 $ do
                 sf <- roomyStore
                 started <- newEmptyMVar
@@ -203,16 +202,16 @@ spec = do
 
     describe "resolveSingleFlight -- single-flight orphan window" $ do
         it "unblocks a waiting follower and lets a later caller re-lead when the leader is cancelled at the claim handoff" $ do
-            -- Regression: an async exception (request timeout, killed handler thread)
-            -- landing on the leader between claiming the in-flight slot and completing
-            -- must still fill the marker with the error and free the slot, or the
+            -- An async exception (request timeout, killed handler thread) can land on
+            -- the leader between claiming the in-flight slot and completing. It must
+            -- still fill the marker with the error and free the slot. Otherwise the
             -- waiting follower parks on the marker forever and the key wedges until
-            -- restart. The window is otherwise a smooth, interruptible point, so it
-            -- is driven deterministically through the 'resolveWith' hook, which runs
-            -- on the leading thread at exactly the claim -> fetch-runner handoff: it
-            -- signals it has reached the window, then parks, so the test can cancel
-            -- the leader there. Everything that could wedge is wrapped in a 'timeout'
-            -- so a regression fails fast instead of hanging the suite.
+            -- restart. The window is an ordinary interruptible point, so the
+            -- 'resolveWith' hook drives it deterministically. The hook runs on the
+            -- leading thread at exactly the claim -> fetch-runner handoff. It signals
+            -- that it reached the window, then parks so the test can cancel the leader.
+            -- A 'timeout' wraps everything that could wedge, so a regression fails fast
+            -- instead of hanging the suite.
             result <- timeout 5_000_000 $ do
                 sf <- roomyStore
                 calls <- newIORef (0 :: Int)
@@ -223,17 +222,16 @@ spec = do
                     afterClaim = do
                         wasArmed <- atomicModifyIORef' armed (False,)
                         when wasArmed $ do
-                            putMVar reached () -- claimed the slot; parked at the handoff
+                            putMVar reached () -- claimed the slot, parked at the handoff
                             takeMVar release -- block interruptibly so the cancel lands here
-                            -- The leader claims the slot and parks at the handoff, holding it.
                 leader <- async (resolveWith afterClaim sf "wedge" fetch)
                 takeMVar reached
-                -- A follower arrives while the slot is held; it must become a follower
-                -- on the marker, not re-lead. (It will block on the marker until the
-                -- cancelled leader fills it.)
+                -- A follower arrives while the slot is held. It must register on the
+                -- marker rather than re-lead, and blocks there until the cancelled
+                -- leader fills the marker.
                 follower <- async (try (resolve sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
                 threadDelay 30000 -- give the follower time to register on the marker
-                cancel leader -- cancel in the handoff window; the slot must still free
+                cancel leader -- cancel in the handoff window: the slot must still free
                 wait follower
             case result of
                 Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
@@ -257,7 +255,7 @@ spec = do
                         pure "unreached"
                 leader <- async (resolveOk sf "midflight" blockingFetch)
                 takeMVar started -- the leader holds the slot and is inside the fetch
-                cancel leader -- async-cancel mid-fetch; the slot must still free
+                cancel leader -- async-cancel mid-fetch: the slot must still free
                 -- A fresh caller must not wedge: with the slot freed it re-leads.
                 recovered <- resolveOk sf "midflight" (countingFetch calls "raw")
                 n <- readIORef calls
@@ -268,13 +266,12 @@ spec = do
                     recovered `shouldBe` "raw"
                     n `shouldBe` 2 -- the cancelled fetch and the recovering re-lead, no caching of the failure
         it "counts one miss per logical resolution even when a cancelled leader forces the follower to re-resolve" $ do
-            -- The orphan retry (a follower re-resolving after the leader was cancelled at
-            -- the claim handoff) must not double-count. The leader records its miss on
-            -- claiming, the follower records its own on coalescing, and the follower's
-            -- retry -- which re-leads the freed slot -- records nothing further. So the
-            -- request counter fires exactly twice: once for the leader, once for the
-            -- follower, never a third for the retry. Before the fix the masked recursion
-            -- re-ran the counter and a third miss appeared.
+            -- The orphan retry (a follower re-resolving after a cancelled leader) must
+            -- not double-count. The leader records its miss on claiming, and the
+            -- follower records its own on coalescing. The follower's retry re-leads the
+            -- freed slot and records nothing further. So the request counter fires
+            -- exactly twice: once for the leader, once for the follower, never a third
+            -- for the retry.
             result <- timeout 5_000_000 $ do
                 sf <- roomyStore
                 seen <- newIORef []
@@ -286,13 +283,13 @@ spec = do
                     afterClaim = do
                         wasArmed <- atomicModifyIORef' armed (False,)
                         when wasArmed $ do
-                            putMVar reached () -- claimed the slot; parked at the handoff
+                            putMVar reached () -- claimed the slot, parked at the handoff
                             takeMVar release -- block interruptibly so the cancel lands here
                 leader <- async (resolveWithRequests seen afterClaim sf "wedge" fetch)
                 takeMVar reached
                 follower <- async (try (resolveWithRequests seen (pure ()) sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
                 threadDelay 30000 -- give the follower time to register on the marker
-                cancel leader -- cancel in the handoff window; the follower must re-resolve
+                cancel leader -- cancel in the handoff window: the follower must re-resolve
                 recovered <- wait follower
                 recorded <- readIORef seen
                 pure (recovered, recorded)
@@ -319,9 +316,9 @@ spec = do
 
     describe "the resident-byte budget" $ do
         it "evicts to keep the resident estimate under the byte budget" $ do
-            -- A budget that holds three entries (the entry count is generous, so the
-            -- byte budget is the binding bound): resolving many distinct keys must not
-            -- let the resident estimate exceed it.
+            -- A budget that holds three entries, with a generous entry count so the byte
+            -- budget is the binding bound. Resolving many distinct keys must not let the
+            -- resident estimate exceed it.
             let held = 3
             seen <- newIORef Nothing
             sf <- newStore 60 1000 (held * flatWeight + flatWeight `div` 2)
@@ -332,10 +329,10 @@ spec = do
             fmap occEntries occ `shouldSatisfy` maybe False (<= held)
 
         it "retains a repeatedly-accessed entry while evicting the one-shot tail" $ do
-            -- The hot head survives pressure: a budget that holds a few entries, a hot
-            -- key re-accessed on every round, and a long tail of one-shot keys. The hot
-            -- key is most-recently-used each round, so the least-recently-used eviction
-            -- sheds the cold tail and never the head.
+            -- The hot head survives pressure. The fixture is a budget that holds a few
+            -- entries, a hot key re-accessed on every round, and a long tail of one-shot
+            -- keys. The hot key is most-recently-used each round, so the
+            -- least-recently-used eviction sheds the cold tail and never the head.
             let held = 3
             sf <- newStore 60 1000 (held * flatWeight + flatWeight `div` 2)
             _ <- resolveOk sf "hot" (pure "raw")
@@ -348,12 +345,12 @@ spec = do
 
     describe "read recency -- the touching vs read-only views" $ do
         it "a touching read bumps recency, so eviction sheds an untouched entry, not the touched one" $ do
-            -- A store holding exactly two flat entries. Insert "old" then "recent";
-            -- read "old" through the *touching* view (bumping its recency); then insert
-            -- "new", which must evict one entry. Under least-recently-used eviction the
-            -- untouched "recent" goes and the touched "old" stays -- the inverse of the
-            -- insert-order (FIFO) victim, which would be "old". This pins the read-side
-            -- recency bump the hybrid serve path relies on.
+            -- A store holding exactly two flat entries. Insert "old" then "recent", read
+            -- "old" through the *touching* view to bump its recency, then insert "new",
+            -- which must evict one entry. Under least-recently-used eviction the
+            -- untouched "recent" goes and the touched "old" stays. That is the inverse
+            -- of the insert-order (FIFO) victim, which would be "old". This pins the
+            -- read-side recency bump the hybrid serve path relies on.
             sf <- newStore 60 2 (100 * flatWeight)
             _ <- resolveOk sf "old" (pure "raw")
             _ <- resolveOk sf "recent" (pure "raw")
@@ -364,10 +361,10 @@ spec = do
             lookupStore sf "new" `shouldReturn` Just "raw"
 
         it "a read-only lookup leaves recency unchanged, so the insert-order-oldest entry still evicts" $ do
-            -- The inspection view must not perturb recency: reading "old" through the
+            -- The inspection view must not perturb recency. Reading "old" through the
             -- read-only 'lookupStore' does not save it, so the insert-order-oldest entry
-            -- is still the eviction victim. This is the contract the eviction cases rely
-            -- on to inspect a store without changing what they measure, and the exact
+            -- is still the eviction victim. The eviction cases rely on that contract to
+            -- inspect a store without changing what they measure. It is the exact
             -- inverse of the touching case above.
             sf <- newStore 60 2 (100 * flatWeight)
             _ <- resolveOk sf "old" (pure "raw")
@@ -389,8 +386,8 @@ spec = do
             readIORef calls `shouldReturn` 2
 
         it "evicts nothing resident to make room that cannot exist" $ do
-            -- The budget fits exactly two flat entries; the weigher charges triple
-            -- for the pathological value, so admitting it could only flush the store.
+            -- The budget fits exactly two flat entries. The weigher charges triple for
+            -- the pathological value, so admitting it could only flush the store.
             let weigh v = if v == "pathological" then 3 * flatWeight else flatWeight
             sf <- newSingleFlight 60 100 (2 * flatWeight) weigh :: IO (SingleFlight StoreFault Text Text)
             _ <- resolveOk sf "a" (pure "resident")
@@ -408,10 +405,10 @@ spec = do
 
     describe "concurrent different-key leaders under the byte budget" $ do
         it "never lands the resident sum past the budget (the insert lock)" $ do
-            -- Eight leaders on distinct keys with barrier-released fetches, so all
-            -- eight evict-then-insert sequences collide; without the per-store
-            -- insert lock two of them can both read the pre-insert resident sum
-            -- and both admit, landing the store past its budget.
+            -- Eight leaders on distinct keys with barrier-released fetches, so all eight
+            -- evict-then-insert sequences collide. Without the per-store insert lock two
+            -- of them can both read the pre-insert resident sum and both admit, landing
+            -- the store past its budget.
             let budget = 3 * flatWeight
             seen <- newIORef []
             sf <- newStore 60 1000 budget

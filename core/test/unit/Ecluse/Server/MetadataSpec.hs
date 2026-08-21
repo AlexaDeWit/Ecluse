@@ -40,15 +40,17 @@ import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 
 {- | Tests for the serve-path read handle's wiring: the full-manifest op resolving through
-the shared cache, and the single-version op's __hybrid__ topology -- the small
-@(package, version)@ cache, then the warm full-packument cache read-only (so a @GET@ then
-its tarball gate stay one upstream call), then a cold selective fetch that populates the
-version cache without writing the whole packument back to the shared one. Also that an
-uncached handle re-fetches, and that a failure propagates and caches nothing.
+the shared cache, and the single-version op's __hybrid__ topology. That topology reads the
+small @(package, version)@ cache first. Then it reads the warm full-packument cache,
+read-only, so a @GET@ and its tarball gate stay one upstream call. Then it leads a cold
+selective fetch that populates the version cache without writing the whole packument back
+to the shared one. These cases also cover an uncached handle re-fetching, and a failure
+propagating and caching nothing.
 
-The handle is exercised over __injected counting fetches__ (not real HTTP), one per leg,
-so the cache-sharing and failure semantics are asserted directly. The two fetches share one
-call counter, so an assertion on it is the total number of upstream calls across both legs.
+These cases drive the handle over __injected counting fetches__, not real HTTP, one per
+leg, so they assert the cache-sharing and failure semantics directly. The two fetches share
+one call counter, so an assertion on it is the total number of upstream calls across both
+legs.
 -}
 spec :: Spec
 spec = do
@@ -76,7 +78,7 @@ spec = do
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) cold `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
-            -- ... and a repeat is served from the version cache, no second call.
+            -- ... and the version cache serves a repeat, no second call.
             warmHit <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) warmHit `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
@@ -89,12 +91,12 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
-            -- A version the metadata does not carry is a forwarded miss (a 404), and it is
-            -- cached as a determined absence ...
+            -- A version the metadata does not carry is a forwarded miss (a 404), and the
+            -- cache holds it as a determined absence ...
             absent <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion) absent `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
-            -- ... so a repeat is served from the negative cache entry, no second call.
+            -- ... so the negative cache entry serves a repeat, no second call.
             absentHit <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
@@ -143,7 +145,7 @@ spec = do
 
         it "records the Connection error cause for an unreachable upstream" $ do
             -- The upstream-fetch error metric keeps its bounded cause: the transport
-            -- arm classifies as Connection, exactly as the thrown HttpException did.
+            -- arm classifies as Connection.
             calls <- newIORef (0 :: Int)
             causes <- newIORef ([] :: [Metric.Cause])
             cache <- newMetadataCache defaultCacheConfig
@@ -154,9 +156,9 @@ spec = do
             readIORef causes `shouldReturn` [Metric.Connection]
 
         it "logs a failure once per real fetch: coalesced followers never re-log" $ do
-            -- Eight concurrent resolutions coalesce onto one failing leader: every
-            -- caller receives the same typed Left, the fetch ran once, and the
-            -- failure log fired once (inside the leader), never per follower.
+            -- Eight concurrent resolutions coalesce onto one failing leader. Every
+            -- caller receives the same typed Left, the fetch ran once, and the failure
+            -- log fired once inside the leader, never per follower.
             fetches <- newIORef (0 :: Int)
             failureLogs <- newIORef (0 :: Int)
             started <- newEmptyMVar
@@ -215,7 +217,7 @@ publicClient cache =
     newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog
 
 {- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest
-paired with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).
+paired with a marker raw 'Value'. A test then confirms that a hit returned the cached pair.
 -}
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
@@ -223,7 +225,7 @@ countingFull calls info _name = do
     pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached (String "raw"), manifestDigest = digestOf "raw-bytes"})
 
 {- | A counting single-version fetch: bumps the call counter, then selects the version from
-the given manifest (so an absent version is a 'Nothing'), as the npm selective fetch would.
+the given manifest, as the npm selective fetch does. An absent version is a 'Nothing'.
 -}
 countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 countingVersion calls info _name version = do

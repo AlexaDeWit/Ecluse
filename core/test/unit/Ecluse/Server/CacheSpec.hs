@@ -33,13 +33,13 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Resolve through the cache with an inert metrics port, so these tests assert the
-cache's hit\/miss and keying behaviour without a telemetry backend. The inert port
-discards every recording, so it neither records nor affects the cache. The
-success-path adapter: these cases drive the cache with fetches that cannot fail, so
-the wrapper lifts them into the typed channel and a 'Left' is a test bug surfaced as
-'UnexpectedFault' (the typed-failure cases call "Ecluse.Core.Server.Cache" directly).
-The store machinery itself (single-flight collapse, the orphan window, the entry and
-byte bounds) is covered by its own spec, "Ecluse.Server.Cache.StoreSpec".
+cache's hit\/miss and keying behaviour without a telemetry backend. The port discards
+every recording and does not affect the cache. This is the success-path adapter.
+These cases drive the cache with fetches that cannot fail, so the wrapper lifts them
+into the typed channel. A 'Left' is a test bug, and surfaces as 'UnexpectedFault'.
+The typed-failure cases call "Ecluse.Core.Server.Cache" directly. The store machinery
+(single-flight collapse, the orphan window, the entry and byte bounds) has its own
+spec, "Ecluse.Server.Cache.StoreSpec".
 -}
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata c source name fetch =
@@ -69,17 +69,17 @@ countingRender renders bytes = do
 mkBytes :: Int -> Char -> ByteString
 mkBytes n c = BS.replicate n (fromIntegral (ord c))
 
--- | A package name fixture; the metadata cache keys on package identity.
+-- | A package name fixture. The metadata cache keys on package identity.
 pkg :: Text -> PackageName
 pkg = mkPackageName Npm Nothing
 
--- | The two upstream sources a packument is fetched from, keyed by base URL.
+-- | The two upstream sources of a packument, keyed by base URL.
 privateSource, publicSource :: Source
 privateSource = Source "https://private.example"
 publicSource = Source "https://public.example"
 
-{- | A 'PackageInfo' carrying only its name -- enough to assert which metadata
-value the cache stored and returned without building a full document.
+{- | A 'PackageInfo' carrying only its name. That is enough to assert which metadata
+value the cache stored and returned, without building a full document.
 -}
 info :: PackageName -> PackageInfo
 info name =
@@ -90,28 +90,28 @@ info name =
         , infoInvalidEntries = []
         }
 
-{- | A cache entry pairing the named metadata with a raw 'Value' tagged by a marker,
-so a test can assert which exact (typed view, raw bytes) pair a hit returned.
+{- | A cache entry pairing the named metadata with a raw 'Value' tagged by a marker. A
+test then asserts which exact (typed view, raw bytes) pair a hit returned.
 -}
 entry :: PackageName -> Text -> CacheEntry
 entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryDigest = digestOf (encodeUtf8 marker)}
 
-{- | A marker raw document: inject a tagged JSON string through npm's boundary pair, so a
-test builds and asserts on the opaque 'CachedDoc' the cache holds without the private
-constructor.
+{- | A marker raw document: a tagged JSON string injected through npm's boundary pair.
+A test then builds and asserts on the opaque 'CachedDoc' the cache holds, without the
+private constructor.
 -}
 cachedRaw :: Text -> CachedDoc
 cachedRaw = fst npmCached . String
 
-{- | A cache config with the given TTL (seconds) and maximum entry count, with a resident
-budget generous enough that the entry count is the binding bound.
+{- | A cache config with the given TTL (seconds) and maximum entry count. The resident
+budget is generous enough that the entry count is the binding bound.
 -}
 config :: NominalDiffTime -> Int -> CacheConfig
 config ttl size = configBytes ttl size (1024 * 1024 * 1024)
 
-{- | A cache config with the given TTL (seconds), entry count, and resident-byte budget,
-each store getting the same bounds (these specs exercise one store at a time; the
-production split is the composition root's concern).
+{- | A cache config with the given TTL (seconds), entry count, and resident-byte budget.
+Every store gets the same bounds. These specs exercise one store at a time, and the
+production split is the composition root's concern.
 -}
 configBytes :: NominalDiffTime -> Int -> Int -> CacheConfig
 configBytes ttl size bytes =
@@ -124,14 +124,14 @@ configBytes ttl size bytes =
   where
     budget = StoreBudget{sbMaxEntries = size, sbMaxBytes = bytes}
 
-{- | The resident weight a single empty-versions cache entry is estimated at, so a byte
-budget can be expressed as a count of these entries.
+{- | The estimated resident weight of a single empty-versions cache entry, so a byte
+budget reads as a count of these entries.
 -}
 entryWeight :: Int
 entryWeight = weighCacheEntry (entry (pkg "weight-probe") "raw")
 
 {- | A metrics port that captures the most-recent full-packument residency-gauge value it
-is handed, alongside a reader for it. Every other field is inert. Lets a test assert the
+receives, alongside a reader for it. Every other field is inert. A test then asserts the
 residency the cache last reported on a leader insert.
 -}
 recordingResidencyPort :: IO (MetricsPort, IO (Maybe Int))
@@ -141,9 +141,9 @@ recordingResidencyPort = do
     pure (port, readIORef seen)
 
 {- | A metrics port that captures the most-recent full-packument entry-count gauge value it
-is handed, alongside a reader for it. Every other field is inert. Lets a test assert the
-held-entry count the cache last reported on a leader insert, the live occupancy path that
-replaces a direct size poll.
+receives, alongside a reader for it. Every other field is inert. A test then asserts the
+held-entry count the cache last reported on a leader insert, the live occupancy path
+instead of a direct size poll.
 -}
 recordingEntriesPort :: IO (MetricsPort, IO (Maybe Int))
 recordingEntriesPort = do
@@ -181,8 +181,8 @@ spec = do
 
         it "returns the coherent pair the entry was cached with on a hit" $ do
             -- A hit serves the cached typed view and the exact bytes it was parsed
-            -- from, never the caller's later (would-be) fetch -- the second fetch's
-            -- distinct marker must not appear, since it never runs.
+            -- from, never the caller's later fetch. The second fetch never runs, so its
+            -- distinct marker must not appear.
             c <- freshCache
             _ <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "first"))
             hit <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "second"))
@@ -218,8 +218,8 @@ spec = do
 
     describe "resolveMetadata -- per-source isolation" $ do
         it "keeps the private and public documents of one package apart" $ do
-            -- The same package is fetched from two distinct sources; each source has its
-            -- own entry, so neither origin sees the other's bytes (no cross-contamination).
+            -- Two distinct sources serve the same package. Each source has its own
+            -- entry, so neither origin sees the other's bytes.
             c <- freshCache
             _ <- resolveMetadata c privateSource (pkg "shared") (pure (entry (pkg "shared") "private-doc"))
             _ <- resolveMetadata c publicSource (pkg "shared") (pure (entry (pkg "shared") "public-doc"))
@@ -233,8 +233,8 @@ spec = do
             calls <- newIORef 0
             _ <- resolveMetadata c privateSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "priv")
             _ <- resolveMetadata c publicSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "pub")
-            -- Two distinct (source, package) keys → two fetches; neither reuses the
-            -- other's entry.
+            -- Two distinct (source, package) keys mean two fetches, and neither reuses
+            -- the other's entry.
             readIORef calls `shouldReturn` 2
 
         it "a hit for one source never satisfies a miss for the other" $ do
@@ -260,8 +260,8 @@ spec = do
         it "counts the two sources of one package as two entries against the bound" $ do
             -- The size bound is over (source, package) entries: caching one package
             -- from both origins occupies two slots, exercising the per-source key under
-            -- the bound. Observed through the entry-count gauge the cache reports on each
-            -- leader insert (the live occupancy path).
+            -- the bound. The observation point is the entry-count gauge the cache
+            -- reports on each leader insert, the live occupancy path.
             (port, readEntries) <- recordingEntriesPort
             c <- newMetadataCache (config 60 4)
             for_ [1 .. 10 :: Int] $ \i -> do
@@ -272,9 +272,9 @@ spec = do
 
     describe "resident-byte budget" $
         it "reports the resident bytes through the residency gauge" $ do
-            -- The residency gauge reflects the held entries' summed weight: after resolving
-            -- four distinct packages (both bounds generous, so all are held), the last
-            -- reported value equals the entry count times the per-entry weight.
+            -- The residency gauge reflects the held entries' summed weight. After
+            -- resolving four distinct packages, with both bounds generous so all are held,
+            -- the last reported value equals the entry count times the per-entry weight.
             (port, readResidency) <- recordingResidencyPort
             c <- newMetadataCache (config 60 100)
             for_ [1 .. 4 :: Int] $ \i ->
@@ -344,9 +344,9 @@ spec = do
             found `shouldSatisfy` isJust
 
         it "keeps the summed residency of all three stores within the summed sub-budgets" $ do
-            -- The architect-flagged worst case was three stores each holding a whole
-            -- aggregate (3B); with per-store sub-budgets the total reported residency
-            -- must stay within their sum however every class is flooded.
+            -- The worst case is three stores each holding a whole aggregate (3B). With
+            -- per-store sub-budgets the total reported residency must stay within their
+            -- sum however hard the test floods every class.
             fullSeen <- newIORef 0
             versionSeen <- newIORef 0
             assembledSeen <- newIORef 0
@@ -378,14 +378,14 @@ spec = do
 
     describe "cachedVersion -- read recency" $
         it "a cachedVersion read bumps the version entry's recency, so a re-read entry survives eviction (LRU, not FIFO)" $ do
-            -- The single-version store's only steady-state read is cachedVersion: a hit
+            -- The single-version store's only steady-state read is cachedVersion. A hit
             -- there short-circuits the hybrid path before resolveVersion's own recency
-            -- bump, so this read must bump recency or a warm version entry ages out in
-            -- insert order. Hold two version entries; re-read the first through
-            -- cachedVersion (bumping it); insert a third, forcing one eviction. Under
-            -- least-recently-used the untouched second entry goes and the re-read first
-            -- stays -- the inverse of the insert-order (FIFO) victim, which would be the
-            -- first.
+            -- bump. This read must bump recency, or a warm version entry ages out in
+            -- insert order. Hold two version entries, re-read the first through
+            -- cachedVersion to bump it, then insert a third and force one eviction.
+            -- Under least-recently-used the untouched second entry goes and the re-read
+            -- first stays. That is the inverse of the insert-order (FIFO) victim, which
+            -- would be the first.
             c <-
                 newMetadataCache
                     CacheConfig
@@ -402,6 +402,6 @@ spec = do
             _ <- Cache.cachedVersion c publicSource name (v 1)
             -- Insert v3, evicting the least-recently-used entry.
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right Nothing))
-            -- v1 (re-read) survived; v2 (untouched, inserted after v1) was evicted.
+            -- v1 (re-read) survived, and the store evicted v2 (untouched, inserted later).
             Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just Nothing
             Cache.cachedVersion c publicSource name (v 2) `shouldReturn` Nothing

@@ -54,7 +54,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
 decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared pd
 
--- | A single inert artifact; the response model does not inspect artifacts.
+-- | A single inert artifact. The response model does not inspect artifacts.
 sampleArtifact :: Artifact
 sampleArtifact =
     Artifact
@@ -68,8 +68,8 @@ sampleArtifact =
         , artProvenance = Nothing
         }
 
-{- | A scoped package version published @ageDays@ before 'now', whose
-install-code signal is supplied so a deny rule can be exercised.
+{- | A scoped package version published @ageDays@ before 'now'. The caller supplies the
+install-code signal, so a case can exercise a deny rule.
 -}
 pkg :: Text -> Integer -> CodeExecSignal -> PackageDetails
 pkg scope ageDays code =
@@ -121,9 +121,9 @@ spec = do
         it "NotFound is 404" $ artifactStatusCode NotFound `shouldBe` 404
 
     describe "the 503-only-when-it-will-resolve rule" $
-        -- The load-bearing distinction in the error model: a transient
-        -- inability to decide invites a retry (503); a permanent/internal one
-        -- does not (500). Pin both directions together so the rule is explicit.
+        -- The load-bearing distinction in the error model: a transient inability to
+        -- decide invites a retry (503), and a permanent or internal one does not (500).
+        -- Pin both directions together so the rule is explicit.
         it "503 iff the rejection believes it will resolve, else 500" $ do
             artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "x")))
                 `shouldBe` 503
@@ -170,9 +170,9 @@ spec = do
             packumentStatus [invalid, broken] `shouldBe` PackumentBadGateway
         it "prefers 502 over 403: a misreporting upstream outranks a deny-by-default" $
             packumentStatus [invalid, denied] `shouldBe` PackumentBadGateway
-        -- The single-pass tally is weighed in strict guard order; pin the whole
-        -- precedence ladder at once with every reason present, so a reordering or a
-        -- miscategorized signal in the fold cannot slip past the pairwise cases above.
+        -- The fold weighs the single-pass tally in strict guard order. Pin the whole
+        -- precedence ladder at once, with every reason present. A reordering or a
+        -- miscategorised signal in the fold then cannot slip past the pairwise cases.
         it "weighs every signal in one pass: a survivor outranks all exclusions" $
             packumentStatus [denied, transient (Just (RetryAfter 5)), invalid, broken, Admit]
                 `shouldBe` PackumentOk
