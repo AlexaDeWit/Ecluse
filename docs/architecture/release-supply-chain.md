@@ -130,13 +130,19 @@ so CVEs disclosed after a release still surface.
 **Freshness, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across
 the ecosystems the repo automates: flake inputs, GitHub Actions, and Hackage cabal
 dependencies. Renovate's `nix` manager is beta and off by default, so the config enables it
-explicitly; without that opt-in the weekly refresh does not run at all. The weekly `flake.lock`
-refresh is the single freshness lever: the flake pins the package set that supplies both the
-image's C-library closure and every Haskell dependency, and `cabal.project.freeze` is
-*generated* from that set (`task freeze`), with the `freeze-sync` flake check failing CI
-whenever the committed freeze drifts. The gate validates each bump and the scan re-runs on it;
-fixing a finding is usually merging the Renovate PR, plus one `task freeze` commit when
-Haskell versions moved.
+explicitly; without that opt-in the weekly refresh does not run at all. A version-based update
+also waits seven days from its publication before Renovate will propose it
+(`minimumReleaseAge`), withheld outright rather than raised as a PR reporting itself as
+pending, so a release yanked shortly after it ships never reaches a branch here; a fix PR
+raised from a vulnerability alert skips that wait, because for a known-vulnerable dependency
+the delay is the greater risk. The weekly `flake.lock` refresh is the single freshness lever:
+the flake pins the package set that supplies both the image's C-library closure and every
+Haskell dependency, and `cabal.project.freeze` is *generated* from that set (`task freeze`),
+with the `freeze-sync` flake check failing CI whenever the committed freeze drifts. That
+refresh sits outside the quarantine: a lock bump carries no publication dates to age out, so
+the flake's branch inputs move on the weekly schedule alone. The gate validates each bump and
+the scan re-runs on it; fixing a finding is usually merging the Renovate PR, plus one
+`task freeze` commit when Haskell versions moved.
 
 **Detection, OSV/HSEC (the Haskell-closure authority).** HSEC advisories (the Haskell Security
 Response Team database) are exported to [OSV.dev](https://osv.dev); the default GitHub
