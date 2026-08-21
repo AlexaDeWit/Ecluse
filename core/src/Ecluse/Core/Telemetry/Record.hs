@@ -146,7 +146,7 @@ data WorkerMetricsPort = WorkerMetricsPort
     }
 
 {- | The advisory sync task's metric-recording port, the third consumer's analogue of
-'MetricsPort' and 'WorkerMetricsPort'. The sync loop ("Ecluse.Runtime.Cve.Sync") records one
+'MetricsPort' and 'WorkerMetricsPort'. The sync loop (@Ecluse.Runtime.Cve.Sync@) records one
 attempt and one latency sample per attempt, each under the ecosystem it synced and the
 bounded result it reached, so an operator sees both the rate and the shape of the advisory
 refresh per ecosystem without a high-cardinality label. Both fields return 'IO', so the

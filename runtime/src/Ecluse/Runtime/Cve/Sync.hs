@@ -306,8 +306,9 @@ runCveSync metrics tracing env schedule notifyFirstSync = do
 {- One observed step: (the burst may stop, the ETag now last seen), with the attempt
 bracketed by its span and metered by its two signals. 'syncStep' is total over the fetch
 and over verification, so the fold over 'SyncOutcome' catches nothing, and residue
-propagates to the task's supervision at the composition root. The span and the histogram
-cover the same bracket, so a trace's duration and the series agree. -}
+propagates to the task's supervision at the composition root. The histogram measures the
+attempt the span brackets; the span, which closes after the two records, reads marginally
+longer. -}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->

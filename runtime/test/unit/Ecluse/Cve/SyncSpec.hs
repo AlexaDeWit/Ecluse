@@ -86,15 +86,23 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
 
--- | Wait (bounded) until the slot serves a generation probing True for the package.
-awaitServing :: CveSlot -> Text -> IO ()
-awaitServing slot pkg = go (200 :: Int)
+{- | Poll a condition (bounded, ~5s) and fail the case naming what never happened. The
+one wait shape the asynchronous cases share: the sync task runs on its own schedule, so
+every assertion about it is a wait rather than a synchronous read.
+-}
+waitFor :: Text -> IO Bool -> IO ()
+waitFor what ready = go (200 :: Int)
   where
-    go 0 = expectationFailure ("slot never served an artifact for " <> toString pkg)
+    go 0 = expectationFailure ("timed out waiting for " <> toString what)
     go n =
-        probesFor slot pkg >>= \case
-            Just True -> pass
-            _ -> threadDelay 25_000 >> go (n - 1)
+        ready >>= \case
+            True -> pass
+            False -> threadDelay 25_000 >> go (n - 1)
+
+-- | Wait until the slot serves a generation probing True for the package.
+awaitServing :: CveSlot -> Text -> IO ()
+awaitServing slot pkg =
+    waitFor ("the slot to serve an artifact for " <> pkg) ((== Just True) <$> probesFor slot pkg)
 
 -- | Run a Katip-constrained action against a scribe-less environment.
 runQuiet :: KatipContextT IO a -> IO a
@@ -135,19 +143,8 @@ observeAttempts wanted schedule env = do
     (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
     (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
     withAsync (runQuiet (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
-        spans <- awaitAttempts wanted readSpans
-        Observed spans <$> readAttempts <*> readDurations
-
--- | Wait (bounded) for @wanted@ recorded spans, failing loudly if they never land.
-awaitAttempts :: Int -> IO [a] -> IO [a]
-awaitAttempts wanted readSpans = go (200 :: Int)
-  where
-    go 0 = [] <$ expectationFailure ("the sync loop bracketed fewer than " <> show wanted <> " attempts")
-    go n = do
-        recorded <- readSpans
-        if length recorded >= wanted
-            then pure recorded
-            else threadDelay 25_000 >> go (n - 1)
+        waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
+        Observed <$> readSpans <*> readAttempts <*> readDurations
 
 {- | Assert that the run bracketed exactly these attempts: one span, one counter
 increment, and one non-negative latency sample each, all under the same labels.

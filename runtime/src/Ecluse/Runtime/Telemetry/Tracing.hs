@@ -31,12 +31,12 @@ one coherent tracer and join into one trace.
   explainable from the trace alone), 'withMirrorEnqueueSpan' (the synchronous serve
   handing off to the asynchronous mirror), 'withMirrorJobSpan' (the worker's
   fetch → verify → publish), and 'withAdvisorySyncSpan' (one per advisory sync attempt,
-  carrying the ecosystem and the attempt's bounded result). The enqueue span captures its own W3C trace context onto
-  the mirror job, and the worker-job span re-establishes it as an OpenTelemetry __span
-  link__ to that producer span, so the asynchronous mirror hand-off is navigable in a
-  trace rather than only correlated by package\/version. A swallowed best-effort
-  enqueue failure is recorded on the enqueue span's status, so the trace explains why
-  the mirror did not happen.
+  carrying the ecosystem and the attempt's bounded result). The enqueue span captures
+  its own W3C trace context onto the mirror job, and the worker-job span re-establishes
+  it as an OpenTelemetry __span link__ to that producer span, so the asynchronous
+  mirror hand-off is navigable in a trace rather than only correlated by
+  package\/version. A swallowed best-effort enqueue failure is recorded on the enqueue
+  span's status, so the trace explains why the mirror did not happen.
 
 == Secret discipline
 

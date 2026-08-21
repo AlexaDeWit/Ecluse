@@ -309,7 +309,7 @@ instance Universe CredentialResult where universe = universeGeneric
 
 {- | What one advisory sync attempt concluded, the closed result vocabulary the
 @ecluse.advisory.sync.*@ signals are labelled by and the advisory sync span records.
-It mirrors the sync step's own outcomes ("Ecluse.Runtime.Cve.Sync"), one bounded value
+It mirrors the sync step's own outcomes (@Ecluse.Runtime.Cve.Sync@), one bounded value
 each, so the series count per ecosystem is five.
 -}
 data AdvisorySyncResult

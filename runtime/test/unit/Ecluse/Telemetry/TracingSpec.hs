@@ -20,6 +20,7 @@ import Network.HTTP.Types.Header (HeaderName, hAuthorization, hUserAgent)
 import Network.Wai (Application, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
+import OpenTelemetry.Attributes (Attributes, fromAttribute, lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Instrumentation.HttpClient (instrumentManagerSettings)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
@@ -225,12 +226,13 @@ sampleVersion :: Version
 sampleVersion = mkVersion Npm "1.3.0"
 
 {- One advisory sync attempt must produce exactly one @ecluse.advisory.sync.attempt@ span
-carrying exactly the ecosystem and the attempt's bounded result: the two bounded
-attributes the metric labels join on. Driven through the in-memory exporter so the span's
-real name and attribute set are asserted, not a port double's projection. -}
+whose @ecluse.@ attributes are exactly the ecosystem and the attempt's bounded result: the
+two values the metric labels join on. Driven through the in-memory exporter, and asserted
+on the __number__ of those attributes as well as their two values, so a third one added
+later (a bucket, an object key, an ETag) fails here rather than reaching a backend. -}
 advisorySyncSpanSpec :: Spec
 advisorySyncSpanSpec = describe "advisory sync span" $
-    it "opens one span per attempt carrying the ecosystem and the attempt's result" $ do
+    it "opens one span per attempt whose attributes are exactly the ecosystem and the result" $ do
         (processor, ref) <- inMemoryListExporter
         tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
         let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
@@ -239,10 +241,25 @@ advisorySyncSpanSpec = describe "advisory sync span" $
         spans <- readIORef ref
         names <- traverse (fmap hotName . readIORef . spanHot) spans
         names `shouldBe` ["ecluse.advisory.sync.attempt"]
-        dump <- attributeDump ref
-        traverse_
-            (\field -> (field `T.isInfixOf` dump) `shouldBe` True)
-            ["ecluse.ecosystem", "npm", "ecluse.advisory.sync.result", "refused"]
+        syncSpan <- findSpan ref "ecluse.advisory.sync.attempt"
+        attributes <- hotAttributes <$> readIORef (spanHot syncSpan)
+        -- The SDK stamps its own code.* and thread.* attributes on every span, so the
+        -- closed-set guard is scoped to the ecluse. namespace: exactly two keys, read off
+        -- the rendered attribute map as the scrub assertions above read theirs.
+        ecluseAttributeCount attributes `shouldBe` 2
+        textAttribute attributes "ecluse.ecosystem" `shouldBe` Just "npm"
+        textAttribute attributes "ecluse.advisory.sync.result" `shouldBe` Just "refused"
+
+-- Read one span attribute back as the text it was recorded as, 'Nothing' when the key is
+-- absent or holds another type.
+textAttribute :: Attributes -> Text -> Maybe Text
+textAttribute attributes key = lookupAttribute attributes key >>= fromAttribute
+
+-- How many @ecluse.@-namespaced attributes a span carries, counted off the rendered
+-- attribute map's key syntax. A value can never be miscounted as a key: only a key is
+-- rendered directly after the pair's opening parenthesis.
+ecluseAttributeCount :: Attributes -> Int
+ecluseAttributeCount = T.count "(\"ecluse." . show
 
 {- The true cross-async span link: capture the originating request's (enqueue) span
 context exactly as the serve path does, hand it to the worker's per-job span exactly as
