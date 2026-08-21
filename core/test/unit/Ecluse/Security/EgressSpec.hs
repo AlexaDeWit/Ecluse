@@ -14,9 +14,9 @@ spec = do
     resolveTarballUrlSpec
 
 {- | 'mkRegistryUrl' is the production boundary: a registry target is https by
-construction, so a plain-HTTP value cannot be represented in a running system. These
-prove the rejection (the load-bearing half) and that a release build's only path to a
-'Ecluse.Core.Security.Egress.RegistryUrl' refuses http.
+construction, so a running system cannot hold a plain-HTTP value. The rejection is
+the load-bearing half. In a release build, 'Ecluse.Core.Security.Egress.RegistryUrl'
+comes only from this function, and this function refuses http.
 -}
 mkRegistryUrlSpec :: Spec
 mkRegistryUrlSpec = describe "mkRegistryUrl (https-only by construction)" $ do
@@ -42,8 +42,8 @@ mkRegistryUrlSpec = describe "mkRegistryUrl (https-only by construction)" $ do
         mkRegistryUrl "ftp://registry.example/" `shouldSatisfy` isLeft
 
 {- | 'resolveTarballUrl' normalises an upstream-declared @dist.tarball@ against the
-host the packument was served from: https kept, same-host http upgraded, foreign-host
-http (or any non-http(s)) refused. The refusals feed the per-version drop.
+host that served the packument. It keeps https, upgrades same-host http, and refuses
+foreign-host http or any other non-http(s) scheme. A refusal drops that version.
 -}
 resolveTarballUrlSpec :: Spec
 resolveTarballUrlSpec = describe "resolveTarballUrl (dist.tarball scheme normalisation)" $ do

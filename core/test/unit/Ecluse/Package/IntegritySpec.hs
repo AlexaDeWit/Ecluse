@@ -39,7 +39,7 @@ import Ecluse.Test.Package (
     validSha512Sri,
  )
 
--- A tarball carrying a chosen set of integrity digests; everything else is inert.
+-- A tarball carrying a chosen set of integrity digests. Every other field is inert.
 artifactWith :: [Hash] -> Artifact
 artifactWith hs =
     Artifact
@@ -58,19 +58,20 @@ spec = do
     describe "the worker verifies what the public floor admits (the #409 invariant)" $ do
         it "every algorithm that meets the default public floor is computable" $
             -- The load-bearing cross-module invariant: the floor admits by algorithm
-            -- authority ('meetsFloor'\/'HashAlg' 'Ord'), the worker verifies by computation
-            -- ('isComputable'\/'Ecluse.Core.Package.computeDigest'), and the second set must
-            -- cover the first or an admitted public artifact is enqueued then permanently
-            -- dropped (issue #409). 'computeDigest''s totality forces a compute arm for any
-            -- new 'HashAlg'; this pins that the arm is actually present for every
-            -- floor-clearing algorithm. Enumerated over the whole 'HashAlg' set, so a new
-            -- constructor is checked automatically.
+            -- authority ('meetsFloor'\/'HashAlg' 'Ord') and the worker verifies by
+            -- computation ('isComputable'\/'Ecluse.Core.Package.computeDigest'). The
+            -- second set must cover the first, or the mirror enqueues an admitted
+            -- public artifact and then drops it permanently (issue #409).
+            -- 'computeDigest''s totality forces a compute arm for any new 'HashAlg'.
+            -- This case pins that the arm is present for every floor-clearing
+            -- algorithm. It enumerates the whole 'HashAlg' set, so it covers a new
+            -- constructor automatically.
             [alg | alg <- universe, meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
                 `shouldBe` []
 
         it "the bare SRI wrapper neither clears the floor nor is computable (it names no algorithm)" $ do
-            -- The one constructor that is correctly excluded from both sides: SRI is a
-            -- wrapper resolved via 'assertedAlg', never a floor candidate or a compute target.
+            -- The one constructor both sides exclude: SRI is a wrapper that
+            -- 'assertedAlg' resolves, never a floor candidate or a compute target.
             meetsFloor defaultMinIntegrity SRI `shouldBe` False
             isComputable SRI `shouldBe` False
 
@@ -119,8 +120,8 @@ spec = do
             (unMinIntegrity <$> mkMinIntegrity Blake2b) `shouldBe` Right Blake2b
 
         it "rejects a floor below SHA-256 with a precise message (a sub-floor is a config error)" $ do
-            -- Asserted by value (not just isLeft) so the operator-facing message -- and
-            -- the rejected algorithm's rendered name -- is pinned.
+            -- Compared by value rather than by isLeft alone, so the case pins the
+            -- operator-facing message and the rejected algorithm's rendered name.
             mkMinIntegrity SHA1 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
             mkMinIntegrity MD5 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             mkMinIntegrity SRI `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sri"
@@ -133,8 +134,9 @@ spec = do
             (unMinIntegrity <$> parseMinIntegrity "blake2b") `shouldBe` Right Blake2b
 
         it "rejects a below-floor name and an unknown name with distinct messages" $ do
-            -- A recognised-but-weak name fails the floor; an unrecognised name fails the
-            -- parse -- the two error texts are distinct so a misconfiguration is precise.
+            -- A recognised but weak name fails the floor. An unrecognised name fails
+            -- the parse. The two error texts differ, so the message names which mistake
+            -- the operator made.
             parseMinIntegrity "sha1" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
             parseMinIntegrity "md5" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             parseMinIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
@@ -144,7 +146,7 @@ spec = do
             unMinTrustedIntegrity defaultMinTrustedIntegrity `shouldBe` SHA256
 
         it "accepts any concrete algorithm -- including the broken SHA-1 and MD5 (loosenable)" $ do
-            -- The trusted floor has NO hard minimum: an operator may loosen it below
+            -- The trusted floor has no hard minimum: an operator may loosen it below
             -- SHA-256 for a legacy private mirror, where trust substitutes for strength.
             (unMinTrustedIntegrity <$> mkMinTrustedIntegrity SHA1) `shouldBe` Right SHA1
             (unMinTrustedIntegrity <$> mkMinTrustedIntegrity MD5) `shouldBe` Right MD5
@@ -194,8 +196,9 @@ spec = do
             classify defaultMinIntegrity [unsafeHash SRI validSha512Sri] `shouldBe` MeetsFloor
 
         it "MeetsFloor when the only digest is a sha384 SRI (clears the SHA-256 floor)" $
-            -- A sha384 SRI resolves to the modelled SHA384, which ranks above the SHA-256
-            -- floor, so a version carrying only it is admissible from a public upstream.
+            -- A sha384 SRI resolves to the modelled SHA384, which ranks above the
+            -- SHA-256 floor. A version carrying only it is admissible from a public
+            -- upstream.
             classify defaultMinIntegrity [unsafeHash SRI validSha384Sri] `shouldBe` MeetsFloor
 
         it "MeetsFloor when a strong digest sits beside a weak one" $

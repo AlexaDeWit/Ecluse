@@ -32,23 +32,23 @@ spec = do
                 `shouldBe` Right SRI
 
         it "rejects a multi-component integrity (one Hash holds exactly one component)" $
-            -- npm may serve "sha512-… sha256-…" on the wire; that shape is split by
-            -- mkSriHashes into one Hash per component, never carried whole, so the
-            -- floor ranking and the worker's byte verification read the same
-            -- component. A joined string does not construct a single Hash.
+            -- npm may serve "sha512-… sha256-…" on the wire. mkSriHashes splits that
+            -- shape into one Hash per component, so the floor ranking and the worker's
+            -- byte verification read the same component. A joined string does not
+            -- construct a single Hash.
             mkHash
                 SRI
                 "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
                 `shouldSatisfy` isLeft
 
         it "rejects an SRI component padded with surrounding whitespace" $
-            -- The stored value is read verbatim by the first-dash accessors, so a
-            -- padded component would corrupt the resolved algorithm and body.
+            -- The first-dash accessors read the stored value verbatim, so a padded
+            -- component would corrupt the resolved algorithm and body.
             mkHash SRI " sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU= " `shouldSatisfy` isLeft
 
         it "accepts a well-formed sha384 SRI (a modelled algorithm)" $
-            -- sha384 is a real, modelled SRI algorithm: validated and accepted as
-            -- well-formed, and it resolves to 'SHA384' for the strength/floor logic.
+            -- sha384 is a modelled SRI algorithm: it validates as well-formed and
+            -- resolves to 'SHA384' for the strength and floor logic.
             mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
                 `shouldSatisfy` isRight
 
@@ -89,8 +89,8 @@ spec = do
             mkHash SRI "sha256-Zm9vYmFy" `shouldSatisfy` isLeft
 
         it "rejects an SRI naming an algorithm outside the Subresource-Integrity set" $
-            -- The SRI set is sha256/sha384/sha512; a well-formed sha1 base64 body is still
-            -- not a valid SRI (sha1 is not an SRI algorithm), so it does not construct.
+            -- The SRI set is sha256, sha384, and sha512. A well-formed sha1 base64 body
+            -- names no SRI algorithm, so it does not construct.
             mkHash SRI "sha1-2jmj7l5rSw0yVb/vlWAYkK/YBwk=" `shouldSatisfy` isLeft
 
     describe "mkSriHashes" $ do
@@ -106,8 +106,8 @@ spec = do
                 `shouldBe` Right ("sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==" :| [])
 
         it "rejects the whole wire string when any component is malformed" $
-            -- All-or-nothing: a partially-valid attacker-shaped value never yields a
-            -- partial digest set the gates would then reason over.
+            -- All-or-nothing: a partly valid attacker-shaped value never yields a
+            -- partial digest set for the gates to reason over.
             mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-short"
                 `shouldSatisfy` isLeft
 
