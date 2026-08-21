@@ -32,11 +32,11 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (validSha1, validSha512Sri)
 
 {- | Pure-projection tests for the npm full-manifest read primitive. They pin the
-'MetadataError' each failure maps to -- the distinctions the serve path renders as
-distinct responses -- and that a well-formed packument projects to the typed manifest
-paired with the raw document the serve path re-serializes. (The body-size bound is
-enforced over the HTTP body in 'Ecluse.Core.Registry.Npm.Metadata.fetchNpmManifest',
-not in this pure step, so it is exercised by the data-plane tests instead.)
+'MetadataError' each failure maps to, the distinctions the serve path renders as distinct
+responses. They also pin that a well-formed packument projects to the typed manifest
+paired with the raw document the serve path re-serialises.
+'Ecluse.Core.Registry.Npm.Metadata.fetchNpmManifest' enforces the body-size bound over
+the HTTP body, not this pure step, so the data-plane tests exercise it instead.
 -}
 spec :: Spec
 spec = do
@@ -51,7 +51,7 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
                 renderPackageName (infoName info) `shouldBe` "is-odd"
                 Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
                 -- The raw document is the decoded bytes, kept so the served surface
-                -- stays coherent with the typed view it was projected from.
+                -- stays coherent with the typed view it came from.
                 raw `shouldSatisfy` isObject
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
@@ -76,10 +76,11 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
 {- | Parity and taxonomy tests for the selective single-version decode. The headline is
-__parity__: 'projectNpmVersion' must yield the byte-for-byte identical 'PackageDetails' a
-full 'projectNpmManifest' followed by a version lookup would -- over a rich, multi-field
-packument (integrity digests, dependencies, install scripts, publish times), for /every/
-version. The rest pin the 'MetadataError' taxonomy and the present\/absent contract.
+__parity__: 'projectNpmVersion' must yield the byte-for-byte identical 'PackageDetails'
+that a full 'projectNpmManifest' followed by a version lookup yields. It must do so for
+/every/ version of a rich, multi-field packument: integrity digests, dependencies,
+install scripts, and publish times. The rest pin the 'MetadataError' taxonomy and the
+present\/absent contract.
 -}
 projectNpmVersionSpec :: Spec
 projectNpmVersionSpec = describe "projectNpmVersion" $ do
@@ -113,8 +114,8 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
 
     it "drops a malformed requested-version object as a forwarded miss (Right Nothing), as the full path would" $ do
         let body = BL.toStrict . encode $ object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= object ["name" .= ("is-odd" :: Text)]]]
-        -- The 1.0.0 manifest has no @dist@, so it is unprojectable and dropped -- a genuine
-        -- absence both the full and the selective path reach.
+        -- The 1.0.0 manifest has no @dist@, so the projection drops it. That is a
+        -- genuine absence both the full and the selective path reach.
         projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
             `shouldBe` Right Nothing
 
@@ -144,13 +145,15 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
 
     duplicateKeyParity
 
-{- | A hostile\/broken upstream can repeat a top-level key. @aeson@'s whole-document decode
-keeps the __first__ occurrence of a duplicate key, so the selective single-version decode
-must too: for each fixture, 'projectNpmVersion' must reach the __same__ outcome the full
-'projectNpmManifest' projection does. These pin the three ways the pre-fix last-wins walk
-diverged -- summing the version count across duplicate @versions@ keys, serving a later
-duplicate's manifest, and letting a later duplicate revive an absent version or shadow the
-validated @name@.
+{- | A hostile or broken upstream can repeat a top-level key. The @aeson@ whole-document
+decode keeps the __first__ occurrence of a duplicate key, so the selective single-version
+decode must too. For each fixture, 'projectNpmVersion' must reach the __same__ outcome
+the full 'projectNpmManifest' projection does. These pin the three ways a last-wins walk
+diverges:
+
+* Summing the version count across duplicate @versions@ keys.
+* Serving a later duplicate's manifest.
+* Letting a later duplicate revive an absent version or shadow the validated @name@.
 -}
 duplicateKeyParity :: Spec
 duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence-wins, matching the whole-document decode" $ do
@@ -234,10 +237,10 @@ isObject = \case
     _ -> False
 
 {- | A __rich__ multi-field packument body, so the selective\/full parity test exercises
-every 'PackageDetails' field: each version carries both integrity digests, a dependency
-set, an install script, maintainers and a per-version publisher, and the document carries a
-@time@ map (a distinct publish stamp per version, plus the @created@\/@modified@
-bookkeeping keys) so 'pkgPublishedAt' is populated and keyed correctly.
+every 'PackageDetails' field. Each version carries both integrity digests, a dependency
+set, an install script, maintainers, and a per-version publisher. The document carries a
+@time@ map: a distinct publish stamp per version, plus the @created@\/@modified@
+bookkeeping keys. That map populates 'pkgPublishedAt' and keys it correctly.
 -}
 richPackumentBytes :: Text -> [Text] -> ByteString
 richPackumentBytes nm versions =
@@ -288,17 +291,17 @@ distTarballObject name v tarball =
         , "dist" .= object ["tarball" .= tarball]
         ]
 
-{- | The outcome the whole-document path reaches for one version: the same refusal, or the
-same 'PackageDetails' looked out of the full projection. 'projectNpmVersion' must match it,
-duplicate-key documents included.
+{- | The outcome the whole-document path reaches for one version: the same refusal, or
+the same 'PackageDetails' read out of the full projection. 'projectNpmVersion' must match
+it, duplicate-key documents included.
 -}
 fullVersionOutcome :: Limits -> PackageName -> Text -> ByteString -> Either MetadataError (Maybe PackageDetails)
 fullVersionOutcome limits name v body =
     (\(info, _raw) -> Map.lookup v (infoVersions info)) <$> projectNpmManifest limits name body
 
-{- | Serialise raw packument bytes from top-level members in order, __preserving duplicate
-keys__. @aeson@'s 'encode' cannot emit a repeated key (its @KeyMap@ de-duplicates), so a
-duplicate-key fixture must be assembled by hand.
+{- | Serialise raw packument bytes from top-level members in order, __preserving
+duplicate keys__. The @aeson@ 'encode' cannot emit a repeated key, because its @KeyMap@
+de-duplicates. This builder therefore assembles a duplicate-key fixture by hand.
 -}
 rawObject :: [(Text, Value)] -> ByteString
 rawObject members =

@@ -56,15 +56,15 @@ ctx = EvalContext now Nothing
 
 {- | The policy under test: a single 7-day publish-age quarantine. A version is
 __approved__ iff its @time@ entry is at least 7 days before 'now', and otherwise
-deny-by-default -- so a version's survival is controlled purely by its @time@ in
-the fixture, exercising the real rules engine rather than a stub.
+deny-by-default. A version's survival therefore turns only on its @time@ in the
+fixture, and these cases drive the real rules engine rather than a stub.
 -}
 quarantine :: [PrecededRule]
 quarantine = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
-{- | An ISO-8601 instant @ageDays@ before 'now', as the bare npm @time@ string
-(no surrounding quotes -- the literal builders add those), parseable by the
-projection's @UTCTime@ decoder.
+{- | An ISO-8601 instant @ageDays@ before 'now', as the bare npm @time@ string the
+projection's @UTCTime@ decoder parses. It carries no surrounding quotes, because the
+literal builders add those.
 -}
 publishedDaysAgo :: Integer -> Text
 publishedDaysAgo = NpmFixture.publishedDaysAgo now
@@ -107,21 +107,21 @@ rewriteSpec = describe "rewriteVersion" $ do
 filterSpec :: Spec
 filterSpec = describe "assembleMergedPackument (plan replay)" $ do
     it "removes a denied version from versions and time, keeping the approved one" $ do
-        -- 2.0.0 is 1 day old (denied by quarantine); 1.0.0 is 30 days old (approved).
+        -- 2.0.0 is 1 day old, denied by the quarantine. 1.0.0 is 30 days old, approved.
         filtered <- filterTo twoVersions
         Map.keys (versionsOf filtered) `shouldBe` ["1.0.0"]
         Map.keys (timeKeysOf filtered) `shouldBe` ["1.0.0"]
 
     it "repoints latest down to a surviving version when the chosen latest is denied" $ do
-        -- latest upstream points at the denied 2.0.0; keep-unless-denied repoints
-        -- it down to the surviving 1.0.0.
+        -- Upstream latest points at the denied 2.0.0. Keep-unless-denied repoints it
+        -- down to the surviving 1.0.0.
         filtered <- filterTo twoVersions
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
-        -- The whole point of keep-unless-denied: upstream latest is 1.0.0 and both
-        -- 1.0.0 and the higher 2.0.0 survive, so latest stays 1.0.0 -- it is never
-        -- promoted to the higher surviving version.
+        -- The point of keep-unless-denied: upstream latest is 1.0.0 and both 1.0.0 and
+        -- the higher 2.0.0 survive, so latest stays 1.0.0. A surviving latest never
+        -- moves up to a higher survivor.
         filtered <- filterTo latestKeptBelowHigherSurvivor
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
@@ -142,7 +142,7 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
 
     it "drops a denied version from time but keeps created/modified bookkeeping" $ do
         -- `time` carries npm's unmodelled `created`/`modified` keys alongside the
-        -- per-version timestamps; only the denied 2.0.0 entry must go.
+        -- per-version timestamps. Only the denied 2.0.0 entry must go.
         filtered <- filterTo twoVersionsWithTimeBookkeeping
         let t = timeKeysOf filtered
         Map.member "created" t `shouldBe` True
@@ -160,10 +160,10 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
             Assembled _ -> expectationFailure "expected NoSurvivors, got an assembled document"
 
     it "assembles onto a non-object base as an object carrying only the plan-owned keys" $ do
-        -- The pipeline never hands a non-object here (a non-object body fails
-        -- projection and contributes nothing), but the assembly is total: a
-        -- non-object base relays no top-level keys and no version objects, so the
-        -- result is an object of exactly the plan-owned keys, none fabricated.
+        -- The pipeline never hands a non-object here, because a non-object body fails
+        -- projection and contributes nothing. The assembly is total anyway. A non-object
+        -- base relays no top-level keys and no version objects, so the result is an
+        -- object of exactly the plan-owned keys, none fabricated.
         (info, _) <- loadPackument oneVersionPackument
         applyTo ctx quarantine info (Array mempty) >>= \case
             NoSurvivors _ -> expectationFailure "expected an assembled document"
@@ -172,15 +172,15 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
                 sort (map Key.toText (KeyMap.keys (asObject out))) `shouldBe` ["dist-tags", "time", "versions"]
 
     it "rewrites a surviving version's dist.tarball under the mount base in the assembly pass" $ do
-        -- The rewrite is fused into the assembly (one pass over the versions), so
-        -- the assembled document already carries {base}/{pkg}/-/{file}.
+        -- The assembly fuses in the rewrite (one pass over the versions), so the
+        -- assembled document already carries {base}/{pkg}/-/{file}.
         filtered <- filterTo twoVersions
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
     it "rewrites a scoped survivor under {base}/@scope/name/-/{file} in the assembly pass" $ do
-        -- The prefix embeds the scoped @scope/name form npm uses in URLs; the
-        -- scope separator must survive the component-safety gate.
+        -- The prefix embeds the scoped @scope/name form npm uses in URLs. The scope
+        -- separator must survive the component-safety gate.
         filtered <- filterTo scopedPackument
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://proxy.test/npm/@myorg/thing/-/thing-1.0.0.tgz"
@@ -194,9 +194,8 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
             NoSurvivors _ -> expectationFailure "expected survivors, got NoSurvivors"
 
     it "leaves a tarball untouched when the document's name carries a traversal" $ do
-        -- The fused rewrite gates the upstream-controlled name component-wise:
-        -- an unsafe name is never interpolated, so the upstream URL is relayed
-        -- unrewritten.
+        -- The fused rewrite gates the upstream-controlled name component-wise. It never
+        -- interpolates an unsafe name, so it relays the upstream URL unrewritten.
         filtered <- filterTo traversalNamePackument
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
@@ -207,10 +206,10 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
             `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
     it "drops a version broken in a required field from the served body, keeping the healthy one" $ do
-        -- End-to-end version-level graceful degradation: 2.0.0's `dist` is a scalar (a
-        -- malformed required field) yet it is 30 days old, so it would clear the
-        -- quarantine if it decoded. It is absent from the served versions/time purely
-        -- because the decode dropped it from the decision surface -- a healthy package
+        -- End-to-end version-level graceful degradation. 2.0.0's `dist` is a scalar, a
+        -- malformed required field, yet it is 30 days old, so it would clear the
+        -- quarantine if it decoded. It is absent from the served versions and time only
+        -- because the decode dropped it from the decision surface. A healthy package
         -- keeps serving its good versions despite one poisoned one.
         filtered <- filterTo healthyPlusBroken
         Map.keys (versionsOf filtered) `shouldBe` ["1.0.0"]
@@ -234,15 +233,15 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "synthesises latest when dist-tags is present but null (not merely absent)" $ do
-        -- `dist-tags: null` passes projection (read as absent) but the raw body
-        -- still carries the null; without repair it would ship with no resolvable
+        -- `dist-tags: null` passes projection, read as absent, but the raw body still
+        -- carries the null. Without repair the document would ship with no resolvable
         -- latest. Coherence outranks relaying the malformed shape.
         filtered <- filterTo nullDistTagsPackument
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "keeps an admitted but unparseable-version key and still resolves a present latest" $ do
         -- `banana` is not parseable semver, so `compareVersions` against it yields
-        -- Nothing; it is old enough to survive the quarantine, exercising the
+        -- Nothing. It is old enough to survive the quarantine, so it drives the
         -- unorderable-version path while coherence (a present latest) must hold.
         filtered <- filterTo unparseableSurvivorPackument
         Map.member "banana" (versionsOf filtered) `shouldBe` True
@@ -308,11 +307,10 @@ propertiesSpec = describe "properties" $ do
                         Nothing -> annotateShow out >> failure
 
     it "the assembled document forces deeply without bottoming (the pdAssemble never-throws contract)" $
-        -- The serve tail feeds the assembled document straight into the encoder,
-        -- so a lurking bottom in any branch would surface as a request-perimeter
-        -- escape at serve time. Force the whole 'Value' ('NFData') here instead,
-        -- across generated documents, so the contract is pinned where the
-        -- assembly logic lives.
+        -- The serve tail feeds the assembled document straight into the encoder. A
+        -- lurking bottom in any branch would escape the request perimeter at serve time.
+        -- Force the whole 'Value' ('NFData') here instead, across generated documents,
+        -- so this pins the contract where the assembly logic lives.
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
@@ -342,8 +340,8 @@ scopedPackument =
         [versionLit "@myorg/thing" "1.0.0" "https://upstream.test/@myorg/thing/-/thing-1.0.0.tgz" []]
         [("1.0.0", publishedDaysAgo 30)]
 
-{- | 1.0.0 published 30 days ago (survives) and 2.0.0 published 1 day ago (denied
-by the quarantine); @latest@ upstream aims at the denied 2.0.0.
+{- | 1.0.0 published 30 days ago (survives) and 2.0.0 published 1 day ago (denied by
+the quarantine). Upstream @latest@ aims at the denied 2.0.0.
 -}
 twoVersions :: ByteString
 twoVersions =
@@ -356,10 +354,9 @@ twoVersions =
         ]
         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 1)]
 
-{- | Both versions survive, and @latest@ aims at the /lower/ 1.0.0 (the
-maintainer's chosen release). Under keep-unless-denied, @latest@ must stay 1.0.0
-even though the higher 2.0.0 also survives -- a surviving @latest@ is never
-promoted to the higher survivor.
+{- | Both versions survive, and @latest@ aims at the /lower/ 1.0.0 (the maintainer's
+chosen release). Under keep-unless-denied, @latest@ must stay 1.0.0 even though the
+higher 2.0.0 also survives. A surviving @latest@ never moves up to the higher survivor.
 -}
 latestKeptBelowHigherSurvivor :: ByteString
 latestKeptBelowHigherSurvivor =
@@ -396,12 +393,11 @@ twoVersionsStableTag =
         ]
         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 1)]
 
-{- | A healthy 1.0.0 alongside a 2.0.0 whose @dist@ is a scalar (a malformed
-required field). Both are 30 days old, so the broken one would clear the
-quarantine if it decoded -- proving its absence from the served body is the
-__decode__ dropping it from the decision surface, not the age policy. The broken
-version's object literal is supplied raw (the 'versionLit' builder only makes
-well-formed versions).
+{- | A healthy 1.0.0 alongside a 2.0.0 whose @dist@ is a scalar, a malformed required
+field. Both are 30 days old, so the broken one would clear the quarantine if it decoded.
+Its absence from the served body is therefore the __decode__ dropping it from the
+decision surface, not the age policy. The broken version's object literal is raw, because
+the 'versionLit' builder only makes well-formed versions.
 -}
 healthyPlusBroken :: ByteString
 healthyPlusBroken =
@@ -444,10 +440,10 @@ twoVersionsWithTimeBookkeeping =
         , ("modified", publishedDaysAgo 0)
         ]
 
-{- | A package with a surviving version whose key is not parseable semver. npm
-accepts arbitrary version-key strings; the strict parser yields an unorderable
-'Version', so ranking @latest@ goes through the @compareVersions@-returns-Nothing
-path. @banana@ is old enough to clear the quarantine, so it survives.
+{- | A package with a surviving version whose key is not parseable semver. npm accepts
+arbitrary version-key strings. The strict parser yields an unorderable 'Version', so
+ranking @latest@ goes through the @compareVersions@-returns-Nothing path. The @banana@
+key is old enough to clear the quarantine, so it survives.
 -}
 unparseableSurvivorPackument :: ByteString
 unparseableSurvivorPackument =
@@ -490,7 +486,7 @@ traversalNamePackument =
         )
 
 {- | A packument whose (upstream-controlled) @name@ carries a control character
-(a literal @\\u0001@), which the component-safety gate rejects -- so the rewrite
+(a literal @\\u0001@), which the component-safety gate rejects. The rewrite therefore
 leaves the version's tarball untouched rather than interpolating it.
 -}
 controlCharNamePackument :: ByteString
@@ -516,9 +512,9 @@ noDistTagsPackument =
             <> "\"}}"
         )
 
-{- | A packument whose @dist-tags@ is JSON @null@ -- the common malformed shape.
+{- | A packument whose @dist-tags@ is JSON @null@, the common malformed shape.
 The projection's @.:?@ reads it as absent, but the raw body still carries the
-null, so filtering must repair it rather than relay an unresolvable @latest@.
+null. Filtering must therefore repair it rather than relay an unresolvable @latest@.
 -}
 nullDistTagsPackument :: ByteString
 nullDistTagsPackument =
@@ -532,7 +528,7 @@ nullDistTagsPackument =
         )
 
 {- | Build a JSON packument literal from its parts. @extras@ are extra top-level
-key/raw-JSON pairs; each version is a pre-rendered object literal.
+key/raw-JSON pairs. Each version is a pre-rendered object literal.
 -}
 encodePackument ::
     Text ->
@@ -565,10 +561,10 @@ encodePackument name extras tags versions times =
     field :: Text -> Text -> Text
     field k v = quoted k <> ":" <> v
 
-{- | Render one version entry as a @(versionKey, objectLiteral)@ pair: the object
-carries name, version, a @dist.tarball@, plus any extra raw key/JSON pairs (some
-placed on the version, the @dist-extra-marker@ moved into @dist@ to exercise
-dist-level passthrough).
+{- | Render one version entry as a @(versionKey, objectLiteral)@ pair. The object
+carries name, version, a @dist.tarball@, and any extra raw key/JSON pairs. Extras sit on
+the version, except @dist-extra-marker@, which moves into @dist@ to drive dist-level
+passthrough.
 -}
 versionLit :: Text -> Text -> Text -> [(Text, Text)] -> (Text, Text)
 versionLit name ver tarball extras =
@@ -602,8 +598,8 @@ versionLit name ver tarball extras =
 quoted :: Text -> Text
 quoted t = "\"" <> t <> "\""
 
-{- | A generated packument's logical spec: a name and a list of versions, each
-with a publish age in days. Survival is derived from the age against 'quarantine'.
+{- | A generated packument's logical spec: a name and a list of versions, each with a
+publish age in days. The age against 'quarantine' decides survival.
 -}
 data PackumentSpec = PackumentSpec
     { specName :: Text
@@ -632,8 +628,8 @@ genBase =
         , "https://r.internal.example.com"
         ]
 
-{- | Render a 'PackumentSpec' to JSON bytes, with @latest@ aimed at the last
-version (which may or may not survive -- exercising repointing) when any exist.
+{- | Render a 'PackumentSpec' to JSON bytes, with @latest@ aimed at the last version
+when any exist. That version may or may not survive, which drives repointing.
 -}
 renderPackument :: PackumentSpec -> ByteString
 renderPackument (PackumentSpec name versions) =
@@ -644,8 +640,8 @@ renderPackument (PackumentSpec name versions) =
         [versionLit name ver (upstreamTarball name ver) [] | (ver, _) <- versions]
         [(ver, publishedDaysAgo age) | (ver, age) <- versions]
   where
-    -- Aim @latest@ at the first version (which may or may not survive), so
-    -- repointing is exercised; the choice of which version is irrelevant.
+    -- Aim @latest@ at the first version, which may or may not survive, so the fixture
+    -- drives repointing. The choice of which version does not matter.
     latestTag = case versions of
         ((ver, _) : _) -> [("latest", ver)]
         [] -> []
@@ -659,9 +655,9 @@ decodeValue :: ByteString -> IO Value
 decodeValue bs = either (fail . ("decode failure: " <>)) pure (eitherDecodeStrict bs)
 
 {- | The route-requested 'PackageName' for projecting a fixture: the body's /own/
-self-reported top-level @name@, so the projection's name validation is a guaranteed
-pass and these tests exercise filtering, not name validation (which has its own
-suite). Mirrors the npm scope split the projection performs.
+self-reported top-level @name@. The projection's name validation is therefore a
+guaranteed pass, so these tests exercise filtering, not name validation, which has its
+own suite. This mirrors the npm scope split the projection performs.
 -}
 fixtureName :: Value -> PackageName
 fixtureName v = npmName (nameOf v)
@@ -683,10 +679,10 @@ fixtureName v = npmName (nameOf v)
                 mkPackageName Npm (Just (mkScope scopeText)) bare
         _ -> mkPackageName Npm Nothing raw
 
-{- | Project a fixture through the live serve projection ('projectNpmManifest') and hold
-onto the decoded 'Value' too, so the 'PackageInfo' and the 'Value' the assembly edits
-agree (they are the same parse). The requested name is the body's own self-reported name,
-so name validation is a guaranteed pass and these tests exercise filtering, not it.
+{- | Project a fixture through the live serve projection ('projectNpmManifest'), and hold
+onto the decoded 'Value' too. The 'PackageInfo' and the 'Value' the assembly edits then
+agree. They are the same parse. The requested name is the body's own self-reported name,
+so name validation is a guaranteed pass and these tests exercise filtering instead.
 -}
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
@@ -694,20 +690,19 @@ loadPackument bs = do
     info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
     pure (info, v)
 
-{- | The outcome of the serve composition under test: the assembled served document
-when survivors remain, or every version's decision when none do -- the shape the
-serve layer branches on.
+{- | The outcome of the serve composition under test: the assembled served document when
+survivors remain, or every version's decision when none do. This is the shape the serve
+layer branches on.
 -}
 data AssembleResult
     = Assembled Value
     | NoSurvivors [Decision]
     deriving stock (Eq, Show)
 
-{- | Decide the plan ('Ecluse.Test.Rules.filterPlan') over the typed view, merge
-the gated survivor set, and assemble the plan onto the raw body under the given
-mount base -- the composition the serve layer performs for a single public origin.
-The tarball rewrite is fused into the assembly, so the result already carries
-mount-based URLs.
+{- | Decide the plan ('Ecluse.Test.Rules.filterPlan') over the typed view, merge the
+gated survivor set, then assemble it onto the raw body under the given mount base.
+That is the composition the serve layer performs for a single public origin. The assembly
+fuses in the tarball rewrite, so the result already carries mount-based URLs.
 -}
 applyToAt :: Text -> EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyToAt mountBase c rules info value = do
@@ -725,7 +720,7 @@ applyToAt mountBase c rules info value = do
 applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyTo = applyToAt base
 
--- | Assemble a fixture body, requiring survivors; returns the served packument.
+-- | Assemble a fixture body, requiring survivors. Returns the served packument.
 filterTo :: ByteString -> IO FilteredPackument
 filterTo bs = do
     (info, v) <- loadPackument bs
@@ -789,8 +784,8 @@ tarballAt ver v = do
         Just (String url) -> Just url
         _ -> Nothing
 
-{- | A bare version-object 'Value' -- the versions-map entry 'rewriteVersion'
-operates on -- with the fixture name\/version and the given tarball URL and extras.
+{- | A bare version-object 'Value', the versions-map entry 'rewriteVersion' operates on,
+with the fixture name\/version and the given tarball URL and extras.
 -}
 versionValue :: Text -> [(Text, Text)] -> IO Value
 versionValue tarball extras = decodeValue (encode (snd (versionLit "thing" "1.0.0" tarball extras)))

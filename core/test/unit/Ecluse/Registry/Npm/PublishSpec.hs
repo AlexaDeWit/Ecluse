@@ -55,8 +55,8 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
             capBody cap `shouldBe` publishDoc
-            -- The publish body must be declared application/json: a spec-compliant
-            -- registry (e.g. Verdaccio) 415s a publish that omits it.
+            -- The publish must declare a content type of application/json: a
+            -- spec-compliant registry (e.g. Verdaccio) 415s a publish that omits it.
             headerValue "content-type" cap `shouldBe` Just "application/json"
 
     it "treats a 2xx as success" $
@@ -83,10 +83,10 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             outcome `shouldSatisfy` isLeft
 
     it "reports a transport failure as a PublishTransport value, never thrown" $ do
-        -- No server listens on this port, so the write throws a connection failure;
-        -- the transport must fold it into a PublishTransport value (a retryable
-        -- fault), honouring its total, never-thrown contract so the worker's
-        -- retry-vs-drop match stays exhaustive.
+        -- No server listens on this port, so the write throws a connection failure. The
+        -- transport must fold it into a PublishTransport value, a retryable fault. That
+        -- honours its total, never-thrown contract, so the worker's retry-vs-drop match
+        -- stays exhaustive.
         publish <- publishAt "http://127.0.0.1:1"
         outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport

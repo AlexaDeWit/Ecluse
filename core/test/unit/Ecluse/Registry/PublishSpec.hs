@@ -34,9 +34,9 @@ spec :: Spec
 spec = do
     describe "newMirrorPublish (the codec-over-transport marriage)" $ do
         it "mints the bearer per probe and attaches it to the wire" $
-            -- A managed mirror (CodeArtifact) requires auth on reads as on writes,
-            -- so the probe must present a current token: minted per call through
-            -- the transport, never cached in the marriage.
+            -- A managed mirror (CodeArtifact) needs auth on reads as on writes, so the
+            -- probe must present a current token. The transport mints it per call, and
+            -- the marriage never caches it.
             withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
                 _ <- mpProbeMetadata publish isOdd
@@ -71,8 +71,8 @@ spec = do
             outcome `shouldSatisfy` isTransportFetch
 
         it "refuses an over-cap probe body fail-closed as a FetchBoundExceeded value" $
-            -- The probe reads the mirror's answer bounded: a body past the budget is
-            -- refused as a value rather than buffered whole.
+            -- The probe reads the mirror's answer bounded. A body past the budget comes
+            -- back as a refusal value, never buffered whole.
             withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
                 manager <- Client.newManager Client.defaultManagerSettings
                 let transport =
@@ -88,8 +88,8 @@ spec = do
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
             -- The transport hands the minted bearer to the codec's former, which
-            -- attaches it through the shared single attach point: redirectCount 0,
-            -- so a credential-bearing probe never follows a redirect.
+            -- attaches it at the shared single attach point. That point pins
+            -- redirectCount 0, so a credential-bearing probe never follows a redirect.
             case pcProbeRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd of
                 Left err -> fail ("expected a formed probe request, got " <> show err)
                 Right request -> do

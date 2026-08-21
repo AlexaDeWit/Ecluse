@@ -55,19 +55,22 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a fetched
-packument projects into -- the second half of the boundary that
-"Ecluse.Registry.Npm.WireSpec" tests the decode half of -- by driving the __live__,
-app-reachable projection entry 'parsePackageInfoFromValue' (and, for a single version, a
-lookup into its 'infoVersions'), the same projection the serve path runs on every request.
-The fixtures under @core\/test\/unit\/fixtures\/npm\/@ are the same captures the wire suite
-uses; a few edge cases (a full-form install-script derivation, a missing @time@ entry) are
-inline JSON literals.
+packument projects into: the second half of the boundary whose decode half
+"Ecluse.Registry.Npm.WireSpec" tests. They drive the __live__, app-reachable projection
+entry 'parsePackageInfoFromValue', and, for a single version, a lookup into its
+'infoVersions'. That is the same projection the serve path runs on every request. The
+fixtures under @core\/test\/unit\/fixtures\/npm\/@ are the same captures the wire suite
+uses. A few edge cases are inline JSON literals: a full-form install-script derivation
+and a missing @time@ entry.
 
-The cases pin down the signal-mapping table: install-script presence (flagged,
-derived, and absent) onto 'CodeExecSignal'; @deprecated@ onto 'Availability';
-the @dist@ integrity pair onto __both__ a 'SHA1' and an 'SRI' 'Hash'; @_npmUser@
-onto 'pkgPublisher'; @time[version]@ onto 'pkgPublishedAt'; and scoped names onto
-'Ecluse.Core.Package.Scope'.
+The cases pin down the signal-mapping table:
+
+* Install-script presence (flagged, derived, and absent) onto 'CodeExecSignal'.
+* The @deprecated@ field onto 'Availability'.
+* The @dist@ integrity pair onto __both__ a 'SHA1' and an 'SRI' 'Hash'.
+* The @_npmUser@ object onto 'pkgPublisher'.
+* The @time[version]@ entry onto 'pkgPublishedAt'.
+* Scoped names onto 'Ecluse.Core.Package.Scope'.
 -}
 spec :: Spec
 spec = do
@@ -82,14 +85,13 @@ spec = do
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do
     it "projects a document whose self-reported name matches the request" $ do
-        -- The served name is a value the upstream genuinely reported (it matched).
         case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
             Right (Projected info) -> renderName (infoName info) `shouldBe` "thing"
             other -> fail ("expected a matching projection, got: " <> show other)
 
     it "flags a document whose self-reported name disagrees with the request" $ do
         -- A present-but-different name is a NameMismatch carrying the upstream's
-        -- self-reported name (for the audit log) -- never a rewrite to the route name.
+        -- self-reported name for the audit log. It is never a rewrite to the route name.
         parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "other")
             `shouldBe` Right (NameMismatch "other")
 
@@ -98,8 +100,8 @@ nameValidationSpec = describe "name validation against the requested name" $ do
             `shouldBe` Right (NameMismatch "@scope/b")
 
     it "never substitutes the served name: a match carries the upstream's own name" $ do
-        -- The route name is the validation authority, not a rewrite: infoName is the
-        -- name the upstream reported (here equal to the request, having matched).
+        -- The route name is the validation authority, not a rewrite. infoName is the
+        -- name the upstream reported, here equal to the request because it matched.
         case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
             Right (Projected info) -> infoName info `shouldBe` unscoped "thing"
             other -> fail ("expected a matching projection, got: " <> show other)
@@ -112,8 +114,8 @@ signalMappingSpec = describe "signal mapping" $ do
             pkgInstallCode d `shouldSatisfy` runsCode
 
         it "derives RunsCodeOnInstall from a full-form postinstall script" $ do
-            -- The full manifest has NO hasInstallScript key; presence is derived
-            -- from `scripts` having one of preinstall/install/postinstall.
+            -- The full manifest has NO hasInstallScript key. The projection derives
+            -- presence from `scripts` carrying preinstall, install, or postinstall.
             d <- projectVersionOf fullPostinstallPackument (mkVersion Npm "1.0.0")
             pkgInstallCode d `shouldSatisfy` runsCode
 
@@ -124,16 +126,15 @@ signalMappingSpec = describe "signal mapping" $ do
             pkgInstallCode d `shouldNotSatisfy` runsCode
 
         it "maps an explicit hasInstallScript:false to NoCodeOnInstall" $ do
-            -- The abbreviated flag, when present and false and no install hook is
-            -- declared in `scripts`, is a determination that installation runs no
-            -- code.
+            -- The abbreviated flag, present and false with no install hook declared in
+            -- `scripts`, is a determination that installation runs no code.
             d <- projectVersionOf noInstallScriptPackument (mkVersion Npm "1.0.0")
             pkgInstallCode d `shouldBe` NoCodeOnInstall
 
         it "fails closed when hasInstallScript:false contradicts a declared postinstall script" $ do
-            -- The flag and the `scripts` map are independent wire fields: a hostile
-            -- upstream must not be able to mask a real install hook by lying in the
-            -- sibling flag, so the declared script is authoritative (RunsCodeOnInstall).
+            -- The flag and the `scripts` map are independent wire fields. A hostile
+            -- upstream must not mask a real install hook by lying in the sibling flag,
+            -- so the declared script wins (RunsCodeOnInstall).
             d <- projectVersionOf falseFlagWithPostinstallPackument (mkVersion Npm "1.0.0")
             pkgInstallCode d `shouldSatisfy` runsCode
 
@@ -184,8 +185,8 @@ signalMappingSpec = describe "signal mapping" $ do
 integritySpec :: Spec
 integritySpec = describe "dist → Artifact integrity" $ do
     it "carries BOTH the SHA-1 shasum and the SRI integrity (is-odd)" $ do
-        -- Neither digest may be dropped: a cross-upstream merge compares both to
-        -- detect a same-version integrity divergence.
+        -- The projection must keep both digests: a cross-upstream merge compares them
+        -- to detect a same-version integrity divergence.
         d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
         artHashes (soleArtifact d)
             `shouldBe` [ unsafeHash SRI "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
@@ -203,9 +204,9 @@ integritySpec = describe "dist → Artifact integrity" $ do
         artFilename (soleArtifact d) `shouldBe` "is-odd-3.0.1.tgz"
 
     it "leaves npm-irrelevant artifact fields at their explicit defaults (is-odd)" $ do
-        -- npm has no per-file yank, interpreter constraint, or separate
-        -- provenance URL on the artifact; these stay at their unknown/false
-        -- defaults rather than being fabricated.
+        -- npm has no per-file yank, interpreter constraint, or separate provenance URL
+        -- on the artifact. These stay at their unknown/false defaults, and the
+        -- projection fabricates nothing.
         d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
         let art = soleArtifact d
         artInterpreter art `shouldBe` Nothing
@@ -233,8 +234,8 @@ integritySpec = describe "dist → Artifact integrity" $ do
         artHashes (soleArtifact d) `shouldBe` [unsafeHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709"]
 
     it "treats an empty-string shasum as no digest (a content-empty digest is absent)" $ do
-        -- An empty `shasum` decodes to a present `Just ""`, but it ties the version to no
-        -- tamper-evident fingerprint. It must project to NO Hash -- not a degenerate
+        -- An empty `shasum` decodes to a present `Just ""`, but it ties the version to
+        -- no tamper-evident fingerprint. It must project to NO Hash, never a degenerate
         -- `Hash SHA1 ""` that would pass the list-emptiness admission gate.
         d <- projectVersionOf emptyShasumPackument (mkVersion Npm "1.0.0")
         artHashes (soleArtifact d) `shouldBe` []
@@ -245,8 +246,8 @@ integritySpec = describe "dist → Artifact integrity" $ do
 
     it "yields a truly hashless artifact when both digests are empty strings" $ do
         -- Both digests empty → empty artHashes → the version contributes no integrity
-        -- fingerprint at all (rather than a degenerate empty one) to the cross-upstream
-        -- divergence check, and classifies as NoIntegrity for the admission gate.
+        -- fingerprint to the cross-upstream divergence check, not a degenerate empty
+        -- one. It classifies as NoIntegrity for the admission gate.
         d <- projectVersionOf emptyBothPackument (mkVersion Npm "1.0.0")
         artHashes (soleArtifact d) `shouldBe` []
 
@@ -260,12 +261,12 @@ versionListSpec = describe "parseVersionList" $ do
         vs <- orFailParse (parseVersionList (RegistryResponse multiVersionPackument))
         map unVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
-{- | One version broken in a required\/security-decisive field must be __dropped__
-from the decision surface, never deny the whole package. A version that cannot be
-decoded cannot be evaluated for integrity, CVEs, or rules, so dropping it is
-fail-closed for that version while every healthy sibling still projects. This is
-the projection-layer (production serve path) guard for the wholesale-denial DoS;
-the served-surface end is proven in "Ecluse.Registry.Npm.FilterSpec".
+{- | One version broken in a required\/security-decisive field must be __dropped__ from
+the decision surface, never deny the whole package. A version that fails to decode
+carries no integrity, CVE, or rule signal. Dropping it fails closed for that version, and
+every healthy sibling still projects. This is the projection-layer guard on the
+production serve path for the wholesale-denial DoS. "Ecluse.Registry.Npm.FilterSpec" pins
+the served-surface end.
 -}
 versionLevelLeniencySpec :: Spec
 versionLevelLeniencySpec = describe "version-level graceful degradation (one broken version never denies the package)" $ do
@@ -280,8 +281,8 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
             Nothing -> fail "the healthy version 1.0.0 must survive"
 
     it "drops a bare-scalar version entry rather than failing the packument" $ do
-        -- A version whose value is a scalar (not even an object) is dropped, not a
-        -- wholesale parse failure -- the old policy this case used to assert.
+        -- The projection drops a version whose value is a scalar, not even an object,
+        -- rather than failing the whole parse.
         info <- projectInfoOf "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}"
         Map.keys (infoVersions info) `shouldBe` []
 
@@ -298,11 +299,12 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
     it "keeps a version carrying junk advisory fields, degrading the field (production Value path)" $ do
         -- The complement to the drop cases: advisory junk degrades the field but the
         -- version SURVIVES. 2.0.0 carries an out-of-range unpackedSize and a signature
-        -- missing its keyid; 3.0.0 a non-array signatures. Both must remain -- the
-        -- degraded unpackedSize projecting to no artifact size, the load-bearing
-        -- tarball/integrity intact. Driven through parsePackageInfoFromValue, the very
-        -- entry the serve path projects the decoded body with, so the field-level and
-        -- version-level leniency are proven to compose on the production decode path.
+        -- missing its keyid. 3.0.0 carries a non-array signatures. Both must remain,
+        -- with the degraded unpackedSize projecting to no artifact size and the
+        -- load-bearing tarball and integrity intact. This runs through
+        -- parsePackageInfoFromValue, the entry the serve path projects a decoded body
+        -- with, so field-level and version-level leniency compose on the production
+        -- decode path.
         value <- decodeValue advisoryJunkPackument
         case parsePackageInfoFromValue (unscoped "adv") value of
             Right (Projected info) -> do
@@ -318,11 +320,12 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
                 Map.member "3.0.0" (infoVersions info) `shouldBe` True
             other -> fail ("expected a Projected packument, got: " <> show other)
 
-{- | A sound requested version next to a malformed sibling in each of the three
-per-entry-lenient axes (an undecodable sibling version manifest, a non-string
-@dist-tags@ value, and an un-decodable per-version @time@ entry) must serve the sound
-version, drop the bad entries (never failing the whole document), and __record__ each
-drop in 'infoInvalidEntries' carrying its kind, key, and the raw offending value.
+{- | A sound requested version sits next to a malformed sibling in each of the three
+per-entry-lenient axes. The axes are an undecodable sibling version manifest, a
+non-string @dist-tags@ value, and an un-decodable per-version @time@ entry. The projection
+must serve the sound version and drop the bad entries, never failing the whole document.
+It must also __record__ each drop in 'infoInvalidEntries' with its kind, key, and the raw
+offending value.
 -}
 gracefulDegradationSpec :: Spec
 gracefulDegradationSpec = describe "graceful per-entry degradation with typed drop-tracking" $ do
@@ -354,20 +357,22 @@ gracefulDegradationSpec = describe "graceful per-entry degradation with typed dr
         (pkgPublishedAt =<< Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Nothing
 
     it "does not track a malformed bookkeeping (created) time as a per-version drop" $ do
-        -- 'created' is package-level, not a version's publish time, so a malformed one is
-        -- not an InvalidPublishTime; every tracked publish-time drop is a real version.
+        -- 'created' is package-level, not a version's publish time, so a malformed one
+        -- is not an InvalidPublishTime. Every tracked publish-time drop is a real
+        -- version.
         info <- projectInfoOf malformedBookkeepingTimePackument
         filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
-{- | The live projection eats __untrusted__ upstream JSON: 'parsePackageInfoFromValue'
-walks an already-decoded 'Value' (the document the serve path edits in place) into the
-domain model, and 'parseVersionList' decodes a response body and enumerates its versions.
-Both must be __total__: an arbitrary input may never make the projection bottom; it must
-always return a typed 'Right' or a typed @ParseError@ 'Left', never ⊥. These generative
-properties feed the entries a bounded-but-arbitrary 'Value' and a run of arbitrary bytes,
-then fully evaluate the result so a partial function anywhere in the projection surfaces as
-a caught exception rather than a pass. They are the projection-layer companion to the
-wire-decoder totality properties in "Ecluse.Registry.Npm.WireSpec".
+{- | The live projection eats __untrusted__ upstream JSON. 'parsePackageInfoFromValue'
+walks an already-decoded 'Value', the document the serve path edits in place, into the
+domain model. 'parseVersionList' decodes a response body and enumerates its versions.
+Both must be __total__: an arbitrary input may never make the projection bottom. It must
+always return a typed 'Right' or a typed @ParseError@ 'Left', never a ⊥ value. These
+generative properties feed the entries a bounded-but-arbitrary 'Value' and a run of
+arbitrary bytes, then fully evaluate the result. A partial function anywhere in the
+projection then surfaces as a caught exception rather than a pass. They are the
+projection-layer companion to the wire-decoder totality properties in
+"Ecluse.Registry.Npm.WireSpec".
 -}
 totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
@@ -383,24 +388,24 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
     it "the body generator reaches both a decodable packument and a rejected body" $
         hedgehog $ do
             v <- forAll genBody
-            -- Validate against the body's own self-reported name so a packument-shaped
-            -- body reaches the success arm (name matches), while arbitrary JSON still
-            -- rejects -- both arms stay sampled.
+            -- Validate against the body's own self-reported name, so a packument-shaped
+            -- body reaches the success arm while arbitrary JSON still rejects. Both arms
+            -- stay sampled.
             let decoded = parsePackageInfoFromValue (routeNameOf v) v
             annotateShow v
             _ <- H.eval (showResult decoded)
-            -- Non-vacuity: 'genBody' must reach both the projects-to-domain arm
-            -- (the packument-shaped half) and the rejected-body arm (the
-            -- arbitrary half), so the totality checks above are not all-failures.
+            -- Non-vacuity: 'genBody' must reach the projects-to-domain arm (the
+            -- packument-shaped half) and the rejected-body arm (the arbitrary half).
+            -- The totality checks above are then not all-failures.
             H.cover 5 "projects (Right)" (isRight decoded)
             H.cover 5 "rejects (Left)" (isLeft decoded)
 
-{- | Assert a projection entry is __total__ over an arbitrary 'Value' body: encode
-a 'genBody' value (which mixes fully-arbitrary JSON with packument-shaped objects,
-so the __success__ path of the projection is exercised too, not just rejection)
-into a response body and fully evaluate the entry's result (the @render@ argument
-forces it to a 'String'), so 'H.eval' turns any bottom inside the projection into
-a caught test failure rather than a pass.
+{- | Assert a projection entry is __total__ over an arbitrary 'Value' body. Encode a
+'genBody' value into a response body and fully evaluate the entry's result, which the
+@render@ argument forces to a 'String'. 'H.eval' then turns any bottom inside the
+projection into a caught test failure rather than a pass. 'genBody' mixes fully-arbitrary
+JSON with packument-shaped objects, so this drives the projection's __success__ path as
+well as its rejection path.
 -}
 projectionIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
 projectionIsTotal render = do
@@ -418,10 +423,10 @@ projectionBytesIsTotal render = do
     _ <- H.eval (length (render (RegistryResponse bytes)))
     H.success
 
-{- | Assert a projection entry is __total__ over an arbitrary already-decoded 'Value':
-feed a 'genBody' value straight to the entry (no re-encode -- this is the decoded document
-the serve path projects) and fully evaluate the rendered result, so 'H.eval' turns any
-bottom inside the projection into a caught failure rather than a pass.
+{- | Assert a projection entry is __total__ over an arbitrary already-decoded 'Value'.
+Feed a 'genBody' value straight to the entry with no re-encode, because this is the
+decoded document the serve path projects. Fully evaluate the rendered result, so 'H.eval'
+turns any bottom inside the projection into a caught failure rather than a pass.
 -}
 projectionValueIsTotal :: (Value -> String) -> PropertyT IO ()
 projectionValueIsTotal render = do
@@ -440,12 +445,12 @@ showResult = \case
 encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
-{- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value' (the same
-shape as "Ecluse.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
-module): the JSON scalar kinds plus small arrays and objects of recursively-
-generated values, shrinking toward the scalars so it terminates. Object keys are
-biased toward the real packument field names (@name@, @versions@, @dist-tags@, …)
-so a generated object routinely reaches the projection's success arm.
+{- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value': the JSON scalar
+kinds plus small arrays and objects of recursively-generated values. It shrinks toward
+the scalars, so it terminates. It has the same shape as "Ecluse.Registry.Npm.WireSpec"'s
+generator, kept in-file to avoid a new module. Object keys lean toward the real packument
+field names (@name@, @versions@, @dist-tags@, …), so a generated object routinely reaches
+the projection's success arm.
 -}
 genValue :: H.Gen Value
 genValue =
@@ -462,20 +467,20 @@ genValue =
         ]
 
 {- | A response-body generator that mixes fully-arbitrary JSON ('genValue') with
-packument-__shaped__ objects ('genPackumentish'), so a property driving a
-projection reaches __both__ arms: arbitrary JSON almost always rejects (a 'Left'),
+packument-__shaped__ objects ('genPackumentish'). A property driving a projection
+therefore reaches __both__ arms. Arbitrary JSON almost always rejects (a 'Left'),
 while a packument-shaped object usually projects (a 'Right'). The wire decoders
-are lenient, so even the shaped half carries arbitrary values in its fields -- it
-is a /shape/ bias, not a valid-document oracle, which keeps the fuzzing honest.
+are lenient, so even the shaped half carries arbitrary values in its fields. It is a
+/shape/ bias, not a valid-document oracle, which keeps the fuzzing honest.
 -}
 genBody :: H.Gen Value
 genBody = Gen.frequency [(1, genValue), (1, genPackumentish)]
 
 {- | A top-level object shaped like an npm packument: a (usually non-empty) string
-@name@, a @versions@ map keyed by a conventional @1.0.0@ whose entries are arbitrary
+@name@ and a @versions@ map keyed by a conventional @1.0.0@. Its entries are arbitrary
 objects carrying a @dist@ object, plus an arbitrary @time@\/@dist-tags@. The values inside
-are still arbitrary, so this only biases the /shape/ toward the projection's success arm;
-it does not hand-build a known-valid document.
+are still arbitrary, so this only biases the /shape/ toward the projection's success arm.
+It does not hand-build a known-valid document.
 -}
 genPackumentish :: H.Gen Value
 genPackumentish = do
@@ -489,8 +494,8 @@ genPackumentish = do
             <> extra
 
 {- | A version-object-shaped 'Value': @name@\/@version@ strings and a @dist@ with a
-@tarball@ URL string, plus a few arbitrary keys -- enough that the wire manifest
-decodes and the artifact projection has a tarball to read.
+@tarball@ URL string, plus a few arbitrary keys. That is enough for the wire manifest to
+decode and for the artifact projection to find a tarball.
 -}
 genVersionish :: H.Gen Value
 genVersionish = do
@@ -503,8 +508,8 @@ genVersionish = do
         ]
             <> extra
 
-{- | A small arbitrary integer to seed a JSON number (kept in a modest range;
-'fromInteger' lifts it into aeson's 'Number' 'Scientific').
+{- | A small arbitrary integer to seed a JSON number, kept in a modest range.
+'fromInteger' lifts it into aeson's 'Number' 'Scientific'.
 -}
 genInteger :: H.Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
@@ -514,10 +519,10 @@ genJsonText :: H.Gen Text
 genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
 
 {- | An object key drawn from a pool biased toward the packument field names the
-projection reads, so generated objects frequently satisfy them (otherwise almost
-every object would miss @name@\/@versions@ and the success arm would go
-unsampled). @1.0.0@ is included so a generated @versions@ map can be keyed by a
-conventional version string.
+projection reads, so generated objects frequently satisfy them. Without the bias almost
+every object would miss @name@\/@versions@ and the success arm would go unsampled. The
+pool includes @1.0.0@, so a generated @versions@ map can carry a conventional version
+string as its key.
 -}
 genKey :: H.Gen Key.Key
 genKey = Key.fromText <$> Gen.choice [Gen.element packumentKeys, genJsonText]
@@ -544,7 +549,7 @@ genKey = Key.fromText <$> Gen.choice [Gen.element packumentKeys, genJsonText]
         ]
 
 {- | A full-form packument whose single version declares a @postinstall@ script
-and __no__ @hasInstallScript@ key, so install-script presence must be derived.
+and __no__ @hasInstallScript@ key, so the projection must derive install-script presence.
 -}
 fullPostinstallPackument :: ByteString
 fullPostinstallPackument =
@@ -561,9 +566,9 @@ noInstallScriptPackument =
     \\"hasInstallScript\":false,\"dist\":{\"tarball\":\"https://r/noscript/-/noscript-1.0.0.tgz\"}}}}"
 
 {- | A full-form packument whose single version sets @hasInstallScript:false@ but
-declares a real @postinstall@ script -- the hostile mismatch a compromised upstream
-could use to try to mask install-time code execution behind the flag. The two wire
-fields are independent, so the projection must fail closed and honour the script.
+declares a real @postinstall@ script. That is the hostile mismatch a compromised upstream
+would use to mask install-time code execution behind the flag. The two wire fields are
+independent, so the projection must fail closed and honour the script.
 -}
 falseFlagWithPostinstallPackument :: ByteString
 falseFlagWithPostinstallPackument =
@@ -620,10 +625,14 @@ emptyBothPackument =
     \\"dist\":{\"tarball\":\"https://r/eb/-/eb-1.0.0.tgz\",\"shasum\":\"\",\"integrity\":\"\"}}}}"
 
 {- | A packument whose 1.0.0 is healthy and three siblings are each broken in a
-distinct required\/security-decisive field: 2.0.0's @dist@ is a scalar (not an
-object), 3.0.0's @dist@ carries no @tarball@, and 4.0.0 is a bare scalar (not even
-a version object). Under version-level graceful degradation each broken sibling is
-dropped while the healthy 1.0.0 survives.
+distinct required\/security-decisive field:
+
+* 2.0.0's @dist@ is a scalar, not an object.
+* 3.0.0's @dist@ carries no @tarball@.
+* 4.0.0 is a bare scalar, not even a version object.
+
+Under version-level graceful degradation the projection drops each broken sibling and
+the healthy 1.0.0 survives.
 -}
 mixedHealthAndBrokenPackument :: ByteString
 mixedHealthAndBrokenPackument =
@@ -634,10 +643,14 @@ mixedHealthAndBrokenPackument =
     \\"4.0.0\":42}}"
 
 {- | A packument whose requested version 1.0.0 is sound but which carries a malformed
-sibling in every per-entry-lenient axis: 2.0.0's manifest is undecodable (a scalar
-@dist@), the @broken@ @dist-tags@ value is a non-string ('Number'), and 1.0.0's own
-@time@ entry is a non-ISO string. The sound 1.0.0 is served (with no publish time); each
-bad entry is dropped and recorded in @infoInvalidEntries@ with its raw value.
+sibling in every per-entry-lenient axis:
+
+* 2.0.0's manifest is undecodable (a scalar @dist@).
+* The @broken@ @dist-tags@ value is a non-string ('Number').
+* 1.0.0's own @time@ entry is a non-ISO string.
+
+The projection serves the sound 1.0.0 with no publish time. It drops each bad entry and
+records it in @infoInvalidEntries@ with its raw value.
 -}
 gracefulDegradationPackument :: ByteString
 gracefulDegradationPackument =
@@ -647,8 +660,8 @@ gracefulDegradationPackument =
     \\"time\":{\"created\":\"2018-01-01T00:00:00.000Z\",\"1.0.0\":\"not-a-date\"}}"
 
 {- | A packument with a sound version and a malformed @created@ bookkeeping time (a
-non-ISO string) but no malformed /per-version/ time, so the @created@ drop must __not__ be
-tracked as an 'InvalidPublishTime' (it is not a version's publish time).
+non-ISO string) but no malformed /per-version/ time. The projection must __not__ track
+the @created@ drop as an 'InvalidPublishTime', because it is not a version's publish time.
 -}
 malformedBookkeepingTimePackument :: ByteString
 malformedBookkeepingTimePackument =
@@ -658,10 +671,10 @@ malformedBookkeepingTimePackument =
 
 {- | A packument whose 1.0.0 is healthy, 2.0.0 carries an out-of-range
 @unpackedSize@ (@1e400@) and a signature missing its @keyid@, and 3.0.0 carries a
-non-array @signatures@. Every version must __survive__ the production decode with
-its advisory fields degraded -- the complement to a required-field-broken version
-being dropped. 2.0.0's @integrity@ is a well-formed SRI so the load-bearing digest
-projects intact alongside the degraded size.
+non-array @signatures@. Every version must __survive__ the production decode with its
+advisory fields degraded, the complement to a dropped required-field-broken version.
+2.0.0's @integrity@ is a well-formed SRI, so the load-bearing digest projects intact
+alongside the degraded size.
 -}
 advisoryJunkPackument :: ByteString
 advisoryJunkPackument =
@@ -684,9 +697,9 @@ multiVersionPackument =
 renderName :: PackageName -> Text
 renderName = TS.toText . pkgCanonical
 
-{- | The first projected 'Artifact' of a version. npm projects exactly one
-artifact per version, so this is the whole of @pkgArtifacts@; taking the head of
-the 'NonEmpty' is total.
+{- | The first projected 'Artifact' of a version. Because npm projects exactly one
+artifact per version, this is the whole of @pkgArtifacts@. Taking the head of the
+'NonEmpty' is total.
 -}
 soleArtifact :: PackageDetails -> Artifact
 soleArtifact d = let (art :| _) = pkgArtifacts d in art
@@ -698,8 +711,8 @@ runsCode = \case
     _ -> False
 
 {- | Decode a JSON literal into a 'Value', failing the example on an undecodable
-literal. Used to drive 'parsePackageInfoFromValue' -- the entry the serve path
-projects an already-decoded body with -- directly from an inline packument.
+literal. It drives 'parsePackageInfoFromValue', the entry the serve path projects an
+already-decoded body with, directly from an inline packument.
 -}
 decodeValue :: ByteString -> IO Value
 decodeValue bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
@@ -718,9 +731,9 @@ unscoped = mkPackageName Npm Nothing
 packumentValueNamed :: Text -> Value
 packumentValueNamed nm = object ["name" .= nm, "versions" .= object []]
 
-{- | The npm route name a packument 'Value' self-reports (scope-aware), used to feed
-the projection a matching requested name in the totality property so a well-shaped
-body reaches the success arm.
+{- | The npm route name a packument 'Value' self-reports, scope-aware. It feeds the
+projection a matching requested name in the totality property, so a well-shaped body
+reaches the success arm.
 -}
 routeNameOf :: Value -> PackageName
 routeNameOf v = npmName (nameOf v)
@@ -743,10 +756,9 @@ routeNameOf v = npmName (nameOf v)
         _ -> mkPackageName Npm Nothing raw
 
 {- | Project a packument body into its 'PackageInfo' through the LIVE whole-packument
-projection ('parsePackageInfoFromValue') the serve path runs, validating against the body's
-own self-reported name so a well-formed fixture always yields 'Projected'. This is the
-app-reachable projection entry; the removed byte-variant accessor was only ever a
-convenience door onto the same internals.
+projection ('parsePackageInfoFromValue') the serve path runs. It validates against the
+body's own self-reported name, so a well-formed fixture always yields 'Projected'. This
+is the app-reachable projection entry.
 -}
 projectInfoOf :: ByteString -> IO PackageInfo
 projectInfoOf body = decodeValue body >>= projectedInfo
@@ -762,8 +774,8 @@ projectedInfo value =
         Left e -> expectationFailureWith e
 
 {- | Look up one version's 'PackageDetails' from a packument body via the live
-whole-packument projection, or 'Nothing' when the version is absent\/dropped -- the same
-per-version snapshot the serve path computes for that version.
+whole-packument projection, or 'Nothing' when the version is absent\/dropped. This is the
+same per-version snapshot the serve path computes for that version.
 -}
 lookupVersionOf :: ByteString -> Version -> IO (Maybe PackageDetails)
 lookupVersionOf body version = do
@@ -782,8 +794,8 @@ projectVersionOf body version =
 projectVersion :: FilePath -> Version -> IO PackageDetails
 projectVersion name version = readFixture name >>= (`projectVersionOf` version)
 
-{- | Unwrap a projection result, failing the example with the 'ParseError'
-message rather than crashing -- keeping the suite total (no partial @error@).
+{- | Unwrap a projection result, failing the example with the 'ParseError' message
+rather than crashing, which keeps the suite total (no partial @error@).
 -}
 orFailParse :: Either ParseError a -> IO a
 orFailParse = either expectationFailureWith pure
