@@ -1,8 +1,8 @@
 # Versioning
 
-Écluse follows [semantic versioning](https://semver.org): `MAJOR.MINOR.PATCH`. It's an application
-shipped as a container image, not a Haskell library other packages bound against, so it doesn't
-follow the Haskell Package Versioning Policy (PVP). The version is a release identity for operators.
+Écluse follows [semantic versioning](https://semver.org): `MAJOR.MINOR.PATCH`. It ships as a
+container image, not as a Haskell library other packages bound against. So it doesn't follow the
+Haskell Package Versioning Policy (PVP). The version is a release identity for operators.
 
 ## One value, one source of truth
 
@@ -10,21 +10,21 @@ The version lives in one place: the `version:` field of [`ecluse.cabal`](ecluse.
 downstream derives from it, so the image tag, git tag, and GitHub Release can't disagree:
 
 - `task version` prints it (via `cabal info`).
-- `task tag` cuts a signed `vX.Y.Z` git tag from it, so it can't be mistyped.
+- `task tag` cuts a signed `vX.Y.Z` git tag from it, so nobody can mistype it.
 - the release workflow asserts the pushed tag matches before building, and fails on any drift.
 
 The mechanics are in [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md).
 
 ## What the numbers mean
 
-Écluse versions against the **operator-facing contract**, not the Haskell source: the configuration
-interface (the `ECLUSE_*` env vars and the config document), the proxy's request and serve behaviour
-(what it admits, denies, mirrors), and the container interface. The Haskell modules are internal and
-carry no API stability promise.
+Écluse versions against the **operator-facing contract**, not the Haskell source. That contract is
+the configuration interface (the `ECLUSE_*` env vars and the config document), the proxy's request
+and serve behaviour, and the container interface. Serve behaviour means what Écluse admits, denies,
+and mirrors. The Haskell modules are internal and carry no API stability promise.
 
-- **MAJOR**: a breaking change to that contract. A removed or renamed environment variable, a
-  default that changes what gets admitted or denied, an incompatible configuration document, or a
-  behaviour an operator relied on being removed.
+- **MAJOR**: a breaking change to that contract. A removed or renamed environment variable, an
+  incompatible configuration document, or the removal of a behaviour an operator relied on. A
+  default that changes what Écluse admits or denies also counts.
 - **MINOR**: a backward-compatible addition. A new ecosystem adapter, a new configuration option
   that defaults to today's behaviour, an opt-in feature.
 - **PATCH**: a backward-compatible fix. A bug fix, a security patch, or performance work that leaves
@@ -39,10 +39,10 @@ or configuration, including a minor bump. Pin an exact version, preferably
 
 ## Release candidates
 
-A release candidate is tagged `vX.Y.Z-rc.N` (e.g. `v0.1.0-rc.2`), published with the same provenance
-and SBOM attestations as a final release, flagged as a prerelease, and cuts no GitHub Release. The
-tag-match guard compares only the base version, so a candidate for `X.Y.Z` carries `ecluse.cabal`
-version `X.Y.Z`.
+A release candidate carries the tag `vX.Y.Z-rc.N`, for example `v0.1.0-rc.2`. It ships with the same
+provenance and SBOM attestations as a final release, flagged as a prerelease, and it cuts no GitHub
+Release. The tag-match guard compares only the base version, so a candidate for `X.Y.Z` carries
+`ecluse.cabal` version `X.Y.Z`.
 
 ## Cutting a release
 

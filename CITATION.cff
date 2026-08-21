@@ -5,7 +5,7 @@ abstract: >-
   Écluse is a deny-by-default policy gate that vets package-registry
   dependencies before they reach a build. It proxies a private upstream first,
   falls back to the public registry with rules applied, and mirrors approved
-  packages asynchronously — without hosting packages itself.
+  packages asynchronously, without hosting packages itself.
 type: software
 authors:
   - given-names: Alexandra
