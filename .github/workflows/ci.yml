@@ -47,7 +47,7 @@ jobs:
     # waste. Runs on ubuntu-latest, which ships the Docker daemon ministack /
     # testcontainers need for the integration tier.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write # OIDC: tokenless Codecov upload + FlakeHub Cache
@@ -144,7 +144,8 @@ jobs:
   smoke:
     name: Smoke tests (live registries — non-gating)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Non-gating, but a cold Nix closure pushes it well past the warm ~8 min.
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -182,8 +183,9 @@ jobs:
   e2e:
     name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
-    # Sanity bound, not a budget: ~15 min warm, but a cold Nix closure adds half an hour (#836).
-    timeout-minutes: 60
+    # Sanity bound, not a budget: ~40 min typical, and a cold Nix closure adds
+    # a further half hour (#836).
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -248,7 +250,7 @@ jobs:
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     # Formerly four jobs (format/lint, cabal-check, Semgrep, workflow-lint). None
     # build Haskell, so each paid a full ~35s toolchain setup for a sub-minute
     # check. Merged so that setup is paid once. Each check runs even if an earlier
@@ -298,7 +300,7 @@ jobs:
     # rebuilds the overridden closure's doc outputs from source (the nix-docs
     # cache is written on main only, so the first PR run pays it all). Warm runs
     # finish in a fraction of this.
-    timeout-minutes: 45
+    timeout-minutes: 75
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -360,7 +362,8 @@ jobs:
   weeder:
     name: Dead-code check (weeder)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Observed 7 min mean, 19 min worst; sized so a cold-cache run still fits.
+    timeout-minutes: 40
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
