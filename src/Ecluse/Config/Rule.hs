@@ -143,10 +143,10 @@ validateMinSeverity name s
     | s >= 0 && s <= 10 = Right s
     | otherwise = Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
 
-{- | Decode 'DenyIfCve''s parameters. @minSeverity@ (a CVSS base score, 0 to 10)
-is required, so an operator states the threshold consciously. @onUnavailable@ is
-optional and defaults to @deny@ (fail-closed): a package the advisory database
-cannot vet is refused rather than admitted.
+{- | Decode 'DenyIfCve''s parameters. The @minSeverity@ key (a CVSS base score, 0 to
+10) is required, so an operator states the threshold consciously. The
+@onUnavailable@ key is optional and defaults to @deny@ (fail-closed): the rule
+refuses a package the advisory database cannot vet.
 -}
 buildDenyIfCveParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfCveParams
 buildDenyIfCveParams name entry =

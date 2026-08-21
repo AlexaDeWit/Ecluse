@@ -75,21 +75,21 @@ defaultPolicy =
 {- | Load the full configuration: defaults, the optional operator document, and the
 environment overlay, merged strongest-last, then parsed, activated, and resolved.
 
-A mount is __active__ when the operator overlay (the document or the
-@ECLUSE_MOUNTS__*@ environment variables) declares any key under
-@mounts.\<ecosystem\>@; the mounts shipped in @config\/default.yaml@ are dormant
-per-ecosystem templates until then. The @enabled@ key is itself a declaration, so
-@enabled: true@ alone activates a mount against its template public upstream (the
-serve-only pure public gate), and @enabled: false@ switches a mount off without
+A mount is __active__ when the operator overlay declares any key under
+@mounts.\<ecosystem\>@, either in the document or in the @ECLUSE_MOUNTS__*@
+environment variables. Until then, the mounts shipped in @config\/default.yaml@ are
+dormant per-ecosystem templates. The @enabled@ key is itself a declaration. So
+@enabled: true@ alone activates a mount against its template public upstream, the
+serve-only pure public gate. And @enabled: false@ switches a mount off without
 removing its other keys.
 
-Whether an active mount __mirrors__ is derived from its declared endpoints: a
-@mirrorTarget@ makes it mirrored (its private upstream is then required, so the
-mirror can be read back: 'MountMissingPrivateUpstream'), and an absent one makes it
-serve-only (never writing anywhere; a mirror-write setting left behind is refused
-per key as 'MirrorSettingWithoutWrite' rather than silently ignored). The boot log
-names each mount's resolved posture, so an unintentionally dropped @mirrorTarget@
-is visible at start-up.
+An active mount's declared endpoints decide whether it __mirrors__. A @mirrorTarget@
+makes it mirrored. Such a mount must also declare a private upstream, so the mirror
+can be read back ('MountMissingPrivateUpstream'). An absent @mirrorTarget@ makes it
+serve-only, writing nowhere. The loader refuses a mirror-write setting left behind on
+a serve-only mount, per key, as 'MirrorSettingWithoutWrite', never ignoring it. The boot
+log names each mount's resolved posture, so an unintentionally dropped
+@mirrorTarget@ shows up at start-up.
 -}
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
@@ -100,13 +100,13 @@ loadConfig envVars mBytes = do
     parsed <- parseAppConfig merged
     active <- declaredMounts overridesAst
     let declared = Map.restrictKeys (cfgMounts parsed) active
-        -- enabled: false switches a declared mount off; anything else declared serves.
+        -- enabled: false switches a declared mount off. Anything else declared serves.
         served = Map.filter (\mcfg -> mntEnabled mcfg /= Just False) declared
         appConfig = parsed{cfgMounts = served}
-    -- Any served mount needs the proxy's own client-facing base URL: served
-    -- tarball URLs are rewritten against it, and without one every real install
+    -- Any served mount needs the proxy's own client-facing base URL. The proxy
+    -- rewrites served tarball URLs against it, and without one every real install
     -- fails client by client instead of loudly here. Aggregated with the mount
-    -- resolution so one load reports both classes at once.
+    -- resolution, so one load reports both classes at once.
     let publicUrlErrs = [PublicUrlRequired | not (Map.null served), isNothing (srvPublicUrl (cfgServer appConfig))]
     globalPolicy <- resolveGlobalPolicy overridesAst
     mounts <- case (publicUrlErrs, resolveMounts globalPolicy appConfig) of
@@ -115,9 +115,9 @@ loadConfig envVars mBytes = do
     Right (Config appConfig mounts)
 
 {- | The ecosystems the operator overlay declares under @mounts@: the activation
-set. Only keys the operator wrote count; the merged defaults never activate a
-mount. An unknown ecosystem key is unreachable here (parsing the merged document
-has already rejected it) but is still refused totally rather than assumed away.
+set. Only keys the operator wrote count. The merged defaults never activate a mount.
+An unknown ecosystem key is unreachable here, because parsing the merged document
+already rejected it. This still refuses it totally rather than assuming it away.
 -}
 declaredMounts :: Value -> Either [ConfigError] (Set Ecosystem)
 declaredMounts overridesAst = Set.fromList <$> traverse parseKey (mountKeysOf overridesAst)
@@ -160,9 +160,9 @@ resolveGlobalPolicy overridesAst = do
     first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
 
 {- | Resolve every active mount into its served 'Mount', aggregating failures so
-one load reports each incomplete mount rather than only the first. The mode is
-derived from the declared endpoints: a @mirrorTarget@ makes the mount mirrored
-(private upstream required), an absent one makes it serve-only.
+one load reports each incomplete mount rather than only the first. The declared
+endpoints decide the mode: a @mirrorTarget@ makes the mount mirrored (private
+upstream required), and an absent one makes it serve-only.
 -}
 resolveMounts :: RulePolicy -> AppConfig -> Either [ConfigError] MountMap
 resolveMounts globalPolicy appConfig =
@@ -178,7 +178,7 @@ resolveMounts globalPolicy appConfig =
         (Nothing, mPrivate) -> case writeOnlySettings mcfg of
             [] -> (eco,) <$> resolveServeOnly globalPolicy eco mPrivate mcfg
             -- A write credential or token duration on a mount that never writes
-            -- signals a misunderstanding; refuse each offending key rather than
+            -- signals a misunderstanding. Refuse each offending key rather than
             -- silently ignoring it.
             offending -> Left (map (MirrorSettingWithoutWrite eco) offending)
 
@@ -186,11 +186,11 @@ resolveMounts globalPolicy appConfig =
         ["mirrorTargetToken" | isJust (mntMirrorTargetToken mcfg)]
             <> ["mirrorCodeArtifactTokenDuration" | isJust (mntMirrorCodeArtifactTokenDuration mcfg)]
 
-{- | Project a mirrored mount, whose private upstream and mirror target the caller
-has already established (see 'resolveMounts'), onto its served form. The
-mirror-write credential is derived from the mirror-target URL here
-('resolveMirrorCredential'), so the resolved 'MirrorTarget' pairs an endpoint only
-with the credential that endpoint dictates.
+{- | Project a mirrored mount onto its served form. The caller already established
+its private upstream and mirror target (see 'resolveMounts'). This derives the
+mirror-write credential from the mirror-target URL ('resolveMirrorCredential'), so
+the resolved 'MirrorTarget' pairs an endpoint only with the credential that endpoint
+dictates.
 -}
 resolveMirrored :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
@@ -210,8 +210,8 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
                             }
                     }
 
-{- | Project a serve-only mount (no mirror write; the private upstream optional,
-absent on the pure public gate) onto its served form.
+{- | Project a serve-only mount onto its served form. It makes no mirror write, and
+its private upstream is optional, absent on the pure public gate.
 -}
 resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe RegistryUrl -> MountConfig -> Either [ConfigError] Mount
 resolveServeOnly globalPolicy eco mPrivate mcfg = do
@@ -237,13 +237,13 @@ mountOf eco mcfg policy mode =
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
 
-{- | Boot-time advisory: one warning per pair of an active mount's resolved
-registry endpoints that point at the same registry. Each collapse is supported by
-the proxy (declaring the mirror target equal to the private upstream is a valid
-arrangement), but a distinct registry per endpoint is the recommended posture, so
-every collision is surfaced once at boot. A publication target equal to the private
-upstream is the documented publish arrangement and is not warned. Comparison is
-textual on the validated URL, insensitive to trailing slashes.
+{- | Boot-time advisory: one warning per pair of an active mount's resolved registry
+endpoints that point at the same registry. The proxy supports each collapse, and
+declaring the mirror target equal to the private upstream is a valid arrangement. A
+distinct registry per endpoint is still the recommended posture, so every collision
+surfaces once at boot. A publication target equal to the private upstream is the
+documented publish arrangement and raises no warning. Comparison is textual on the
+validated URL, insensitive to trailing slashes.
 -}
 mountCollisionWarnings :: Config -> [Text]
 mountCollisionWarnings config =
@@ -286,11 +286,11 @@ sameRegistry a b = strip a == strip b
     strip = T.dropWhileEnd (== '/') . registryUrlText
 
 {- | One line per resolved leaf of the merged configuration: the dotted path, the
-rendered value (secret-typed keys redacted), and the layer that supplied it
-(environment > document > default, mirroring the merge precedence). Derived and
-computed values are deliberately absent: they are not configuration, and their
-resolvers log their own provenance lines (the runtime posture, the memory plan,
-the queue selection). Renders nothing if the layers fail to parse; callers dump
+rendered value (secret-typed keys redacted), and the layer that supplied it. That
+layer is one of environment, document, or default, in that order of precedence.
+Derived and computed values are deliberately absent. They are not configuration, and
+their resolvers log their own provenance lines: the runtime posture, the memory plan,
+and the queue selection. Renders nothing if the layers fail to parse. Callers dump
 provenance only after a successful 'loadConfig'.
 -}
 resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
@@ -301,7 +301,7 @@ resolvedKeyProvenance envVars mBytes = fromRight [] $ do
         merged = deepMerge defaultAst (deepMerge docAst envAst)
     pure (map (renderResolvedLeaf envAst docAst) (sortOn fst (leafPaths [] merged)))
 
--- Every leaf of a config AST with its dotted path (objects recurse; anything
+-- Every leaf of a config AST with its dotted path (objects recurse, and anything
 -- else, arrays included, is a leaf).
 leafPaths :: [Text] -> Value -> [(Text, Value)]
 leafPaths path (Object o) =
@@ -332,10 +332,10 @@ renderLeafValue path v
         other -> decodeUtf8 (LBS.toStrict (encode other))
 
 {- | Boot-time posture: one line per served mount naming its derived mode and its
-consequence. The mode is derived from the declared endpoints (see 'loadConfig'), so
-this is the loud counterpart of that inference: an unintentionally dropped
-@mirrorTarget@ shows up here as "serve-only" at the very next boot rather than
-silently un-mirroring.
+consequence. The declared endpoints decide the mode (see 'loadConfig'), so this is
+the loud counterpart of that inference. An unintentionally dropped @mirrorTarget@
+shows up here as "serve-only" at the next boot, rather than silently
+un-mirroring.
 -}
 mountPostureLines :: Config -> [Text]
 mountPostureLines config = map postureLine (Map.toAscList (configMounts config))

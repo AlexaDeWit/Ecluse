@@ -3,15 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The ambient cloud-SDK environment: the handful of @AWS_*@ variables Écluse
-itself consults, read straight from the process environment at boot and carried
-beside the parsed configuration, never through the config document or its
-environment overlay.
+itself consults. It reads them straight from the process environment at boot, and
+carries them beside the parsed configuration. They never pass through the config
+document or its environment overlay.
 
 Keeping them out of the config AST makes "secrets never live in the structured
-config" structural: a document key like @awsSecretAccessKey@ is an unknown key
-and a loud parse failure, not a silently ignored ghost. The AWS SDK's own
-credential discovery (@AWS_ACCESS_KEY_ID@, @AWS_SECRET_ACCESS_KEY@, the instance
-role) is untouched; this record carries only the values Écluse reads explicitly.
+config" structural. A document key like @awsSecretAccessKey@ is an unknown key and a
+loud parse failure, not a silently ignored ghost. Nothing here touches the AWS SDK's
+own credential discovery (@AWS_ACCESS_KEY_ID@, @AWS_SECRET_ACCESS_KEY@, the instance
+role). This record carries only the values Écluse reads explicitly.
 -}
 module Ecluse.Config.Ambient (
     AmbientAws (..),
@@ -25,9 +25,9 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 
-{- | The @AWS_*@ values Écluse consults directly (region scoping and endpoint
-overrides); each is 'Nothing' when the variable is unset. Blank-value handling
-stays with each consumer, so sourcing these ambiently changes no behaviour.
+{- | The @AWS_*@ values Écluse consults directly: region scoping and endpoint
+overrides. Each is 'Nothing' when the variable is unset. Blank-value handling stays
+with each consumer, so sourcing these ambiently changes no behaviour.
 -}
 data AmbientAws = AmbientAws
     { ambientAwsRegion :: Maybe Text
@@ -60,12 +60,14 @@ ambientAwsFromEnv env =
 
 {- | Parse an endpoint override URL (an 'ambientAwsEndpointUrl' or
 'ambientAwsEndpointUrlSqs' value) into its (TLS flag, host, port). The scheme picks
-the TLS flag and the default port (443\/80) when none is given; an absent scheme or a
-non-numeric port yields 'Nothing'. The @host[:port]@ authority is split by the shared
-bracket-aware 'Ecluse.Core.Security.splitHostPort', so a bracketed IPv6 literal
-(@[::1]:4566@) is split on its closing bracket, not on an inner colon, and the host is
-returned without brackets -- the same primitive the data-plane host extractor uses, so
-the two cannot drift on an authority edge case.
+the TLS flag and the default port (443\/80) when none is given. An absent scheme or a
+non-numeric port yields 'Nothing'.
+
+The shared bracket-aware 'Ecluse.Core.Security.splitHostPort' splits the
+@host[:port]@ authority. A bracketed IPv6 literal (@[::1]:4566@) therefore splits on
+its closing bracket, not on an inner colon, and the host comes back without brackets.
+That is the same primitive the data-plane host extractor uses, so the two cannot
+drift on an authority edge case.
 -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do

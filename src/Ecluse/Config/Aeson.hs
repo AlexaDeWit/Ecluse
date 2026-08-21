@@ -73,8 +73,8 @@ parseScopes = withText "Scopes" $ \t ->
         then pure []
         else traverse parseScopeEntry (T.splitOn "," t)
 
--- Reject a publishAllow segment that no conforming scope can equal (an empty
--- segment from a stray comma, or one bearing a wrong separator), so a typo fails
+-- Reject a publishAllow segment that no conforming scope can equal: an empty
+-- segment from a stray comma, or one bearing a wrong separator. A typo then fails
 -- the load rather than seeding a dead allow-list that refuses every publish at
 -- request time. Mirrors 'parseBlockedRangeEntry' for the sibling comma list.
 parseScopeEntry :: Text -> Parser Scope
@@ -105,8 +105,8 @@ appConfigParser o = do
         <*> (groupOf "observability" o >>= observabilityParser)
         <*> (o .:? "mounts" .!= mempty >>= parseMounts)
 
--- An absent group reads as empty (its required keys, pinned in the embedded
--- defaults, are then reported missing by its own parser).
+-- An absent group reads as empty. Its own parser then reports its required keys,
+-- pinned in the embedded defaults, as missing.
 groupOf :: Key.Key -> KeyMap.KeyMap Value -> Parser (KeyMap.KeyMap Value)
 groupOf key o = case KeyMap.lookup key o of
     Nothing -> pure KeyMap.empty
@@ -209,9 +209,9 @@ acceptedDocumentKeys =
     ]
 
 {- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem
-templates included. Which of them are /active/ (operator-declared, served, and
-required to be complete) is decided against the operator overlay in
-"Ecluse.Config"; this parser stays a faithful projection of the merged document.
+templates included. "Ecluse.Config" decides which of them are /active/, meaning
+operator-declared, served, and required to be complete. This parser stays a faithful
+projection of the merged document.
 -}
 parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
 parseMounts km = Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
@@ -245,10 +245,10 @@ parseSeconds field = \case
     String t -> case readMaybe (T.unpack t) :: Maybe Integer of
         Just n -> boundedSeconds field n
         Nothing -> secondsFailure field (show t)
-    -- 'toBoundedInteger' refuses a fractional or out-of-'Int64'-range value, and
-    -- its exponent guard rejects a pathological 1e999999999999 without ever
-    -- realising the integer, so a hostile config or env value fails the load
-    -- instead of hanging or exhausting memory at boot.
+    -- 'toBoundedInteger' refuses a fractional or out-of-'Int64'-range value. Its
+    -- exponent guard rejects a pathological 1e999999999999 without ever realising
+    -- the integer. A hostile config or env value therefore fails the load, instead
+    -- of hanging or exhausting memory at boot.
     Number n -> case toBoundedInteger n :: Maybe Int64 of
         Just val -> boundedSeconds field (toInteger val)
         Nothing -> secondsFailure field (show n)
@@ -268,9 +268,9 @@ parsePositiveInt field value
     | value > 0 = pure value
     | otherwise = fail (field <> " must be a positive integer")
 
-{- A recurring delay: positive (zero would spin the poll without
-yielding) and bounded so its microsecond conversion fits 'Int'
-rather than wrapping into an invalid negative delay.
+{- A recurring delay, positive and bounded. Zero would spin the poll without
+yielding. The bound keeps its microsecond conversion inside 'Int', rather than
+wrapping into an invalid negative delay.
 -}
 parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
 parseDelaySeconds field v = do
