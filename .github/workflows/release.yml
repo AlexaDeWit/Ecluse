@@ -1,13 +1,13 @@
 name: Release
 
-# Publishing is a separate lifecycle from the PR `gate` in ci.yml: it runs only
-# when a version tag is pushed (or dispatched manually). The image is built
-# NATIVELY on a per-arch matrix (amd64 + arm64 — no fragile GHC cross-compilation),
-# then one privileged job assembles the two builds into a SINGLE multi-arch
-# manifest list, pushes it under an immutable `X.Y.Z` tag, attaches keyless
-# provenance + SBOM attestations (per platform, plus provenance on the index),
-# and (on a real tag) publishes a GitHub Release pinning the digest. It is never
-# a gate dependency. See docs/architecture/release-supply-chain.md.
+# Publishing is a separate lifecycle from the PR `gate` in ci.yml. It runs only on a
+# pushed version tag, or on a manual dispatch. A per-arch matrix builds the image
+# NATIVELY (amd64 and arm64), so there is no fragile GHC cross-compilation. One
+# privileged job then assembles the two builds into a SINGLE multi-arch manifest list
+# and pushes it under an immutable `X.Y.Z` tag. It attaches keyless provenance and
+# SBOM attestations: one per platform, plus provenance on the index. On a real tag it
+# also publishes a GitHub Release pinning the digest. It is never a gate dependency.
+# See docs/architecture/release-supply-chain.md.
 on:
   push:
     tags:
@@ -28,10 +28,10 @@ permissions:
 
 jobs:
   # The single source of truth for the version is ecluse.cabal's `version:` field.
-  # A pushed tag (or the workflow_dispatch `tag` input) must match it — a release
-  # fails fast HERE, before the expensive multi-arch build, on any drift. Pre-release
-  # suffixes (e.g. -rc1) are stripped before comparing, so v0.1.0-rc1 still matches
-  # 0.1.0. `task version` reads it via `cabal info`, so this needs the toolchain —
+  # A pushed tag (or the workflow_dispatch `tag` input) must match it. On any drift
+  # the release fails fast HERE, before the expensive multi-arch build. The comparison
+  # strips a pre-release suffix (e.g. -rc1) first, so v0.1.0-rc1 still matches 0.1.0.
+  # `task version` reads the field via `cabal info`, so this job needs the toolchain:
   # cheap insurance on the infrequent release path.
   verify-version:
     name: Verify tag matches cabal version
@@ -66,10 +66,10 @@ jobs:
     name: Build image (${{ matrix.platform.arch }})
     needs: verify-version
     # Native per-arch builds: amd64 on the standard runner, arm64 on GitHub's free
-    # public-repo arm64 runner — so GHC compiles natively on each target and we
-    # avoid cross-compilation entirely. fail-fast off so one arch failing still
-    # leaves the other's logs. No secrets here: the build legs are credential-free;
-    # only the `publish` job below is privileged.
+    # public-repo arm64 runner. GHC therefore compiles natively on each target, and
+    # cross-compilation never enters the picture. The fail-fast setting is off, so one
+    # failing arch still leaves the other's logs. No secrets here: the build legs are
+    # credential-free, and only the `publish` job below carries privileges.
     strategy:
       fail-fast: false
       matrix:
@@ -123,9 +123,9 @@ jobs:
     name: Assemble multi-arch image, attest & release
     needs: build
     runs-on: ubuntu-latest
-    # The workflow relies on the ephemeral GITHUB_TOKEN to push to GHCR.
-    # The protected environment (required reviewers) ensures human approval
-    # before a release is published.
+    # The workflow relies on the ephemeral GITHUB_TOKEN to push to GHCR. The
+    # protected environment (required reviewers) holds the job until a human
+    # approves the release.
     environment: release
     permissions:
       contents: write # create the GitHub Release (digest pin + verify recipe + notes)
@@ -163,8 +163,9 @@ jobs:
           path: artifacts
 
       # Authenticate so regctl can push the manifest list and the attest-actions
-      # can push referrers. docker/login-action writes ~/.docker/config.json,
-      # which both regctl and skopeo read as their fallback auth file.
+      # can push referrers. The docker/login-action step writes
+      # ~/.docker/config.json, which both regctl and skopeo read as their fallback
+      # auth file.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -172,10 +173,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Assemble the two per-arch archives into ONE manifest list, push the single
-      # canonical tag, and emit the index + per-platform digests for the attest
-      # steps. All skopeo/regctl/jq logic lives in the script (shellcheck'd), so
-      # the workflow stays injection-free.
+      # Assemble the two per-arch archives into ONE manifest list and push the
+      # single canonical tag. The step emits the index and per-platform digests for
+      # the attest steps. All skopeo, regctl, and jq logic lives in the script
+      # (shellcheck'd), so the workflow stays injection-free.
       - name: Assemble & push multi-arch image
         id: push
         env:
@@ -187,9 +188,9 @@ jobs:
               artifacts/image-arm64/image-arm64.tar >> "$GITHUB_OUTPUT"
 
       # Provenance on the index (what `gh attestation verify oci://IMAGE:TAG`
-      # resolves to) and on each platform digest (so a consumer pinning a single
-      # arch by digest can verify it too). Keyless (OIDC → Fulcio/Rekor), stored as
-      # immutable OCI referrers — compatible with the repo's immutable tags.
+      # resolves to) and on each platform digest. A consumer pinning a single arch by
+      # digest can then verify it too. Keyless (OIDC → Fulcio/Rekor), stored as
+      # immutable OCI referrers, which suits the repo's immutable tags.
       - name: Attest provenance (index)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -211,9 +212,9 @@ jobs:
           subject-digest: ${{ steps.push.outputs.arm64-digest }}
           push-to-registry: true
 
-      # SBOM is per-platform (each arch has its own C closure): attach each arch's
-      # SBOM to that arch's platform digest, never to the index (which has no
-      # closure of its own).
+      # The SBOM is per-platform, because each arch has its own C closure. Attach
+      # each arch's SBOM to that arch's platform digest, never to the index. The
+      # index has no closure of its own.
       - name: Attest SBOM (amd64)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
@@ -231,9 +232,9 @@ jobs:
           push-to-registry: true
 
       # On a real version tag (not an rc dispatch), publish a GitHub Release that
-      # pins the INDEX digest, gives the `gh attestation verify` recipe, and carries
-      # the auto-generated changelog. Untrusted refs flow through env, never into
-      # the run script directly.
+      # pins the INDEX digest. The release gives the `gh attestation verify` recipe
+      # and carries the auto-generated changelog. Untrusted refs flow through env,
+      # never into the run script directly.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
         env:

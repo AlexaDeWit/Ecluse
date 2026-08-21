@@ -1,18 +1,17 @@
 name: Load test
 
-# The load benchmarks tier of the benchmark strategy: throughput & latency under concurrent load against
-# the real composed proxy, driven by `oha`. Deliberately NOT run per pull request —
-# shared-runner throughput is too noisy to be a useful per-PR signal, and a load run is
-# heavier than the per-PR work-per-request micro-benches. It runs on a nightly schedule and on manual
-# dispatch only.
+# The load benchmark tier: throughput and latency under concurrent load against the
+# real composed proxy, driven by `oha`. It runs on a nightly schedule and on manual
+# dispatch only, never per pull request. Shared-runner throughput is too noisy to be a
+# useful per-PR signal, and a load run is heavier than the per-PR work-per-request
+# micro-benches.
 #
-# Like the work-per-request micro-benches it is a standalone, INFORM-ONLY tier: it is NOT wired into
-# ci.yml's `gate`, so it never blocks a merge, and its only red state is a LITERAL
-# failure (the harness cannot boot, `oha` cannot run, or a scenario served nothing). It
-# never computes a perf-regression fail — throughput and latency are reported in the run
-# summary for a human to read and trend, never compared to a threshold. There is no
-# cross-run baseline: a run's results are downloadable from its own page but consumed by
-# no other run.
+# Like those micro-benches, this is a standalone, INFORM-ONLY tier. ci.yml's `gate` does
+# not depend on it, so it never blocks a merge. Its only red state is a LITERAL failure:
+# the harness cannot boot, `oha` cannot run, or a scenario served nothing. It never
+# computes a perf-regression fail. The run summary reports throughput and latency for a
+# human to read and trend, never against a threshold. There is no cross-run baseline: a
+# run's results are downloadable from its own page, and no other run consumes them.
 on:
   workflow_dispatch:
     inputs:
@@ -34,7 +33,7 @@ on:
     # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
 
-# One run per ref; never cancel a scheduled or dispatched run mid-flight.
+# One run per ref. Never cancel a scheduled or dispatched run mid-flight.
 concurrency:
   group: bench-load-${{ github.ref }}
   cancel-in-progress: false
@@ -53,12 +52,12 @@ jobs:
       # Pin the cabal store to a deterministic, cacheable location, as the other
       # Haskell jobs do.
       CABAL_DIR: ${{ github.workspace }}/.cabal
-      # The load knobs, from the dispatch inputs (defaulted for a scheduled run). Passed
-      # through the environment, never interpolated into a shell command, so a malformed
-      # value can only mis-size a measurement, never inject. Admission has no fixed
-      # default here: blank means the harness resolves the proxy's computed default from
-      # the capability count, exactly as an unconfigured deployment would, so nightly
-      # trends measure what operators get. Dispatch a number to pin it.
+      # The load knobs, from the dispatch inputs (defaulted for a scheduled run). They
+      # travel through the environment, never interpolated into a shell command, so a
+      # malformed value can only mis-size a measurement, never inject. Admission has no
+      # fixed default here. Blank means the harness resolves the proxy's computed
+      # default from the capability count, exactly as an unconfigured deployment would.
+      # Nightly trends then measure what an operator gets. Dispatch a number to pin it.
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '100' }}
       BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight }}
@@ -75,30 +74,30 @@ jobs:
         with:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
-          # Restore the shared Nix store but never write it: build-test on main is the
-          # single writer, and this job realizes the `.#ci` closure, so saving here
-          # would race and bloat the canonical entry. Restore-only.
+          # Restore the shared Nix store but never write it. The build-test job on
+          # main is the single writer. This job realises the same `.#ci` closure, so a
+          # save here would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"
 
       - name: Update package index
         run: nix develop .#ci --command task update
 
-      # Run the load tests. The harness renders its per-scenario tables to the run
-      # summary itself (via $GITHUB_STEP_SUMMARY); `tee` also captures them as this run's
-      # downloadable results. `task bench-load` never gates on performance; this step
-      # fails only on a genuine harness failure (a non-zero exit).
+      # The harness renders its per-scenario tables to the run summary itself, via
+      # $GITHUB_STEP_SUMMARY. `tee` also captures them as this run's downloadable
+      # results. `task bench-load` never gates on performance, so this step fails
+      # only on a genuine harness failure (a non-zero exit).
       - name: Run load tests
         run: |
           set -eo pipefail
-          # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
-          # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
-          # neatly occupy the remaining 3 cores without self-contention. The driver
-          # propagates this count to the scenario child processes via GHCRTS (argv RTS
-          # flags do not survive the per-scenario re-exec).
+          # Isolate the load generator from the server: ubuntu-latest has 4 cores. The
+          # harness pins oha to core 0, and GHC gets 3 capability threads, so they
+          # occupy the remaining 3 cores without self-contention. The driver propagates
+          # this count to the scenario child processes via GHCRTS, because argv RTS
+          # flags do not survive the per-scenario re-exec.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # This run's results, downloadable from the run page. A convenience for a human
-      # comparing by hand — there is no cross-run baseline store. Uploaded even on a
+      # comparing by hand: there is no cross-run baseline store. Uploaded even on a
       # failed run, so the partial output survives.
       - name: Upload this run's results
         if: always()

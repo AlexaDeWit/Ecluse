@@ -67,21 +67,20 @@ runs:
   steps:
     # ---- Disk headroom (Linux runners) ------------------------------------
     # Free the ~14 GB root partition and move the big stores onto the large
-    # ephemeral /mnt volume, before Nix installs into /nix and the caches
-    # restore below. Every workflow that sets up the toolchain then gets the
-    # same headroom: the heaviest job (the e2e image build plus `docker load`)
-    # can exhaust the small root partition, and the benchmark jobs hit the same
-    # wall. These run FIRST because the /mnt bind mount must precede the Nix
-    # install, and both must precede the cache restore. Guarded to Linux: the
+    # ephemeral /mnt volume. The e2e image build plus `docker load` can exhaust
+    # the root partition, and the benchmark jobs hit the same wall. Every
+    # workflow that sets up the toolchain gets the same headroom.
+    #
+    # These steps run FIRST: the /mnt bind mount must precede the Nix install,
+    # and both must precede the cache restore. Linux only, because the
     # sudo/rm/mount/systemctl calls assume a Linux runner (every current caller
-    # is ubuntu-latest), so on any other runner they are a safe no-op. Kept
-    # inline, not a third-party action, to honour the repo's SHA-pin
+    # is ubuntu-latest). On any other runner they are a safe no-op. They stay
+    # inline rather than a third-party action, to honour the repo's SHA-pin
     # supply-chain convention. See AGENTS.md → "CI & Security".
     #
-    # Remove preinstalled toolchains these Nix jobs never touch (the system
-    # GHC/ghcup, Android SDK, .NET, Swift), since npm/node and GHC all come from
-    # the Nix dev shell. `df` before/after so a failing run shows the actual
-    # reclaim.
+    # Remove the preinstalled toolchains these Nix jobs never touch (the system
+    # GHC/ghcup, Android SDK, .NET, Swift). The Nix dev shell supplies npm,
+    # node, and GHC. `df` before and after so a failing run shows the reclaim.
     - name: Free disk space
       if: runner.os == 'Linux'
       shell: bash
@@ -96,12 +95,12 @@ runs:
         echo "after:"; df -h / /mnt
 
     # Put the two biggest disk consumers on the ephemeral /mnt volume (~70 GB)
-    # rather than the small root partition: the Nix store (bind-mounted now so
-    # the GHC closure lands on /mnt when the Install Nix step below writes into
-    # it) and the Docker data-root (so a later `docker load` of an OCI image and
-    # its running containers do too). Both must precede their first use: the bind
-    # mount before the Install Nix step just below, the data-root before any job
-    # step that runs Docker.
+    # rather than the small root partition. The bind mount moves the Nix store
+    # now, so the GHC closure lands on /mnt when the Install Nix step below
+    # writes into it. The Docker data-root moves too, so a later `docker load`
+    # of an OCI image and its running containers land there as well. Both must
+    # precede their first use: the bind mount before the Install Nix step just
+    # below, the data-root before any job step that runs Docker.
     - name: Relocate the Nix store and Docker data-root onto /mnt
       if: runner.os == 'Linux'
       shell: bash
@@ -122,19 +121,21 @@ runs:
 
     # Reproducible toolchain: the exact flake-pinned dev shell developers use.
     # extra-conf hardens substitution against transient cache.nixos.org hiccups
-    # — the cold path; warm runs restore the store from the cache below and skip
-    # the upstream substituter entirely. auto-optimise-store stays off: the installer
-    # turns it on for Linux, an optimised store hard-links files into
+    # on the cold path. A warm run restores the store from the cache below and
+    # skips the upstream substituter entirely.
+    #
+    # The extra-conf block keeps auto-optimise-store off, although the installer
+    # turns it on for Linux. An optimised store hard-links files into
     # /nix/store/.links, and cache-nix-action cannot restore that archive
-    # (nix-community/cache-nix-action#170: `tar: Cannot hard link`), so every
-    # consumer of a saved entry would die in toolchain setup.
+    # (nix-community/cache-nix-action#170: `tar: Cannot hard link`). Every
+    # consumer of a saved entry would then fail in toolchain setup.
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       with:
-        # Upstream Nix, the same flavour the dev shell pins. The default
-        # (Determinate Nix) logs the runner in to FlakeHub, which adds two
-        # substituters every run is unauthorised for and writes a root-only
-        # /nix/var/determinate/auth_state.json that makes the store save's tar
+        # Upstream Nix, the same flavour the dev shell pins. The default,
+        # Determinate Nix, logs the runner in to FlakeHub. That login adds two
+        # substituters no run has authorisation for. It also writes a root-only
+        # /nix/var/determinate/auth_state.json, which makes the store save's tar
         # exit 2, so the nix-* entries below never refresh.
         determinate: false
         extra-conf: |
@@ -142,22 +143,23 @@ runs:
           download-attempts = 5
           auto-optimise-store = false
 
-    # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
-    # warm runs are fast and immune to cache.nixos.org flakiness. Most gate jobs
-    # realize the same `.#ci` shell, so the default "nix" prefix serves them from
-    # one shared entry; a job with a larger, distinct closure (the `docs` job's
-    # Haddock doc-closure) overrides nix-cache-prefix to own a separate entry.
+    # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so a
+    # warm run is fast and immune to cache.nixos.org flakiness. Most gate jobs
+    # realise the same `.#ci` shell, so the default "nix" prefix serves them all
+    # from one shared entry. A job with a larger, distinct closure (the `docs`
+    # job's Haddock doc-closure) overrides nix-cache-prefix to own a separate
+    # entry.
     #
-    # save is gated to main AND to the save-nix-store input: PR runs restore (from
-    # main's entry, via the base-branch fallback) but never write, so they can't
-    # each leave a ~1.3 GB copy behind; and every non-writer job sets
-    # save-nix-store: false, so build-test alone writes the shared
-    # nix-<os>-<flakehash> entry and its content is deterministic (the `.#ci`
-    # shell closure, never a bystander job's store). gc-max-store-size
-    # trims the store to its live closure before saving, so the cached entry can't
-    # balloon past that job's closure. Stale older-flake.lock entries are pruned
-    # by the cache-cleanup workflow (this token is read-only; purging in-action
-    # would need `actions: write`).
+    # Two conditions gate the save: main, AND the save-nix-store input. A PR run
+    # restores (from main's entry, via the base-branch fallback) but never
+    # writes, so PRs cannot each leave a ~1.3 GB copy behind. Every non-writer
+    # job sets save-nix-store: false, so build-test alone writes the shared
+    # nix-<os>-<flakehash> entry. Its content is therefore deterministic: the
+    # `.#ci` shell closure, never a bystander job's store. The gc-max-store-size
+    # input trims the store to its live closure before saving, so the cached
+    # entry cannot balloon past that job's closure. The cache-cleanup workflow prunes
+    # stale older-flake.lock entries, because this token is read-only and
+    # purging in-action would need `actions: write`.
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
@@ -166,15 +168,18 @@ runs:
         save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
         gc-max-store-size-linux: ${{ inputs.nix-gc-max-store-size }}
 
-    # Hackage deps are built by cabal into CABAL_DIR (the store + the package
-    # index), outside /nix/store, so they need their own cache. RESTORE ONLY — the
-    # build-test job is the single writer (on main), populating it from the widest
-    # plan (`cabal build all --enable-tests`) so every consumer job's narrower plan
-    # is fully covered. Keyed on the dependency *plan* inputs — flake.lock (the GHC)
-    # + cabal.project (index-state, constraints) + cabal.project.freeze (the exact
-    # version lock) — NOT `**/*.cabal`, which changed on ~half of recent commits
-    # (adding a module/source file) and needlessly churned a fresh ~0.3 GB entry
-    # each time while never actually changing the resolved dependency set.
+    # cabal builds the Hackage deps into CABAL_DIR (the store plus the package
+    # index), outside /nix/store, so they need their own cache. RESTORE ONLY.
+    # The build-test job is the single writer, on main. It populates the entry
+    # from the widest plan (`cabal build all --enable-tests`), so every consumer
+    # job's narrower plan is fully covered.
+    #
+    # The key covers the dependency *plan* inputs: flake.lock (the GHC), plus
+    # cabal.project (index-state, constraints), plus cabal.project.freeze (the
+    # exact version lock). It does NOT cover `**/*.cabal`. That pattern changed
+    # on ~half of recent commits, whenever one added a module or source file.
+    # Each such commit churned a fresh ~0.3 GB entry without changing the
+    # resolved dependency set.
     - name: Restore cabal store
       if: inputs.cabal-cache == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -184,12 +189,13 @@ runs:
         restore-keys: |
           cabal-store-${{ runner.os }}-
 
-    # The project's own incremental build products (changed-module recompiles only).
-    # Same dep-plan key, separate from the store: the store is the heavy, slow-moving
-    # part (180 compiled deps); dist-newstyle is small and fast-moving. Restore-only,
-    # written by build-test on main. The deps live in the store above, so a
-    # restore-keys fallback to a slightly older dist-newstyle only recompiles the
-    # changed local modules (~12k LoC) — never the dependency closure.
+    # The project's own incremental build products (changed-module recompiles
+    # only). Same dep-plan key, separate from the store: the store is the heavy,
+    # slow-moving part (180 compiled deps), and dist-newstyle is small and
+    # fast-moving. Restore-only, written by build-test on main. The deps live in
+    # the store above. A restore-keys fallback to a slightly older dist-newstyle
+    # therefore recompiles only the changed local modules (~12k LoC), never the
+    # dependency closure.
     - name: Restore dist-newstyle
       if: inputs.cabal-cache == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -1,40 +1,39 @@
 name: Cache cleanup
 
-# Keep the repo's GitHub Actions cache comfortably under the 10 GB quota.
+# Keep the repo's GitHub Actions cache under the 10 GB quota.
 #
-# The CI workflow already does the heavy lifting by SAVING caches only on main
-# (PRs restore but never write — see setup-toolchain), so the day-to-day churn of
-# branch-scoped copies is gone. This workflow is the housekeeping backstop that
-# handles what that policy can't:
+# The CI workflow already does the heavy lifting: it SAVES caches only on main, and a
+# PR restores but never writes (see setup-toolchain). The day-to-day churn of
+# branch-scoped copies is therefore gone. This workflow is the housekeeping backstop
+# for the two cases that policy cannot cover. First, stragglers on non-main refs:
+# anything a non-main run left behind, such as an entry from a branch deleted after
+# merge. Second, superseded main entries: once a dependency epoch advances, the
+# previous epoch's immutable-keyed `cabal-store`, `dist-*`, and `nix` entries are dead
+# weight. A change to flake.lock, cabal.project, or cabal.project.freeze advances the
+# epoch.
 #
-#   * stragglers on non-main refs — anything a non-main run left behind (e.g. an
-#     entry from a deleted/after-merge branch); and
-#   * superseded main entries — once a dependency epoch advances (flake.lock /
-#     cabal.project / cabal.project.freeze change), the previous epoch's
-#     immutable-keyed cabal-store / dist-* / nix entries are dead weight.
+# It runs on two triggers. The primary one is a push to main, restricted to the
+# dependency-plan files (flake.lock / flake.nix / cabal.project[.freeze]). Those are
+# the only commits that mint a new epoch. Each bump then reaps its predecessors right
+# when it lands, rather than letting a day's worth stack against the 10 GB ceiling
+# between sweeps. That push fires ~before build-test saves the bump's own epoch, so it
+# reaps one bump behind (steady state ~2 nix epochs). The daily `schedule` trims that
+# to one, and it is the only reaper of off-main stragglers, which belong to no main
+# run. A plain `push` avoids the `workflow_run` and pull_request_target hazard, and it
+# keeps the privileged `actions: write` token in this single-purpose workflow. The
+# always-on PR workflow, ci.yml, stays at its minimal `contents: read`.
 #
-# It runs on two triggers. The primary one is a push to main restricted to the
-# dependency-plan files (flake.lock / flake.nix / cabal.project[.freeze]) — the only
-# commits that mint a new epoch — so each bump reaps its predecessors right when it
-# lands, rather than letting a day's worth stack against the 10 GB ceiling between
-# sweeps. That push fires ~before build-test saves the bump's own epoch, so it reaps
-# one bump behind (steady state ~2 nix epochs); the daily `schedule` trims that to one
-# and is also the only reaper of off-main stragglers (tied to no main run). Keeping to
-# a plain `push` avoids the `workflow_run` / pull_request_target hazard and leaves the
-# privileged `actions: write` token in this single-purpose workflow — ci.yml, the
-# always-on PR workflow, stays at its minimal `contents: read`.
-#
-# It keeps the newest KEEP_PER_PREFIX entries per key prefix on main (current +
-# one fallback for in-flight runs and quick rollback) and deletes the rest. The
-# heavy single-epoch caches keep only KEEP_DOCS instead — the Pages doc-variant
+# It keeps the newest KEEP_PER_PREFIX entries per key prefix on main and deletes the
+# rest. That is the current epoch plus one fallback, for in-flight runs and quick
+# rollback. The heavy single-epoch caches keep only KEEP_DOCS: the Pages doc-variant
 # caches (`-docs-` prefixes) and the Nix-store closures (`nix-*` prefixes, incl. the
-# docs job's `nix-docs-*` doc closure): they are the biggest entries (~1 GB each),
-# change only on a dependency/flake bump, and each has a single writer, so a second
+# docs job's `nix-docs-*` closure). Those are the biggest entries (~1 GB each). They
+# change only on a dependency or flake bump, and each has a single writer, so a second
 # epoch buys little (see prune-caches.sh). Everything else is least-privilege.
 
 on:
-  # Primary: a dependency bump on main is the only commit that mints a new epoch;
-  # reap on exactly those pushes (see the note above).
+  # Primary: a dependency bump on main is the only commit that mints a new epoch.
+  # Reap on exactly those pushes (see the note above).
   push:
     branches: [main]
     paths:
@@ -76,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # All caches: id, ref, key, created_at — one TSV row each, across pages.
+          # All caches: id, ref, key, created_at. One TSV row each, across pages.
           gh api --paginate "repos/$REPO/actions/caches?per_page=100" \
             --jq '.actions_caches[] | [.id, .ref, .key, .created_at] | @tsv' \
             > caches.tsv || true
@@ -86,11 +85,11 @@ jobs:
             exit 0
           fi
 
-          # Decide which ids to delete. The selection logic (off-main stragglers +
-          # superseded-epoch pruning, keyed on the prefix with the trailing hashFiles
-          # digest stripped) lives in scripts/prune-caches.sh — reviewable, lintable,
-          # and runnable outside CI. It reads the TSV on stdin and writes the ids to
-          # delete on stdout.
+          # Decide which ids to delete. The selection logic lives in
+          # scripts/prune-caches.sh, where it is reviewable, lintable, and runnable
+          # outside CI. It prunes off-main stragglers and superseded epochs, keyed on
+          # the prefix with the trailing hashFiles digest stripped. It reads the TSV
+          # on stdin and writes the ids to delete on stdout.
           bash scripts/prune-caches.sh < caches.tsv > to-delete.txt
 
           count=$(wc -l < to-delete.txt | tr -d ' ')
