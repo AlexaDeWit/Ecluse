@@ -75,21 +75,26 @@ format is one compact JSON object per line to stdout (JSONL), which the Datadog 
 autodiscovery consumes. Set the shape with `ECLUSE_OBSERVABILITY__LOG_FORMAT`: `json` (the
 in-container default) or `console` (human-readable, for development).
 
-Every JSON line carries the reserved attribute names a log backend indexes without a custom
-pipeline:
+Every JSON line carries the reserved attribute names a log backend reads:
 
 ```json
 {"timestamp":"2026-06-22T09:14:03.118Z","status":"warn","message":"denied","service":"ecluse","env":"prod","version":"0.1.0","dd":{"trace_id":"…","span_id":"…"},"data":{"module":"Ecluse.Server.Pipeline.Internal","package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"},"katip":{"ns":["ecluse","serve"],"app":["ecluse"],"host":"…","pid":"1","thread":"…","loc":null}}
 ```
 
-`status` folds `katip`'s eight syslog severities onto the four an operator acts on: `debug`, `info`,
-`warn`, `error`. `service`, `env`, and `version` come from the same resolved identity as the traces,
-so a log-to-trace pivot lines up; the formatter stamps that identity, so a line raised outside any
-request scope carries it too. With no `DD_ENV` or `deployment.environment` set, `env` falls back to
-the deployment label the process boots under, and `version` to the binary's own build version. The
-`dd` object appears only while a span is in scope, and Datadog needs those ids as low-64-bit decimal
-for OTLP-ingested traces to match. The emitting call's own fields sit under `data`, the `katip`
-emitter fields under `katip`.
+`timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes, read
+unmodified by its JSON preprocessing; `env` and `version` are ordinary attributes any backend
+indexes, and on Datadog the matching unified-service tags normally come from `DD_ENV` and
+`DD_VERSION` on the Agent rather than from the line. `status` folds `katip`'s eight syslog
+severities onto the four an operator acts on: `debug`, `info`, `warn`, `error`.
+
+`service`, `env`, and `version` come from the same resolved identity as the traces, so a log-to-trace
+pivot lines up; the formatter stamps that identity, so a line raised outside any request scope
+carries it too. With no `DD_ENV` or `deployment.environment` set, `env` falls back to the deployment
+label the process boots under, and `version` to the binary's own build version. The `dd` object
+appears only while a span is in scope, and Datadog needs those ids as low-64-bit decimal for
+OTLP-ingested traces to match. The emitting call's own fields sit under `data`, the `katip` emitter
+fields under `katip`; the emitting process's hostname is `katip.host`, so a collector's own
+host attribution (the Datadog Agent supplies it) governs the line's `host`.
 
 `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the severity floor: `debug`, `info` (the default), `warn`, or
 `error`. The scribe drops anything below the floor before rendering it, so `debug` instrumentation
@@ -97,12 +102,14 @@ costs nothing at `info`. An unrecognised value is a boot error, like every other
 
 ### URL minimisation
 
-No log line and no span attribute renders a URL. An artifact location is upstream-supplied and an
-advisory export URL is operator-supplied; either can carry a credential in its userinfo or in a
-pre-signed query string, and both logs and spans leave the node. Every site that names a location
-names its validated `host:port` instead, through the one shared reduction in
-`Ecluse.Core.Security.Authority`; a value with no dialable authority renders as `<unresolved>`,
-never as a fragment of the input. The span attributes say so in their names:
+No log line and no span attribute renders a URL. An artifact location is upstream-supplied, and an
+advisory export URL and a configured upstream base URL are operator-supplied; any of them can carry
+a credential in its userinfo or in a pre-signed query string, and both logs and spans leave the
+node. Every site that names a location names its validated `host:port` instead, through the one
+shared reduction in `Ecluse.Core.Security.Authority`; a value with no dialable authority renders as
+`<unresolved>`, never as a fragment of the input. This covers the mirror artifact URL, the OSV
+export URL, the packument origin and upstream fields on the serve path, and the artifact URL a
+dropped-entry record carries. The span attributes say so in their names:
 `ecluse.mirror.artifact_host` and `ecluse.osv.source_host`.
 
 ## Configuration and deployment

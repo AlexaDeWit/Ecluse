@@ -80,12 +80,12 @@ module Ecluse.Runtime.Log (
     formatDdSpanId,
 ) where
 
-import Data.Aeson (Value (Object, String), encode, object, toJSON, (.=))
+import Data.Aeson (Value (Object, String), object, toJSON, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString qualified as BS
 import Data.Text.Lazy.Builder qualified as TB
-import Data.Text.Lazy.Encoding qualified as TLE
 import Katip (
     ColorStrategy (ColorLog),
     Environment,
@@ -253,7 +253,7 @@ adds it). The colourise flag is ignored because 'newScribe' forces colour off, a
 wrapping the object in ANSI escapes would make the line invalid JSON. -}
 jsonLineFormat :: (LogItem a) => DdContext -> ItemFormatter a
 jsonLineFormat logIdentity _colourise verb logItem =
-    TB.fromLazyText (TLE.decodeUtf8 (encode (jsonLine logIdentity verb logItem)))
+    TB.fromLazyText (encodeToLazyText (jsonLine logIdentity verb logItem))
 
 {- The rendered JSON log line. The reserved attributes a log backend reads without a
 custom pipeline sit at the top level; the emitter's own @katip@ fields are nested

@@ -4,8 +4,10 @@
 
 module Ecluse.Package.FilterSpec (spec) where
 
+import Data.Aeson (Value (String), encode)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Hedgehog (Gen, annotateShow, assert, forAll, (===))
 import Hedgehog qualified as H
@@ -20,7 +22,7 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
-    InvalidEntry (invalidKind),
+    InvalidEntry (invalidKind, invalidValue),
     InvalidEntryKind (InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
@@ -297,6 +299,17 @@ enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact
         let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact "http://evil.example.test/thing-1.0.0.tgz")
         Map.lookup "1.0.0" (infoVersions enforced) `shouldBe` Nothing
         map invalidKind (infoInvalidEntries enforced) `shouldBe` [InvalidVersionManifest]
+
+    it "records the dropped artifact's authority, never its URL (the value reaches a log line)" $ do
+        -- An upstream-supplied dist.tarball can carry a credential in its userinfo or a
+        -- signed query string, and the recorded value is rendered onto the drop-tracking
+        -- WARNING line, so only the authority is kept.
+        let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact "http://deploy:hunter2@evil.test/x?sig=abc")
+            recorded = map invalidValue (infoInvalidEntries enforced)
+            rendered = decodeUtf8 (encode recorded) :: Text
+        recorded `shouldBe` [String "evil.test:443"]
+        rendered `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        rendered `shouldSatisfy` (not . T.isInfixOf "sig=abc")
 
     it "leaves artifact URLs untouched for a non-https (loopback) upstream" $
         urlOf (enforceArtifactScheme "http://127.0.0.1:8080" (infoWithArtifact "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"))

@@ -524,16 +524,20 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
   `console` for local development. Each JSON line carries `timestamp` (RFC 3339 UTC), `status`
   (`debug`, `info`, `warn`, `error`), `message`, and the `service`/`env`/`version` identity, plus a
   `dd` object with `trace_id` and `span_id` while a span is in scope. The emitting call's own fields
-  sit under `data` and the `katip` emitter fields under `katip`. Those top-level names are the ones
-  Datadog's JSON preprocessing reads unmodified; any other backend indexes them as ordinary fields.
-  `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the floor (`info` by default). Bearer tokens render as a
-  redacted placeholder and a URL is reduced to its host and port, so neither token material nor a
-  signed query string reaches a log field. The shape is in
+  sit under `data` and the `katip` emitter fields under `katip`, the emitting process's hostname
+  included (`katip.host`), so a collector's own host attribution governs the line's `host`.
+  `timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes and are read
+  unmodified by its JSON preprocessing; `env` and `version` are ordinary attributes any backend
+  indexes. `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the floor (`info` by default). Bearer tokens render
+  as a redacted placeholder and a URL is reduced to its host and port, so neither token material nor
+  a signed query string reaches a log field. The shape is in
   [observability → Logs](docs/architecture/observability.md#logs).
 - **Telemetry (opt-in).** Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then `DD_*` (`DD_SERVICE`,
   `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for Datadog or the standard `OTEL_*` for any other
-  backend; `DD_*` wins where both are set, and the resolved identity stamps both traces and the `dd`
-  object on every log line. `DD_API_KEY`/`DD_SITE` are ignored: Écluse exports only to a node-local
+  backend; `DD_*` wins where both are set, and the resolved identity stamps both traces and every log
+  line. With no `DD_VERSION` or `service.version` set, exported traces and log lines both carry the
+  running binary's own build version, so the version tag is never blank.
+  `DD_API_KEY`/`DD_SITE` are ignored: Écluse exports only to a node-local
   collector or Agent, at `http://localhost:4318` by default or wherever
   `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` points (authenticate a remote collector out of band
   with `OTEL_EXPORTER_OTLP_HEADERS`). Export is async and batched, off the request path, so an
