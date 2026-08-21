@@ -73,6 +73,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -486,6 +487,12 @@ data MountBinding = MountBinding
     and what serving it amounts to (an 'Ecluse.Core.Server.Dispatch.RouteAction'). The
     adapter derives it from its own route table, so the web layer holds no ecosystem's
     path grammar of its own.
+    -}
+    , bindingCredential :: CredentialMapping
+    {- ^ The ecosystem's credential presentation: how a client of this mount presents its
+    credential, and how one is carried upstream. The adapter declares it, so the serve
+    path recovers what this ecosystem's clients actually send and holds no scheme of its
+    own; the edge compare and the deny-by-default refusal stay the pipeline's.
     -}
     , bindingPackumentDeps :: PackumentDeps
     {- ^ The packument-serve dependencies. Not optional: a mount exists only for an

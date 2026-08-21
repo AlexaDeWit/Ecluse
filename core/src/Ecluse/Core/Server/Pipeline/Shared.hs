@@ -9,7 +9,7 @@ authentication and the shared serve rejection values for integrity-floor enforce
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
     edgeTokenMatches,
-    forwardedToken,
+    forwardedCredential,
     integrityMissing,
     integrityBelowFloor,
     trustedIntegrityMissing,
@@ -19,12 +19,13 @@ module Ecluse.Core.Server.Pipeline.Shared (
     shedRetryAfter,
 ) where
 
-import Data.Text qualified as T
-import Network.HTTP.Types (Header, HeaderName, Status, hAuthorization, status503)
+import Network.HTTP.Types (Header, HeaderName, Status, status503)
 import Network.Wai (Request, requestHeaders)
 
-import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Registry.Request (credentialRecover)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
+import Ecluse.Core.Server.Context (MountBinding (bindingCredential))
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
@@ -51,36 +52,29 @@ shedRetryAfter :: Header
 shedRetryAfter = (hRetryAfter, show (admissionWaitMicros `div` 1_000_000))
 
 {- | The shared edge gate against a configured inbound token: with none configured the
-edge is open; with one configured the request's forwarded bearer must match it exactly.
-Deny-by-default: a missing or mismatched bearer is rejected. The match is constant-time:
-'Secret' equality compares over the full UTF-8 bytes without a content-dependent early
-out, so this gate does not leak the configured token's prefix length through timing.
+edge is open; with one configured the credential the client presented must match it
+exactly. Deny-by-default: a missing or mismatched credential is rejected. The match is
+constant-time: 'Secret' equality compares over the full UTF-8 bytes without a
+content-dependent early out, so this gate does not leak the configured token's prefix
+length through timing.
 
 The packument, tarball, and publish paths all apply the same gate, so it is factored
-here rather than duplicated per route. It takes the __already-extracted__ bearer
-('forwardedToken') rather than the request, so a handler that also forwards the
-credential upstream scans the headers for it once and reuses the one extraction for
-both.
+here rather than duplicated per route. It takes the __already-recovered__ credential
+('forwardedCredential') rather than the request, so a handler that also forwards the
+credential upstream scans the headers for it once and reuses the one recovery for both.
 -}
 edgeTokenMatches :: Maybe Secret -> Maybe Secret -> Bool
 edgeTokenMatches expected forwarded = case expected of
     Nothing -> True
     Just want -> forwarded == Just want
 
-{- The client's forwarded bearer credential, recovered from the request's
-@Authorization: Bearer …@ header. 'Nothing' when no bearer credential is present;
-the recovered 'Secret' is what is forwarded to the private upstream and compared
-against the edge token. The scheme name is matched case-insensitively (npm sends
-@Bearer@), the token taken verbatim after it. -}
-forwardedToken :: Request -> Maybe Secret
-forwardedToken request = do
-    (_, raw) <- find ((== hAuthorization) . fst) (requestHeaders request)
-    let value = decodeUtf8 raw
-        (scheme, rest) = T.break (== ' ') value
-    guard (T.toLower scheme == "bearer")
-    let token = T.dropWhile (== ' ') rest
-    guard (not (T.null token))
-    pure (mkSecret token)
+{- The credential a client of this mount presented, recovered through the mount's own
+ecosystem presentation ('bindingCredential'): the token text, or 'Nothing' when the
+request carries no credential in that form. It is what the edge gate compares and what a
+passthrough read forwards to the private upstream, so a mount accepts exactly its
+ecosystem's presentation and this pipeline names no scheme of its own. -}
+forwardedCredential :: MountBinding -> Request -> Maybe Secret
+forwardedCredential mount = credentialRecover (bindingCredential mount) . requestHeaders
 
 {- A __public__ version refused by the integrity-presence admission policy: its selected
 artifact carries no integrity digest of any kind, so it cannot be tied to a
