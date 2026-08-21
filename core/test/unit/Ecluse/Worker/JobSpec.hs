@@ -160,6 +160,21 @@ spec = do
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
+        it "renders a failed artifact fetch without the URL's userinfo, path, or query" $
+            -- The fetch fault's text becomes the Retried reason: it is logged at the
+            -- queue-realisation site and set as the mirror-job span's error status, so it
+            -- must name the authority and the bounded transport cause, never the location.
+            withRuntime (Right ()) $ \runtime queue _logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
+                outcome <- runWM runtime (processJob receipt job)
+                case outcome of
+                    Retried reason -> do
+                        reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
+                        reason `shouldSatisfy` (not . T.isInfixOf "hunter2")
+                        reason `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+                        reason `shouldSatisfy` (not . T.isInfixOf "/x")
+                    other -> expectationFailure ("expected a Retried outcome from the refused connect, got " <> show other)
+
         it "treats a registry rejection as retryable (job left for redelivery)" $
             withUpstream $ \url ->
                 withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do

@@ -529,8 +529,10 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
   `timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes and are read
   unmodified by its JSON preprocessing; `env` and `version` are ordinary attributes any backend
   indexes. `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the floor (`info` by default). Bearer tokens render
-  as a redacted placeholder and a URL is reduced to its host and port, so neither token material nor
-  a signed query string reaches a log field. The shape is in
+  as a redacted placeholder, and on every running path a URL is reduced to its host and port, so
+  neither token material nor a signed query string reaches a log field. The boot-time configuration
+  echo is the exception: it prints each configured upstream and mirror URL as you gave it, so keep
+  credentials in the token variables rather than inside a URL. The shape is in
   [observability → Logs](docs/architecture/observability.md#logs).
 - **Telemetry (opt-in).** Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then `DD_*` (`DD_SERVICE`,
   `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for Datadog or the standard `OTEL_*` for any other

@@ -102,15 +102,29 @@ costs nothing at `info`. An unrecognised value is a boot error, like every other
 
 ### URL minimisation
 
-No log line and no span attribute renders a URL. An artifact location is upstream-supplied, and an
-advisory export URL and a configured upstream base URL are operator-supplied; any of them can carry
-a credential in its userinfo or in a pre-signed query string, and both logs and spans leave the
-node. Every site that names a location names its validated `host:port` instead, through the one
-shared reduction in `Ecluse.Core.Security.Authority`; a value with no dialable authority renders as
-`<unresolved>`, never as a fragment of the input. This covers the mirror artifact URL, the OSV
-export URL, the packument origin and upstream fields on the serve path, and the artifact URL a
-dropped-entry record carries. The span attributes say so in their names:
-`ecluse.mirror.artifact_host` and `ecluse.osv.source_host`.
+An artifact location is upstream-supplied, and an advisory export URL and a configured upstream base
+URL are operator-supplied; any of them can carry a credential in its userinfo or in a pre-signed
+query string, and both logs and spans leave the node. So on every running path a URL is reduced to
+its validated `host:port` before it names anything, through the one shared reduction in
+`Ecluse.Core.Security.Authority`; a value with no dialable authority renders as `<unresolved>`,
+never as a fragment of the input. The paths this covers:
+
+- **Serve.** The packument origin and upstream fields on the degrade warnings, the URL a
+  url-formation fault carries, and the artifact URL a dropped-entry record holds.
+- **Mirror enqueue and worker fetch.** The `ecluse.mirror.artifact_host` span attribute, the
+  worker's tarball-host drop reason and artifact-fetch line, and a failed fetch's reason, which
+  names the authority and the bounded transport cause rather than the client's rendered exception.
+- **Advisory sync and export.** The `ecluse.osv.source_host` span attribute on the compile and
+  stream spans, and the stream's start line.
+
+The span attribute names say what they hold: `ecluse.mirror.artifact_host` and
+`ecluse.osv.source_host`.
+
+The **boot-time configuration echo** is the exception, by design: the resolved-key provenance dump,
+the endpoint-collision warnings, and the mount posture lines print each configured upstream and
+mirror URL as the operator gave it, so the effective posture reads straight from the start-up log.
+Secret-typed keys are redacted there, and a credential belongs in one of those rather than inside a
+URL (see [Secrets](../../USAGE.md#secrets)).
 
 ## Configuration and deployment
 
