@@ -1,23 +1,23 @@
 # The RubyGems registry protocol (Ruby / gem / Bundler)
 
 Reverse-engineering reference for the Ruby package registry, third after
-[`npm.md`](npm.md) and [`pypi.md`](pypi.md). Same goal: a JSON/text type model
-(see [Type model](#11-type-model)) that lets Écluse act as both a Ruby client
-(fetching the way `gem`/Bundler do) and a Ruby server (an index `bundle install`
-resolves against).
+[`npm.md`](npm.md) and [`pypi.md`](pypi.md). The goal is the same: a JSON and
+text type model (see [Type model](#11-type-model)). The model lets Écluse act as
+a Ruby client, fetching the way `gem` and Bundler do. It also lets Écluse serve
+an index that `bundle install` resolves against.
 
-> **Terminology.** `gem` is the CLI, **Bundler** the dependency manager; the
-> registry is **RubyGems.org** (`rubygems.org`). The install-facing protocol is
-> the **Compact Index** (`/versions`, `/info`, `/names`): plain text, append-only,
-> Range-fetched, the analogue of npm's abbreviated packument / PyPI's Simple API.
-> A richer **JSON API** (`/api/v1/...`, `/api/v2/...`) is the packument-style
-> view. Artifacts are `.gem` files under `/gems/`.
+> **Terminology.** `gem` is the CLI and **Bundler** is the dependency manager.
+> The registry is **RubyGems.org** (`rubygems.org`). The install-facing protocol
+> is the **Compact Index** (`/versions`, `/info`, `/names`): plain text,
+> append-only, Range-fetched, the analogue of npm's abbreviated packument or
+> PyPI's Simple API. A richer **JSON API** (`/api/v1/...`, `/api/v2/...`) is the
+> packument-style view. Artifacts are `.gem` files under `/gems/`.
 
 > **Provenance.** Live examples captured 2026-06-21 against `rubygems.org` with
-> `curl`/`jq`/`tar` (see [Reproducing the probes](#13-reproducing-the-probes));
-> normative claims cite the
-> [RubyGems guides](https://guides.rubygems.org/). Where live and docs differ,
-> observed behaviour wins.
+> `curl`, `jq`, and `tar` (see
+> [Reproducing the probes](#13-reproducing-the-probes)). Normative claims cite
+> the [RubyGems guides](https://guides.rubygems.org/). Where live behaviour and
+> the docs differ, observed behaviour wins.
 
 ---
 
@@ -47,19 +47,19 @@ RubyGems sits between npm and PyPI in shape, with one transport twist:
 - **Like PyPI**, a version can have **multiple files**, one per platform (`ruby`
   = pure, plus `java`, `x86_64-linux`, `arm64-darwin`, …). Live: `bcrypt 3.1.22`
   ships both `3.1.22` (MRI) and `3.1.22-java` (JRuby).
-- **Like npm**, install can execute arbitrary code: a gem with **native
-  extensions** compiles them at `gem install` time (`extconf.rb`, `make`), the
-  install-time RCE surface analogous to npm's install scripts.
+- **Like npm**, install can execute arbitrary code. A gem with **native
+  extensions** compiles them at `gem install` time (`extconf.rb`, `make`). That
+  is the install-time remote code execution (RCE) surface, analogous to npm's
+  install scripts.
 - **Unlike either**, the Compact Index is **plain text, append-only, and fetched
   incrementally via HTTP Range**, not a JSON document re-downloaded each time.
 
-One finding dominates the security design:
-
-- **The native-extension signal is in no metadata API.** `extensions` lives only
-  in the gemspec (the `.gem`'s `metadata.gz`, or the legacy `quick` Marshal
-  spec), not the Compact Index and not the JSON API (captured: `extensions: null`
-  for `bcrypt`, which has one). So "does it run code on install?" is a
-  fetch-and-parse, not a free field read, a real divergence from npm (§6).
+One finding dominates the security design: **the native-extension signal is in no
+metadata API**. `extensions` lives only in the gemspec: the `.gem`'s
+`metadata.gz`, or the legacy `quick` Marshal spec. It is not in the Compact Index
+and not in the JSON API. Captured: `extensions: null` for `bcrypt`, which has one.
+So "does it run code on install?" costs a fetch and a parse, not a free field
+read. That is a real divergence from npm (§6).
 
 ### npm ↔ PyPI ↔ RubyGems
 
@@ -73,7 +73,7 @@ One finding dominates the security design:
 | One version's detail | `/{pkg}/{v}` | `/pypi/{p}/{v}/json` | `/api/v2/rubygems/{n}/versions/{v}.json` |
 | Files per version | one `.tgz` | many (sdist + wheels) | many (one per **platform**) |
 | Integrity | `dist.integrity` (SRI) | `hashes.sha256` | `checksum` (SHA256 of `.gem`) in `/info` |
-| "current" pointer | `dist-tags.latest` | none (client computes) | none; `/latest.json` or JSON `version` |
+| "current" pointer | `dist-tags.latest` | none (client computes) | none, use `/latest.json` or JSON `version` |
 | Name identity | case-sensitive, scopes | normalised (PEP 503) | **verbatim** (no normalisation step) |
 | Dependency spec | semver range | PEP 508 | `Gem::Requirement` (`~>`, `&`-joined) |
 | Version grammar | semver | PEP 440 | `Gem::Version` (e.g. `1.0.0.beta1`) |
@@ -82,12 +82,12 @@ One finding dominates the security design:
 | Code-exec signal location | abbreviated `hasInstallScript` (free) | file `packagetype == sdist` (free) | **gemspec `extensions`** (fetch required) |
 | Advisories | npm advisories endpoint | `vulnerabilities[]` (OSV) | RubyAdvisory DB / OSV (out-of-band) |
 
-Three request shapes cover ~all install traffic:
+Three request shapes cover almost all install traffic:
 
 | Intent | Request |
 |--------|---------|
 | "What versions of X exist + their deps + checksums?" | `GET /info/{gem}` (Compact Index) |
-| "What does X-1.2.3 depend on / does it build native code?" | `/info` for deps; **gemspec** for `extensions` |
+| "What does X-1.2.3 depend on / does it build native code?" | `/info` for deps, **gemspec** for `extensions` |
 | "Give me the bytes" | `GET /gems/{gem}-{version}[-{platform}].gem` |
 
 ---
@@ -96,20 +96,20 @@ Three request shapes cover ~all install traffic:
 
 ### Hosts & scheme
 
-- One host does it all: `https://rubygems.org` serves the Compact Index, JSON
-  APIs, and `.gem` artifacts (`/gems/…`), fronted by Fastly. No separate artifact
-  host (simpler than PyPI). Always HTTPS, HTTP/2.
+One host serves everything: `https://rubygems.org` returns the Compact Index, the
+JSON APIs, and `.gem` artifacts (`/gems/…`), fronted by Fastly. There is no
+separate artifact host, which is simpler than PyPI. Always HTTPS, HTTP/2.
 
 ### Gem-name identity
 
-Gem names are **verbatim**, no PEP 503-style normalisation. `/names` is the
-authoritative set of exact names. Names are conventionally lowercase with
-`-`/`_`, but the registry folds nothing: treat the name as opaque and exact.
+Gem names are **verbatim**, with no PEP 503-style normalisation. `/names` is the
+authoritative set of exact names. By convention a name is lowercase with `-` or
+`_`, but the registry folds nothing: treat the name as opaque and exact.
 
 ### The Compact Index is plain text + Range-incremental
 
 The install path is not JSON. `/versions` and `/info/{gem}` are UTF-8 text files
-that only grow (append-only), letting a client fetch just the new tail:
+that only grow (append-only), so a client fetches just the new tail:
 
 | Mechanism | Observed |
 |-----------|----------|
@@ -131,9 +131,9 @@ never changes (until yanked, when it disappears, §8).
 
 ### Compression
 
-`/versions` and `.gem` files are already compact/binary; `Accept-Encoding: gzip`
-is honoured on text endpoints. The legacy full indexes are gzipped Marshal
-(`*.4.8.gz`).
+`/versions` and `.gem` files are already compact or binary. The server honours
+`Accept-Encoding: gzip` on text endpoints. The legacy full indexes ship as
+gzipped Marshal (`*.4.8.gz`).
 
 ### Errors
 
@@ -143,14 +143,15 @@ is honoured on text endpoints. The legacy full indexes are gzipped Marshal
 | Unknown gem, `/info/{gem}` | `404` | `This gem could not be found` (plain text) |
 | Unknown `.gem` file | `403` | (Fastly/object-store denies a missing key) |
 
-Note the `.gem` 403 (not 404) for a missing artifact, an object-store quirk. For
-the Compact Index the natural denial is to omit the version line (§8) or `403`.
+A missing artifact returns `403`, not `404`, an object-store quirk. For the
+Compact Index the natural denial is to omit the version line (§8) or return
+`403`.
 
 ---
 
 ## 3. Endpoint catalogue
 
-`✓` = exercised live on 2026-06-21; `▢` = documented / theory only.
+`✓` = exercised live on 2026-06-21. `▢` = documented or theory only.
 
 ### Read path (the proxy's hot path)
 
@@ -167,8 +168,8 @@ the Compact Index the natural denial is to omit the version line (§8) or `403`.
 | `GET` ✓ | `/quick/Marshal.4.8/{name}-{version}.gemspec.rz` | One gemspec (zlib Marshal), **carries `extensions`** | none |
 | `GET` ▢ | `/specs.4.8.gz`, `/latest_specs.4.8.gz`, `/prerelease_specs.4.8.gz` | Legacy full Marshal indexes | none |
 
-> The legacy Marshal **dependency API** (`/api/v1/dependencies?gems=…`) was
-> superseded by the Compact Index and should not be used by new integrations.
+> The Compact Index supersedes the legacy Marshal **dependency API**
+> (`/api/v1/dependencies?gems=…`). Do not use it in a new integration.
 
 ### Auth & write path (theory, no token)
 
@@ -195,17 +196,18 @@ runtime}`), `metadata` (free-form hash), `downloads`, `version_downloads`,
 `funding_uri`, `project_uri`).
 
 `dependencies` here is `{ "runtime": [{name, requirements}], "development":
-[{name, requirements}] }`, the **runtime** list is what matters for resolution.
+[{name, requirements}] }`. The **runtime** list is the one that matters for
+resolution.
 
-The `metadata` hash is gem-author-supplied and can include policy-relevant keys,
-notably **`rubygems_mfa_required`** (published under enforced MFA?), plus
-`source_code_uri`, `funding_uri`, `changelog_uri`. Live on `sinatra`:
-`metadata.rubygems_mfa_required`.
+The gem author supplies the `metadata` hash. It can carry policy-relevant keys,
+above all **`rubygems_mfa_required`** (was the gem published under enforced
+MFA?), plus `source_code_uri`, `funding_uri`, and `changelog_uri`. Live on
+`sinatra`: `metadata.rubygems_mfa_required`.
 
 ### `GET /api/v1/versions/{name}.json`, all versions
 
-An array, newest first; the analogue of npm's `versions` map / PyPI `releases`.
-Each entry (captured, `bcrypt`):
+An array, newest first. It is the analogue of npm's `versions` map and PyPI's
+`releases`. Each entry (captured, `bcrypt`):
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -218,7 +220,7 @@ Each entry (captured, `bcrypt`):
 | `created_at` / `built_at` | ISO date | Publish / build time, the **age signal**. |
 | `requirements`, `authors`, `summary`, `description`, `metadata`, `spec_sha`, `downloads_count` | … | |
 
-This is where you enumerate platform variants: `bcrypt 3.1.22` appears as both
+Enumerate platform variants here: `bcrypt 3.1.22` appears as both
 `platform: "ruby"` and `platform: "java"`.
 
 ### Real example (trimmed, `sinatra` latest)
@@ -246,8 +248,8 @@ This is where you enumerate platform variants: `bcrypt 3.1.22` appears as both
 
 ## 5. The Compact Index (installer-facing)
 
-The endpoint Bundler resolves against and the proxy's primary. Three plain-text
-files.
+The endpoint Bundler resolves against, and so the proxy's primary one. Three
+plain-text files.
 
 ### `GET /versions`, the master list
 
@@ -257,12 +259,12 @@ created_at: 2026-05-29T01:10:37Z
 RUBYGEM [-]VERSION[,VERSION,...] MD5
 ```
 
-- A `created_at` line, then `---`, then one line per gem; later publishes append
-  new lines.
+- A `created_at` line, then `---`, then one line per gem. A later publish
+  appends a new line.
 - Each line: `name`, a comma-separated version list, and the **MD5 of that gem's
   `/info` file** (a cheap "did /info change?" check).
 - **Yanks** append a line with a leading dash on the version (`somegem -2.0.0
-  <md5>`); only the last MD5 per gem is authoritative. Live (first lines, 22 MB
+  <md5>`). Only the last MD5 per gem is authoritative. Live (first lines, 22 MB
   file):
 
 ```
@@ -293,8 +295,8 @@ and a platform-split, dependency-free gem (`bcrypt`):
 
 | Token | Meaning |
 |-------|---------|
-| `VERSION[-PLATFORM]` | The version; platform suffix when not pure `ruby`. |
-| before `\|` | **Runtime** dependencies, `name:requirement`; multiple constraints joined by `&` (`rack:< 4&>= 3.0.0`). Development deps are **not** here. |
+| `VERSION[-PLATFORM]` | The version, with a platform suffix when not pure `ruby`. |
+| before `\|` | **Runtime** dependencies, `name:requirement`. An `&` joins multiple constraints (`rack:< 4&>= 3.0.0`). Development deps are **not** here. |
 | `checksum:` | **SHA256 of the `.gem`**, the integrity value Bundler pins. |
 | `ruby:` / `rubygems:` | `required_ruby_version` / `required_rubygems_version`. |
 | `created_at:` | Per-version publish timestamp (the age signal). |
@@ -310,7 +312,7 @@ code. That signal requires the gemspec (§6).
 RUBYGEM
 ```
 Newline-delimited, one exact name per line (`_`, `-`, `023_solver_…`). The basis
-of name completion / existence checks.
+of name completion and existence checks.
 
 ---
 
@@ -327,13 +329,13 @@ Good for display and most rules.
 
 ### (b) The Compact Index `/info` line (§5)
 
-Cheapest source of the resolver essentials: deps, `checksum`, `ruby` req,
-timestamp. This is what Bundler uses.
+Cheapest source of the resolver essentials: deps, `checksum`, `ruby` req, and
+timestamp. Bundler uses this.
 
 ### (c) The gemspec, the **only** source of `extensions`
 
-Neither (a) nor (b) says whether install will **compile and run code**; the
-gemspec does. Two ways to get it without running the gem:
+Neither (a) nor (b) says whether install will **compile and run code**. The
+gemspec does. Two ways to read it without running the gem:
 
 1. **`/quick/Marshal.4.8/{name}-{version}.gemspec.rz`**, a single version's
    gemspec, zlib Ruby Marshal. Cheapest read of `extensions` without the full
@@ -360,9 +362,9 @@ non-Ruby implementation parses them directly or shells to Ruby. In the YAML form
 ### Dependencies (`Gem::Requirement`)
 
 Operators are `=`, `!=`, `>`, `<`, `>=`, `<=`, and the pessimistic `~>`
-(twiddle-wakka: `~> 3.0` ≈ `>= 3.0, < 4.0`). In the Compact Index multiple
-constraints are `&`-joined; in JSON they are one comma-separated `requirements`
-string. Keep the raw string plus the parsed `{name, constraints}`.
+(twiddle-wakka: `~> 3.0` ≈ `>= 3.0, < 4.0`). The Compact Index joins multiple
+constraints with `&`. JSON gives one comma-separated `requirements` string. Keep
+the raw string plus the parsed `{name, constraints}`.
 
 ---
 
@@ -389,28 +391,29 @@ SHA512:
   data.tar.gz: 9a2eddcb…
 ```
 
-So there are **two integrity layers**: the outer `checksum:` (SHA256 of the
-whole `.gem`, in `/info` and JSON `sha`) that Bundler verifies on download, and
-the inner `checksums.yaml.gz` covering the two tar members.
+So there are **two integrity layers**. The outer `checksum:` is the SHA256 of
+the whole `.gem`, carried in `/info` and JSON `sha`, and Bundler verifies it on
+download. The inner `checksums.yaml.gz` covers the two tar members.
 
 ### Download URL & platforms
 
 `GET /gems/{name}-{version}[-{platform}].gem`. The pure build omits the platform
-(`bcrypt-3.1.22.gem`), variants carry it (`bcrypt-3.1.22-java.gem`). As with PyPI
-wheels, a version maps to a **set of files** keyed by platform. Bundler picks the
-file matching the running platform, falling back to the pure `ruby` gem (which
-may then build a native extension).
+(`bcrypt-3.1.22.gem`) and a variant carries it (`bcrypt-3.1.22-java.gem`). As
+with PyPI wheels, a version maps to a **set of files** keyed by platform. Bundler
+picks the file matching the running platform and falls back to the pure `ruby`
+gem, which may then build a native extension.
 
 ### Signing
 
-RubyGems supports **signed gems** (`gem cert`, X.509), but adoption is rare and
-not enforced. Rely on the per-download `checksum` (SHA256), which is ubiquitous.
+RubyGems supports **signed gems** (`gem cert`, X.509), but few gems use them and
+nothing enforces them. Rely on the per-download `checksum` (SHA256), which is
+always present.
 
 ---
 
 ## 8. Version & availability resolution
 
-As with npm and pip, the registry resolves no requirements; Bundler does,
+As with npm and pip, the registry resolves no requirements. Bundler does that,
 client-side.
 
 ### What the server resolves vs. the client
@@ -436,31 +439,31 @@ version list (`/info/{gem}`, `/api/v1/versions/{name}.json`), the latest pointer
    `checksum:` SHA256, write resolved versions (and, in modern Bundler, a
    `CHECKSUMS` block) to `Gemfile.lock`.
 
-So availability is a non-yanked version line in `/info`; presence in the Compact
+So availability is a non-yanked version line in `/info`. Presence in the Compact
 Index is availability.
 
 ### Yank semantics (sharper than PyPI)
 
-`gem yank` removes the version: its line disappears from `/info`, a dash-prefixed
-line is appended to `/versions`, and the `.gem` stops resolving (403/404). Unlike
+`gem yank` removes the version: its line disappears from `/info`, `/versions`
+gains a dash-prefixed line, and the `.gem` stops resolving (403/404). Unlike
 PyPI, where a yanked file stays downloadable for exact pins, a RubyGems yank is
 closer to a soft-delete.
 
 ### Consequences for a proxy (both directions)
 
 - **As a client**, fetch availability via the Compact Index (incrementally,
-  honouring `Range`/`ETag`), read deps/checksums from `/info`, resolve
+  honouring `Range`/`ETag`), read deps and checksums from `/info`, and resolve
   `Gem::Requirement` locally. For an install-script policy, also fetch the
   gemspec (`/quick/...gemspec.rz` or the `.gem`'s `metadata.gz`), the one signal
   the index withholds.
-- **As a server**, serve a coherent Compact Index: a `/versions` whose per-gem
-  MD5 matches the served `/info`, `/info` lines with correct `checksum:` and
-  `ruby:`, and working `ETag`/`Range`/`Repr-Digest`. Also serve `/names` and the
-  `.gem` files.
+- **As a server**, serve a coherent Compact Index. That means a `/versions` whose
+  per-gem MD5 matches the served `/info`, `/info` lines with correct `checksum:`
+  and `ruby:`, and working `ETag`/`Range`/`Repr-Digest`. Also serve `/names` and
+  the `.gem` files.
 - **Policy shapes availability.** To deny a version, omit its `/info` line and
-  update the `/versions` MD5; to hard-block, `403` the `.gem`. A deny-by-default
+  update the `/versions` MD5. To hard-block, `403` the `.gem`. A deny-by-default
   index is a **filtered projection** of upstream, but here it must keep the
-  append-only/checksum invariants, more delicate than rewriting JSON.
+  append-only and checksum invariants, more delicate than rewriting JSON.
 - **`created_at`** (per version, in `/info` and JSON) is the age signal.
 - **`rubygems_mfa_required`** (JSON `metadata`) is a Ruby-specific trust signal:
   prefer gems published under enforced MFA.
@@ -469,16 +472,18 @@ closer to a soft-delete.
 
 ## 9. Authentication (in theory)
 
-No token available. All read endpoints above are anonymous (every probe
-succeeded with no credentials); auth gates only writes and account actions.
+No token available for these probes. Every read endpoint above is anonymous:
+every probe succeeded with no credentials. Auth gates only writes and account
+actions.
 
 ### Reading
 
 Public RubyGems.org needs no auth to read. Private gem servers (Gemfury,
-Artifactory, GitHub Packages, self-hosted Geminabox/`gem server`) use HTTP Basic,
-typically credentials in the source URL (`https://KEY@gems.example.com`) or in
-Bundler config (`bundle config set --global https://gems.example.com KEY`).
-`gem`/Bundler send `Authorization: Basic …`.
+Artifactory, GitHub Packages, self-hosted Geminabox or `gem server`) use HTTP
+Basic. The credentials usually sit in the source URL
+(`https://KEY@gems.example.com`) or in Bundler config
+(`bundle config set --global https://gems.example.com KEY`). `gem` and Bundler
+then send `Authorization: Basic …`.
 
 ### Writing (the API-key model)
 
@@ -510,18 +515,19 @@ Modern refinements (parallel to npm/PyPI):
   token, handled like its npm endpoint.
 - **Mirror/push** (if the proxy publishes): `POST /api/v1/gems` with the raw-key
   `Authorization`, or OIDC.
-- Note the wire difference: an npm client sends `Bearer`, a Ruby client a raw key
-  or Basic. The edge auth check must accept the right form per mount.
+- The wire forms differ: an npm client sends `Bearer`, a Ruby client sends a raw
+  key or Basic. The edge auth check must accept the right form per mount.
 
 ---
 
 ## 10. Write path (for completeness)
 
-Off the proxy's critical path (Écluse delegates storage), here for completeness.
+Off the proxy's critical path, because Écluse delegates storage.
 
 - **Push**, `POST /api/v1/gems`, `Authorization: <key>` (+ `OTP`), body the raw
-  `.gem`. Re-pushing an existing `name-version[-platform]` → rejected (immutable).
-- **Yank**, `DELETE /api/v1/gems/yank` (`gem_name`, `version`, `platform?`);
+  `.gem`. The registry rejects a re-push of an existing
+  `name-version[-platform]`, because artifacts are immutable.
+- **Yank**, `DELETE /api/v1/gems/yank` (`gem_name`, `version`, `platform?`). It
   removes the version from the index and stops serving the `.gem` (§8).
 - **Owners**, `GET/POST/DELETE /api/v1/gems/{name}/owners` manage gem owners.
 - **Trusted Publishing**, CI exchanges OIDC for a short-lived key, then pushes
@@ -531,11 +537,11 @@ Off the proxy's critical path (Écluse delegates storage), here for completeness
 
 ## 11. Type model
 
-A wire type model, sharing vocabulary with [`npm.md` §11](npm.md#11-type-model)
-and [`pypi.md` §11](pypi.md#11-type-model) for easy comparison. Lenient on input
-(ignore unknown keys; tolerate the plain-text Compact Index, JSON, and
-Ruby-serialised gemspec forms), strict on output. ⚠️ = a shape that differs
-materially from the npm wire model.
+A wire type model that shares vocabulary with
+[`npm.md` §11](npm.md#11-type-model) and [`pypi.md` §11](pypi.md#11-type-model)
+for easy comparison. Be lenient on input: ignore unknown keys, and accept the
+plain-text Compact Index, JSON, and Ruby-serialised gemspec forms. Be strict on
+output. ⚠️ = a shape that differs materially from the npm wire model.
 
 ### Shared scalars
 
@@ -585,8 +591,8 @@ GemVersionDetails = {
 ```
 
 > The install-script signal (`extensions` non-empty) is not in the metadata
-> responses, unlike npm's `hasInstallScript` and PyPI's `packagetype`: it must be
-> fetched from the gemspec, an effectful input rather than a free field.
+> responses, unlike npm's `hasInstallScript` and PyPI's `packagetype`. A client
+> fetches it from the gemspec, an effectful input rather than a free field.
 
 ### Compact Index & JSON shapes
 
@@ -606,14 +612,14 @@ GemJsonVersions = [ { number, platform, sha, ruby_version, prerelease, created_a
 GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/versions/{v}.json
 ```
 
-> **Cross-ecosystem note.** RubyGems echoes the same shape differences PyPI
-> surfaced versus npm, (a) a version owns **N** artifacts (`Dist` → list, keyed
-> by platform); (b) the publish timestamp is per-file/per-version (here right
-> inside `/info`, no separate time map); (c) the install-risk signal is
-> ecosystem-specific (`hasInstallScript` / `packagetype==sdist` / `extensions`),
-> and adds a fourth: that signal may live **outside the metadata API**, so a
-> resolver needs a way to *fetch* per-version detail rather than read it from a
-> field.
+> **Cross-ecosystem note.** RubyGems echoes the shape differences PyPI surfaced
+> versus npm. (a) A version owns **N** artifacts (`Dist` → list, keyed by
+> platform). (b) The publish timestamp is per file and per version, here right
+> inside `/info`, with no separate time map. (c) The install-risk signal is
+> ecosystem-specific (`hasInstallScript`, `packagetype==sdist`, `extensions`).
+> RubyGems adds a fourth difference: that signal may live **outside the metadata
+> API**. A resolver then needs a way to *fetch* per-version detail, rather than
+> read a field.
 
 ---
 
@@ -624,25 +630,25 @@ GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/
 - [ ] Compact Index: `GET /versions`, `/info/{gem}`, `/names` as plain text,
       with **`ETag`, `Range`/`206`, and a correct `Repr-Digest`** so incremental
       fetch works.
-- [ ] Keep the invariants: `/versions` per-gem MD5 == MD5 of the served `/info`;
-      append-only ordering; dash-prefixed lines for yanks.
+- [ ] Keep the invariants: `/versions` per-gem MD5 == MD5 of the served `/info`,
+      append-only ordering, and dash-prefixed lines for yanks.
 - [ ] `/info` lines with correct `checksum:` (SHA256), `ruby:`, `created_at:`.
 - [ ] Serve `.gem` artifacts at `/gems/{name}-{version}[-{platform}].gem`
       (immutable cache), and `/quick/Marshal.4.8/…gemspec.rz`.
 - [ ] Optionally serve the JSON APIs (`/api/v1/gems`, `/api/v1/versions`,
       `/api/v2/...`).
-- [ ] `404` for unknown gem/metadata; policy denials by **omitting** the version
-      line (or `403` on the `.gem`).
+- [ ] Return `404` for an unknown gem or metadata. Express a policy denial by
+      **omitting** the version line, or `403` on the `.gem`.
 
 ### To be a correct gem **client** (fetch from upstreams)
 
 - [ ] Fetch the Compact Index **incrementally** (Range + ETag + Repr-Digest
-      verification); resolve `Gem::Requirement` (PubGrub semantics) **locally**.
-- [ ] Select the right **platform** file; exclude **yanked** and (by default)
-      prereleases.
-- [ ] Read deps/checksum/ruby-req from `/info`; **fetch the gemspec** to learn
-      `extensions` for the install-script signal.
-- [ ] For private upstreams attach `Authorization: Basic …` / raw key.
+      verification). Resolve `Gem::Requirement` (PubGrub semantics) **locally**.
+- [ ] Select the right **platform** file. Exclude **yanked** versions and, by
+      default, prereleases.
+- [ ] Read deps, checksum, and ruby req from `/info`. **Fetch the gemspec** to
+      learn `extensions` for the install-script signal.
+- [ ] For a private upstream, attach `Authorization: Basic …` or the raw key.
 - [ ] Verify each `.gem` against its SHA256 `checksum` before mirroring.
 - [ ] Project upstream into a **filtered** Compact Index reflecting policy
       decisions, preserving the append-only/MD5/checksum invariants.
