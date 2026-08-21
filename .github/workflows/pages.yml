@@ -45,6 +45,9 @@ jobs:
   deploy:
     name: Build & deploy site
     runs-on: ubuntu-latest
+    # The only bound this job had was GitHub's six-hour default. Observed
+    # ~12 min mean, 22 min worst.
+    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}

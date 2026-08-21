@@ -57,7 +57,7 @@ jobs:
   prune:
     name: Prune Actions cache
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read # checkout, to run scripts/prune-caches.sh
       actions: write # delete caches via the REST API
