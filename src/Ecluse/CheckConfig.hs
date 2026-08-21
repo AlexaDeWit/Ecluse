@@ -5,13 +5,15 @@
 {- | @ecluse check-config@: validate the configuration exactly as a boot would and
 print the whole resolved posture, without starting anything.
 
-The subcommand runs the same resolution chain the proxy boots through --
+The subcommand runs the same resolution chain the proxy boots through:
 'Ecluse.Config.loadConfig', the runtime plan, the admission and pool sizings, the
-memory plan, and the mirror-queue selection -- but applies none of it: no socket
-opens, no capability count changes, no re-exec, no cloud call. Failures print the
-same aggregated reports a boot would log and exit @2@; a valid configuration
-prints per-key provenance and every resolver's decision lines and exits @0@, so an
-operator (or a CI step) reads exactly what a boot would do before running one.
+memory plan, and the mirror-queue selection. It applies none of it: no socket
+opens, no capability count changes, no re-exec, no cloud call.
+
+A failure prints the same aggregated reports a boot would log and exits @2@. A valid
+configuration prints per-key provenance and every resolver's decision lines, then
+exits @0@. An operator or a CI step reads exactly what a boot would do before
+running one.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 
@@ -69,8 +71,8 @@ runCheckConfig = do
         Nothing -> "config document: none at " <> toText docPath <> " (defaults and environment only)"
     config <- either (refuseWith . renderErrs renderConfigError) pure (loadConfig envVars docBlob)
     -- The pure structural half of the composition (missing adapters, publish
-    -- policy): the same validateComposition the boot's composeBindings runs, so a
-    -- configuration the proxy would refuse can never validate here.
+    -- policy). It runs the same validateComposition the boot's composeBindings runs,
+    -- so a configuration the proxy would refuse can never validate here.
     case validateComposition config of
         [] -> pass
         errs -> refuseWith (renderErrs renderBootError errs)
@@ -83,8 +85,8 @@ runCheckConfig = do
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit
-    -- Backend selection precedes the plan, exactly as a boot orders it: the
-    -- queue tenant exists only when the memory backend was selected.
+    -- Backend selection precedes the plan, exactly as a boot orders it: the queue
+    -- tenant exists only when that selection picks the memory backend.
     runtimePlan <-
         either
             (refuseWith . renderErrs renderBootError)
@@ -101,9 +103,9 @@ runCheckConfig = do
             , renderEffectivePosture effective
             , [privateLine, publicLine]
             , memoryPlanLines
-            , -- The shed ladder, printed exactly as the boot would warn it: a
-              -- degraded-but-coherent plan validates (the plan is made safe by
-              -- shrinking); only an explicit override refuses below.
+            , -- The shed ladder, printed exactly as the boot would warn it. A
+              -- degraded-but-coherent plan validates, because shrinking makes the
+              -- plan safe. Only an explicit override refuses below.
               map ("warning: " <>) (mpDegradations memoryPlan)
             , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) runtimePlan
             , mountPostureLines config

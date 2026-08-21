@@ -32,8 +32,8 @@ commandParser =
         )
         <|> pure RunProxy
 
--- A bare @pilot@ keeps its serve-and-export meaning; @pilot compile@ selects
--- the one-shot mode.
+-- A bare @pilot@ keeps its serve-and-export meaning. @pilot compile@ selects the
+-- one-shot mode.
 pilotCommandParser :: Parser AppCommand
 pilotCommandParser =
     hsubparser

@@ -16,15 +16,14 @@ import Ecluse.Config (AppConfig (cfgServer), ServerSettings (srvPort))
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 
-{- | The WAI application for the Dredger worker mode.
-It exposes liveness and readiness probes.
--}
+-- | The WAI application for the Dredger worker mode: the liveness and readiness probes.
 dredgerApplication :: ServerConfig -> IO Application
 dredgerApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (pure True)))
 
 {- | The entry point for the Dredger worker mode.
-Dredger runs as a standalone HTTP server that only exposes liveness and readiness
-probes. Its actual worker loop will clean up upstream mirrors.
+
+Dredger runs as a standalone HTTP server that exposes only liveness and readiness
+probes. Its worker loop will clean up upstream mirrors.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do

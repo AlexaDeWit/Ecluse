@@ -4,48 +4,50 @@
 
 {- | Écluse: a supply-chain policy proxy for package registries.
 
-Écluse (package @ecluse@) sits between consumers (developers, CI) and a package
-registry, applying a configurable resilience policy before any dependency reaches
-a build, without hosting packages itself. The name is French for a canal lock: a
+Écluse (package @ecluse@) sits between clients (developers, CI) and a package
+registry. It applies a configurable resilience policy before any dependency reaches
+a build, and it hosts no packages itself. The name is French for a canal lock: a
 chamber whose gates never open at once. Every dependency is held and cleared
-through that controlled passage before it is admitted to a build.
+through that controlled passage before it enters a build.
 
-The goal is __resilience, not malware detection__: shrink the blast radius of a
-bad publish (a hijacked maintainer account, a race-to-publish, a typosquat)
-rather than promise to recognise malice. Écluse is __not a registry__: storage is
-delegated to whatever backend the operator runs (AWS CodeArtifact, GCP Artifact
-Registry), and Écluse only governs what may be fetched from, and mirrored to,
-those backends. npm is the first ecosystem; the domain model is ecosystem-agnostic
-so PyPI and RubyGems can follow.
+The goal is __resilience, not malware detection__. Shrink the blast radius of a bad
+publish (a hijacked maintainer account, a race-to-publish, a typosquat), rather than
+promise to recognise malice.
+
+Écluse is __not a registry__. The operator's own backend stores the packages (AWS
+CodeArtifact, GCP Artifact Registry). Écluse governs only what may be fetched from,
+and mirrored to, those backends. npm is the first ecosystem. The domain model is
+ecosystem-agnostic, so PyPI and RubyGems can follow.
 
 == How a request is cleared
 
-Écluse speaks a registry's native protocol across three read-path registries (the
+Écluse speaks a registry's native protocol across three read-path registries: the
 client's, a /private upstream/ of already-vetted packages, and the /public/
-registry), and the two request shapes use them differently:
+registry. The two request shapes use them differently:
 
-* A __tarball__ request is gated for that one version: a private-upstream hit is
-  streamed unfiltered (already vetted); on a miss, the proxy fetches the
-  version's public metadata, evaluates the rules, and either streams it from
-  public __and enqueues an asynchronous mirror job__ or returns a denial.
-* A __packument__ (metadata) request is a /merge/: the private and public
-  upstreams are fetched in parallel, public versions are filtered by the rules
-  while private versions are trusted, and the two are combined into one document
-  (private wins a version collision, an integrity divergence is flagged as a
-  supply-chain signal, and @latest@ is repointed to the newest survivor).
+* Écluse gates a __tarball__ request for that one version. It streams a
+  private-upstream hit unfiltered, because it is already vetted. On a miss, the
+  proxy fetches the version's public metadata and evaluates the rules. It then
+  streams the version from public __and enqueues an asynchronous mirror job__, or
+  returns a denial.
+* A __packument__ (metadata) request is a /merge/. Écluse fetches the private and
+  public upstreams in parallel, filters the public versions through the rules, and
+  trusts the private ones. It then combines the two into one document. Private wins
+  a version collision, Écluse flags an integrity divergence as a supply-chain
+  signal, and @latest@ repoints to the newest survivor.
 
-Two properties run through both shapes: the rules engine is __deny by default__ (a
-version is admitted only if some rule allows it and none denies it), and
-__mirroring is demand-driven__, so only versions actually pulled are mirrored,
-never on the request's critical path.
+Two properties run through both shapes. The rules engine is __deny by default__: a
+version is admitted only if some rule allows it and none denies it. __Mirroring is
+demand-driven__, so Écluse mirrors only the versions a client actually pulls, never
+on the request's critical path.
 
 == How the code is organised
 
-Écluse is a __functional core with effects at the edges__: the policy and
-protocol logic is pure and trivially testable, and @IO@ is confined to a thin
-shell. Swappable backends sit behind /handles/ (records of functions chosen at a
-single composition root), so a new cloud or a new ecosystem is an added
-implementation behind an existing handle, not a structural change.
+Écluse is a __functional core with effects at the edges__. The policy and protocol
+logic is pure and easy to test, and a thin shell confines @IO@. Swappable
+backends sit behind /handles/, records of functions chosen at a single composition
+root. A new cloud or a new ecosystem is then one more implementation behind an
+existing handle, not a structural change.
 
 The library's vocabulary, roughly from the pure core outward:
 
@@ -69,7 +71,7 @@ The library's vocabulary, roughly from the pure core outward:
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
 in the library, not in @app\/Main.hs@, so the composition root is a single
-importable unit and @app\/Main.hs@ stays a thin shell that only calls it.
+importable unit. @app\/Main.hs@ stays a thin shell that only calls it.
 
 == Further reading
 
@@ -134,17 +136,17 @@ run = do
         RunDredger -> runDredger bootEnv
         RunCheckConfig -> pass
 
-{- | How one whole service run ended: the typed outer perimeter of the process,
-each constructor owning one exit code ('exitCodeFor') so an orchestrator reads
-the ending from the status alone.
+{- | How one whole service run ended: the typed outer perimeter of the process.
+Each constructor owns one exit code ('exitCodeFor'), so an orchestrator reads the
+ending from the status alone.
 -}
 data ProcessOutcome
     = -- | The services drained and returned (a graceful shutdown): exit 0.
       ShutdownRequested
     | -- | A service failed up with the carried rendered fault: exit 1.
       ServiceExited Text
-    | {- | The boot aborted ('BootAborted'; the boot phase already reported its
-      errors to standard error): exit 2.
+    | {- | The boot aborted ('BootAborted'), after the boot phase reported its
+      errors to standard error: exit 2.
       -}
       BootFault
     | -- | The run was cancelled from outside (a kill, an interrupt): exit 3.
@@ -152,22 +154,26 @@ data ProcessOutcome
     deriving stock (Eq, Show)
 
 {- | Run the whole service under the typed process perimeter and classify its
-ending as a 'ProcessOutcome' -- the one place the process's exception channel is
-read, so nothing above it interprets exceptions.
+ending as a 'ProcessOutcome'. This is the one place that reads the process's
+exception channel, so nothing above it interprets exceptions.
 
-The classification, in order: a normal return is 'ShutdownRequested' (warp's
-graceful drain returns); 'BootAborted' is 'BootFault'; an 'ExitCode' rethrows
-(a deliberate exit request keeps its code, the local-dev halt's 130 included);
-the recognised kill deliveries ('ThreadKilled', 'UserInterrupt') are
-'RunCancelled'; any __other__ asynchronous exception is not ours to interpret
-and propagates -- so a 'System.Timeout.timeout' or an @async@ cancellation
-wrapped around 'run' by a test keeps its own semantics -- and every remaining
-synchronous escape is 'ServiceExited' with its rendered detail.
+The classification, in order:
+
+* A normal return is 'ShutdownRequested' (warp's graceful drain returns).
+* 'BootAborted' is 'BootFault'.
+* An 'ExitCode' rethrows, so a deliberate exit request keeps its code, the
+  local-dev halt's 130 included.
+* The recognised kill deliveries ('ThreadKilled', 'UserInterrupt') are
+  'RunCancelled'.
+* Any __other__ asynchronous exception is not ours to interpret and propagates, so
+  a 'System.Timeout.timeout' or an @async@ cancellation a test wraps around 'run'
+  keeps its own semantics.
+* Every remaining synchronous escape is 'ServiceExited' with its rendered detail.
 
 This is the one deliberate base-'Exception.try' in the codebase: the process
-perimeter must observe asynchronous delivery to classify a kill, which the
-async-hygienic @unliftio@ catches deliberately refuse to hand over (they would
-rethrow the kill and the classification arm could never run). The rethrows go
+perimeter must observe asynchronous delivery to classify a kill. The
+async-hygienic @unliftio@ catches refuse to hand it over on purpose, because they
+would rethrow the kill and the classification arm could never run. The rethrows go
 through the base 'Exception.throwIO' for the same reason: what leaves here
 async must leave async.
 -}

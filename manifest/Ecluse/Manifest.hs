@@ -6,56 +6,56 @@
 {- | The capability manifest: a pure assembly of Écluse's OpenAPI 3 document from
 the closed serve-route enumeration and the configured mounts.
 
-The manifest is a __capability statement__, not a client-integration contract:
-registry clients (npm, pnpm, yarn) hardcode the registry protocol and never read
-an API description. So this document exists to say, for a human, /which registry
-protocols this one server speaks and exactly what is -- and is not -- supported/,
-per ecosystem. It is __statically generated__ from a fixed canonical source and
-published as static content; it is __not served__, and there is no route or WAI
-wiring for it.
+The manifest is a __capability statement__, not a client-integration contract.
+Registry clients (npm, pnpm, yarn) hardcode the registry protocol and never read an
+API description. This document exists to say, for a human, /which registry protocols
+this one server speaks and exactly what is, and is not, supported/, per ecosystem.
+It is __statically generated__ from a fixed canonical source and published as static
+content. It is __not served__, and there is no route or WAI wiring for it.
 
-The document is __rendered from the mounted adapters' route grammar__: each
+The document is __rendered from the mounted adapters' route grammar__. Each
 configured ecosystem's 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' carries
 its serve surface as data ('Ecluse.Core.Registry.Adapter.Types.serveRoutes', a
 'RouteSpec' per served 'Route'), the same grammar the server's
 'Ecluse.Core.Server.Route.Classifier' routes on. This module walks those specs into
-OpenAPI paths and marries each to its owned documentation, so the described surface
-is a projection of how the server mounts routes, not a hand-kept parallel copy. The
-owned response bodies carry code-first schemas. Three kinds of surface are
-distinguished:
+OpenAPI paths and marries each to its owned documentation. The described surface is
+therefore a projection of how the server mounts routes, not a hand-kept parallel
+copy. The owned response bodies carry code-first schemas, and the module
+distinguishes three kinds of surface:
 
-* __Owned__ bodies -- the error\/denial envelope (a codec, rendered from the same
+* Écluse authors the __owned__ bodies, so this module models them in full: the
+  error\/denial envelope (a codec, rendered from the same
   'Ecluse.Core.Registry.Npm.Serve.npmErrorCodec' the serve path emits) and the
-  merged-and-filtered packument ('synthesizedPackumentSchema') -- are modelled in full,
-  because Écluse authors them.
-* __Opaque pass-through__ -- artifact bytes -- are described as a streamed media
-  type and link out rather than reproducing the upstream protocol.
-* __Unsupported__ -- @search@ and any unrecognised path -- are first-class
-  documented boundaries (a @501@ and the deny-by-default @404@), so a reader
-  learns the limit from the manifest, not from an error reply.
+  merged-and-filtered packument ('synthesizedPackumentSchema').
+* __Opaque pass-through__, the artifact bytes, is described as a streamed media
+  type and links out rather than reproducing the upstream protocol.
+* __Unsupported__, @search@ and any unrecognised path, are first-class documented
+  boundaries (a @501@ and the deny-by-default @404@), so a reader learns the limit
+  from the manifest, not from an error reply.
 
 == Determinism
 
 The rendered bytes must be __byte-stable__ across runs and machines, so the
 published artifact yields a meaningful line-level diff on every contract change.
-'renderManifest' pins object-key ordering (sorted) and 'buildOpenApi' is a pure
-function of an explicit 'ManifestSource' -- generate from 'canonicalManifestSource'
-(fixed mounts and base URL), never a live or environment-derived configuration,
-or the output would churn on per-deployment values.
+'renderManifest' pins object-key ordering (sorted), and 'buildOpenApi' is a pure
+function of an explicit 'ManifestSource'. Generate from 'canonicalManifestSource'
+(fixed mounts and base URL), never from a live or environment-derived configuration,
+or the output churns on per-deployment values.
 
 == Schema strategy
 
 A response body is either a codec or a hand-authored schema, and the route's declared
-'Ecluse.Core.Server.Contract.Outcome's say which. A __codec body__ (npm's error envelope)
-carries one @autodocodec@ codec in core; the serve path encodes the wire body from it and
-this tier renders the /same/ codec to the documented schema, so the emitted body and its
-documentation are one source and cannot diverge. A __documented body__ (the merged
-packument, the publish document) is one Écluse builds imperatively rather than
-round-tripping through a type: it carries a hand-written schema here, registered as a
-named component, and is bound to the emitted bytes by a validation check. npm's /inbound/
-wire decoding stays lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") --
-codecs are for what Écluse owns and emits, not for tolerantly parsing someone else's loose
-document.
+'Ecluse.Core.Server.Contract.Outcome's say which. A __codec body__ (npm's error
+envelope) carries one @autodocodec@ codec in core. The serve path encodes the wire
+body from it, and this tier renders the /same/ codec to the documented schema. The
+emitted body and its documentation are one source and cannot diverge.
+
+A __documented body__ (the merged packument, the publish document) is one Écluse
+builds imperatively rather than round-tripping through a type. It carries a
+hand-written schema here, registered as a named component, and a validation check
+binds it to the emitted bytes. npm's /inbound/ wire decoding stays lenient
+hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire"): codecs are for what Écluse owns
+and emits, not for tolerantly parsing someone else's loose document.
 -}
 module Ecluse.Manifest (
     -- * Inputs
@@ -136,12 +136,13 @@ import Ecluse.Core.Server.RouteSpec (
  )
 
 {- | The explicit inputs the manifest is a pure function of: the server's
-externally-reachable base URL (the @servers@ entry artifact URLs resolve against)
-and the mounted ecosystems (the manifest's tags and per-mount path grammars).
+externally-reachable base URL, and the mounted ecosystems. The base URL is the
+@servers@ entry artifact URLs resolve against, and each mounted ecosystem
+contributes a tag and its path grammar.
 
-It is deliberately a narrow value -- the base URL and the set of mounts, not the
-proxy's credentials, upstreams, or policy -- so the assembly stays a total,
-deterministic function of something trivial to fix for the generator.
+It is deliberately a narrow value: the base URL and the set of mounts, not the
+proxy's credentials, upstreams, or policy. The assembly therefore stays a total,
+deterministic function of something easy to fix for the generator.
 -}
 data ManifestSource = ManifestSource
     { manifestBaseUrl :: Text
@@ -151,9 +152,9 @@ data ManifestSource = ManifestSource
     }
     deriving stock (Eq, Show)
 
-{- | The fixed canonical source the build-time generator runs against. Its base
-URL is a stable placeholder and its mounts are the single served @npm@ ecosystem,
-so the generated artifact is byte-reproducible across machines and captures
+{- | The fixed canonical source the build-time generator runs against. Its base URL
+is a stable placeholder, and its mounts are the single served @npm@ ecosystem. The
+generated artifact is therefore byte-reproducible across machines, and it captures
 /code-level/ changes rather than per-deployment values.
 -}
 canonicalManifestSource :: ManifestSource
@@ -163,10 +164,10 @@ canonicalManifestSource =
         , manifestEcosystems = Npm :| []
         }
 
-{- | Assemble the OpenAPI 3 document. A __pure__ function of the source: the
-operations are folded from the closed 'Route' enumeration over each mount, the
-owned bodies carry their schemas in @components@, and operations are tagged by
-ecosystem so a renderer groups the document as "one server, these protocols."
+{- | Assemble the OpenAPI 3 document, a __pure__ function of the source. It folds the
+operations from the closed 'Route' enumeration over each mount, carries the owned
+bodies' schemas in @components@, and tags operations by ecosystem. A renderer then
+groups the document as "one server, these protocols."
 -}
 buildOpenApi :: ManifestSource -> OpenApi
 buildOpenApi src =
@@ -211,10 +212,10 @@ ecosystemTag :: Ecosystem -> Tag
 ecosystemTag eco = Tag (ecosystemName eco) (Just (ecosystemName eco <> " registry protocol coverage")) Nothing
 
 {- | The (path key, spec) entries an ecosystem contributes: its mounted adapter's
-declarative route grammar ('Ecluse.Core.Registry.Adapter.Types.serveRoutes'), each
-keyed by its rendered path template under the ecosystem's mount prefix. An ecosystem
-with no adapter contributes nothing (rather than documenting a route the server
-cannot serve), so adding a mount is what adds its routes to the manifest.
+declarative route grammar ('Ecluse.Core.Registry.Adapter.Types.serveRoutes'). Each
+entry is keyed by its rendered path template under the ecosystem's mount prefix. An
+ecosystem with no adapter contributes nothing, rather than documenting a route the
+server cannot serve. Adding a mount is what adds its routes to the manifest.
 -}
 ecosystemRouteSpecs :: Ecosystem -> [(Ecosystem, FilePath, RouteSpec)]
 ecosystemRouteSpecs eco =
@@ -226,10 +227,10 @@ ecosystemRouteSpecs eco =
             ]
 
 {- | Fold the (path key, spec) entries into the paths map. Specs that render to the
-same key (the packument @GET@ and the publish @PUT@ on @\/{package}@) merge: their
-operations combine through 'PathItem''s 'Semigroup', and the key's path parameters
-are the union of the contributing specs' parameters, de-duplicated by name so a
-shared parameter is documented once.
+same key (the packument @GET@ and the publish @PUT@ on @\/{package}@) merge. Their
+operations combine through 'PathItem''s 'Semigroup'. The key's path parameters are
+the union of the contributing specs' parameters, de-duplicated by name so the
+manifest documents a shared parameter once.
 -}
 pathsFrom :: [(Ecosystem, FilePath, RouteSpec)] -> InsOrd.InsOrdHashMap FilePath PathItem
 pathsFrom entries =
@@ -268,8 +269,8 @@ specParams :: RouteSpec -> [ParamSpec]
 specParams spec = [p | Param p <- rsPattern spec]
 
 {- | Place an operation on the 'PathItem' field its HTTP method names. Total over
-'StdMethod'; the final @CONNECT@ branch is genuinely unreachable (see below), so
-it is the sanctioned per-declaration @error@ escape hatch (STYLE.md section 10).
+'StdMethod'. The final @CONNECT@ branch is genuinely unreachable (see below), so it
+is the sanctioned per-declaration @error@ escape hatch (STYLE.md section 10).
 -}
 
 {- HLINT ignore methodItem "Avoid restricted function" -}
@@ -283,21 +284,22 @@ methodItem method op = case method of
     PATCH -> (mempty :: PathItem){_pathItemPatch = Just op}
     OPTIONS -> (mempty :: PathItem){_pathItemOptions = Just op}
     TRACE -> (mempty :: PathItem){_pathItemTrace = Just op}
-    -- CONNECT has no OpenAPI operation slot; no served route uses it.
+    -- CONNECT has no OpenAPI operation slot, and no served route uses it.
     CONNECT -> error "Ecluse.Manifest: OpenAPI has no CONNECT operation"
 
 {- | Interpret a route's __documentation__ into an OpenAPI operation.
 
-This is the whole of the manifest's per-route knowledge: there is none. A route's
-summary, its request body, and its status set are declared in the core, beside the
-pattern that routes it ("Ecluse.Core.Server.RouteDoc"), and this function renders
-whatever it is handed. There is no table here to keep in step with the routes, so there
-is nothing to drift.
+This is the whole of the manifest's per-route knowledge: there is none. The core
+declares a route's summary, its request body, and its status set, beside the pattern
+that routes it ("Ecluse.Core.Server.RouteDoc"). This function renders whatever it is
+handed. There is no table here to keep in step with the routes, so there is nothing
+to drift.
 
-The tag is the ecosystem being walked, so a mount's operations are tagged with the
-registry they belong to, and the route's name is qualified by that ecosystem to form
-OpenAPI's @operationId@ (which client generators key on, and which must be unique across
-the whole document: only here, where every mount is in view, can that be guaranteed).
+The tag is the ecosystem this walk is on, so each mount's operations carry the
+registry they belong to. That ecosystem also qualifies the route's name to form
+OpenAPI's @operationId@. Client generators key on it, and it must be unique across
+the whole document. Only here, where every mount is in view, can the code guarantee
+that.
 -}
 operationFrom :: Ecosystem -> RouteSpec -> Operation
 operationFrom eco spec =
@@ -349,12 +351,13 @@ responseFrom doc =
 {- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body
 vocabulary, so a new shape cannot go unrendered.
 
-This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. A codec
-body ('SchemaJson') renders its schema from the /same/ @autodocodec@ codec the serve path
-encodes the wire body with (via @autodocodec-openapi3@, in this tier only), so the
-documented schema and the wire format cannot diverge. A 'SchemaDocumented' body references
-a hand-authored component schema by name (the packument, the publish document): Écluse
-builds those imperatively, so they are documented rather than round-tripped.
+This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. A
+codec body ('SchemaJson') renders its schema from the /same/ @autodocodec@ codec the
+serve path encodes the wire body with. That rendering uses @autodocodec-openapi3@, in
+this tier only, so the documented schema and the wire format cannot diverge. A
+'SchemaDocumented' body references a hand-authored component schema by name (the
+packument, the publish document). Écluse builds those imperatively, so the manifest
+documents them rather than round-tripping them.
 -}
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
@@ -368,8 +371,8 @@ mediaTypeOf :: ByteString -> MediaType
 mediaTypeOf media = fromString (decodeUtf8 media :: String)
 
 {- | Render an @autodocodec@ 'JSONCodec' to its OpenAPI schema (this tier only). The
-codec bodies Écluse owns are flat, so the declared definitions are empty and the schema
-inlines; 'undeclare' discards the (empty) definition set.
+codec bodies Écluse owns are flat, so the declared definitions are empty and the
+schema inlines. 'undeclare' discards the (empty) definition set.
 -}
 schemaViaCodec :: JSONCodec a -> Schema
 schemaViaCodec c =
@@ -396,10 +399,10 @@ jsonContent = mediaContent "application/json"
 mediaContent :: MediaType -> Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 mediaContent mediaType ref = InsOrd.singleton mediaType ((mempty :: MediaTypeObject){_mediaTypeObjectSchema = Just ref})
 
-{- | A type-level handle for the synthesized packument's hand-written schema. It
-has no values: the served packument is built by the npm serve path, not decoded
-into a single Haskell type, so this exists only to carry 'synthesizedPackumentSchema'
-as a 'ToSchema' instance for schema-validation backstops.
+{- | A type-level handle for the synthesized packument's hand-written schema. It has
+no values: the npm serve path builds the served packument, and no single Haskell type
+decodes it. This exists only to carry 'synthesizedPackumentSchema' as a 'ToSchema'
+instance for schema-validation backstops.
 -}
 data SynthesizedPackument
 
@@ -411,16 +414,18 @@ synthesizedPackumentSchemaName :: Text
 synthesizedPackumentSchemaName = "SynthesizedPackument"
 
 {- | The hand-written __partial__ schema of the served (merged-and-filtered)
-packument -- the documented __trust boundary__.
+packument: the documented __trust boundary__.
 
-This is the highest-scrutiny piece of the manifest. It models only the fields
-Écluse reads and transforms (@versions@, @dist-tags@, @time@, and each version's
-@dist@), and carries @additionalProperties: true@ everywhere: every unlisted field
-is __relayed unchanged from the contributing upstream, and the private upstream
-wins on a collision__. It is therefore a precise statement of what the gate
-touches -- and what it does not -- but a valid instance is __not__ a proof that the
-filtered document is internally coherent (that every @dist-tags@ target is a
-surviving @versions@ key); that cross-field coherence is not schema-expressible.
+This is the highest-scrutiny piece of the manifest. It models only the fields Écluse
+reads and transforms (@versions@, @dist-tags@, @time@, and each version's @dist@),
+and it carries @additionalProperties: true@ everywhere. Écluse __relays every
+unlisted field unchanged from the contributing upstream, and the private upstream
+wins on a collision__.
+
+The schema is therefore a precise statement of what the gate touches, and what it
+does not. A valid instance is __not__ a proof that the filtered document is
+internally coherent, that every @dist-tags@ target is a surviving @versions@ key.
+That cross-field coherence is not schema-expressible.
 
 It is hand-written, not codec-derived, because an open schema has no clean
 @autodocodec@ representation.
@@ -517,9 +522,9 @@ publishDocumentSchema =
 publishDocumentSchemaName :: Text
 publishDocumentSchemaName = "PublishDocument"
 
-{- | Render the document to __byte-stable__ JSON: object keys are sorted, so the
-output is independent of insertion order and reproducible across runs and
-machines, and the file ends in a trailing newline for a clean diff.
+{- | Render the document to __byte-stable__ JSON. Sorted object keys make the output
+independent of insertion order and reproducible across runs and machines. The file
+ends in a trailing newline for a clean diff.
 -}
 renderManifest :: OpenApi -> LByteString
 renderManifest =
