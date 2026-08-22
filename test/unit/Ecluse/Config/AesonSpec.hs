@@ -18,6 +18,7 @@ import Ecluse.Config (
     ConfigError,
     EgressSettings (..),
     IntegritySettings (..),
+    ObservabilitySettings (..),
     RuntimeSettings (..),
     ServerSettings (..),
     loadConfig,
@@ -26,6 +27,7 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
+import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
 spec :: Spec
 spec = describe "decodeDocument" $ do
@@ -46,6 +48,28 @@ spec = describe "decodeDocument" $ do
 
     it "rejects an unparseable JSON body" $
         loadConfig [] (Just "{not json") `shouldSatisfy` isLeft
+
+    it "defaults observability.logLevel to info from the shipped baseline" $
+        loadedLogLevel [] Nothing `shouldBe` Right InfoLevel
+
+    it "parses every accepted observability.logLevel from the document" $ do
+        loadedLogLevel [] (Just "{\"observability\":{\"logLevel\":\"debug\"}}") `shouldBe` Right DebugLevel
+        loadedLogLevel [] (Just "{\"observability\":{\"logLevel\":\"info\"}}") `shouldBe` Right InfoLevel
+        loadedLogLevel [] (Just "{\"observability\":{\"logLevel\":\"warn\"}}") `shouldBe` Right WarnLevel
+        loadedLogLevel [] (Just "{\"observability\":{\"logLevel\":\"error\"}}") `shouldBe` Right ErrorLevel
+
+    it "takes observability.logLevel from the environment layer" $
+        loadedLogLevel [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "warn")] Nothing `shouldBe` Right WarnLevel
+
+    it "rejects an unknown observability.logLevel, naming the key and the accepted set" $ do
+        loadConfig [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "trace")] Nothing
+            `shouldSatisfy` decodeErrorMentions "observability.logLevel"
+        loadConfig [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "trace")] Nothing
+            `shouldSatisfy` decodeErrorMentions "expected one of: debug, info, warn, error"
+
+    it "rejects an unknown key under observability, naming it" $
+        loadConfig [] (Just "{\"observability\":{\"logLevl\":\"info\"}}")
+            `shouldSatisfy` decodeErrorMentions "logLevl"
 
     it "rejects an unknown top-level key, naming it (strict, not silently dropped)" $
         loadConfig [] (Just "{\"mountz\":{}}") `shouldSatisfy` decodeErrorMentions "mountz"
@@ -481,3 +505,12 @@ mountDocWithExtraKey extra =
 decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs
 decodeErrorMentions _ (Right _) = False
+
+{- The resolved log level, with the error side flattened to text so the assertion reads
+as a value comparison rather than a case split. -}
+loadedLogLevel :: [(String, String)] -> Maybe ByteString -> Either Text LogLevel
+loadedLogLevel envVars doc =
+    bimap
+        (T.unlines . map renderConfigError)
+        (obsLogLevel . cfgObservability . configApp)
+        (loadConfig envVars doc)

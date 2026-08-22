@@ -36,7 +36,7 @@ jobs:
     # sbomnix builds .#ecluse-bin, so the job pays the full source rebuild of
     # the overridden closure that the main-written cache does not yet hold.
     # Warm runs finish in a fraction of this.
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -71,7 +71,7 @@ jobs:
   osv-freeze:
     name: Haskell advisories (OSV/HSEC over the freeze)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)

@@ -20,13 +20,16 @@ module Ecluse.Server.PipelineSpec (spec) where
 
 import Data.Aeson (Value, encode, (.=))
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 
+import Ecluse.Core.Credential (mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (
     npmPackumentContract,
     npmPackumentReplies,
@@ -34,6 +37,7 @@ import Ecluse.Core.Registry.Npm.Route (
     npmTarballContract,
     npmTarballReplies,
  )
+import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -63,7 +67,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, vers
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (consistentGate, npmServeDeps)
-import Network.HTTP.Types.Header (hHost)
+import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
@@ -103,6 +107,25 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
+
+    it "admits exactly the credential presentation the mount's ecosystem declares" $ do
+        (metricsPort, _decisions) <- recordingMetricsPort
+        rt <- mkRuntime metricsPort
+        -- Both origins point at a closed port, so a request the edge admits degrades to
+        -- 503; the 401 is the edge gate's own refusal. The two mounts differ only in the
+        -- presentation their ecosystem declares, so the pipeline is shown to hold none.
+        gated <- gatedDeps
+        let serveUnder mapping headers =
+                statusCode . responseStatus
+                    <$> captureServe
+                        npmPackumentContract
+                        rt
+                        (mountUnder mapping gated)
+                        (servePackument npmPackumentReplies leftpad (requestWith headers))
+        serveUnder npmCredential [("Authorization", "Bearer " <> edgeToken)] >>= (`shouldBe` 503)
+        serveUnder npmCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 401)
+        serveUnder apiKeyCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 503)
+        serveUnder apiKeyCredential [("Authorization", "Bearer " <> edgeToken)] >>= (`shouldBe` 401)
 
     it "serves a gated tarball and records an admit, driving the metrics and tracing ports" $
         testWithApplication (pure upstreamApp) $ \port -> do
@@ -210,13 +233,44 @@ leftpad = mkPackageName Npm Nothing "leftpad"
 
 -- | An npm mount over the given serve dependencies (or 'Nothing' for the unwired stub).
 mountWith :: PackumentDeps -> MountBinding
-mountWith deps =
+mountWith = mountUnder npmCredential
+
+{- | An npm mount whose credential presentation is the given one, so a serve can be driven
+under an ecosystem that presents its credential differently from npm's.
+-}
+mountUnder :: CredentialMapping -> PackumentDeps -> MountBinding
+mountUnder mapping deps =
     MountBinding
         { bindingPrefix = "npm" :| []
         , bindingRouter = npmRouter
+        , bindingCredential = mapping
         , bindingPackumentDeps = deps
         , bindingPublishDeps = Nothing
         }
+
+{- | A presentation carrying a raw token on @X-Api-Key@: a form npm does not present, so
+a mount declaring it accepts what an npm mount refuses and refuses what it accepts.
+-}
+apiKeyCredential :: CredentialMapping
+apiKeyCredential = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecret)
+  where
+    recoverApiKey headers = mkSecret . decodeUtf8 <$> lookup "X-Api-Key" headers
+
+-- | The token a gated mount requires at its edge, in the form a client presents it.
+edgeToken :: (IsString s) => s
+edgeToken = "edge-token"
+
+{- | Serve dependencies whose edge requires 'edgeToken' and whose origins both point at a
+closed port, so an admitted request degrades rather than reaching an upstream.
+-}
+gatedDeps :: IO PackumentDeps
+gatedDeps = do
+    base <- depsFor 1
+    pure base{pdInboundToken = Just (mkSecret edgeToken)}
+
+-- | A request presenting the given headers, otherwise the WAI default.
+requestWith :: RequestHeaders -> Request
+requestWith headers = defaultRequest{requestHeaders = headers}
 
 {- | Serve dependencies pointing the public origin at the in-process upstream on
 @publicPort@ and the private origin at a closed port (so the trusted leg always degrades

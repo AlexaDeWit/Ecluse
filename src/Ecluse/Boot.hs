@@ -41,7 +41,7 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Config (
     AppConfig (cfgObservability, cfgRuntime),
     Config (configApp),
-    ObservabilitySettings (obsLogFormat, obsTelemetry),
+    ObservabilitySettings (obsLogFormat, obsLogLevel, obsTelemetry),
     RuntimeSettings (rtCores, rtMaxHeapBytes),
     loadConfig,
     mountCollisionWarnings,
@@ -60,6 +60,7 @@ import Ecluse.Runtime.Log (moduleField, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 
 {- | The boot context assembled once at start-up and handed to each subcommand: the
@@ -196,7 +197,11 @@ withBootEnv action = do
     let env = configApp config
         observability = cfgObservability env
         runtimeSettings = cfgRuntime env
-    logEnv <- newLogEnv (obsLogFormat observability) (Environment "production")
+    -- The log identity is resolved from the same table the SDK reads
+    -- ("Ecluse.Runtime.Telemetry.Resolve"), before any OTEL_* projection is applied,
+    -- so the identity on a boot line matches the one on a served request's.
+    ddIdentity <- ddIdentityFromEnvironment
+    logEnv <- newLogEnv (obsLogFormat observability) (obsLogLevel observability) ddIdentity (Environment "production")
     -- Resolve and apply the runtime posture before anything else spins up: this may
     -- exec the binary in place (same PID; see Ecluse.Rts) to enforce a heap
     -- ceiling, so nothing stateful must precede it beyond config and the logger.

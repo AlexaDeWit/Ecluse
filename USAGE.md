@@ -283,6 +283,7 @@ a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud bo
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_OBSERVABILITY__LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
+| `ECLUSE_OBSERVABILITY__LOG_LEVEL` | No | `info` | Lowest severity kept: `debug`, `info`, `warn`, or `error`. Anything below the floor is dropped before it is rendered. `debug` adds the per-decision diagnostics (mirror presence probes, artifact fetches) and is verbose under load. |
 | `ECLUSE_OBSERVABILITY__TELEMETRY` | No | `off` | OpenTelemetry master switch (`on`/`off`). With it `off`, no telemetry is emitted. See [Operating Écluse](#operating-écluse) for the export configuration. |
 
 Configuration is validated in full at startup and the process refuses to start on any problem (an
@@ -310,14 +311,56 @@ vars above and need no document. Schema and examples:
 [Configuration and authentication](docs/architecture/configuration.md#configuration). Deployments
 derive their initial policy from the [default baseline configuration](config/default.yaml).
 
+Each key resolves independently, strongest last: the built-in default, then this document, then the
+environment. The document therefore carries only what you change, and an unknown key anywhere in it
+is a boot error rather than a silent no-op.
+
+A worked document for a mirrored npm deployment: reads resolve against a private CodeArtifact
+endpoint, approved public packages mirror into a separate CodeArtifact store, and the quarantine
+widens to fourteen days. Keeping the read endpoint and the mirror store distinct is
+[the Golden Path](#the-golden-path) posture, and Écluse logs a boot warning for any two of a mount's
+endpoints that resolve to the same registry.
+
+```yaml
+server:
+  publicUrl: https://ecluse.example.internal
+  helpMessage: Contact the ACME platform team for access
+
+queue:
+  url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
+
+advisories:
+  bucket: acme-ecluse-advisories
+
+mounts:
+  npm:
+    privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    publicUpstream: https://registry.npmjs.org
+    mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
+
+rules:
+  min-age:
+    ageSeconds: 1209600
+```
+
+That mount is mirrored because it declares `mirrorTarget`, and for no other reason: there is no mode
+key to set. Delete that one line and the same mount is serve-only, still merging the private
+upstream with the gated public registry but never writing, and `queue` then goes unread. Delete
+`privateUpstream` as well and the mount is the pure public gate of
+[the two-variable start](#the-two-variable-start-serve-only-gate) in document form: `enabled: true`
+is then the only key it needs, since `publicUpstream` already has a default.
+
+No token appears above. The mirror-target write credential is minted from the CodeArtifact host, and
+every other secret is an environment variable.
+
 ### Secrets
 
 Secrets never live in the config document. Client and registry tokens are always env vars, and
 cloud-managed registries (CodeArtifact, Artifact Registry) derive short-lived tokens from ambient
 cloud credentials. A **mirrored** mount holds a mirror-target **write** credential; a serve-only
-mount never writes and holds none. Reads use the default passthrough strategy: the caller's own
-credential is forwarded to the private upstream and stripped before the public one. The credential
-model, including the planned per-mount strategies, is in
+mount never writes and holds none. What Écluse does with a client's own token is under
+[Connecting your clients](#connecting-your-clients). The credential model, including the planned
+per-mount strategies, is in
 [access model](docs/architecture/access-model.md) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
@@ -342,6 +385,18 @@ Edge authentication to the proxy has two shipped modes:
 A third mode, a **trusted edge identity** honoured over a verifiable binding to a fronting
 gateway/IAP/mesh, is planned; see
 [access model → edge authentication](docs/architecture/access-model.md#edge-authentication).
+
+Authenticating at the edge is separate from how Écluse reaches the registries behind it, and the
+edge token never becomes the upstream one. Reads run **passthrough**: the caller's own credential is
+forwarded to the private upstream, which stays the authority on what that caller may see, and is
+stripped before the anonymous public fetch, so a client token never leaves for a public registry.
+The private origin is never cached across callers, so one caller's read can never answer another's.
+By default the only credential of Écluse's own is a mirrored mount's write to the mirror target,
+derived from the mirror-target URL. An `npm publish` forwards the publisher's own token the same way
+as a read, unless you opt into a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, under which
+Écluse publishes as itself; that combination is refused at boot without an edge token Écluse can
+verify. The reasoning, the invariants, and the planned extensions are in
+[access model](docs/architecture/access-model.md).
 
 ## Securing network egress (required)
 
@@ -498,15 +553,19 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
 - **Pre-warming the cache.** A cold `npm install` against an empty cache hits the proxy with dozens
   of heavy requests at once, causing latency spikes or `503` backpressure. Run an `npm install`
   after starting Écluse, before production traffic; once warm, request coalescing absorbs spikes.
-- **Health probes.** `GET /livez` reports process liveness (on a mirroring deployment a stalled
-  mirror worker fails it; a serve-only deployment's liveness is the listener alone). `GET /readyz`
-  reports config loaded and the listener serving; it is deliberately lenient about public-upstream
-  reachability, so a transient blip doesn't pull a healthy pod from rotation. With an advisory bucket
-  configured, readiness also waits for each ecosystem's first advisory sync (a one-way flip, so it
-  never flaps), so mounting an ecosystem whose artifact Pilot never publishes leaves the pod never
-  ready. The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`, and
-  `GET /npm/-/v1/search` returns `501` by design (search is a discovery convenience, not an install
-  path). Pilot and Dredger export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
+- **Health probes.** `GET /livez` reports process liveness, `200` while the process is healthy and
+  `503` when it is not; on a mirroring deployment a stalled mirror worker fails it, while a
+  serve-only deployment's liveness is the listener alone. `GET /readyz` reports config loaded and
+  the listener serving. It is deliberately lenient about public-upstream reachability, so a
+  transient blip doesn't pull a healthy pod from rotation, and it answers `503` in exactly two
+  cases: the instance is draining, or it has not finished starting up. With an advisory bucket
+  configured, that startup gate also waits for each ecosystem's first advisory sync (a one-way flip,
+  so it never flaps back), so give a cold pod room to finish that first database download with a
+  Kubernetes `startupProbe` or a readiness `failureThreshold` sized for it. Mounting an ecosystem
+  whose artifact Pilot never publishes leaves the pod never ready. The npm liveness probe
+  `GET /npm/-/ping` answers locally with `200 {}`, and `GET /npm/-/v1/search` returns `501` by
+  design (search is a discovery convenience, not an install path). Pilot and Dredger export the same
+  `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 - **Graceful shutdown and pod drain.** On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. `GET /readyz` flips to `503` (the signal a load balancer or mesh watches to stop routing new traffic here) while `GET /livez` stays `200`, so an orchestrator does not kill a still-draining instance early. Every response then carries `Connection: close`, so a keep-alive pool reconnects to a ready instance, and the process finishes in-flight requests and in-progress artifact streams (a half-delivered tarball runs to completion) before exiting, bounded by `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` (default 30 seconds). **Set the platform's termination grace period above `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT`** so the orchestrator does not `SIGKILL` mid-drain: on Kubernetes, set `terminationGracePeriodSeconds` comfortably above it. When Écluse is attached to an interactive terminal, a second `Ctrl+C` (or `Ctrl+D`) forces an immediate halt that bypasses the drain; this is gated on standard input being a TTY, so production has no such bypass.
 - **Process exit codes.** The exit status states how a run ended, so an orchestrator can branch
   without parsing logs:
@@ -520,12 +579,25 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
   | `130` | The local-development halt (Ctrl-D on an interactive terminal). |
 
 - **Logs.** One JSON object per line by default (`ECLUSE_OBSERVABILITY__LOG_FORMAT=json`), or
-  `console` for local development. Bearer tokens render as a redacted placeholder, so token material
-  never reaches a log field.
+  `console` for local development. Each JSON line carries `timestamp` (RFC 3339 UTC), `status`
+  (`debug`, `info`, `warn`, `error`), `message`, and the `service`/`env`/`version` identity, plus a
+  `dd` object with `trace_id` and `span_id` while a span is in scope. The emitting call's own fields
+  sit under `data` and the `katip` emitter fields under `katip`, the emitting process's hostname
+  included (`katip.host`), so a collector's own host attribution governs the line's `host`.
+  `timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes and are read
+  unmodified by its JSON preprocessing; `env` and `version` are ordinary attributes any backend
+  indexes. `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the floor (`info` by default). Bearer tokens render
+  as a redacted placeholder, and on every running path a URL is reduced to its host and port, so
+  neither token material nor a signed query string reaches a log field. The boot-time configuration
+  echo is the exception: it prints each configured upstream and mirror URL as you gave it, so keep
+  credentials in the token variables rather than inside a URL. The shape is in
+  [observability → Logs](docs/architecture/observability.md#logs).
 - **Telemetry (opt-in).** Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then `DD_*` (`DD_SERVICE`,
   `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for Datadog or the standard `OTEL_*` for any other
-  backend; `DD_*` wins where both are set, and the resolved identity stamps both traces and the `dd`
-  object on every log line. `DD_API_KEY`/`DD_SITE` are ignored: Écluse exports only to a node-local
+  backend; `DD_*` wins where both are set, and the resolved identity stamps both traces and every log
+  line. With no `DD_VERSION` or `service.version` set, exported traces and log lines both carry the
+  running binary's own build version, so the version tag is never blank.
+  `DD_API_KEY`/`DD_SITE` are ignored: Écluse exports only to a node-local
   collector or Agent, at `http://localhost:4318` by default or wherever
   `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` points (authenticate a remote collector out of band
   with `OTEL_EXPORTER_OTLP_HEADERS`). Export is async and batched, off the request path, so an

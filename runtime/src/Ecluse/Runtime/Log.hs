@@ -6,8 +6,8 @@
 
 Écluse sits in the install path of someone else's build, so when it refuses a
 package or runs slow the operator must see /why/ from the logs alone. This module
-stands up a @katip@ 'LogEnv' -- the single log stream every layer attaches context
-to -- and chooses its on-the-wire shape:
+stands up a @katip@ 'LogEnv' (the single log stream every layer attaches context
+to), chooses its on-the-wire shape, and sets the severity it admits:
 
 * __'JsonLog'__ writes __one compact JSON object per line__ to stdout (JSONL): the
   whole physical line /is/ the JSON, with no pretty-printing and no level or
@@ -17,24 +17,38 @@ to -- and chooses its on-the-wire shape:
 * __'ConsoleLog'__ writes the human-readable bracketed form for local development.
 
 A 'LogEnv' built here carries no colour codes even on a terminal, so a captured
-JSON line is always valid JSON. The selected format is parsed from @ECLUSE_OBSERVABILITY__LOG_FORMAT@
-at the configuration boundary (@Ecluse.Config@) and the resulting 'LogEnv' is held
-in the composition root ("Ecluse.Runtime.Env").
+JSON line is always valid JSON. The format and the 'LogLevel' are parsed from
+@ECLUSE_OBSERVABILITY__LOG_FORMAT@ and @ECLUSE_OBSERVABILITY__LOG_LEVEL@ at the
+configuration boundary (@Ecluse.Config@) and the resulting 'LogEnv' is held in the
+composition root ("Ecluse.Runtime.Env").
 
-Trace-ID correlation rides this stream as the @dd@ object ('ddField'): @service@\/
-@env@\/@version@ from the resolved telemetry identity, plus the active span's
-@trace_id@\/@span_id@ in the id format Datadog expects ('formatDdTraceId'). The object
-is built here but stays free of any OpenTelemetry dependency -- the active span is read
-and the ids rendered by "Ecluse.Runtime.Telemetry.Correlation", which composes 'ddField' into a
-log site's payload.
+== The JSON line
+
+'JsonLog' renders the shape a Datadog-class collector reads without a custom
+pipeline, using that vendor's reserved log attributes ('jsonLine'):
+
+* @timestamp@ (RFC 3339 UTC), @status@ (@debug@ \/ @info@ \/ @warn@ \/ @error@,
+  mapped from the @katip@ severity by 'severityStatus'), and @message@;
+* @service@, @env@, and @version@: the unified-service identity, resolved once at
+  boot ("Ecluse.Runtime.Telemetry.Resolve") and handed to the formatter, so the
+  identity stamps every line rather than only the lines raised inside a request;
+* @dd.trace_id@ and @dd.span_id@ when a span is in scope, read from the log site's
+  own @dd@ payload ('ddField') in the id format Datadog correlates on
+  ('formatDdTraceId');
+* @data@: the per-call structured payload, unchanged;
+* @katip@: the emitter's namespace, application, host, process, thread, and source
+  location.
 
 == Secrets
 
 A bearer token is carried as the redacted @Secret@ of "Ecluse.Core.Credential", whose
 'Show' renders only a placeholder, so token material cannot reach a log field
 through any structured payload or message built from it (see
-@docs\/architecture\/observability.md@). This module adds no field that would
-defeat that redaction.
+@docs\/architecture\/observability.md@). A URL is reduced to its host and port
+before it names anything in a log line or a span
+('Ecluse.Core.Security.Authority.authorityLabel'), so userinfo and a pre-signed
+query string cannot ride a location into the stream. This module adds no field that
+would defeat either.
 
 The model is described in @docs\/architecture\/observability.md@ → "Logs".
 -}
@@ -42,6 +56,12 @@ module Ecluse.Runtime.Log (
     -- * Log format
     LogFormat (..),
     parseLogFormat,
+
+    -- * Log level
+    LogLevel (..),
+    parseLogLevel,
+    severityFloor,
+    severityStatus,
 
     -- * Pipeline construction
     newLogEnv,
@@ -60,25 +80,32 @@ module Ecluse.Runtime.Log (
     formatDdSpanId,
 ) where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (Object, String), object, toJSON, (.=))
+import Data.Aeson.Key (Key)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString qualified as BS
+import Data.Text.Lazy.Builder qualified as TB
 import Katip (
     ColorStrategy (ColorLog),
     Environment,
+    Item (..),
     LogEnv,
     LogItem,
     Namespace (Namespace),
     Scribe,
-    Severity (DebugS),
+    Severity (AlertS, CriticalS, DebugS, EmergencyS, ErrorS, InfoS, NoticeS, WarningS),
     SimpleLogPayload,
     Verbosity (V2),
     defaultScribeSettings,
     initLogEnv,
+    itemJson,
     permitItem,
     registerScribe,
     sl,
+    unLogStr,
  )
-import Katip.Scribes.Handle (ItemFormatter, bracketFormat, jsonFormat, mkHandleScribeWithFormatter)
+import Katip.Scribes.Handle (ItemFormatter, bracketFormat, mkHandleScribeWithFormatter)
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
@@ -116,42 +143,177 @@ Left "unknown log format \"yaml\" (expected one of: json, console)"
 parseLogFormat :: Text -> Either Text LogFormat
 parseLogFormat = parseWire
 
-{- | Build the application 'LogEnv': a @katip@ environment under the @ecluse@
-namespace with a single stdout scribe in the chosen 'LogFormat'. This is the value
-the composition root holds and every later layer logs through.
-
-The scribe admits every severity ('DebugS' upward); a deployment narrows what it
-keeps through @katip@'s own verbosity controls rather than by rebuilding the
-environment.
+{- | The lowest severity the stream keeps, selected by configuration. The four
+values are the ones the rendered @status@ field speaks ('severityStatus'), so the
+level an operator sets and the value they filter on in a log backend are the same
+vocabulary.
 -}
-newLogEnv :: LogFormat -> Environment -> IO LogEnv
-newLogEnv format environment = do
-    scribe <- newScribe format
+data LogLevel
+    = -- | Keep everything, the per-decision diagnostics included.
+      DebugLevel
+    | -- | The default: normal runtime conditions and worse.
+      InfoLevel
+    | -- | Warnings and worse.
+      WarnLevel
+    | -- | Errors alone.
+      ErrorLevel
+    deriving stock (Eq, Ord, Show)
+
+-- The wire vocabulary of a 'LogLevel', listed from most to least verbose so the
+-- accepted-set message reads as a ladder.
+instance WireVocab LogLevel where
+    wireKind = "log level"
+    wireTable =
+        (DebugLevel, "debug")
+            :| [ (InfoLevel, "info")
+               , (WarnLevel, "warn")
+               , (ErrorLevel, "error")
+               ]
+
+{- | Parse a 'LogLevel' from its wire name, naming the accepted set on failure, the
+same strict style as 'parseLogFormat'.
+
+>>> parseLogLevel "warn"
+Right WarnLevel
+
+>>> parseLogLevel "trace"
+Left "unknown log level \"trace\" (expected one of: debug, info, warn, error)"
+-}
+parseLogLevel :: Text -> Either Text LogLevel
+parseLogLevel = parseWire
+
+{- | The @katip@ 'Severity' floor a 'LogLevel' admits: the scribe keeps an item at or
+above it. @katip@ orders its severities, so 'WarnLevel' keeps 'WarningS' and every
+severity above it, and 'InfoLevel' keeps 'NoticeS' along with 'InfoS'.
+-}
+severityFloor :: LogLevel -> Severity
+severityFloor = \case
+    DebugLevel -> DebugS
+    InfoLevel -> InfoS
+    WarnLevel -> WarningS
+    ErrorLevel -> ErrorS
+
+{- | The @status@ a @katip@ 'Severity' renders as. @katip@ carries the eight syslog
+severities; a log backend's status facet reads the four an operator acts on, so
+'NoticeS' folds into @info@ and everything above 'ErrorS' folds into @error@.
+-}
+severityStatus :: Severity -> Text
+severityStatus = \case
+    DebugS -> "debug"
+    InfoS -> "info"
+    NoticeS -> "info"
+    WarningS -> "warn"
+    ErrorS -> "error"
+    CriticalS -> "error"
+    AlertS -> "error"
+    EmergencyS -> "error"
+
+{- | Build the application 'LogEnv': a @katip@ environment under the @ecluse@
+namespace with a single stdout scribe in the chosen 'LogFormat', keeping every item
+at or above @level@. This is the value the composition root holds and every later
+layer logs through.
+
+@logIdentity@ is the span-less @dd@ identity
+('Ecluse.Runtime.Telemetry.Correlation.ddIdentity'); the JSON formatter stamps it on
+every line, so a line raised outside any request scope still carries the service it
+came from.
+-}
+newLogEnv :: LogFormat -> LogLevel -> DdContext -> Environment -> IO LogEnv
+newLogEnv format level logIdentity environment = do
+    scribe <- newScribe format level logIdentity
     base <- initLogEnv (Namespace ["ecluse"]) environment
     registerScribe "stdout" scribe defaultScribeSettings base
 
-{- | Build the stdout 'Scribe' for a 'LogFormat'. Colour is forced __off__
-('ColorLog' 'False') so a captured 'JsonLog' line is always valid JSON -- no ANSI
-escapes leak into the object even when stdout is a terminal. The handle scribe
+{- | Build the stdout 'Scribe' for a 'LogFormat' at a 'LogLevel'. Colour is forced
+__off__ ('ColorLog' 'False') so a captured 'JsonLog' line is always valid JSON -- no
+ANSI escapes leak into the object even when stdout is a terminal. The handle scribe
 writes each item as exactly one line (the formatter output plus a single trailing
 newline), which is what makes 'JsonLog' a true JSONL stream.
 -}
-newScribe :: LogFormat -> IO Scribe
-newScribe format =
+newScribe :: LogFormat -> LogLevel -> DdContext -> IO Scribe
+newScribe format level logIdentity =
     mkHandleScribeWithFormatter
-        (formatterFor format)
+        (formatterFor format logIdentity)
         (ColorLog False)
         stdout
-        (permitItem DebugS)
+        (permitItem (severityFloor level))
         V2
 
-{- | The @katip@ 'ItemFormatter' a 'LogFormat' wires into its scribe: the compact
-one-line JSON encoder for 'JsonLog', the bracketed human form for 'ConsoleLog'.
+{- | The @katip@ 'ItemFormatter' a 'LogFormat' wires into its scribe: the one-line
+JSON encoder for 'JsonLog', the bracketed human form for 'ConsoleLog'. The @dd@
+identity is the one the JSON line stamps; 'ConsoleLog' does not render it.
 -}
-formatterFor :: (LogItem a) => LogFormat -> ItemFormatter a
-formatterFor = \case
-    JsonLog -> jsonFormat
+formatterFor :: (LogItem a) => LogFormat -> DdContext -> ItemFormatter a
+formatterFor format logIdentity = case format of
+    JsonLog -> jsonLineFormat logIdentity
     ConsoleLog -> bracketFormat
+
+{- The JSONL encoder: one compact JSON object, no trailing newline (the handle scribe
+adds it). The colourise flag is ignored because 'newScribe' forces colour off, and
+wrapping the object in ANSI escapes would make the line invalid JSON. -}
+jsonLineFormat :: (LogItem a) => DdContext -> ItemFormatter a
+jsonLineFormat logIdentity _colourise verb logItem =
+    TB.fromLazyText (encodeToLazyText (jsonLine logIdentity verb logItem))
+
+{- The rendered JSON log line. The reserved attributes a log backend reads without a
+custom pipeline sit at the top level; the emitter's own @katip@ fields are nested
+under @katip@ so they cannot collide with one. The per-call payload is carried under
+@data@ with its @dd@ object lifted out: the identity is already top level, and only
+the span ids remain to render. -}
+jsonLine :: (LogItem a) => DdContext -> Verbosity -> Item a -> Value
+jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPresent))
+  where
+    katipObject :: KeyMap.KeyMap Value
+    katipObject = case itemJson verb logItem of
+        Object o -> o
+        _ -> KeyMap.empty
+
+    structured :: KeyMap.KeyMap Value
+    structured = case KeyMap.lookup "data" katipObject of
+        Just (Object o) -> o
+        _ -> KeyMap.empty
+
+    -- The identity, with the log site's own active span filled in when it installed one.
+    context :: DdContext
+    context = logIdentity{ddSpan = payloadSpan structured <|> ddSpan logIdentity}
+
+    reserved :: [(Key, Value)]
+    reserved =
+        [ ("timestamp", toJSON (_itemTime logItem))
+        , ("status", toJSON (severityStatus (_itemSeverity logItem)))
+        , ("message", toJSON (TB.toLazyText (unLogStr (_itemMessage logItem))))
+        , ("service", toJSON (ddService context))
+        , ("env", maybe (toJSON (_itemEnv logItem)) toJSON (ddEnv context))
+        , ("data", Object (KeyMap.delete "dd" structured))
+        , ("katip", Object (KeyMap.filterWithKey (\key _ -> key `notElem` promoted) katipObject))
+        ]
+
+    whenPresent :: [(Key, Value)]
+    whenPresent =
+        catMaybes
+            [ ("version",) . toJSON <$> ddVersion context
+            , ("dd",) . spanObject <$> ddSpan context
+            ]
+
+    -- The @katip@ keys this line renders itself, so the nested block does not repeat them.
+    promoted :: [Key]
+    promoted = ["at", "data", "env", "msg", "sev"]
+
+    spanObject :: DdSpan -> Value
+    spanObject theSpan = object ["trace_id" .= ddTraceId theSpan, "span_id" .= ddSpanId theSpan]
+
+{- The active span's ids from a log site's own @dd@ payload ('ddField'). Absent
+outside a span scope, and absent for a payload whose @dd@ object carries no ids, so a
+line never renders a half-filled correlation pair. -}
+payloadSpan :: KeyMap.KeyMap Value -> Maybe DdSpan
+payloadSpan structured = case KeyMap.lookup "dd" structured of
+    Just (Object dd) -> DdSpan <$> textAt "trace_id" dd <*> textAt "span_id" dd
+    _ -> Nothing
+  where
+    textAt :: Key -> KeyMap.KeyMap Value -> Maybe Text
+    textAt key o = case KeyMap.lookup key o of
+        Just (String t) -> Just t
+        _ -> Nothing
 
 {- | The structured context naming the __source module__ a log line was emitted
 from, so every JSON record carries a @module@ field (e.g.
@@ -164,19 +326,19 @@ opens its own context through the composition-root 'LogEnv').
 moduleField :: Text -> SimpleLogPayload
 moduleField = sl "module"
 
-{- | The unified-service identity stamped onto every log line as the @dd@ object, plus
-the active span's ids when one is in scope. @service@\/@env@\/@version@ come from the
-same resolved telemetry identity as the traces ("Ecluse.Runtime.Telemetry.Resolve"), so logs
-and traces share one identity; the trace\/span ids are present only when a span is
-active (filled by "Ecluse.Runtime.Telemetry.Correlation" off the OpenTelemetry context).
+{- | The unified-service identity stamped onto every log line, plus the active span's
+ids when one is in scope. @service@\/@env@\/@version@ come from the same resolved
+telemetry identity as the traces ("Ecluse.Runtime.Telemetry.Resolve"), so logs and
+traces share one identity; the trace\/span ids are present only when a span is active
+(filled by "Ecluse.Runtime.Telemetry.Correlation" off the OpenTelemetry context).
 -}
 data DdContext = DdContext
     { ddService :: Text
-    -- ^ @dd.service@ -- the resolved service name.
+    -- ^ @service@ -- the resolved service name.
     , ddEnv :: Maybe Text
-    -- ^ @dd.env@ -- the deployment environment, when configured.
+    -- ^ @env@ -- the deployment environment, when configured.
     , ddVersion :: Maybe Text
-    -- ^ @dd.version@ -- the service version, when configured.
+    -- ^ @version@ -- the service version.
     , ddSpan :: Maybe DdSpan
     -- ^ The active span's correlation ids, when a span is in scope.
     }
@@ -195,8 +357,9 @@ data DdSpan = DdSpan
     deriving stock (Eq, Show)
 
 {- | The @dd@ object as JSON: @service@ always, @env@\/@version@ when configured, and
-@trace_id@\/@span_id@ only when a span is active. This is the object a log collector's
-unified-service tagging and trace-to-log correlation read.
+@trace_id@\/@span_id@ only when a span is active. A log site installs it as context
+('ddField'); the rendered line lifts the ids to its own @dd@ object and carries the
+identity at the top level.
 -}
 ddObject :: DdContext -> Value
 ddObject ctx =
@@ -210,8 +373,8 @@ ddObject ctx =
             ]
 
 {- | The @dd@ object as a @katip@ structured payload, nested under the @dd@ key. Compose
-it into a log site's payload so the rendered JSON line carries
-@"dd":{"service":…,"trace_id":…}@ for trace-to-log correlation.
+it into a log site's payload, or install it as the initial context of a
+request\/worker scope, so the rendered line carries that scope's active span.
 -}
 ddField :: DdContext -> SimpleLogPayload
 ddField = sl "dd" . ddObject

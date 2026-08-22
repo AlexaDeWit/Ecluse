@@ -581,6 +581,14 @@ the genuine transient fault. Port 1 is in the privileged range and never bound.
 unreachableUrl :: Text
 unreachableUrl = "http://127.0.0.1:1/thing/-/thing-1.0.0.tgz"
 
+{- | 'unreachableUrl' dressed as a hostile artifact location: userinfo before the host
+and a signed query string, the two places a @dist.tarball@ can hide a credential. The
+fetch is refused at connect exactly as 'unreachableUrl' is, so the fault text a failed
+fetch produces can be asserted against it with no network.
+-}
+credentialBearingUnreachableUrl :: Text
+credentialBearingUnreachableUrl = "http://deploy:hunter2@127.0.0.1:1/x?sig=abc"
+
 {- | A job artifact URL that cannot be parsed into a request at all (a space and no
 scheme), so the worker's by-URL request build fails before any fetch -- the
 unformable-URL arm, distinct from a reachable-but-failing fetch.

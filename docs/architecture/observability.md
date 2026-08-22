@@ -12,7 +12,7 @@ measurement rather than a branch.
 
 Datadog is a first-class, tested target, what the maintainer runs, but never required and not a
 lock-in: nothing in the core depends on it, and switching backends is a config change. Its
-Datadog-specific pieces (`dd.*` log fields, Agent-side sampling, the
+Datadog-specific pieces (the `dd` trace-correlation object on a log line, Agent-side sampling, the
 [Operator recipe](../../USAGE.md#datadog-on-kubernetes)) are optional add-ons on the OTLP baseline.
 
 ## What gets traced
@@ -27,7 +27,11 @@ the decisions operators care about:
 - **Mirror enqueue to worker**: the serve-time enqueue and the worker's probe-to-publish run under
   linked spans, so a worker poll mixing jobs from many requests links each back to its own triggering
   request. A job enqueued with tracing off bears no link.
-- **Advisory sync**: one span per [advisory-dataset sync](rules-engine.md#cve-subsystem) run.
+- **Advisory sync**: one `ecluse.advisory.sync.attempt` span per
+  [advisory-dataset sync](rules-engine.md#cve-subsystem) attempt, carrying the ecosystem and which of
+  the five outcomes the attempt reached. The bucket, object key, ETag, and provenance stay off it.
+  That same bounded result labels the attempt metrics below, so a trace and a series join on one
+  value.
 
 Sampling is head-based and always-on by default, so rare denial and error traces are never dropped;
 `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code change, and
@@ -49,6 +53,12 @@ collector and is planned.
   [threat model](https://ecluse-proxy.com/threat-model.html).
 - `ecluse.credential.token.ttl.seconds` alarms a stuck refresh; `ecluse.credential.refresh` carries
   (result, provider).
+- `ecluse.advisory.sync.attempts` (a counter) and `ecluse.advisory.sync.duration` (a histogram, in
+  seconds) both carry (ecosystem, result), where result is one of `swapped`, `unchanged`,
+  `none_published`, `fetch_failed`, or `refused`. A run of `fetch_failed` or `refused` means that
+  ecosystem is gating against an ageing advisory database or none at all, so its rules deny by
+  default: check the bucket, the object key, and the IAM the sync task reads under. The artifact's
+  own identifiers stay on the sync log line, never a label.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate dashboards;
 all export over the same OTLP push pipeline as traces. A Prometheus scrape endpoint
@@ -73,16 +83,58 @@ explosion. Two guarantees hold it and the telemetry safe:
 Logs stay structured JSON via `katip`, stitched to traces by trace-ID injection. The production
 format is one compact JSON object per line to stdout (JSONL), which the Datadog Agent's stdout
 autodiscovery consumes. Set the shape with `ECLUSE_OBSERVABILITY__LOG_FORMAT`: `json` (the
-in-container default) or `console` (human-readable, for development). Each line carries a `dd` object
-for correlation and unified service tagging:
+in-container default) or `console` (human-readable, for development).
+
+Every JSON line carries the reserved attribute names a log backend reads:
 
 ```json
-{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"}
+{"timestamp":"2026-06-22T09:14:03.118Z","status":"warn","message":"denied","service":"ecluse","env":"prod","version":"0.1.0","dd":{"trace_id":"…","span_id":"…"},"data":{"module":"Ecluse.Server.Pipeline.Internal","package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"},"katip":{"ns":["ecluse","serve"],"app":["ecluse"],"host":"…","pid":"1","thread":"…","loc":null}}
 ```
 
-`dd.service` / `dd.env` / `dd.version` come from the same config as the traces, so logs and traces
-share one identity and log-to-trace pivots line up. The ids appear only while a span is in scope, and
-Datadog needs them as low-64-bit decimal for OTLP-ingested traces to match.
+`timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes, read
+unmodified by its JSON preprocessing; `env` and `version` are ordinary attributes any backend
+indexes, and on Datadog the matching unified-service tags normally come from `DD_ENV` and
+`DD_VERSION` on the Agent rather than from the line. `status` folds `katip`'s eight syslog
+severities onto the four an operator acts on: `debug`, `info`, `warn`, `error`.
+
+`service`, `env`, and `version` come from the same resolved identity as the traces, so a log-to-trace
+pivot lines up; the formatter stamps that identity, so a line raised outside any request scope
+carries it too. With no `DD_ENV` or `deployment.environment` set, `env` falls back to the deployment
+label the process boots under, and `version` to the binary's own build version. The `dd` object
+appears only while a span is in scope, and Datadog needs those ids as low-64-bit decimal for
+OTLP-ingested traces to match. The emitting call's own fields sit under `data`, the `katip` emitter
+fields under `katip`; the emitting process's hostname is `katip.host`, so a collector's own
+host attribution (the Datadog Agent supplies it) governs the line's `host`.
+
+`ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the severity floor: `debug`, `info` (the default), `warn`, or
+`error`. The scribe drops anything below the floor before rendering it, so `debug` instrumentation
+costs nothing at `info`. An unrecognised value is a boot error, like every other configuration enum.
+
+### URL minimisation
+
+An artifact location is upstream-supplied, and an advisory export URL and a configured upstream base
+URL are operator-supplied; any of them can carry a credential in its userinfo or in a pre-signed
+query string, and both logs and spans leave the node. So on every running path a URL is reduced to
+its validated `host:port` before it names anything, through the one shared reduction in
+`Ecluse.Core.Security.Authority`; a value with no dialable authority renders as `<unresolved>`,
+never as a fragment of the input. The paths this covers:
+
+- **Serve.** The packument origin and upstream fields on the degrade warnings, the URL a
+  url-formation fault carries, and the artifact URL a dropped-entry record holds.
+- **Mirror enqueue and worker fetch.** The `ecluse.mirror.artifact_host` span attribute, the
+  worker's tarball-host drop reason and artifact-fetch line, and a failed fetch's reason, which
+  names the authority and the bounded transport cause rather than the client's rendered exception.
+- **Advisory sync and export.** The `ecluse.osv.source_host` span attribute on the compile and
+  stream spans, and the stream's start line.
+
+The span attribute names say what they hold: `ecluse.mirror.artifact_host` and
+`ecluse.osv.source_host`.
+
+The **boot-time configuration echo** is the exception, by design: the resolved-key provenance dump,
+the endpoint-collision warnings, and the mount posture lines print each configured upstream and
+mirror URL as the operator gave it, so the effective posture reads straight from the start-up log.
+Secret-typed keys are redacted there, and a credential belongs in one of those rather than inside a
+URL (see [Secrets](../../USAGE.md#secrets)).
 
 ## Configuration and deployment
 

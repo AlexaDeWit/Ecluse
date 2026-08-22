@@ -46,7 +46,7 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl))
+import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
@@ -122,7 +122,7 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
             logged `shouldSatisfy` T.isInfixOf "\"upstreamName\":\"other\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
+            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
             logged `shouldSatisfy` T.isInfixOf "different package"
 
     describe "logUpstreamUnformable" $
@@ -138,9 +138,27 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
+            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
             logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
             logged `shouldSatisfy` T.isInfixOf "could not be formed"
+
+    describe "logUpstreamUnformable (url minimisation)" $
+        it "reduces the offending URL to its authority, dropping userinfo and query" $ do
+            -- A configured base URL can carry a credential in its userinfo or query, so
+            -- the rendered fault names the authority alone.
+            let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
+            logged <- captureStdout $ do
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
+                void (closeScribes logEnv)
+            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
+            -- The origin is the operator's configured base URL, which mkRegistryUrl
+            -- accepts with userinfo, so it is reduced on the same line.
+            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
+            logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
+            logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
+            logged `shouldSatisfy` (not . T.isInfixOf "s3cret")
+            logged `shouldSatisfy` (not . T.isInfixOf "k=v")
 
     -- The pure metric-label projections that classify a serve outcome into the bounded
     -- labels the catalogue records. Every branch is asserted directly, so the
@@ -344,10 +362,11 @@ captureStdout act =
         hDuplicateTo saved stdout
         hClose saved
 
-{- | A @katip@ 'LogEnv' with a single stdout scribe in the compact one-line JSON form,
-built from @katip@ directly (the application's "Ecluse.Log".@newLogEnv@ is not on the
-core side of the boundary). It reproduces that scribe -- colour off, every severity
-admitted -- so a warning's serialised bytes are assertable here.
+{- | A @katip@-direct JSON fixture: one stdout scribe over @katip@'s own @jsonFormat@,
+colour off and every severity admitted, so a warning's serialised @data@ fields are
+assertable from the core side of the boundary (the application's own scribe, which
+renders a different line shape, is built in @Ecluse.Runtime.Log@ and is not reachable
+here). The assertions below read the structured payload, which both shapes carry.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do

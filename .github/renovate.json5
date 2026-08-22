@@ -22,6 +22,16 @@
   // a bot needs no local timezone.
   schedule: ["before 9am on monday"],
 
+  // Quarantine a version-based update for a week after its publication, so a
+  // release yanked shortly after it ships is never proposed here. This cannot
+  // cover the flake.lock refresh below: a lock refresh carries no publication
+  // dates to age out, and branch inputs move on the weekly schedule alone.
+  minimumReleaseAge: "7 days",
+
+  // Withhold an update still inside its quarantine entirely, rather than
+  // raising a PR that reports it as pending.
+  internalChecksFilter: "strict",
+
   // Conventional Commits, matching the repo's history. Default scope is "deps";
   // the per-manager commit *type* is set in packageRules below to preserve the
   // old prefixes (build → flake/cabal, ci → actions).
@@ -62,6 +72,12 @@
   // one line of the generated freeze, that PR fails checks.freeze-sync by
   // design, and the real fix is a flake-side bump plus `task freeze`.
   osvVulnerabilityAlerts: true,
+
+  // A known-vulnerable dependency is the one case where waiting is the greater
+  // risk, so a fix PR raised from an advisory skips the quarantine above.
+  vulnerabilityAlerts: {
+    minimumReleaseAge: null,
+  },
 
   // Refresh flake.lock weekly. The inputs track *branches* (nixos-26.05), which
   // carry no version for Renovate to bump; a lock refresh is how the whole

@@ -26,6 +26,16 @@ There is one mount per ecosystem, and its prefix is derived from the ecosystem, 
 optional per-ecosystem [rule refinement](configuration.md#rule-policy) merged over the shared
 policy; the single-npm setup is the degenerate case under its own derived prefix.
 
+A mount also carries its ecosystem's credential presentation: the form that ecosystem's clients
+put a credential in, and the header it rides on when Écluse reads an upstream. npm clients send an
+opaque token as `Authorization: Bearer`, so an npm mount accepts that form and no other, and
+presents the same form upstream when it forwards the credential. The web layer owns the check, not
+the form: it compares whatever the mount recovered against the configured edge token in constant
+time, and refuses a request that presents nothing it recognises. So each mount's accepted surface
+is exactly its ecosystem's, while the deny-by-default refusal stays one decision shared by every
+route. An outbound credential is attached through the same presentation, on the one path that also
+disables redirect-following, so no credentialed request can reach the wire without that pin.
+
 URL rewriting is load-bearing. Registry responses embed absolute artifact locations (npm's
 `dist.tarball`; on public PyPI, file URLs on a separate host). Forwarded unchanged, a client would
 resolve metadata through the proxy but download bytes directly from upstream, bypassing the gate.

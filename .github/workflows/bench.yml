@@ -30,7 +30,7 @@ jobs:
   bench:
     name: Work-per-request benchmarks (inform-only)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Pin the cabal store to a deterministic, cacheable location, as the other
       # Haskell jobs do.

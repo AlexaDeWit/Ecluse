@@ -11,9 +11,11 @@ import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBod
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Fault (TransportFault (tfCause))
+import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Registry (UrlFormationError, renderUrlFormationError)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Security (Limits, boundedRead)
+import Ecluse.Core.Security (Limits, authorityLabel, boundedRead)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
 
@@ -48,7 +50,9 @@ composition root sizes it from the memory plan's mirror-artifact tenant, in
 refused fail-closed rather than exhausting the heap the plan partitions. An over-cap
 body is an 'ArtifactOverCap' (terminal at the call site); a network or URL failure an
 'ArtifactUnavailable' (transient), so a flaky upstream redelivers rather than killing
-the iteration. -}
+the iteration. Neither reason renders the artifact URL: the location is
+upstream-supplied and the reason reaches a log line and a span, so it carries the
+authority and the bounded transport cause only. -}
 fetchArtifactBytes ::
     Limits ->
     (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) ->
@@ -60,10 +64,18 @@ fetchArtifactBytes limits buildRequest url = do
     -- and the public artifact fetch is anonymous, so the builder gets an empty
     -- base and no token (the by-URL builder's documented contract).
     case buildRequest limits manager "" Nothing (registryUrlText url) of
-        Left urlErr -> pure (Left (ArtifactUnavailable ("unformable artifact URL: " <> show urlErr)))
+        Left urlErr -> pure (Left (ArtifactUnavailable ("unformable artifact URL: " <> renderUrlFormationError urlErr)))
         Right request ->
             try (liftIO (boundedFetch limits manager request)) <&> \case
-                Left (e :: HttpException) -> Left (ArtifactUnavailable ("artifact fetch failed: " <> show e))
+                -- The client's rendered exception prints the request's path, query, and
+                -- headers, so the reason names the bounded 'TransportCause' and the
+                -- authority the fetch dialled instead: this text reaches a worker log
+                -- line and the mirror-job span's error status.
+                Left (e :: HttpException) ->
+                    Left
+                        ( ArtifactUnavailable
+                            ("artifact fetch from " <> authorityLabel (registryUrlText url) <> " failed: " <> show (tfCause (classifyTransport e)))
+                        )
                 Right (Left (ResponseBoundExceeded limitErr)) ->
                     Left (ArtifactOverCap ("artifact exceeded the response bound: " <> show limitErr))
                 Right (Right bytes) -> Right bytes

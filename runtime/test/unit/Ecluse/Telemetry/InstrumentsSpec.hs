@@ -6,7 +6,9 @@ module Ecluse.Telemetry.InstrumentsSpec (spec) where
 
 import Test.Hspec
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
     BreakerSource (CredentialMint, EffectfulRule),
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (Hit, Miss),
@@ -23,6 +25,8 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments (
     newMetrics,
+    recordAdvisorySyncAttempt,
+    recordAdvisorySyncDuration,
     recordBreakerState,
     recordCacheEntries,
     recordCacheRequest,
@@ -82,6 +86,11 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordCredentialRefresh m Static RefreshFailed
         recordCredentialRefresh m GcpArtifactRegistry Refreshed
         recordCredentialTokenTtl m CodeArtifact 3600
+        traverse_
+            (recordAdvisorySyncAttempt m Npm)
+            [AdvisorySwapped, AdvisoryUnchanged, AdvisoryNonePublished, AdvisoryFetchFailed, AdvisoryRefused]
+        recordAdvisorySyncDuration m Npm AdvisorySwapped 1.5
+        recordAdvisorySyncDuration m PyPI AdvisoryFetchFailed 0
         pure () :: Expectation
 
     it "times an action on the monotonic clock, never returning a negative duration" $ do

@@ -34,6 +34,11 @@ permissions:
 # Caching is restore-everywhere / SAVE-ONLY-ON-main: the heavy compiled-dependency
 # store is built once on main and reused by every PR (which never write their own
 # copies). build-test is the single writer. See AGENTS.md → "CI & Security" and the setup-toolchain action.
+#
+# Every timeout-minutes below is a hang-catcher, not a budget: CI is free on this
+# public repository, so each is sized to clear a fully cold run (~25 min of
+# dependency rebuild on a cache miss) and never fire on a healthy one. Raise one
+# that starts cancelling real runs; do not tighten them towards the observed mean.
 jobs:
   build-test:
     name: Build & tests (core-unit + app-unit + integration)
@@ -47,7 +52,7 @@ jobs:
     # waste. Runs on ubuntu-latest, which ships the Docker daemon ministack /
     # testcontainers need for the integration tier.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     permissions:
       contents: read
       id-token: write # OIDC: tokenless Codecov upload + FlakeHub Cache
@@ -144,7 +149,10 @@ jobs:
   smoke:
     name: Smoke tests (live registries — non-gating)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Non-gating. On a cabal-store cache miss this rebuilds the whole
+    # dependency closure from source before it reaches a single registry
+    # call, which is what the bound has to cover.
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -182,8 +190,9 @@ jobs:
   e2e:
     name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
-    # Sanity bound, not a budget: ~15 min warm, but a cold Nix closure adds half an hour (#836).
-    timeout-minutes: 60
+    # Sanity bound, not a budget: ~40 min typical, and a cold Nix closure adds
+    # a further half hour (#836).
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -248,7 +257,7 @@ jobs:
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     # Formerly four jobs (format/lint, cabal-check, Semgrep, workflow-lint). None
     # build Haskell, so each paid a full ~35s toolchain setup for a sub-minute
     # check. Merged so that setup is paid once. Each check runs even if an earlier
@@ -298,7 +307,7 @@ jobs:
     # rebuilds the overridden closure's doc outputs from source (the nix-docs
     # cache is written on main only, so the first PR run pays it all). Warm runs
     # finish in a fraction of this.
-    timeout-minutes: 45
+    timeout-minutes: 100
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -360,7 +369,8 @@ jobs:
   weeder:
     name: Dead-code check (weeder)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Observed 7 min mean, 19 min worst; sized so a cold-cache run still fits.
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -425,7 +435,7 @@ jobs:
   stan:
     name: Haskell static analysis (stan)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # authenticate to FlakeHub Cache (OIDC)
@@ -492,7 +502,7 @@ jobs:
     needs: [build-test, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Fail if any dependency did not succeed
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}

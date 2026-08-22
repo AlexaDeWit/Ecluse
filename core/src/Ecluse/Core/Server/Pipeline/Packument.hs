@@ -92,6 +92,7 @@ import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (
     PackageInfo (infoVersions),
     PackageName,
@@ -260,52 +261,55 @@ packumentWith ::
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 packumentWith mode replies name request respond = do
-    deps <- asks (bindingPackumentDeps . ctxMount)
-    serveWithDeps mode replies deps name request respond
+    mount <- asks ctxMount
+    serveWithDeps mode replies (bindingPackumentDeps mount) (forwardedCredential mount request) name request respond
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
 -- and answer -- the credential-authority and merge logic the module header
--- describes. The request runtime is read from the request context. The
--- 'PackumentServe' mode is threaded to the success path so a @HEAD@ stamps the
--- would-be body's @Content-Length@ (the route contract withholds the bytes).
+-- describes. The credential is the one the mount's ecosystem presentation recovered,
+-- scanned out of the headers once at the entry point. The request runtime is read from
+-- the request context. The 'PackumentServe' mode is threaded to the success path so a
+-- @HEAD@ stamps the would-be body's @Content-Length@ (the route contract withholds the
+-- bytes).
 serveWithDeps ::
     PackumentServe ->
     PackumentReplies response ->
     PackumentDeps ->
+    Maybe Secret ->
     PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveWithDeps mode replies deps name request respond
-    | not (edgeTokenMatches (pdInboundToken deps) (forwardedToken request)) =
+serveWithDeps mode replies deps clientToken name request respond
+    | not (edgeTokenMatches (pdInboundToken deps) clientToken) =
         liftIO (respond (packumentUnauthorised replies [] "authentication required"))
     | otherwise = do
         rt <- asks ctxRuntime
-        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode replies deps name request respond rt) >>= \case
+        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode replies deps clientToken name request respond rt) >>= \case
             Just received -> pure received
             Nothing -> liftIO $ do
                 mpServeDecision (srMetrics rt) Metric.Unavailable
                 respond (packumentUnavailable replies [shedRetryAfter] "server is busy; retry later")
 
 {- Serve a packument once past the admission gate: fetch both origins, gate and merge
-them, then either answer the conditional serve or take the no-survivors terminal. Hoisted
-to the module level, taking its serve context as parameters rather than closing over a
-large @where@, so the request flow reads as a flat sequence rather than deep nesting. -}
+them, then either answer the conditional serve or take the no-survivors terminal. The
+private-origin fetch forwards the client's credential (the edge gate already compared it
+before admission). Hoisted to the module level, taking its serve context as parameters
+rather than closing over a large @where@, so the request flow reads as a flat sequence
+rather than deep nesting. -}
 serveAdmittedPackument ::
     PackumentServe ->
     PackumentReplies response ->
     PackumentDeps ->
+    Maybe Secret ->
     PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     ServeRuntime ->
     Handler ResponseReceived
-serveAdmittedPackument mode replies deps name request respond rt = do
+serveAdmittedPackument mode replies deps clientToken name request respond rt = do
     logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
     let metrics = srMetrics rt
-        -- The client's bearer, scanned out of the headers once; the private-origin fetch
-        -- forwards it (the edge gate already compared it before admission).
-        clientToken = forwardedToken request
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     (privResult, pubResult) <-
         concurrently

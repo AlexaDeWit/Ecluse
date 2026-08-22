@@ -65,6 +65,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterEcosystem,
     adapterFor,
     adapterServe,
+    serveCredential,
     serveRouter,
  )
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
@@ -83,10 +84,11 @@ import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
 import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
-import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
+import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Runtime.Telemetry.Instruments (advisorySyncMetricsPortOf)
 import Ecluse.Runtime.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredMirrorEnqueueFailure,
@@ -94,7 +96,7 @@ import Ecluse.Runtime.Telemetry.Reporters (
     installMetrics,
     newDeferredMetrics,
  )
-import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
+import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDataPlaneManagerSettings)
 
 {- | Assemble and run the proxy role from an already validated 'BootEnv'.
 
@@ -310,15 +312,20 @@ enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 -- One advisory sync task per configured ecosystem: each runs under the boot log's
 -- "cve-sync" namespace, supervised by the shared combinator (residue restarts the
 -- task, which simply resumes from the remote artifact), and flips its ecosystem's
--- one-way readiness flag once its first sync lands.
+-- one-way readiness flag once its first sync lands. Every task observes through the
+-- same instruments and telemetry handle as the rest of the process, so its span and
+-- attempt series are inert exactly when telemetry is off.
 cveSyncTasks :: Env -> SyncSchedule -> Map.Map Ecosystem CveSyncHandle -> [IO ()]
 cveSyncTasks builtEnv schedule plan =
     [ void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
         superviseLoop
             (transientPolicy ("cve-sync[" <> show (syncEcosystem (csEnv handle)) <> "]"))
-            (runCveSync (csEnv handle) schedule (atomically (writeTVar (csReady handle) True)))
+            (runCveSync syncMetrics syncTracing (csEnv handle) schedule (atomically (writeTVar (csReady handle) True)))
     | handle <- Map.elems plan
     ]
+  where
+    syncMetrics = advisorySyncMetricsPortOf (envMetrics builtEnv)
+    syncTracing = advisorySyncTracingPortOf (envTelemetry builtEnv)
 
 {- A policy for the shell's background loops with no wiring fault to fail up on:
 every synchronous escape is residue, retried from one second towards a
@@ -416,6 +423,7 @@ mountOf adapter packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor (adapterEcosystem adapter)
         , bindingRouter = serveRouter (adapterServe adapter)
+        , bindingCredential = serveCredential (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
         }
