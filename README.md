@@ -25,26 +25,20 @@ rebuild.
 
 ## Overview
 
-`ecluse` sits between your build (or CI) and the upstream registry. It applies a
-deny-by-default policy before it serves any package. It checks a private upstream first,
-falls back to the public registry with the rules applied, and mirrors approved packages
-asynchronously, without hosting packages itself.
+Most damage from a malicious package publish happens in the first days, before the ecosystem
+notices and pulls the version. Écluse makes a build late instead of trying to detect malice.
+Every new version waits in a quarantine, seven days by default, before a build can install it.
+A version that an advisory names as the fix for a vulnerability skips the queue, so the
+quarantine never delays a security patch. Écluse runs in front of the registry you already have,
+AWS CodeArtifact today. It reads your private registry first, gates the public one, and mirrors
+approved versions into yours with the cloud's own identity. It hosts nothing.
 
-The serve path is capacity-bounded. It admits metadata requests up to a process-wide limit
-and sheds excess load rather than queueing it. npm is the first supported ecosystem. The
-core is registry-agnostic: each ecosystem registers as a self-contained adapter
-(`Ecluse.Core.Registry.Adapter`), and PyPI is on the roadmap.
-
-Each ecosystem route carries an abstract response contract. That one contract drives both
-the runtime wire behaviour and the OpenAPI capability documentation. A handler receives
-only the matching typed responder, so its declared status and body cannot drift from what
-it emits.
-
-[`docs/architecture.md`](docs/architecture.md) has the full design: the four-role registry
-model, the rules engine, the mirror queue, and the configuration reference. The threat model
-(OWASP Threat Dragon, STRIDE) lives in
-[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as
-a readable [register](https://ecluse-proxy.com/threat-model.html).
+Point npm at Écluse as its registry. npm is the supported ecosystem, and the core is
+registry-agnostic. [`USAGE.md`](USAGE.md) starts with the idea and builds down to the details.
+[`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
+engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in
+[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as a
+readable [register](https://ecluse-proxy.com/threat-model.html).
 
 ## Using Écluse
 

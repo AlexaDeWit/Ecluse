@@ -58,14 +58,19 @@
         <img class="hero-art" src="lock-illustration.svg" alt="A draughtsman's section of a canal lock: a barge of stacked shipping containers waits in the low chamber below the closed gate." />
         <h1>Écluse</h1>
         <p class="lead">
-          A supply-chain policy proxy for package registries. It applies a
-          deny-by-default policy before a package reaches a build.
+          Most damage from a malicious package publish happens in the first days, before the ecosystem
+          notices and pulls the version. Écluse makes a build late instead of trying to detect malice.
+          Every new version waits in a quarantine, seven days by default, before a build can install it.
+          A version that an advisory names as the fix for a vulnerability skips the queue, so the
+          quarantine never delays a security patch. Écluse runs in front of the registry you already have,
+          AWS CodeArtifact today. It reads your private registry first, gates the public one, and mirrors
+          approved versions into yours with the cloud's own identity. It hosts nothing.
         </p>
       </section>
       <ul class="index">
         <li><a href="usage.html">Operator manual</a></li>
         <li><a href="threat-model.html">Threat model</a></li>
-        <li><a href="api/index.html">API reference (Haddock and the capability manifest)</a></li>
+        <li><a href="api/index.html">API reference (Haddock and the OpenAPI spec)</a></li>
         <li><a href="https://github.com/AlexaDeWit/Ecluse">Source on GitHub</a></li>
       </ul>
     </main>
