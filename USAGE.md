@@ -85,11 +85,14 @@ above every allow by default. Two rules ship on:
   vulnerability, as long as no other advisory still affects it. It abstains until a first
   advisory database syncs, so without one only the quarantine governs.
 
-Four more rules are off and opt in by name: a pin for a package or version, or an allow-list for
-your own scopes (`AllowByIdentity`), a revoke (`DenyByIdentity`), a deny for packages that run
-code at install time (`DenyInstallTimeExecution`), and a deny for versions with a known
-vulnerability above a severity you choose (`DenyIfCve`). [Rule policy](#rule-policy) has their
-knobs.
+Four more rules are off and opt in by name:
+
+- a pin for a package or version, or an allow-list for your own scopes (`AllowByIdentity`)
+- a revoke of a package or version (`DenyByIdentity`)
+- a deny for packages that run code at install time (`DenyInstallTimeExecution`)
+- a deny for versions with a known vulnerability above a severity you choose (`DenyIfCve`)
+
+[Rule policy](#rule-policy) has their knobs.
 
 Independent of the rules, Écluse serves a public version only if it carries a digest that meets
 the public integrity floor, `sha256` by default. One gotcha: on a custom or off-spec public
@@ -593,7 +596,7 @@ explicit override that breaks the plan refuses (exit `2`). The model is in
 [Runtime sizing](docs/architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling).
 
 Cores and the heap ceiling resolve at boot from config, else the cgroup, else the runtime's own
-posture, and the boot log records each decision with its provenance. The whole-cores guidance and
+posture. The boot log records each decision with its provenance. The whole-cores guidance and
 the per-pod memory arithmetic are in the [appendix](#appendix-runtime-sizing-arithmetic).
 
 A cold install against an empty cache hits the proxy with dozens of heavy requests at once, which
