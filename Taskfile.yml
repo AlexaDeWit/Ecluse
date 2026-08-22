@@ -5,7 +5,7 @@ vars:
   SUITE: ecluse-unit
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
-  PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/links.lua
+  PANDOC_FLAGS: --standalone --from gfm --template web/template.html
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 tasks:
   default:
@@ -467,7 +467,7 @@ tasks:
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --haddock-quickjump --disable-documentation
   docs-site:
-    desc: Build Haddock + OpenAPI manifest and stage under ./_site/api
+    desc: Build Haddock + the OpenAPI spec and stage under ./_site/api
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}}
       - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
@@ -537,10 +537,14 @@ tasks:
       - web/template.html
       - web/static/style.css
       - web/links.lua
+      - web/embed-config.lua
+      - config/default.yaml
     generates:
       - '_site/{{.OUT}}'
     cmds:
-      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} -M title="{{.TITLE}}" -M description="{{.DESCRIPTION}}" -M canonical-url="https://ecluse-proxy.com/{{.OUT}}"
+      # links.lua runs last. A filter that matches a link by its in-repo target (embed-config.lua)
+      # must see the target before the rewrite to GitHub.
+      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} --lua-filter web/links.lua -M title="{{.TITLE}}" -M description="{{.DESCRIPTION}}" -M canonical-url="https://ecluse-proxy.com/{{.OUT}}"
   site:check:
     internal: true
     cmds:

@@ -8,9 +8,9 @@
 --
 -- A rendered doc that does not live at the repository root declares its directory
 -- with `-M link-base=<dir>` (see site:pandoc in Taskfile.yml). A relative target
--- resolves against that base before the lookup. So `../MOTIVATION.md` written
--- from docs/ still maps to motivation.html, and `architecture/foo.md` lands on
--- the right GitHub path.
+-- resolves against that base before the lookup. So `../USAGE.md` written from
+-- docs/ still maps to usage.html, and `architecture/foo.md` lands on the right
+-- GitHub path. No rendered page sets it today, so the base is the repo root.
 
 -- Only docs rendered 1:1 belong here. Every other in-repo path, README.md and the
 -- architecture documents included, falls back to GitHub, where the file and its
