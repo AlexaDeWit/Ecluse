@@ -157,14 +157,19 @@ the live composition root.
 
 ---
 
-## 5. Documentation (Haddock)
+## 5. Documentation (Haddock) and comments
 
 Documentation is not optional, and it is the rule agents most often skip.
 **[`docs/haddock.md`](haddock.md)** holds the conventions. Read it before writing doc comments.
 Every module opens with a prose header, and every exported type and function gets a Haddock comment.
-A non-exported helper gets a plain `--` at most. Document the *why*, especially a rule's security
-rationale, never the signature. `task doctest` runs the `>>>` examples in the CI gate, so they can't
-drift.
+A non-exported helper gets a plain `--` at most. `task doctest` runs the `>>>` examples in the CI
+gate, so they can't drift.
+
+Keep every comment lean. A comment states only what the code cannot say: the goal, a constraint, a
+gotcha, or the security rationale behind a rule. It never restates the implementation and never
+narrates the body. A function comment is one or two lines, or nothing. The module header is the one
+comment that may run longer, because it carries the module's contract. A long comment confuses or
+exhausts the reader. Justify its length by the confusion it prevents, not by the effort behind it.
 
 ---
 

@@ -2,7 +2,6 @@
 
 How to write the in-source documentation for Écluse (package `ecluse`). Follow it directly.
 [`docs/style.md`](style.md) owns formatting, naming, totality, and the compiler flags.
-[`docs/prose.md`](prose.md) owns how every sentence reads.
 
 > When in doubt, match the nearest existing module.
 > [`core/src/Ecluse/Core/Package.hs`](../core/src/Ecluse/Core/Package.hs) and
@@ -47,8 +46,9 @@ changeable internals.
 
 ## 3. How much to document, and what to skip
 
-A summary sentence on everything exported. An example or caveat where it earns its place. Nothing
-on internals. Never restate the type.
+A summary sentence on everything exported, one or two lines at most. An example or caveat where it
+earns its place. Nothing on internals. Never restate the type or narrate the body. Only the module
+header may run longer (§5).
 
 | Entity | Document? | What to say |
 |---|---|---|
