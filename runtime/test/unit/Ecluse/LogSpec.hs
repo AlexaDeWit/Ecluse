@@ -54,15 +54,12 @@ import Ecluse.Runtime.Log (
 fixedTime :: UTCTime
 fixedTime = UTCTime (fromGregorian 2026 6 22) 0
 
-{- | The boot-resolved identity the formatter stamps on every line: a deployment that
-named its environment and version.
--}
+-- | The boot-resolved identity the formatter stamps on every line.
 testIdentity :: DdContext
 testIdentity = DdContext "ecluse" (Just "prod") (Just "1.4.2") Nothing
 
-{- | Build a log 'Item' with the given structured payload and message, holding
-every other field fixed. This is the unit the scribe serialises. Rendering it through
-the production formatter asserts on the emitted line with no stdout dependency.
+{- | Build a log 'Item' with the given payload and message, holding every other field
+fixed. Rendering it through the production formatter needs no stdout.
 -}
 item :: SimpleLogPayload -> Text -> Item SimpleLogPayload
 item = itemAt WarningS
@@ -121,10 +118,8 @@ ddObjectOf logIdentity logItem = lineObject logIdentity logItem >>= parseMaybe (
 ddStr :: Text -> Object -> Maybe Text
 ddStr key = parseMaybe (\ob -> ob .: Key.fromText key)
 
-{- | Run an 'IO' action with the process 'stdout' redirected to a temporary file,
-returning everything written. The original 'stdout' is restored on every exit
-path. This lets a test capture what a scribe (which writes to the real 'stdout')
-actually emits, without a network or any other dependency.
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file and return what was
+written. The original 'stdout' is restored on every exit path.
 -}
 captureStdout :: IO () -> IO Text
 captureStdout act =
@@ -142,9 +137,8 @@ captureStdout act =
         hDuplicateTo saved stdout
         hClose saved
 
-{- | Emit one event through a real 'LogEnv' at the given level, capturing what the
-scribe wrote to stdout. The whole admission decision lives in the scribe, so a case
-asserts a level's floor through this helper.
+{- | Emit one event through a real 'LogEnv' at the given level and capture what the
+scribe wrote to stdout. The whole admission decision lives in the scribe.
 -}
 emitAt :: LogLevel -> Severity -> Text -> IO Text
 emitAt level severity message =
@@ -292,20 +286,17 @@ spec = do
         for_ escapeCases $ \(label, raw) ->
             it ("keeps one physical line for: " <> toString label) $ do
                 captured <- emitAt InfoLevel WarningS raw
-                -- The scribe ends each event with one trailing newline, so a message
-                -- carrying embedded newlines still emits as a single physical JSONL line.
-                -- Its newline is escaped to the two characters '\' 'n' inside the JSON string.
+                -- The scribe ends each event with one trailing newline, so a message with embedded
+                -- newlines still emits as one physical JSONL line, its newline escaped to '\' 'n'.
                 case filter (not . T.null) (T.lines captured) of
                     [line] -> line `shouldSatisfy` T.isInfixOf "\\n"
                     other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))
 
     describe "secrets never reach a log field" $ do
         it "a Secret embedded in a payload renders only its redaction, never the token" $ do
-            -- The realistic leak path: code logs a value built from a Secret. The
-            -- Secret's Show is a fixed placeholder, so the token text cannot reach
-            -- a structured field. This is the load-bearing redaction
-            -- (observability.md: token material must never reach a log), asserted
-            -- through the real scribe's emitted output.
+            -- The realistic leak path: code logs a value built from a Secret. The Secret's Show is
+            -- a fixed placeholder, so the token text cannot reach a structured field.
+            -- Token material must never reach a log (observability.md).
             let token = "super-secret-token"
                 leaky = sl "credential" (T.pack (show (mkSecret token)))
             captured <- captureStdout $ do
@@ -326,8 +317,7 @@ spec = do
 
     describe "newScribe" $
         it "constructs a scribe for each format without throwing" $ do
-            -- A 'Scribe' is opaque. Constructing it (the format switch and scribe
-            -- wiring) and forcing it to weak-head normal form is the assertion: the
+            -- A 'Scribe' is opaque. Forcing it to weak-head normal form is the assertion that the
             -- pipeline assembles for both shapes.
             _ <- newScribe JsonLog InfoLevel testIdentity >>= evaluate
             _ <- newScribe ConsoleLog InfoLevel testIdentity >>= evaluate
@@ -340,9 +330,8 @@ spec = do
                 runKatipT logEnv $
                     logF deniedContext (Namespace ["serve"]) WarningS (logStr ("denied" :: Text))
                 void (closeScribes logEnv)
-            -- The scribe ends each event with a newline, so a single event
-            -- is one non-empty physical line. That line is a complete JSON object
-            -- carrying the structured data.
+            -- The scribe ends each event with a newline, so one event is one non-empty physical
+            -- line holding a complete JSON object.
             let physicalLines = filter (not . T.null) (T.lines captured)
             length physicalLines `shouldBe` 1
             case physicalLines of
@@ -354,9 +343,8 @@ spec = do
         it "round-trips a newline-bearing message: the decoded message equals the exact original" $ do
             let original = "denied\nfor cause" :: Text
             captured <- emitAt InfoLevel WarningS original
-            -- The escaped newline in the single physical JSONL line decodes back to
-            -- the exact newline-bearing message. The JSON string escaping is lossless,
-            -- rather than merely one-line-safe.
+            -- The escaped newline decodes back to the exact message, so the JSON string escaping
+            -- is lossless rather than merely one-line-safe.
             case filter (not . T.null) (T.lines captured) of
                 [line] -> lineMessage line `shouldBe` Just original
                 other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))

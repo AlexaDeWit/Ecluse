@@ -52,10 +52,9 @@ spec = do
             readIORef steps `shouldReturn` ["orphan", "release"]
 
         it "unblocks a waiting follower and releases the slot when the leader is cancelled mid-body (no orphan window)" $ do
-            -- The hazard the guard closes: an async exception lands on the leader while
-            -- it is inside the body. The orphan hand-off must fill the follower's promise
-            -- and the slot must still free, or the follower parks forever. A 'timeout'
-            -- turns a regression into a fast failure instead of a hung suite.
+            -- The hazard the guard closes: an async exception lands on the leader inside the body.
+            -- The orphan hand-off must fill the follower's promise and free the slot, or the
+            -- follower parks.
             outcome <- timeout 5_000_000 $ do
                 released <- newIORef (0 :: Int)
                 promise <- newEmptyTMVarIO
@@ -79,9 +78,8 @@ spec = do
             outcome `shouldBe` Just (True, 1)
 
         it "releases the slot under a no-op orphan hook when cancelled (the flag-only consumer)" $ do
-            -- The credential refresher's shape: no result promise, so the orphan hook is
-            -- a no-op and freeing the slot is the whole signal. A cancel mid-body must
-            -- still run the release.
+            -- The credential refresher's shape: no result promise, so freeing the slot is the whole
+            -- signal. A cancel mid-body must still run the release.
             outcome <- timeout 5_000_000 $ do
                 released <- newIORef (0 :: Int)
                 running <- newEmptyMVar

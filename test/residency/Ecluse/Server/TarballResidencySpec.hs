@@ -72,9 +72,8 @@ smallArtifactBytes, largeArtifactBytes :: Int
 smallArtifactBytes = 1 * 1024 * 1024
 largeArtifactBytes = 100 * 1024 * 1024
 
-{- | The allowed peak-live growth from the small probe to the large one. Generous
-against fixture noise (connection buffers, chunk copies, GC estimation), and still
-~6x below what even partial buffering of the large artifact would add.
+{- | The allowed peak-live growth from the small probe to the large one. It is generous against
+fixture noise and still far below what partial buffering of the large artifact would add.
 -}
 residencyMarginBytes :: Integer
 residencyMarginBytes = 16 * 1024 * 1024
@@ -122,9 +121,8 @@ publicMissPeak size = do
         served `shouldBe` fromIntegral size
         pure peak
 
-{- | Drive one tarball request through the 'Application', consuming the streaming
-body chunk-by-chunk and discarding it, sampling live bytes as the stream flows.
-Returns the status code, total bytes served (so the caller can prove the stream
+{- | Drive one tarball request through the 'Application', discarding the streamed body while
+sampling live bytes. Returns the status, the bytes served (so the caller can prove the stream
 flowed), and the peak sampled live bytes.
 -}
 streamProbe :: Maybe Text -> Application -> IO (Int, Int64, Word64)
@@ -149,9 +147,8 @@ streamProbe bearer app = do
         writeIORef chunksRef (seen + 1)
         when (seen `mod` sampleEveryChunks == 0) (samplePeak peakRef)
 
-{- | Force a major collection and fold the resulting live-bytes reading into the
-running maximum. Forcing the GC makes the sample deterministic: the reading is
-what is genuinely live mid-stream, not whatever the collector last happened to see.
+{- | Fold a forced-GC live-bytes reading into the running maximum. Forcing the collection makes
+the sample deterministic: it reads what is genuinely live mid-stream.
 -}
 samplePeak :: IORef Word64 -> IO ()
 samplePeak peakRef = do
@@ -159,16 +156,14 @@ samplePeak peakRef = do
     stats <- getRTSStats
     modifyIORef' peakRef (max (gcdetails_live_bytes (gc stats)))
 
-{- | Sampling cadence: the large probe streams thousands of chunks, so this yields
-on the order of a hundred forced collections over a small heap. That is cheap, and
-dense enough that a growing buffer cannot hide between samples.
+{- | Sampling cadence. It yields on the order of a hundred forced collections over the large
+probe, dense enough that a growing buffer cannot hide between samples.
 -}
 sampleEveryChunks :: Int
 sampleEveryChunks = 64
 
-{- | A lazy body of one shared strict chunk. The whole served artifact costs the
-fixture ~64 KiB resident regardless of its size. Any size-proportional growth the
-probe observes therefore belongs to the relay under test.
+{- | A lazy body of one shared strict chunk, so the artifact costs the fixture 64 KiB resident
+whatever its size. Any size-proportional growth the probe observes belongs to the relay under test.
 -}
 syntheticArtifact :: Int -> LByteString
 syntheticArtifact size = LBS.fromChunks (replicate (size `div` chunkBytes) sharedChunk)

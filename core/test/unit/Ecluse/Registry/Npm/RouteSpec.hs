@@ -29,14 +29,8 @@ import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
 
-{- | What a request routes to, rebuilt for the assertions from the table's __public__
-surface. Two parts: which route claimed it ('matchRoute'), and what that route's captures
-parse to ('takePackage', 'tarballCoordinate').
-
-The routes carry actions, not values, so there is nothing to compare directly. This type
-restates the routing decision /and/ its parse as one comparable value. That is what these
-examples are about: a hostile path never yields an accepted route whose components are
-unsafe.
+{- | What a request routes to, rebuilt from the table's public surface: which route claimed the
+path, and what that route's captures parse to. The routes carry actions, not comparable values.
 -}
 data Routed
     = ToPackument PackageName
@@ -64,18 +58,13 @@ routed method segments =
             pure (ToTarball name version filename)
         Just _ -> Denied
 
-{- | The read classification (a @GET@) of an npm path: 'Route.classify' restricted to a
-read method. Each @pathInfo → Route@ assertion below goes through it. A @HEAD@
-classifies identically (the dispatcher answers it bodiless), so @GET@ stands for every
-read method here.
+{- | The read classification (a @GET@) of an npm path. A @HEAD@ classifies identically, so @GET@
+stands for every read method here.
 -}
 classify :: [Text] -> Routed
 classify = routed methodGet
 
-{- | The __publish__ classification (a @PUT@) of an npm path: 'Route.classify' at the
-publish method. The publish routing cases assert @PUT \/{pkg} → Publish@ apart from the
-read table.
--}
+-- | The publish classification (a @PUT@) of an npm path.
 publish :: [Text] -> Routed
 publish = routed methodPut
 
@@ -91,9 +80,8 @@ scoped scope = mkPackageName Npm (Just (mkScope scope))
 npmVersion :: Text -> Version
 npmVersion = mkVersion Npm
 
-{- | The npm routing table, asserted as @pathInfo → Route@. The path arrives
-percent-decoded at 'classify', so each scoped case appears in __both__ wire encodings:
-one decoded segment @\@scope\/pkg@ and two segments @\@scope@,@pkg@. Both must agree.
+{- | The npm routing table, asserted as @pathInfo → Route@. The path arrives percent-decoded, so
+each scoped case appears in both wire encodings and both must agree.
 -}
 spec :: Spec
 spec = do
@@ -131,9 +119,8 @@ spec = do
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
                 `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
-            -- The file names a DIFFERENT package's artifact under @is-odd@'s path. The
-            -- basename does not begin with @is-odd-@, so the coordinate parse denies it
-            -- rather than coercing a fabricated @is-odd@ coordinate.
+            -- The file names a DIFFERENT package's artifact under @is-odd@'s path.
+            -- The basename lacks the @is-odd-@ prefix, so the parse denies rather than fabricates.
             classify ["is-odd", "-", "is-even-3.0.1.tgz"] `shouldBe` Denied
         it "denies a basename that is the bare package name with no version" $
             -- @{name}.tgz@ has no @-{version}@ run, so there is no coordinate to parse.
@@ -257,15 +244,9 @@ spec = do
             classify ["@types", "node"] `shouldBe` ToPackument (scoped "types" "node")
 
     describe "properties" $
-        -- The safety invariant: no hostile path yields an accepted route whose
-        -- structural components are unsafe. The generator emits hostile fragments AND
-        -- real-looking names, so it drives both denied and accepted routes. The coverage
-        -- classification below proves it is not vacuous. For each accepted
-        -- 'Packument'/'Tarball' we check every component against the same safe-component
-        -- rule the router enforces: scope, base name, and, for tarballs, the file. We
-        -- split the rendered name back into its components rather than scanning it
-        -- whole. A legitimate scoped name renders as @\@scope\/base@, so it carries the
-        -- structural @\'\/\'@ separator by design.
+        -- The invariant: no hostile path yields an accepted route with an unsafe component.
+        -- The coverage classification below proves the generator reaches both arms.
+        -- Each component is checked alone, because a scoped name renders with a structural '/'.
         it "an accepted route never carries an unsafe component" $
             hedgehog $ do
                 segs <- forAll genSegments
@@ -287,27 +268,20 @@ isAccepted = \case
     ToTarball{} -> True
     _ -> False
 
-{- | The structural components of an accepted name, its scope (if any) and its base
-name, recovered from the public surface. The base name is the rendered display form with
-any @\@scope\/@ prefix stripped. The caller then checks each component on its own rather
-than across the scope separator.
+{- | The structural components of an accepted name: its scope, if any, and its base name. The
+caller checks each component on its own rather than across the scope separator.
 -}
 nameComponents :: PackageName -> [Text]
 nameComponents pn =
     case pkgNamespace pn of
         Nothing -> [renderPackageName pn]
-        -- A scoped name renders as "@scope/base". Recover [scope, base] by dropping the
-        -- "@scope/" prefix, so the check never judges a component across the structural
-        -- separator.
         Just s ->
             let scopeTxt = unScope s
                 base = fromMaybe (renderPackageName pn) (T.stripPrefix ("@" <> scopeTxt <> "/") (renderPackageName pn))
              in [scopeTxt, base]
 
-{- | The router's safety rule, restated here so the property pins the externally
-observable guarantee independently of the implementation. A component is safe
-iff it is non-empty, is not @"."@\/@".."@, and carries no @\'\/\'@, @\'\\\\\'@,
-or control character.
+{- | The router's safety rule, restated here so the property pins the externally observable
+guarantee independently of the router's implementation.
 -}
 safe :: Text -> Bool
 safe c =
@@ -316,9 +290,8 @@ safe c =
         && c /= ".."
         && T.all (\ch -> ch /= '/' && ch /= '\\' && not (isControl ch)) c
 
-{- | A path generator that mixes real-looking segments with hostile fragments:
-@"."@, @".."@, slashes, backslashes, control chars, empties, @"-"@, and @"@"@. It
-drives 'classify' down both its accepting and its denying paths.
+{- | A path generator that mixes real-looking segments with hostile fragments, so 'classify' runs
+down both its accepting and its denying paths.
 -}
 genSegments :: Gen [Text]
 genSegments = Gen.list (Range.linear 0 4) genSegment

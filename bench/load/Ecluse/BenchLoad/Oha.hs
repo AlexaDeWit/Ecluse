@@ -76,28 +76,17 @@ instance FromJSON OhaReport where
                 , ohaErrorCounts = errorCounts
                 }
 
-{- | Drive @oha@ against a URL at the given concurrency for the given number of seconds,
-returning its parsed report. The driver captures the subprocess output and keeps it off
-the harness's stdout, which carries only the machine-readable per-scenario report. A
-caller renders the figures itself.
-
-Throws when @oha@ cannot start or its JSON does not parse, a literal harness failure. A
-merely degraded run (errors, non-2xx) parses cleanly and comes back for the caller to
-report.
+{- | Drive @oha@ against a URL and parse its report, keeping the subprocess output off the
+harness's stdout, which carries only the machine-readable report. Throws when @oha@ cannot
+start or its JSON does not parse. A degraded run (errors, non-2xx) parses and comes back.
 -}
 runOha :: Int -> Int -> Text -> IO OhaReport
 runOha concurrency durationSeconds url =
     runOhaArgs concurrency durationSeconds [toString url]
 
-{- | Drive @oha@ against a __weighted list of URLs__ at the given concurrency for the
-given number of seconds, returning its parsed report. The driver writes the list to a
-temporary file and passes it via @--urls-from-file@. Then @oha@ spreads requests across
-the file in proportion to each URL's multiplicity. Repeating a URL @w@ times therefore
-gives it weight @w@ in the served mix. That is how the load harness drives a realistic
-heavy-headed (Zipfian) package mix: a few hot packages, a long one-shot tail.
-
-The same literal-failure contract as 'runOha'. It throws when @oha@ cannot start or its
-JSON does not parse, and returns a degraded run for the caller to report.
+{- | Drive @oha@ against a weighted URL list. Repeating a URL @w@ times gives it weight @w@
+in the served mix, which is how the harness drives a heavy-headed package mix. Same
+failure contract as 'runOha'.
 -}
 runOhaUrls :: Int -> Int -> [Text] -> IO OhaReport
 runOhaUrls = runOhaUrlsWith []

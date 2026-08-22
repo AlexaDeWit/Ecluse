@@ -69,10 +69,8 @@ main = do
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` rendered)
     when (reportBreached report) exitFailure
 
-{- | Fetch one package's live packument and measure Écluse's overhead over it: both
-the full-packument transform and the single-version selective decode of its latest
-version. A @Left (name, reason)@ marks it unavailable, a fetch, decode, or projection
-failure that is never a breach. A @Right sample@ carries the timed legs.
+{- | Measure Écluse's overhead over one package's live packument: the full transform and
+the single-version selective decode. A @Left (name, reason)@ marks it unavailable, never a breach.
 -}
 measurePackage :: Manager -> UTCTime -> Text -> IO (Either (Text, Text) Sample)
 measurePackage manager now name = do
@@ -100,17 +98,14 @@ measurePackage manager now name = do
                                 }
                     _ -> Left (name, "packument did not decode or project")
 
-{- | The version a single-version read targets: the latest published (the last key in
-the packument's version list, the realistic install target). 'Nothing' for a
-packument exposing no versions.
+{- | The version a single-version read targets: the last key in the packument's version
+list, the realistic install target. 'Nothing' when the packument exposes no versions.
 -}
 targetVersion :: LByteString -> Maybe Version
 targetVersion body = mkVersion Npm . NE.last <$> (nonEmpty =<< parseRegistryVersions Npm body)
 
-{- | Time one pass of the full-packument transform over a body. 'Nothing' when the
-body does not decode or project (an unavailable input, not a slow one). It forces the
-transform's result inside the timed region, so the figure reflects the real decode,
-filter, rewrite, and re-serialise work.
+{- | Time one pass of the full-packument transform, forcing the result inside the timed
+region so the figure covers the real work. 'Nothing' when the body does not decode or project.
 -}
 measureFull :: UTCTime -> PackageName -> LByteString -> IO (Maybe Double)
 measureFull now pkg body = do
@@ -119,18 +114,11 @@ measureFull now pkg body = do
     t1 <- getMonotonicTime
     pure (if done then Just (t1 - t0) else Nothing)
 
-{- | Time the single-version selective decode: the cold tarball gate's read of one
-version's snapshot from the raw packument. It parses only that version, not the whole
-document. 'Nothing' when the version is absent or the body does not decode.
-Otherwise the median of a few passes, to damp noise.
+{- | Time the single-version selective decode, the median of a few passes. 'Nothing' when
+the version is absent or the body does not decode.
 
-The leg is a pure, deterministic computation, so timing it needs care. Replicating the
-__same__ projection would let GHC share one evaluation across the passes and time
-nothing on the rest. Each pass therefore runs over a __distinct__ copy of the bytes,
-made outside the timed region ('BS.copy', a fresh object the compiler cannot share).
-Every pass is then a genuine fresh decode. 'evaluate' forces the selected snapshot over
-a deep field inside the timed region, so the figure reflects the real selective-decode
-work.
+Each pass runs over a distinct 'BS.copy' made outside the timed region. Otherwise GHC shares
+one evaluation of this pure projection across every pass and times nothing on the rest.
 -}
 measureSingleVersion :: PackageName -> Version -> ByteString -> IO (Maybe Double)
 measureSingleVersion pkg version raw = do
@@ -146,9 +134,8 @@ measureSingleVersion pkg version raw = do
         t1 <- getMonotonicTime
         pure (if depth >= 0 then Just (t1 - t0) else Nothing)
 
--- The single-version selective decode reduced to an 'Int' over a deep field of the
--- selected snapshot, so forcing it runs the real projection. A non-negative result
--- means the projection found the version. -1 marks it absent, and -2 a decode failure.
+-- Reduces the selective decode to an 'Int' over a deep field, so forcing it runs the
+-- real projection. -1 marks the version absent, -2 a decode failure.
 selectiveDepth :: PackageName -> Version -> ByteString -> Int
 selectiveDepth pkg version raw =
     case projectNpmVersion defaultLimits pkg version raw of
@@ -156,14 +143,8 @@ selectiveDepth pkg version raw =
         Right Nothing -> -1
         Left _ -> -2
 
-{- | The full-packument work-per-request transform, mirroring the serve pipeline's
-composition: decode the body, project it, sweep the rules to build the filter plan,
-merge the gated survivor set, assemble the served document from the plan,
-re-serialise, and ETag the result. The assembly takes each surviving version from the
-raw body and rewrites its tarball URL in the same pass.
-
-Returns whether the input decoded and projected. It forces the computed size, so the
-whole transform actually runs.
+{- | The full-packument work-per-request transform, mirroring the serve pipeline's composition.
+Returns whether the input decoded and projected, forcing the size so the whole transform runs.
 -}
 runTransform :: UTCTime -> PackageName -> LByteString -> IO Bool
 runTransform now pkg body =

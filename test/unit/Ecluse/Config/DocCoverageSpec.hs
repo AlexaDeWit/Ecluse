@@ -9,11 +9,8 @@ import Test.Hspec
 
 import Ecluse.Config (loadConfig)
 
-{- | The golden environment reference: every operator-facing @ECLUSE_*@ spelling,
-paired with a value the loader must accept. The two assertions keep it honest in
-both directions they can check: each spelling must appear in @USAGE.md@, and each
-must load. A brand-new config key missed from this list escapes both, because the
-accepted set is not exported. Adding the key here is part of adding it.
+{- | Every operator-facing @ECLUSE_*@ spelling, paired with a value the loader must accept.
+Each must appear in @USAGE.md@ and must load, so listing a new key here is part of adding it.
 -}
 documentedEnvVars :: [(String, String)]
 documentedEnvVars =

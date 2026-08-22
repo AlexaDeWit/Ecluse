@@ -11,9 +11,7 @@ spec :: Spec
 spec = do
     showInstancesSpec
 
-{- | The error and config types derive 'Show' for diagnostics and test output. Each
-case asserts a rendering, so a silently dropped instance fails the suite.
--}
+-- | Each case asserts a rendering, so a silently dropped 'Show' instance fails the suite.
 showInstancesSpec :: Spec
 showInstancesSpec = describe "Show instances" $ do
     it "renders LimitError values" $ do

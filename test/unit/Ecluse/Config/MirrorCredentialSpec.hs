@@ -49,9 +49,8 @@ resolveMirrorCredentialSpec = describe "resolveMirrorCredential (the target dict
             other -> expectationFailure ("expected MirrorCredentialTokenMissing Npm, got " <> show other)
 
     it "rejects a CodeArtifact target that also carries a static token (the two must not contend)" $ do
-        -- A CodeArtifact-scoped mint identity can never be paired with an
-        -- operator-supplied bearer, and a CodeArtifact endpoint's token is always
-        -- minted. Supplying both is a loud conflict, not a silent choice.
+        -- A CodeArtifact endpoint's token is always minted, so an operator-supplied bearer beside
+        -- it is a loud conflict, never a silent choice.
         case resolveMirrorCredential Npm (unsafeRegistryUrl codeArtifactTarget) (Just (mkSecret "stray")) (Just 1800) of
             Left err@(MirrorCredentialConflict Npm) ->
                 renderConfigError err `shouldSatisfy` T.isInfixOf "MIRROR_TARGET_TOKEN"
@@ -84,9 +83,6 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.foo.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if there is no hyphen separating domain and owner" $ do
-        -- The parse finds the last hyphen in domainOwner. With no hyphen,
-        -- T.breakOnEnd returns ("", "mydomain111122223333"), so T.dropEnd 1 "" is ""
-        -- and the `nonBlank` check fails.
         parseCodeArtifactHost "mydomain111122223333.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if the host is missing the .amazonaws.com suffix" $ do

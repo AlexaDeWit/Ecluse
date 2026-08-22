@@ -33,9 +33,8 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 ctx :: EvalContext
 ctx = EvalContext now Nothing
 
-{- | A package version under an optional npm scope, published @ageDays@ days
-before 'now'. Other fields are fixed. The rules under test read only the scope,
-the publish age, and the install-code signal.
+{- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
+The rules under test read only the scope, the publish age, and the install-code signal.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
@@ -119,10 +118,8 @@ genAgeDays = Gen.integral (Range.linear 0 3650)
 genPrecedence :: Gen Int
 genPrecedence = Gen.int (Range.linear 0 1000)
 
-{- | A rule that takes a position against the package the order-independence property
-builds: scoped @scopeTxt@, old, and running install scripts. It is a matching
-'AllowScope', an 'AllowIfOlderThan' the package is old enough for, or
-'DenyInstallTimeExecution'. None yields no decision, so every generated rule competes.
+{- | A rule that fires on the package the order-independence property builds: scoped
+@scopeTxt@, old, and running install scripts. None yields no decision, so every rule competes.
 -}
 genFiringRule :: Text -> Gen Rule
 genFiringRule scopeTxt =
@@ -132,11 +129,9 @@ genFiringRule scopeTxt =
         , DenyInstallTimeExecution
         ]
 
-{- | Canonicalise a decision for order-independence comparison. Sort the audit-reason
-list of a 'BlockedByDefault'. The engine gathers reasons in boot order, and a
-permutation of the configured set only reorders the non-decisive ones at equal
-precedence. 'Admitted' and 'Blocked' stay as they are. A permutation cannot change the
-credited rule, because the boot order resolves every equal-precedence tie by name.
+{- | Canonicalise a decision for order-independence comparison. Sorting a 'BlockedByDefault'
+reason list is enough, because a permutation only reorders non-decisive reasons at equal
+precedence, and the boot order still resolves every equal-precedence tie by name.
 -}
 canonical :: Decision -> Decision
 canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
@@ -245,9 +240,8 @@ spec = do
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "cveIdsInReason -- recovering advisory ids for the denial audit line" $ do
-        -- The deny reason 'denyVerdict' builds, asserted verbatim by the DenyIfCve
-        -- describe above. The audit layer reads the ids back from it, so the two must
-        -- stay in lockstep: a reword of either fails one of these.
+        -- The deny reason 'denyVerdict' builds, asserted verbatim above. The audit layer reads
+        -- the ids back from it, so a reword of either fails one of these.
         let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
         it "recovers the id a DenyIfCve denial named" $
             cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
@@ -369,20 +363,16 @@ spec = do
             decide rs p >>= \d -> blockedBy d `shouldBe` Just "DenyInstallTimeExecution"
             decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyInstallTimeExecution"
         it "resolves an equal-precedence allow-vs-deny tie by name, not by deny-priority" $ do
-            -- At equal explicit precedence there is no deny-over-allow runtime rule:
-            -- the boot order resolves the tie by name. "AllowScope" sorts before
-            -- "DenyInstallTimeExecution", so the engine credits the allow even though
-            -- the version also trips the deny. (Deny-over-allow still holds out of the
-            -- box, where the deny default sits strictly higher.)
+            -- At equal explicit precedence there is no deny-over-allow rule. The boot order breaks
+            -- the tie by name, and "AllowScope" sorts first. Out of the box the deny default sits
+            -- higher.
             let rs = [at 300 (AllowScope (mkScope "myorg")), at 300 DenyInstallTimeExecution]
                 p = withInstallScripts (pkg (Just "myorg") 99)
             decide rs p >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
             decide (reverse rs) p >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
         it "breaks an equal-precedence allow-vs-allow tie by name, regardless of order" $ do
-            -- Two allows fire at the same precedence. The boot order breaks the tie by
-            -- name (the smallest ruleName), not by list position, so the same rule wins
-            -- whichever order the list supplies. "AllowIfOlderThan" sorts before
-            -- "AllowScope", so it takes the credit.
+            -- The boot order breaks an equal-precedence tie by the smallest ruleName, not by list
+            -- position. "AllowIfOlderThan" sorts before "AllowScope", so it takes the credit.
             let allows =
                     [ at 150 (AllowScope (mkScope "myorg"))
                     , at 150 (AllowIfOlderThan (7 * nominalDay))
@@ -414,9 +404,8 @@ spec = do
                 (pkg Nothing 0)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowIfRemediatesCve"
         it "a failing advisory lookup abstains: the quarantine still governs, and nothing turns Undecidable" $ do
-            -- The deliberate failure asymmetry (the inverse of a deny direction): an
-            -- unconfirmable remediation costs the fix its fast lane, never
-            -- availability and never an admission.
+            -- The deliberate failure asymmetry: an unconfirmable remediation costs the fix its fast
+            -- lane, never availability and never an admission.
             let broken =
                     RuleDeps
                         { rdWithCveLookup = \_ -> throwString "advisory database exploded"
@@ -433,9 +422,8 @@ spec = do
                 BlockedByDefault _ -> pass
                 other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
         it "denies by default when every rule is non-decisive, collecting each reason in boot order" $
-            -- The audit trail carries each non-decisive rule's actual reason, in
-            -- boot order (highest precedence first): AllowScope (200) then
-            -- AllowIfOlderThan (100).
+            -- The audit trail carries each non-decisive rule's reason in boot order, highest
+            -- precedence first: AllowScope (200) then AllowIfOlderThan (100).
             decide
                 (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowScope (mkScope "myorg")])
                 (pkg (Just "other") 1)
@@ -478,9 +466,8 @@ spec = do
 
         it "every rule non-decisive yields deny-by-default" $
             hedgehog $ do
-                -- A non-matching scope and a too-young age make both allows yield no
-                -- decision. The package runs no install scripts, so the deny yields
-                -- none either. Whatever the precedences, nothing fires.
+                -- A non-matching scope, a too-young age, and no install scripts leave every rule
+                -- non-decisive, whatever the precedences.
                 scopeTxt <- forAll genScope
                 otherTxt <- forAll (Gen.filter (/= scopeTxt) genScope)
                 precs <- forAll (Gen.list (Range.singleton 3) genPrecedence)
@@ -517,12 +504,10 @@ spec = do
 
         it "the decision is invariant under shuffling the rule list" $
             hedgehog $ do
-                -- Precedences may collide, so the draw exercises equal-precedence ties,
-                -- including an allow-vs-allow tie where two firing allows share a
-                -- precedence. The boot order resolves every tie by name, so the credited
-                -- winner, and the whole 'Decision', is order-independent. Only the
-                -- gathered reason order tracks the input list within a tie, so
-                -- 'canonical' sorts it before comparing.
+                -- Colliding precedences make the draw exercise equal-precedence ties, allow-vs-
+                -- allow included. The boot order resolves every tie by name, so the 'Decision' is
+                -- order-independent. Only the gathered reason order tracks the input list, so
+                -- 'canonical' sorts it.
                 scopeTxt <- forAll genScope
                 ageDays <- forAll genAgeDays
                 n <- forAll (Gen.int (Range.linear 0 6))

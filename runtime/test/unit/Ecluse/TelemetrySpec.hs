@@ -39,20 +39,9 @@ import Ecluse.Runtime.Telemetry (
  )
 import Ecluse.Runtime.Telemetry.Resolve (newExportFailureSink)
 
-{- | Tests for the OpenTelemetry substrate. They exercise three promises. The
-@ECLUSE_OBSERVABILITY__TELEMETRY@ master switch parses strictly (on \/ off \/
-malformed). The off-by-default handle is a genuine no-op: the SDK is never initialised
-and no provider is exposed. And 'telemetryEnabled' wires the SDK's tracer and meter
-providers through to the handle's accessors. The enabled handle under test is built
-from /offline/ providers: an empty-processor tracer provider and the no-op meter
-provider. No exporter is opened, no @OTEL_*@ env is read, and this stays pure-tier.
-Only the live 'withTelemetry' @on@ path is reserved for the integration tier. It reads
-@OTEL_*@ and opens an OTLP exporter against a real collector (see
-@docs\/architecture\/observability.md@ → "Verifying it").
-
-The 'observeSpanExporter' \/ 'observeMetricExporter' cases below stay pure. A stub
-exporter that always fails drives the wrapper, and the case asserts that the failure
-reaches an injected sink without a live SDK. Pure and offline.
+{- | Tests the OpenTelemetry substrate: the @ECLUSE_OBSERVABILITY__TELEMETRY@ switch parses
+strictly, the off handle initialises no SDK, and 'telemetryEnabled' wires the SDK providers
+through. The live @on@ path opens a real exporter, so the integration tier covers it.
 -}
 spec :: Spec
 spec = do
@@ -90,13 +79,8 @@ handleSpec = describe "telemetryDisabled" $ do
         TelemetryDisabled -> pure ()
         TelemetryEnabled{} -> expectationFailure "expected the disabled no-op handle"
 
-{- | An 'OTelSignals' assembled from /offline/ providers, so a test drives
-'telemetryEnabled' without standing up the real SDK. Every provider is inert. The
-tracer and logger providers have no processors, so they export nothing. The meter
-provider is the SDK's no-op, and the propagator is the empty 'mempty'. No exporter is
-opened and no @OTEL_*@ env is read. This is pure substrate wiring, not the live @on@
-path. ('telemetryEnabled' reads only the tracer and meter fields. The rest are present
-so the value is total rather than relying on a bottom.)
+{- | An 'OTelSignals' of inert providers, so a test drives 'telemetryEnabled' without the real
+SDK. It reads only the tracer and meter fields, the rest keep the value total.
 -}
 offlineSignals :: IO OTelSignals
 offlineSignals = do
@@ -113,13 +97,8 @@ offlineSignals = do
 
 enabledHandleSpec :: Spec
 enabledHandleSpec = describe "telemetryEnabled" $ do
-    -- 'telemetryEnabled' is the only way to obtain an enabled handle. It must take
-    -- the tracer and meter providers from the SDK signals and expose exactly those
-    -- through the handle's accessors. A 'TracerProvider'/'MeterProvider' has no 'Eq'
-    -- or 'Show'. So the assertion is the constructor shape plus a /forced/ projected
-    -- provider, not value equality. Forcing proves the provider is a real value rather
-    -- than a discarded thunk. 'forceProvider' below evaluates the projection to WHNF
-    -- so the wiring genuinely runs end to end.
+    -- A 'TracerProvider'/'MeterProvider' has no 'Eq' or 'Show', so the assertion is the
+    -- constructor shape plus a forced projection rather than value equality.
     it "carries the SDK providers into the TelemetryEnabled handle" $ do
         signals <- offlineSignals
         case telemetryEnabled signals of
@@ -137,10 +116,8 @@ enabledHandleSpec = describe "telemetryEnabled" $ do
         present <- forceProvider (telemetryMeterProvider (telemetryEnabled signals))
         present `shouldBe` True
   where
-    -- Force the projected provider to WHNF and report whether it was present. A
-    -- provider has no 'Eq'/'Show', so this asserts the projection actually ran and
-    -- yielded a real value ('Just' forced), not a lazily-dropped thunk. That exercises
-    -- the enabled branches of the accessors and the field projections.
+    -- Force the projected provider to WHNF and report whether it was present. A provider has no
+    -- 'Eq'/'Show', so this proves the projection yielded a real value, not a dropped thunk.
     forceProvider :: Maybe a -> IO Bool
     forceProvider = \case
         Nothing -> pure False
@@ -149,11 +126,8 @@ enabledHandleSpec = describe "telemetryEnabled" $ do
 lifecycleSpec :: Spec
 lifecycleSpec = describe "withTelemetry" $ do
     it "runs the body against the disabled no-op when off, initialising no SDK" $ do
-        -- The off path must be a pure pass-through: it opens no exporter and
-        -- reads no OTEL_* env, so the body simply receives the inert handle. The
-        -- assertion is that the handle exposes no providers (a 'TracerProvider'
-        -- has no 'Eq', so the test checks each through 'isNothing'). The 'LogEnv' is
-        -- unused on the off path, so a scribe-less one suffices.
+        -- The off path is a pure pass-through: it opens no exporter and reads no OTEL_* env. A
+        -- provider has no 'Eq', so absence is checked through 'isNothing'.
         logEnv <- newTestLogEnv
         (noTracer, noMeter) <-
             withTelemetry TelemetryOff logEnv $ \telemetry ->
@@ -169,12 +143,8 @@ lifecycleSpec = describe "withTelemetry" $ do
         result <- withTelemetry TelemetryOff logEnv (const (pure (42 :: Int)))
         result `shouldBe` 42
 
-{- The exporter wrappers turn a dropped export into a visible warning. A stub exporter
-that always returns 'Failure' drives the wrapper. The wrapper must surface the first
-failure through the sink and suppress repeats inside the throttle window. Once the
-window elapses it heartbeats the suppressed count. This is the IO-boundary mirror of
-the pure 'throttleStep' tests. The test injects the clock and the surfacing action, so
-it asserts the decision without wall-clock timing or a live @katip@ scribe. -}
+{- The wrapper surfaces the first export failure, suppresses repeats inside the throttle
+window, then heartbeats the suppressed count off an injected clock. -}
 exportObservationSpec :: Spec
 exportObservationSpec = describe "observeSpanExporter / observeMetricExporter" $ do
     it "surfaces the first span-export failure, throttles repeats, then heartbeats the count" $ do

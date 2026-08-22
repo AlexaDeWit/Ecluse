@@ -20,12 +20,9 @@ import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
--- CorpusV1's rows, in the fake's vocabulary. Keep them in lockstep with the corpus
--- pins in Ecluse.Test.OsvSpec. The conformance cases below run against both this fake
--- and the real artifact compiled from the same corpus.
--- Each severity is the CVSS band ceiling the writer maps a fixture's GHSA label to
--- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0). These fixtures carry no
--- last_affected bound, so it is Nothing throughout.
+-- CorpusV1's rows in the fake's vocabulary. Keep them in lockstep with the corpus pins in
+-- Ecluse.Test.OsvSpec. Each severity is the CVSS band ceiling for the fixture's GHSA label
+-- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0), and no fixture carries a last_affected bound.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
     [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (Just "3.0.0") Nothing)
@@ -104,9 +101,8 @@ spec = do
         it "rejects an artifact whose tables are not STRICT" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "lax-schema.db"
-                -- The right names and columns under affinity-hinted (non-STRICT)
-                -- declarations: the reader cannot trust its decodes, so schema
-                -- conformance must refuse it as a value.
+                -- The reader cannot trust decodes under affinity-hinted (non-STRICT) declarations,
+                -- so schema conformance must refuse the artifact as a value.
                 mkDbWithLaxSchema path
                 openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
@@ -116,11 +112,9 @@ spec = do
         it "rejects an artifact with no meta table as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-meta.db"
-                -- A structurally-sound artifact with the canonical ranges table and
-                -- the right epoch stamp, but no @meta@ table. Schema conformance must
-                -- refuse the missing relation as a rejection value. An uncaught throw
-                -- would re-download the artifact every poll and leak the just-opened
-                -- connection.
+                -- A structurally-sound artifact with no @meta@ table. An uncaught throw would re-
+                -- download the artifact every poll and leak the just-opened connection, so refusal
+                -- must be a value.
                 bracket (open path) close $ \conn -> do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
                     execute_ conn (Query rangesTableDdl)
@@ -143,10 +137,8 @@ spec = do
         it "rejects an artifact whose stored meta values violate the strict declaration, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "malformed-meta.db"
-                -- A BLOB smuggled under a forged STRICT declaration. The integrity
-                -- walk verifies stored values against the declared column types. It
-                -- must refuse the artifact as a rejection value, never a thrown decode
-                -- error, so the sync task remembers its ETag.
+                -- A BLOB smuggled under a forged STRICT declaration. Refusal must be a rejection
+                -- value, never a thrown decode error, so the sync task remembers its ETag.
                 mkDbWithMalformedProvenance path
                 openCveDb Npm path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
@@ -183,12 +175,9 @@ spec = do
         it "rejects a non-SQLite artifact as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "not-a-database.db"
-                -- Arbitrary non-SQLite bytes: the header magic is absent, so the
-                -- first file-touching statement (the epoch-stamp PRAGMA) makes
-                -- SQLite raise SQLITE_NOTADB. That must surface as a rejection
-                -- value, never an uncaught exception that leaks the just-opened
-                -- connection. The sync task then remembers the ETag rather than
-                -- re-downloading the same hostile object every poll.
+                -- Arbitrary non-SQLite bytes make SQLite raise SQLITE_NOTADB. Refusal must be a
+                -- value, or the connection leaks and the sync task re-downloads the same hostile
+                -- object every poll.
                 writeFileBS path "this is not an SQLite database, not even close"
                 openCveDb Npm path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
@@ -204,10 +193,9 @@ spec = do
     describe "the confined query-fault channel" $ do
         it "re-raises a mid-query SQLite fault as CveQueryFault, tagged with the field asked" $
             withAcceptedDb $ \dbFile db -> do
-                -- Break the accepted schema out from under the open handle through a
-                -- second (unhardened) connection. The next query through the view is
-                -- the infrastructural fault the confined channel carries. Artifact
-                -- content cannot reach it: acceptance made that path total.
+                -- A second, unhardened connection breaks the schema under the open handle. The next
+                -- query through the view raises the infrastructural fault the confined channel
+                -- carries.
                 saboteur <- open dbFile
                 execute_ saboteur "DROP TABLE package_vulnerability_ranges"
                 close saboteur

@@ -79,19 +79,17 @@ osvCorpusFiles v = traverse readEntry (files v)
         bytes <- readFileLBS (corpusRoot </> rel)
         pure (takeFileName rel, bytes)
 
-{- | Assemble the osv.dev-shaped export (a flat zip of advisory JSON files)
-for a corpus version, in memory. The entry timestamp is fixed so the archive
-is deterministic.
+{- | Assemble the osv.dev-shaped export, a flat zip of advisory JSON files, for a corpus version.
+The entry timestamp is fixed, so the archive is deterministic.
 -}
 osvCorpusZip :: CorpusVersion -> IO LByteString
 osvCorpusZip v = do
     entries <- osvCorpusFiles v
     osvZipOf (map (first toText) entries)
 
-{- | Assemble an osv.dev-shaped export (a flat zip of advisory JSON files) from
-arbitrary (entry name, bytes) pairs, in memory. The entry timestamp is fixed so the
-archive is deterministic. Suites use this to build tampered or pathological archives
-the corpus does not carry.
+{- | Assemble an osv.dev-shaped zip from arbitrary (entry name, bytes) pairs, so a suite can build
+tampered or pathological archives the corpus does not carry. The entry timestamp is fixed, so the
+archive is deterministic.
 -}
 osvZipOf :: [(Text, LByteString)] -> IO LByteString
 osvZipOf entries =
@@ -113,19 +111,16 @@ osvZipOf entries =
 corpusTimestamp :: LocalTime
 corpusTimestamp = LocalTime (fromGregorian 2026 1 1) midnight
 
-{- | A structurally plausible artifact stamped with a different table-schema
-epoch. A reader must reject it on the 'osvSchemaEpoch' check alone, before
-trusting anything else about the file, so the interior shape is deliberately
-minimal.
+{- | A structurally plausible artifact stamped with a different table-schema epoch. A reader must
+reject it on the 'osvSchemaEpoch' check alone, so the interior shape is deliberately minimal.
 -}
 mkDbWithWrongEpoch :: FilePath -> IO ()
 mkDbWithWrongEpoch path = withConnection path $ \conn -> do
     createRangesTable conn
     setEpoch conn (osvSchemaEpoch + 1)
 
-{- | An artifact with the right epoch whose ranges relation is a __view__. A view
-is schema-borne SQL, and a hardened reader (read-only,
-@PRAGMA trusted_schema = OFF@) must refuse to evaluate it on the file's terms.
+{- | An artifact with the right epoch whose ranges relation is a __view__. A view is schema-borne
+SQL, and a hardened reader (read-only, @PRAGMA trusted_schema = OFF@) must refuse to evaluate it.
 Schema conformance refuses it as not a real @STRICT@ table.
 -}
 mkDbWithViewShadowingRanges :: FilePath -> IO ()
@@ -146,11 +141,9 @@ mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
         \SELECT package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity FROM raw_rows"
     setEpoch conn osvSchemaEpoch
 
-{- | An artifact that passes acceptance (right epoch, real ranges table, npm
-@meta@ row) but carries a malicious trigger poised on the ranges table. A
-read-only consumer must behave exactly as it would on a clean artifact. A
-trigger can only ever fire on a write, and the hardened connection refuses
-writes outright.
+{- | An artifact that passes acceptance but carries a malicious trigger poised on the ranges table.
+A read-only consumer must behave exactly as it would on a clean artifact, because a trigger fires
+only on a write and the hardened connection refuses writes outright.
 -}
 mkDbWithMaliciousTrigger :: FilePath -> IO ()
 mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
@@ -164,14 +157,10 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
         \BEGIN DELETE FROM package_vulnerability_ranges; END"
     setEpoch conn osvSchemaEpoch
 
-{- | An artifact forged to look conformant whose stored @meta@ values violate
-the declaration. The builder authors the @meta@ table __lax__, since TEXT
-affinity stores a BLOB verbatim and the hostile row can then exist at all. It
-then rewrites the stored @CREATE TABLE@ text to the canonical @STRICT@ DDL under
-@PRAGMA writable_schema@. The declaration alone therefore passes schema
-conformance. Only the integrity walk (@PRAGMA quick_check@), verifying stored
-values against the @STRICT@ declaration, catches the BLOB. The reader must
-refuse it as a rejection value, never a thrown decode error.
+{- | An artifact forged to look conformant whose stored @meta@ values violate the declaration. The
+builder authors @meta@ __lax__ so the hostile BLOB row can exist, then rewrites the stored DDL to
+the canonical @STRICT@ text under @PRAGMA writable_schema@. Only the @PRAGMA quick_check@ integrity
+walk catches the BLOB, and the reader must refuse it as a rejection value, never a thrown error.
 -}
 mkDbWithMalformedProvenance :: FilePath -> IO ()
 mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
@@ -184,10 +173,9 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
     execute_ conn "PRAGMA writable_schema = OFF"
     setEpoch conn osvSchemaEpoch
 
-{- | An artifact whose tables carry the right names and columns but without
-@STRICT@ (the epoch-2 shape). The declared types are affinity hints, not
-enforced storage types, so the reader cannot trust its decodes. Schema
-conformance must refuse it as a value.
+{- | An artifact whose tables carry the right names and columns but without @STRICT@. The declared
+types are then affinity hints, not enforced storage types, so schema conformance must refuse it as
+a value.
 -}
 mkDbWithLaxSchema :: FilePath -> IO ()
 mkDbWithLaxSchema path = withConnection path $ \conn -> do
@@ -205,14 +193,10 @@ mkDbWithLaxSchema path = withConnection path $ \conn -> do
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     setEpoch conn osvSchemaEpoch
 
-{- | A structurally corrupt artifact: a valid, right-epoch database whose
-interior b-tree pages carry garbage on disk. Page 1 (the file header and the
-schema) stays intact, so the file still opens, reports the current
-'osvSchemaEpoch', and presents a real @package_vulnerability_ranges@ table. Only
-the @PRAGMA quick_check@ integrity walk, reading the wrecked table b-tree,
-catches it. This models a tampered or truncated download that parses as SQLite
-but is not a sound database. The builder creates the ranges table first, so its
-b-tree root is page 2. A handful of rows keep that page a populated leaf.
+{- | A valid, right-epoch database whose interior b-tree pages carry garbage on disk, modelling a
+tampered or truncated download. Page 1 stays intact, so the file still opens and presents a real
+@package_vulnerability_ranges@ table, and only the @PRAGMA quick_check@ walk catches it. The
+builder creates the ranges table first, so its b-tree root is page 2.
 -}
 mkDbWithCorruptPage :: FilePath -> IO ()
 mkDbWithCorruptPage path = do
@@ -232,12 +216,10 @@ mkDbWithCorruptPage path = do
         hSeek h AbsoluteSeek 4096
         BS.hPut h (BS.replicate 4096 255)
 
-{- | A minimal artifact 'Ecluse.Core.Cve.openCveDb' accepts: the ranges table,
-an npm @meta@ row, the current epoch stamp, and one advisory row. That row's
-package name is the given tag, with @1.0.0@ as its exact fixed bound. Sync and
-slot tests can then tell generations apart by which package answers the
-remediation probe. The corpus-compiled fixtures stay the schema's conformance
-authority. This builder exists for mechanics tests below the app tier.
+{- | A minimal artifact 'Ecluse.Core.Cve.openCveDb' accepts, carrying one advisory row whose package
+name is the given tag and whose exact fixed bound is @1.0.0@. Sync and slot tests then tell
+generations apart by which package answers the remediation probe. The corpus-compiled fixtures stay
+the schema's conformance authority.
 -}
 mkMinimalValidDb :: FilePath -> Text -> IO ()
 mkMinimalValidDb path pkg = withConnection path $ \conn -> do

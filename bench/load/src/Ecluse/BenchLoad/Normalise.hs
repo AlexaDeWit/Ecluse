@@ -49,19 +49,14 @@ import Data.Text qualified as T
 import Numeric (showFFloat)
 
 {- | The per-request upstream wait as a multiple of the public-registry round trip. The
-proxy fetches the two origin legs concurrently and amortises the public leg through
-single-flight. A request therefore waits one round trip on the upstream, whichever
-scenario it is. A scenario that fetched its legs serially would wait two. This single
-multiple holds for every npm scenario, and another ecosystem's fixtures must re-check it
-when they land.
+proxy fetches the two origin legs concurrently and single-flights the public leg, so a
+request waits one round trip. Another ecosystem's fixtures must re-check this.
 -}
 publicLegMultiple :: Double
 publicLegMultiple = 1.0
 
-{- | Where the upstream baseline subtracted from each measured latency came from: a live
-probe of the public registry (its mean round trip and the number of timed samples), or the
-configured injected latency as a fallback when the probe was unavailable. Only the label
-differs. The arithmetic is the same.
+{- | Where the subtracted upstream baseline came from, a live probe or the configured
+injected latency. Only the label differs. The arithmetic is the same.
 -}
 data BaselineSource
     = -- | A live probe: the mean round trip in milliseconds and how many samples it averaged.
@@ -93,10 +88,8 @@ data Attribution = Attribution
     }
     deriving stock (Eq, Show)
 
-{- | Split a measured latency into its upstream baseline and the Écluse overhead. The
-baseline is the public round trip times 'publicLegMultiple', capped at the total so the
-overhead is never negative. A measurement below the baseline, from noise or a path faster
-than the live registry, attributes the whole latency to upstream and zero overhead.
+{- | Split a measured latency into upstream baseline and Écluse overhead. The baseline is
+capped at the total, so a measurement below it yields zero overhead rather than a negative.
 -}
 attribute :: Double -> Double -> Attribution
 attribute rttMs totalMs =
@@ -112,9 +105,8 @@ attribute rttMs totalMs =
     overhead = max 0 (totalMs - upstream)
     fraction part = if totalMs <= 0 then 0 else part / totalMs
 
-{- | One scenario's measured latency at the primary (p50) and tail (p99) percentiles,
-before attribution. A percentile is 'Nothing' when the run recorded no successful request
-at it. 'renderNormalised' applies 'attribute' against the baseline.
+{- | One scenario's measured p50 and p99 latency, before attribution. A percentile is
+'Nothing' when the run recorded no successful request at it.
 -}
 data NormalisedRow = NormalisedRow
     { nrName :: Text
@@ -123,11 +115,7 @@ data NormalisedRow = NormalisedRow
     }
     deriving stock (Eq, Show)
 
-{- | Render the service-time attribution as a Markdown section: a header naming the
-baseline source and the concurrency-one pass, then a row per scenario. Each row splits the
-p50 (primary) into total \/ upstream \/ overhead, and carries the p99 (tail, GC included)
-split alongside.
--}
+-- | Render the service-time attribution as a Markdown section, one row per scenario.
 renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
 renderNormalised source rows =
     T.unlines $
@@ -167,17 +155,14 @@ renderRow rttMs row =
             ]
     split ms frac = msCell ms <> " (" <> pctCell frac <> ")"
 
-{- | The fraction of the loaded latency above which the queuing delay dominates it. Past
-that point the latency a client sees is mostly the request waiting in line, neither
-upstream nor Écluse's per-request work.
+{- | The fraction of the loaded latency above which queuing delay dominates it: past that
+point the client sees mostly waiting in line, neither upstream nor Écluse's own work.
 -}
 queuingDominanceThreshold :: Double
 queuingDominanceThreshold = 0.5
 
-{- | The scalars 'deriveSaturation' builds one scenario's saturation view from: its name,
-the achieved throughput and deadline-abort count under load, and the p50 latency from each
-pass (the concurrency-one service pass and the loaded pass). Both passes run at the same
-injected upstream latency, so their difference is the queuing delay alone.
+{- | The scalars 'deriveSaturation' works from. Both passes run at the same injected
+upstream latency, so their p50 difference is the queuing delay alone.
 -}
 data SaturationInput = SaturationInput
     { siName :: Text
@@ -192,10 +177,7 @@ data SaturationInput = SaturationInput
     }
     deriving stock (Eq, Show)
 
-{- | One scenario's saturation view: the load-pass throughput and deadline aborts, the
-two p50s, the queuing delay between them, its share of the loaded latency, and whether it
-dominates.
--}
+-- | One scenario's saturation view, derived by 'deriveSaturation'.
 data Saturation = Saturation
     { satName :: Text
     , satThroughput :: Double
@@ -211,11 +193,8 @@ data Saturation = Saturation
     }
     deriving stock (Eq, Show)
 
-{- | Derive a scenario's saturation view from its scalars. The queuing delay is the loaded
-p50 less the concurrency-one service p50, floored at zero. Its fraction is that delay over
-the loaded p50, and it dominates when the fraction exceeds the threshold. A missing p50
-leaves the delay, the fraction, and the dominance undefined: an absent measurement, never
-a breach and never a slow one.
+{- | Derive a scenario's saturation view. A missing p50 leaves the delay, the fraction, and
+the dominance undefined: an absent measurement, never a breach and never a slow one.
 -}
 deriveSaturation :: Double -> SaturationInput -> Saturation
 deriveSaturation threshold si =
@@ -236,9 +215,8 @@ deriveSaturation threshold si =
         loaded <- siLoadedP50Ms si
         if loaded > 0 then Just (d / loaded) else Nothing
 
-{- | Render the saturation view as a Markdown section: a header, then a per-scenario
-table with the throughput, the deadline aborts, the two p50s, the queuing delay and its
-share, and a per-row flag. A loud summary line follows when any scenario is queuing-bound.
+{- | Render the saturation view as a Markdown section, with a loud summary line when any
+scenario is queuing-bound.
 -}
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =

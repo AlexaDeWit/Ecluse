@@ -41,22 +41,9 @@ import Ecluse.Runtime.Telemetry.Instruments (
 import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 
-{- | The integration tier for metrics. Drive @ecluse.*@ measurements through an
-in-process telemetry handle into a real OTLP __Collector__ container (no Datadog SaaS),
-then assert the Collector accepts the series. The Collector runs an OTLP\/HTTP receiver
-into a @debug@ exporter at detailed verbosity. It therefore writes every received
-metric, its name and labels, to its logs. The test records a spread of catalogue
-signals, force-flushes the meter provider, then watches the Collector's logs for a known
-metric name.
-
-Two cases prove the wire and its gate. With telemetry __on__ the metric reaches the
-Collector, so the SDK exported it and the Collector accepted it. With telemetry __off__
-the SDK never initialises and exports nothing, so the name never appears. The metric
-/name/ is the marker, never a label: a unique-per-run label would breach the
-bounded-label discipline the catalogue enforces. The assertion therefore keys on the
-catalogue name, which a fresh per-case container makes unambiguous. Gating and
-Dockerised, the same tier as the tracing and mirror-queue tests. It needs a Docker
-daemon and no external network beyond pulling the Collector image.
+{- | Drive @ecluse.*@ measurements through an in-process telemetry handle into a real OTLP
+Collector container, then assert the Collector accepts the series. The assertion keys on the
+catalogue metric /name/, never a unique label, because the catalogue enforces bounded labels.
 -}
 spec :: Spec
 spec =
@@ -76,10 +63,9 @@ spec =
 markerMetric :: Text
 markerMetric = "ecluse.serve.decision"
 
-{- Record a spread of @ecluse.*@ signals through an in-process telemetry handle pointed
-at the collector. Then force-flush the meter provider, so the export does not wait on
-the periodic reader's window. With telemetry off, 'newMetrics' builds against the no-op
-meter and no provider exists to flush, so the handle emits nothing. -}
+{- Record a spread of @ecluse.*@ signals, then force-flush the meter provider so the export
+does not wait on the periodic reader's window. With telemetry off, 'newMetrics' builds
+against the no-op meter and there is no provider to flush. -}
 driveMetrics :: Collector -> TelemetrySwitch -> IO ()
 driveMetrics collector switch = do
     logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
@@ -97,13 +83,9 @@ driveMetrics collector switch = do
             whenJust (telemetryMeterProvider telemetry) $ \meterProvider ->
                 void (forceFlushMeterProvider meterProvider Nothing)
 
-{- Run an action with the SDK pointed at the collector through the standard @OTEL_*@
-environment, then __restore the prior environment on exit__. The metrics exporter is on,
-because the collector carries a metrics pipeline. Traces and logs are off, so the SDK
-does not ship signals the collector has no pipeline for. The @setEnv@ call is
-process-global, and the integration suite runs every spec in one process. Without the
-restore these values (e.g. @OTEL_TRACES_EXPORTER=none@) would leak into a later spec.
-This saves every key it sets and puts it back, or unsets it if it was absent. -}
+{- Point the SDK at the collector through the standard @OTEL_*@ environment, then restore the
+prior environment on exit. @setEnv@ is process-global and the integration suite runs every spec
+in one process, so an unrestored value (e.g. @OTEL_TRACES_EXPORTER=none@) would leak. -}
 withSdkEnv :: Text -> IO a -> IO a
 withSdkEnv endpoint act = bracket saveKeys restoreKeys (const (apply >> act))
   where
@@ -144,19 +126,14 @@ data Collector = Collector
 collectorPort :: TC.Port
 collectorPort = 4318
 
--- The OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest.
--- 'withCollector' resolves it to a 'PinnedImageRef' at startup. A mutable tag, which
--- could be re-pointed at a poisoned image, therefore aborts the suite rather than
--- reaching the @FROM@ line. This digest matches the e2e harness's collector pin. The
--- core distribution carries the OTLP receiver and the @debug@ exporter the assertion
--- reads.
+-- The OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest and
+-- resolved to a 'PinnedImageRef' at startup. A mutable tag could be re-pointed at a poisoned
+-- image, so a non-pinned literal aborts the suite rather than reaching the @FROM@ line.
 collectorImage :: Text
 collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
-{- A derived image that bakes the @--config env:OTELCOL_CONFIG@ command into the
-collector. Version 0.5.3 of testcontainers appends @setCmd@ to @docker start@, which
-rejects it, so the command belongs in the image rather than at run time. The config
-itself still arrives through the (correctly applied) @--env@ on @docker create@. -}
+{- A derived image that bakes the @--config env:OTELCOL_CONFIG@ command in. Version 0.5.3 of
+testcontainers appends @setCmd@ to @docker start@, which rejects it. -}
 collectorDockerfile :: PinnedImageRef -> Text
 collectorDockerfile image =
     "FROM "
@@ -164,11 +141,9 @@ collectorDockerfile image =
         <> "\nCMD [\"--config\", \"env:OTELCOL_CONFIG\"]\n"
         <> "LABEL com.ecluse.test=integration\n"
 
-{- The whole collector configuration as a single-line (flow-style) YAML document. It
-passes through the @env:@ config provider, so the distroless image needs no shell, file,
-or bind mount. It declares an OTLP\/HTTP receiver feeding a @debug@ exporter at detailed
-verbosity, through a __metrics__ pipeline. The collector therefore writes every received
-metric to the container logs. -}
+{- The whole collector configuration as single-line flow-style YAML, passed through the @env:@
+config provider so the distroless image needs no shell or bind mount. Its @debug@ exporter at
+detailed verbosity writes every received metric to the container logs. -}
 collectorConfig :: Text
 collectorConfig =
     "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
@@ -176,8 +151,7 @@ collectorConfig =
         <> "service: {pipelines: {metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
 {- | Start an OTLP Collector container, follow its logs into a shared buffer the test
-inspects, and tear it down after. The container is given the inline config and waits
-until its OTLP port accepts connections before the body runs.
+inspects, and tear it down after. The body runs once the OTLP port accepts connections.
 -}
 withCollector :: (Collector -> IO ()) -> IO ()
 withCollector action = do
@@ -209,9 +183,8 @@ collectorContainer labels logsRef image =
 accumulateLogs :: IORef [ByteString] -> TC.LogConsumer
 accumulateLogs logsRef _pipe line = atomicModifyIORef' logsRef (\acc -> (line : acc, ()))
 
-{- Poll the collector's accumulated logs for the metric name, up to @attempts@ times at
-~250ms each. 'True' once a log line carries the name. The @debug@ exporter prints each
-received metric's name, so the name surfaces once the collector accepts the metric. -}
+{- Poll the collector's accumulated logs for the metric name, up to @attempts@ times at ~250ms
+each. The @debug@ exporter prints each received metric's name. -}
 awaitMetric :: Collector -> Text -> Int -> IO Bool
 awaitMetric collectorHandle metric = go
   where

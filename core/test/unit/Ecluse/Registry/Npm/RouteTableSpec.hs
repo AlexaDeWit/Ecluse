@@ -49,11 +49,9 @@ import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
 
-{- | The route a request takes, named: the identifier of the first route to claim it, or
-'Nothing' when none does (the deny-by-default @404@).
-
-This is what the table decides. The serve path exercises the closure a route names, so
-these examples assert only that the __right__ route claimed the request.
+{- | The route a request takes: the name of the first route to claim it, or 'Nothing' when
+none does (the deny-by-default @404@). These examples assert only which route claimed the
+request, never what its closure serves.
 -}
 matchedId :: Method -> [Text] -> Maybe RouteName
 matchedId method segments = routeName . fst <$> matchRoute npmRoutes method segments
@@ -91,15 +89,12 @@ spec = do
         it "an unknown meta-route denies" $
             matchedId methodGet ["-", "bogus"] `shouldBe` Nothing
 
-        -- The artifact route does not claim a file that names another package's
-        -- artifact. The request falls through to the 404, and the router fabricates no
-        -- coordinate. Path confusion is a denial, not a mis-parse.
+        -- Path confusion is a denial: the router fabricates no coordinate from a mismatched
+        -- artifact basename.
         it "an artifact whose basename is for another package is not claimed (path confusion)" $
             matchedId methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Nothing
 
-        -- A lone "-" is the reserved meta-route prefix, never a package name (npm
-        -- cannot even hold one called "-"). Both the read path and the publish path
-        -- deny it.
+        -- "-" is the reserved meta-route prefix, and npm cannot hold a package named "-".
         it "a lone \"-\" is never a package, on any method" $ do
             matchedId methodPut ["-"] `shouldBe` Nothing
             matchedId methodGet ["-"] `shouldBe` Nothing
@@ -173,11 +168,9 @@ genSegment =
 
 -- The independent reference ---------------------------------------------------
 --
--- A hand-written implementation of the npm grammar, structured as pattern matching
--- rather than as a table. It shares no code with the implementation under test, so the
--- equivalence properties are a genuine differential check of the routing engine, not a
--- tautology. It encodes the same grammar: it answers only GET, HEAD, and PUT, and a
--- lone "-" is never a package.
+-- A hand-written implementation of the npm grammar, structured as pattern matching. It
+-- shares no code with the table under test, so the equivalence properties are a genuine
+-- differential check rather than a tautology.
 
 -- | Which route the reference grammar says claims a request.
 referenceRouteId :: Method -> [Text] -> Maybe RouteName

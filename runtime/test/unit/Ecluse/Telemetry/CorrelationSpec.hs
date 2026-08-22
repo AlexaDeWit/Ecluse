@@ -14,14 +14,8 @@ import Ecluse.Runtime.Telemetry.Resolve (
     TelemetryEndpoint (TelemetryEndpoint),
  )
 
-{- | Tests for the log↔trace correlation glue. A unit test runs outside any span, with
-no SDK installed, so there is no active span. The trace\/span ids are absent, and the
-resolved @service@\/@env@\/@version@ identity still stamps the @dd@ object. These pin
-that identity-present, ids-absent shape. The complementary __active-span__ path is a
-real span yielding a non-zero @dd.trace_id@ on a rendered log line. It needs a live SDK
-span, so the integration tier asserts it (@Ecluse.TelemetryMetricsSpec@'s sibling,
-@Ecluse.TelemetryTracingSpec@). "Ecluse.LogSpec" covers the id /format/. Pure of any
-exporter.
+{- | Tests the @dd@ correlation object outside any span: ids absent, resolved identity present.
+The active-span path needs a live SDK, so @Ecluse.TelemetryTracingSpec@ covers it.
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Correlation" $ do

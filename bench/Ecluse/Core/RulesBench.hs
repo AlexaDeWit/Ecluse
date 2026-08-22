@@ -50,10 +50,8 @@ benchmarks loaded =
                     rulesDepth
                ]
 
-{- | Evaluate the rule set against every version, forcing each decision. The engine
-'prepare's the rules, then sweeps every version in 'IO', the per-request work a packument
-response performs. For pure rules the prepare step is cheap and runs once at boot, a
-constant in the version count.
+{- | Evaluate the rule set against every version, forcing each decision. This sweep is the
+per-request work a packument response performs, since 'prepare' runs once at boot.
 -}
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do

@@ -30,10 +30,9 @@ import Ecluse.Core.Security (
     thgEcosystemHosts,
  )
 
-{- | The raw configured upstream authorities (lower-/mixed-case on purpose), before
-normalisation. It stays unwrapped so a case can extend it (for example the SSRF
-gate's allowlisted-internal case) before normalising it through 'allowedHostPorts'.
-Every entry is portless, so each authorises its host on 443 alone.
+{- | The raw configured upstream authorities, mixed case on purpose, so a case can extend them
+before normalising through 'allowedHostPorts'. Every entry is portless, so each authorises 443
+alone.
 -}
 upstreamHosts :: Set.Set HostPort
 upstreamHosts = Set.fromList [hp "registry.npmjs.org", hp "Private.Internal.Example.com"]
@@ -83,9 +82,8 @@ hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
 
     describe "the port dimension" $ do
         it "rejects an allowlisted host on a nonstandard port when the entry carries no port" $
-            -- The membership half of the #779 vector: an entry without a port
-            -- authorises 443 alone. An allowlisted host at an attacker-chosen port
-            -- never inherits the host's authorisation.
+            -- An entry without a port authorises 443 alone. An allowlisted host at an
+            -- attacker-chosen port never inherits the host's authorisation.
             isAllowedUpstreamHost upstreams (hpAt "registry.npmjs.org" 9443) `shouldBe` False
         it "authorises exactly the pair an explicit host:port entry names" $ do
             let allowed = allowedHostPorts (Set.singleton (hpAt "quay.internal.example.com" 9443))
@@ -167,9 +165,8 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "::ffff:101:101" `shouldBe` False
 
     describe "blocks IPv4-mapped IPv6 in canonical dotted form (RFC 4291 §2.2.3)" $ do
-        -- The dotted spelling is what a tool or attacker actually emits, so the block
-        -- must decode it as well as the all-hex spelling above. This form is the one
-        -- that slipped past the internal-range block.
+        -- A tool or an attacker emits the dotted spelling, so the block must decode it as
+        -- well as the all-hex spelling above.
         it "blocks the instance-metadata address (::ffff:169.254.169.254)" $
             isBlockedTarget noOptIn "::ffff:169.254.169.254" `shouldBe` True
         it "blocks mapped loopback (::ffff:127.0.0.1)" $
@@ -180,9 +177,8 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "::ffff:1.1.1.1" `shouldBe` False
 
     describe "blocks IPv4-compatible IPv6 (::/96)" $ do
-        -- RFC 4291 §2.5.5.1: IPv4-compatible addresses are deprecated, but many
-        -- stacks still accept them, including Écluse's parser. The block decodes them
-        -- to their embedded IPv4 so it catches them.
+        -- RFC 4291 2.5.5.1 deprecates IPv4-compatible addresses, but many stacks still accept
+        -- them, Ecluse's parser included, so the block decodes them to their embedded IPv4.
         it "blocks the instance-metadata address (::169.254.169.254)" $
             isBlockedTarget noOptIn "::169.254.169.254" `shouldBe` True
         it "blocks compatible loopback (::127.0.0.1)" $
@@ -193,9 +189,8 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "::1.1.1.1" `shouldBe` False
 
     describe "blocks NAT64-embedded IPv4 under the well-known prefix (64:ff9b::/96, RFC 6052)" $ do
-        -- On a fabric that runs NAT64, an address under the well-known prefix routes
-        -- to its embedded IPv4. The block decodes and tests it against the IPv4
-        -- ranges exactly as it does the mapped and compatible forms.
+        -- On a fabric that runs NAT64, an address under the well-known prefix routes to its
+        -- embedded IPv4, so the block decodes and tests that address against the IPv4 ranges.
         it "blocks the instance-metadata address (64:ff9b::a9fe:a9fe)" $
             isBlockedTarget noOptIn "64:ff9b::a9fe:a9fe" `shouldBe` True
         it "blocks the instance-metadata address in dotted form (64:ff9b::169.254.169.254)" $
@@ -266,16 +261,9 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "" `shouldBe` False
 
     describe "deliberately treats RFC 5737 documentation ranges as external" $ do
-        -- A tripwire rather than plain coverage. The end-to-end suite (S53) stands the
-        -- whole system up on a docker network whose subnet is TEST-NET-3
-        -- (203.0.113.0/24). It points the proxy's gated *public* upstream at a stub on
-        -- that range, and relies on these documentation addresses staying reachable
-        -- rather than blocked. That is correct: a documentation range never aliases a
-        -- real service, so blocking it adds no SSRF protection. A blocklist audit (issue
-        -- #178) that broadened the block to all reserved space would silently break
-        -- e2e. If you are here because this failed, that broadening is a conscious
-        -- choice: update the e2e harness (planning/slices/S53-e2e-ecosystem.md) to
-        -- match.
+        -- A tripwire, not plain coverage. The e2e suite runs on a docker network in TEST-NET-3
+        -- (203.0.113.0/24) and needs these ranges reachable. A documentation range never
+        -- aliases a real service, so blocking it adds no SSRF protection.
         it "does not block TEST-NET-3 203.0.113.0/24 (the e2e network subnet)" $
             isBlockedTarget noOptIn "203.0.113.2" `shouldBe` False
         it "does not block TEST-NET-1 192.0.2.0/24" $
@@ -300,10 +288,9 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
 
     describe "coerces an IPv4 octet as inet_aton does (leading-zero octal, 0x hex)" $ do
-        -- The literal block reads each octet in the base a libc resolver would, so it
-        -- tests the address actually dialled rather than a decimal misreading. The
-        -- non-gating smoke oracle ("Ecluse.SecurityResolverOracleSpec") validates
-        -- these expectations against the real 'getAddrInfo'.
+        -- The block reads each octet in the base a libc resolver would, so it tests the
+        -- address actually dialled. The smoke oracle ("Ecluse.SecurityResolverOracleSpec")
+        -- validates these expectations against the real 'getAddrInfo'.
         it "blocks 0012.0.0.1 -- octal 0012 = 10.0.0.1, an RFC1918 address" $
             -- The reported under-block: a decimal reading sees 12 (public) and lets it
             -- through. Octal reads 10, the internal address the resolver actually dials.
@@ -323,27 +310,15 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "treats 0400.0.0.1 as a name -- octal 0400 = 256 overflows an octet" $
             isBlockedTarget noOptIn "0400.0.0.1" `shouldBe` False
         it "does not block the short 32-bit form 2130706433 (not a four-part literal here)" $
-            -- inet_aton resolves this to 127.0.0.1, but the four-part recogniser does not
-            -- model the short forms. It treats them as names the host allowlist
-            -- constrains, with certificate validation authenticating the dialled host.
+            -- inet_aton resolves this to 127.0.0.1, but the four-part recogniser does not model
+            -- the short forms. The allowlist and certificate validation constrain such names.
             isBlockedTarget noOptIn "2130706433" `shouldBe` False
 
-{- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an
-__explicit expected table__ rather than any prior implementation. The internal block
-recognises a host as a literal with a deliberately lenient hand-rolled parser, and
-delegates only the range membership to a library. The corpus guards that the gate
-neither narrows nor widens: every internal range blocks, the IPv4-embedding smuggling
-forms (mapped, compatible, and NAT64) decode and block, and the lenient/strict
-boundary spellings classify exactly as documented.
-
-The boundary cases are the load-bearing ones. A leading-zero octet coerces as
-__octal__, exactly as a libc resolver does, so it is /not/ its decimal digits.
-@0012.0.0.1@ is octal @10.0.0.1@ and is __blocked__ (RFC1918). @010.0.0.1@ (octal
-@8.0.0.1@) and @0127.0.0.1@ (octal @87.0.0.1@) coerce to __public__ addresses and are
-__not__ blocked. A decimal misreading would over-block those two and, worse,
-/under/-block a sibling like @0012.0.0.1@. A @0x@ octet is hexadecimal (@0x7f.0.0.1@
-is @127.0.0.1@, blocked). @fe80::1ffff@ is __not__ blocked: its final group overflows
-16 bits, so it is not a literal here and stays a name the allowlist constrains.
+{- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an explicit
+expected table rather than any prior implementation. A leading-zero octet coerces as octal, as a
+libc resolver does: @0012.0.0.1@ is @10.0.0.1@ and blocks, while @010.0.0.1@ (@8.0.0.1@) and
+@0127.0.0.1@ (@87.0.0.1@) are public and do not. A @0x@ octet is hexadecimal. @fe80::1ffff@
+overflows 16 bits, so it stays a name the allowlist constrains.
 -}
 classificationCorpusSpec :: Spec
 classificationCorpusSpec =
@@ -454,10 +429,8 @@ classificationCorpusSpec =
         , ("::ffff:1.2.3.4.5", False) -- mapped form with a bad embedded IPv4
         ]
 
-{- | The outbound-fetch guarantee is the __conjunction__: Écluse fetches a target
-only if it is on the host allowlist /and/ not an internal address. The cases above
-exercise the two halves. These pin the composition the data plane relies on, so no
-edit can weaken either half silently.
+{- | The outbound-fetch guarantee is the conjunction: Ecluse fetches a target only if the host
+allowlist admits it and it is not an internal address.
 -}
 ssrfGateSpec :: Spec
 ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
@@ -478,21 +451,17 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
             )
                 `shouldBe` False
     it "refuses an IPv4-mapped IPv6 metadata literal (blocked by both halves)" $
-        -- '::ffff:a9fe:a9fe' is 169.254.169.254 in IPv4-mapped form. The internal
-        -- block decodes the embedded IPv4 address and catches it directly, so the
-        -- gate refuses it even when an operator allowlists this literal form.
+        -- '::ffff:a9fe:a9fe' is 169.254.169.254 in IPv4-mapped form. The block decodes the
+        -- embedded IPv4, so the gate refuses it even when an operator allowlists this form.
         passesGate (hp "::ffff:a9fe:a9fe") `shouldBe` False
     it "refuses a metadata authority extracted from a URL" $
         (passesGate <$> hostPortAddress "http://169.254.169.254/latest/meta-data/")
             `shouldBe` Just False
 
-{- | The @dist.tarball@ host gate: Écluse fetches a tarball only from the same
-authority (host and port) that served the packument. The ecosystem's own declared
-artifact hosts are the sole equivalence (see the ecosystem spec below). Nothing ever
-escapes the allowlist. The internal-range block is __origin-aware__: it gates the
-untrusted origin, and exempts the trusted private origin, mirroring the connection
-layer's unguarded manager (security.md invariant 3). The deny paths get the hardest
-exercise, because under-blocking on the untrusted origin is a vulnerability.
+{- | The @dist.tarball@ host gate: Ecluse fetches a tarball only from the authority (host and
+port) that served the packument, plus the ecosystem's declared artifact hosts, and never off the
+allowlist. The internal-range block is origin-aware: it gates the untrusted origin and exempts the
+trusted private origin (security.md invariant 3).
 -}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
@@ -525,10 +494,8 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
 
     describe "the port dimension (the gate authorises host and port as a pair)" $ do
         it "refuses a nonstandard-port dist.tarball when the entry carries no port" $
-            -- The #779 vector: dist.tarball = https://registry.npmjs.org:9443/...
-            -- after a packument from https://registry.npmjs.org. The :9443 must
-            -- reach both the allowlist and the same-authority clause, and nothing
-            -- may discard it before them.
+            -- dist.tarball names registry.npmjs.org:9443 after a packument from that host on 443.
+            -- The port must reach the allowlist and the same-authority clause undiscarded.
             decide (hpAt "registry.npmjs.org" 9443) `shouldBe` False
         it "refuses a port mismatch between packument origin and tarball even with both pairs allowlisted" $
             -- Same host, both pairs allowlisted: the same-authority clause still
@@ -551,9 +518,8 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
 
     describe "the internal-range block beats the other clauses (untrusted origin)" $ do
         it "refuses an internal literal even when it equals the packument authority" $
-            -- An operator could (mis)configure an internal upstream host, and the
-            -- internal block still vetoes a tarball pointed at it. The allowlist must
-            -- carry the literal for this to even reach the block clause.
+            -- The internal block still vetoes a tarball at a misconfigured internal upstream. The
+            -- allowlist must carry the literal for the case to reach the block clause.
             let allowInternal = allowedHostPorts (Set.singleton (hp "169.254.169.254"))
              in tarballHostAllowed noEco UntrustedOrigin allowInternal noOptIn (Just (hp "169.254.169.254")) (Just (hp "169.254.169.254"))
                     `shouldBe` False
@@ -569,11 +535,9 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
                     `shouldBe` False
 
     describe "the trusted private origin is exempt from the internal-range block" $ do
-        -- The trusted origin mirrors the connection layer's unguarded manager
-        -- (security.md invariant 3). A private registry may legitimately live on an
-        -- internal address, so the gate admits its same-host dist.tarball where it
-        -- would refuse the untrusted origin. The allowlist and same-authority clauses
-        -- still gate it, so the exemption never widens past its own pair.
+        -- The trusted origin mirrors the connection layer's unguarded manager (security.md
+        -- invariant 3). A private registry may live on an internal address, so the gate admits
+        -- its same-host dist.tarball. The allowlist and same-authority clauses still gate it.
         let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
         it "admits a same-authority internal-literal tarball (where untrusted is refused)" $ do
             tarballHostAllowed noEco TrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
@@ -582,15 +546,13 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
             tarballHostAllowed noEco UntrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
                 `shouldBe` False
         it "still refuses a trusted tarball off the host allowlist (allowlist not relaxed)" $
-            -- The exemption covers the internal-range clause only. The gate still
-            -- refuses an off-allowlist host, so nothing can steer the trusted origin
-            -- onto an arbitrary host.
+            -- The exemption covers the internal-range clause only, so the gate still refuses an
+            -- off-allowlist host.
             tarballHostAllowed noEco TrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "192.168.0.9"))
                 `shouldBe` False
         it "still refuses a cross-host trusted tarball (same-host not relaxed)" $
-            -- Two allowlisted internal hosts. The trusted origin's tarball must still
-            -- equal its packument authority, so the gate refuses a different
-            -- (allowlisted, internal) host.
+            -- The trusted origin's tarball must still equal its packument authority, so the gate
+            -- refuses a different allowlisted internal host.
             let bothAllowed = allowedHostPorts (Set.fromList [hp "10.0.0.5", hp "10.0.0.6"])
              in tarballHostAllowed noEco TrustedOrigin bothAllowed noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.6"))
                     `shouldBe` False
@@ -604,9 +566,8 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
 allowedHostPortsSpec :: Spec
 allowedHostPortsSpec = describe "allowedHostPorts" $ do
     it "folds configured-host case so a mixed-case entry matches a lowercase query" $
-        -- 'allowedHostPorts' is the only constructor of the 'AllowedHostPorts' the
-        -- guard takes, so this proves the guard relies on it for normalisation. A
-        -- lowercase query matches a host configured in mixed case.
+        -- 'allowedHostPorts' is the only constructor of the 'AllowedHostPorts' the guard
+        -- takes, so the guard relies on it for normalisation.
         isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hp "Registry.NPMjs.ORG"))) (hp "registry.npmjs.org")
             `shouldBe` True
     it "normalises distinct casings of one host to the same allowlist" $
@@ -620,22 +581,15 @@ allowedHostPortsSpec = describe "allowedHostPorts" $ do
         allowedHostPorts (Set.fromList [hp "example.com", hpAt "example.com" 8443])
             `shouldNotBe` allowedHostPorts (Set.singleton (hp "example.com"))
 
--- The "public host matched by an additional range" arm is rare. It needs a public IP
--- literal whose own /32 lands in the additional ranges, which happens in only about
--- 5% of generated cases. At hspec-hedgehog's default 100 tests the 'H.cover 2' floor
--- below straddled that rate and failed on unlucky seeds. Draw 1000 tests so the
--- coverage estimate is stable without weakening the floor. 'modifyMaxSuccess' is how
--- hspec-hedgehog sets Hedgehog's test count.
+-- The "public host matched by an additional range" arm hits about 5% of generated
+-- cases, which straddled the 'H.cover 2' floor at hspec-hedgehog's default 100 tests.
+-- Draw 1000 so the coverage estimate is stable without weakening the floor.
 propertiesSpec :: Spec
 propertiesSpec = modifyMaxSuccess (const 1000) $ describe "properties" $ do
     it "isBlockedTarget blocks an internal host, or one matched by an additional range" $
         hedgehog $ do
-            -- Generate addresses across the blocked ranges and public ones, plus a
-            -- random set of operator-configured additional ranges. Each additional
-            -- range is a /32 or /128 naming one generated host. A random extra set
-            -- almost never collides with the host by chance, so the generator includes
-            -- the host's own range half the time. The property then checks the
-            -- invariant directly.
+            -- A random additional-range set almost never names the generated host by chance, so
+            -- the generator includes the host's own range half the time.
             host <- forAll genMaybeInternalHost
             extra <- forAll (Gen.set (Range.linear 0 3) genMaybeInternalHost)
             includeHost <- forAll Gen.bool
@@ -649,20 +603,16 @@ propertiesSpec = modifyMaxSuccess (const 1000) $ describe "properties" $ do
             H.cover 2 "public host matched by an additional range" (not (looksInternal host) && matchedByExtra)
             isBlockedTarget additionalRanges host === (looksInternal host || matchedByExtra)
 
-{- | An operator-configured single-host range naming exactly @host@, or 'Nothing' for
-a DNS name, which no CIDR range can express. The range is a @\/32@ for an IPv4
-literal and a @\/128@ for IPv6. It turns 'genMaybeInternalHost's generated set into
-plausible @additionalBlockedRanges@ that sometimes, but not always, name the
-property's own @host@.
+{- | An operator-configured single-host range naming exactly @host@, a @\/32@ for an IPv4 literal
+and a @\/128@ for IPv6, or 'Nothing' for a DNS name, which no CIDR range can express.
 -}
 singleHostRange :: Text -> Maybe IPRange
 singleHostRange h
     | T.any (== ':') h = parseBlockedRange (h <> "/128")
     | otherwise = parseBlockedRange (h <> "/32")
 
-{- | Whether a generated host string is one this module's ranges treat as internal.
-It restates the ranges independently of the implementation, so the property is not a
-tautology. It matches the dotted-quad and IPv6 literals 'genMaybeInternalHost' emits.
+{- | Whether a generated host string is one this module's ranges treat as internal. It restates
+the ranges independently of the implementation, so the property is not a tautology.
 -}
 looksInternal :: Text -> Bool
 looksInternal h =
@@ -679,9 +629,8 @@ looksInternal h =
   where
     octetIn t lo hi = maybe False (\n -> n >= lo && n <= hi) (readMaybe (toString t) :: Maybe Int)
 
-{- | A host generator mixing internal-range IPv4/IPv6 literals with public addresses
-and the odd DNS name. The SSRF property then drives both the blocked and the
-permitted arms.
+{- | A host generator mixing internal-range IPv4 and IPv6 literals with public addresses and the
+odd DNS name, so the SSRF property drives both the blocked and the permitted arms.
 -}
 genMaybeInternalHost :: H.Gen Text
 genMaybeInternalHost =
@@ -710,9 +659,8 @@ genMaybeInternalHost =
     octet = Gen.int (Range.linear 0 255)
 
 {- | 'parseBlockedRange' is the total decoder the config layer relies on for
-@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@. A malformed entry must yield 'Nothing',
-so the decoder can fail the boot closed, rather than throwing as the module's own
-compile-time 'IPRange' literals do.
+@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@. A malformed entry yields 'Nothing', so boot fails
+closed rather than throwing as the module's own compile-time 'IPRange' literals do.
 -}
 parseBlockedRangeSpec :: Spec
 parseBlockedRangeSpec = describe "parseBlockedRange" $ do
@@ -733,10 +681,9 @@ parseBlockedRangeSpec = describe "parseBlockedRange" $ do
     it "returns Nothing for the empty string" $
         parseBlockedRange "" `shouldBe` Nothing
 
-{- Coverage of the ecosystem-host equivalence ('tarballHostAllowed'). An ecosystem's
-canonical artifact host (PyPI's files host) is same-host-equivalent under the secure
-default. Every other gate dimension stays the same: the allowlist, the internal-range
-block, and the policy for non-ecosystem hosts.
+{- Coverage of the ecosystem-host equivalence in 'tarballHostAllowed'. An ecosystem's canonical
+artifact host is same-host-equivalent under the secure default. Every other gate dimension holds:
+the allowlist, the internal-range block, and the policy for non-ecosystem hosts.
 -}
 ecosystemHostSpec :: Spec
 ecosystemHostSpec = describe "tarballHostAllowed (ecosystem artifact hosts)" $ do

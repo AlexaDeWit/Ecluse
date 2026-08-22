@@ -51,9 +51,8 @@ recoverySpec = describe "npm recovers the bearer token an npm client presents" $
         recover [("Authorization", "\xff\xfe tok")] `shouldBe` Nothing
 
     it "decodes a token that is not valid UTF-8 leniently rather than throwing" $
-        -- The recovery is total on any byte string a client can send. Invalid bytes
-        -- decode to replacement text, which the constant-time compare then refuses.
-        -- No exception crosses the serve path.
+        -- Recovery is total on any bytes a client can send. Invalid bytes decode to replacement
+        -- text, which the constant-time compare then refuses. No exception crosses the serve path.
         recover [("Authorization", "Bearer \xff\xfe")]
             `shouldBe` Just (mkSecret (decodeUtf8 ("\xff\xfe" :: ByteString)))
 

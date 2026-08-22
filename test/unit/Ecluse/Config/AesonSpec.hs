@@ -108,9 +108,8 @@ spec = describe "decodeDocument" $ do
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "resolves a mount declared with no endpoint keys as the serve-only pure gate" $
-        -- Mirroring is derived from the declared target, so no mirrorTarget means
-        -- serve-only. With no private upstream either, the mount fronts only the
-        -- template public upstream: the pure public gate.
+        -- Mirroring is derived from the declared target, so a mount with no endpoint keys fronts
+        -- only the template public upstream.
         case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -182,9 +181,8 @@ spec = describe "decodeDocument" $ do
                 -- serveMaxInFlight is unset by default: the boot computes the
                 -- effective capacity from the resolved capability count.
                 rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Nothing
-                -- publicConnectionsPerHost is unset by default too: the effective
-                -- pool is computed at boot from the file-descriptor limit, like
-                -- the private pool.
+                -- publicConnectionsPerHost is unset by default too: the boot computes the effective
+                -- pool from the file-descriptor limit, like the private pool.
                 rtPublicConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Nothing
 
     it "rejects a zero cveDbPollInterval (a zero delay would spin the poll)" $
@@ -297,9 +295,8 @@ spec = describe "decodeDocument" $ do
             Right doc -> rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Just 24
 
     it "parses an explicit privateConnectionsPerHost override" $ do
-        -- The private pool defaults to a value computed from the file-descriptor limit,
-        -- independent of the admission capacity because it streams outside admission.
-        -- An operator who knows their fan-out can still pin it.
+        -- The private pool default is computed from the file-descriptor limit, independent of the
+        -- admission capacity because it streams outside admission. An operator can still pin it.
         case loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Just 256
@@ -360,9 +357,8 @@ spec = describe "decodeDocument" $ do
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
         it "rejects an upstream URL with a non-numeric port, naming the value (fails closed at boot)" $
-            -- The gate refuses every fetch from an authority it cannot extract, so
-            -- the misconfiguration surfaces at load, never as a mount that
-            -- silently serves nothing.
+            -- The gate refuses every fetch from an authority it cannot extract, so the
+            -- misconfiguration surfaces at load, never as a mount that silently serves nothing.
             loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:9x9/npm")] Nothing
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
         it "rejects an upstream URL with an out-of-range port" $

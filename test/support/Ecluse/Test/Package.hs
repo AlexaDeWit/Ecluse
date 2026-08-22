@@ -102,19 +102,17 @@ unsafeRegistryUrl = either error id . mkRegistryUrl
 
 {- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
 
-{- | The SHA-256 public-integrity floor fixture: the hard minimum 'mkMinIntegrity'
-enforces. The public smart constructor builds it, and SHA-256 always clears the hard
-floor, so the construction cannot fail. Suites and harnesses gate with it wherever a
-spec needs an admission floor and the floor is not the axis under test.
+{- | The SHA-256 public-integrity floor fixture, the hard minimum 'mkMinIntegrity' enforces, so the
+construction cannot fail. Suites gate with it wherever a spec needs an admission floor and the floor
+is not the axis under test.
 -}
 defaultMinIntegrity :: MinIntegrity
 defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
 
 {- HLINT ignore defaultMinTrustedIntegrity "Avoid restricted function" -}
 
-{- | The SHA-256 trusted-integrity floor fixture: the same secure posture as
-'defaultMinIntegrity'. 'mkMinTrustedIntegrity' builds it, and SHA-256 names a concrete
-algorithm, so the construction cannot fail.
+{- | The SHA-256 trusted-integrity floor fixture, the same secure posture as 'defaultMinIntegrity'.
+SHA-256 names a concrete algorithm, so 'mkMinTrustedIntegrity' cannot fail here.
 -}
 defaultMinTrustedIntegrity :: MinTrustedIntegrity
 defaultMinTrustedIntegrity = either error id (mkMinTrustedIntegrity SHA256)
@@ -144,10 +142,8 @@ renderSri prefix digest = prefix <> renderBase Base64 digest
 renderBase :: (ByteArrayAccess digest) => Base -> digest -> Text
 renderBase base digest = decodeUtf8 (convertToBase base digest :: ByteString)
 
-{- | Canonical well-formed digests, each the empty-input digest of its algorithm. Every
-fixture 'Hash' is therefore 'mkHash'-constructible and survives a validated decode
-round-trip. The values are immaterial beyond being well-formed: a suite uses them
-wherever a digest must parse, not match particular bytes.
+{- | Canonical well-formed digests, each the empty-input digest of its algorithm, so every fixture
+'Hash' is 'mkHash'-constructible. The values are immaterial beyond being well-formed.
 -}
 validSha1, validSha256, validSha384Hex, validSha512Hex, validMd5, validBlake2b :: Text
 validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
@@ -179,9 +175,8 @@ sampleArtifact =
         , artProvenance = Nothing
         }
 
-{- | A minimal per-version snapshot for a given name and version. Only the fields a
-'PackageInfo' threads through, the name and version, carry meaning. The rest are inert
-defaults.
+{- | A minimal per-version snapshot. Only the name and version carry meaning, and the other fields
+are inert defaults.
 -}
 sampleDetails :: PackageName -> Version -> PackageDetails
 sampleDetails name version =

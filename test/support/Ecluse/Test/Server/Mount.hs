@@ -54,22 +54,11 @@ import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUr
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
-{- | An npm mount's serve dependencies with the standard production wiring filled once.
-Only the per-site axes are parameters. Those are the two upstream base URLs, the mirror
-plan, the prepared rule set, and the clock. The private upstream base URL is 'Nothing'
-for a pure public gate. The builder binds the upstream cluster from those URLs, so the
-tarball-host gate derives from them and cannot disagree with them.
-
-The remaining varying fields carry defaults: the mount base URL, no inbound token, and
-the production https-only egress former. A site record-updates just the ones it needs to
-differ on. The egress former defaults to the production 'mkRegistryUrl'. The loopback dev
-former lives behind the @dev-http-egress@ flag, and this support library is not built
-with that flag. A hermetic-upstream site, built with the flag, record-updates
-@pdEgressUrl@ to its loopback former.
-
-The artifact-by-URL builder passes the origin base through for symmetry with the by-file
-builder. The production former ignores it and fetches the authoritative @dist.tarball@
-URL.
+{- | An npm mount's serve dependencies with the production wiring filled once, leaving the two
+upstream base URLs, the mirror plan, the rules, and the clock as parameters. A 'Nothing' private
+base URL gives a pure public gate, and the builder derives the tarball-host gate from these URLs
+so the two cannot disagree. The remaining fields carry defaults that a site record-updates,
+including the production https-only egress former 'mkRegistryUrl'.
 -}
 npmServeDeps :: Maybe Text -> Text -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
@@ -95,15 +84,10 @@ npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
         , pdEgressUrl = mkRegistryUrl
         }
 
-{- | A mount's serve dependencies wired to nowhere. Every base URL is a closed loopback
-port, the rule set is empty, and the clock is fixed. An empty rule set means the
-deny-by-default engine admits nothing. It inherits the builder's production https-only
-egress former, because it is production-faithful, not a live-upstream fixture.
-
-It is complete enough to bind a 'Ecluse.Core.Server.Context.MountBinding'. It is inert
-enough that a spec which does not test the data plane cannot reach an upstream by
-accident. A packument or artifact request served through it fails to connect instead of
-getting an answer.
+{- | A mount's serve dependencies wired to nowhere: a closed loopback port for every base URL, an
+empty rule set, and a fixed clock. It is complete enough to bind a
+'Ecluse.Core.Server.Context.MountBinding', but a packument or artifact request through it fails to
+connect instead of reaching an upstream.
 -}
 inertPackumentDeps :: PackumentDeps
 inertPackumentDeps =
@@ -118,17 +102,14 @@ inertPackumentDeps =
     fixedNow :: UTCTime
     fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
-{- | Rebind a fixture's upstreams with the private base URL replaced. The tarball-host
-gate re-derives, because the one builder rebuilds the whole cluster. This rebind drops
-any declared ecosystem artifact hosts, so a fixture that wants both applies
-'withEcosystemHosts' last.
+{- | Rebind a fixture's upstreams with the private base URL replaced. The rebind drops any declared
+ecosystem artifact hosts, so a fixture that wants both applies 'withEcosystemHosts' last.
 -}
 withPrivateBaseUrl :: Maybe Text -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
-{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the
-old one, by rewriting a host for example. A mount with no private upstream stays without
-one. It drops any declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
+{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the old one. A
+mount with no private upstream stays without one, and declared ecosystem artifact hosts are dropped.
 -}
 overPrivateBaseUrl :: (Text -> Text) -> PackumentDeps -> PackumentDeps
 overPrivateBaseUrl f = rebind [] (fmap f) id
@@ -139,17 +120,15 @@ declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
 withMirrorPlan :: MirrorServePlan -> PackumentDeps -> PackumentDeps
 withMirrorPlan mirror = rebind [] id (const mirror)
 
-{- | Rebind a fixture's upstreams declaring the given ecosystem artifact hosts, for a
-test that exercises the ecosystem-host equivalence (the PyPI files-host shape). The
-rebind carries the upstream URLs over unchanged. The hosts join the gate's allowlist.
+{- | Rebind a fixture's upstreams declaring the given ecosystem artifact hosts, which join the
+gate's allowlist. The upstream URLs carry over unchanged.
 -}
 withEcosystemHosts :: [Text] -> PackumentDeps -> PackumentDeps
 withEcosystemHosts ecosystemHosts = rebind ecosystemHosts id id
 
--- The one rebinding point every fixture tweak routes through. It rebuilds the cluster
--- from the given ecosystem hosts and the URL axes read back off the deps. The gate
--- therefore derives from what the result carries. The cluster does not carry the hosts,
--- so each rebind states them or drops them.
+-- The one rebinding point every fixture tweak routes through, so the gate derives from what the
+-- result carries. The cluster does not carry the ecosystem hosts, so each rebind states or drops
+-- them.
 rebind :: [Text] -> (Maybe Text -> Maybe Text) -> (MirrorServePlan -> MirrorServePlan) -> PackumentDeps -> PackumentDeps
 rebind ecosystemHosts onPrivate onMirror d =
     d{pdUpstreams = mountUpstreams ecosystemHosts (onPrivate (pdPrivateBaseUrl d)) (pdPublicBaseUrl d) (onMirror (pdMirror d))}

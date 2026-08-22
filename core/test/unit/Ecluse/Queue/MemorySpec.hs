@@ -24,11 +24,8 @@ spec :: Spec
 spec = do
     describe "newBoundedInMemoryQueue" $ do
         it "returns [] on an idle queue within the poll window (never blocks forever)" $ do
-            -- The load-bearing liveness property: the worker advances its heartbeat
-            -- only when receive returns. An idle receive must return [] (a healthy
-            -- empty poll) within its bounded window rather than block indefinitely.
-            -- The helper uses a 50ms window. The 2s timeout fails loudly if receive
-            -- ever reverts to blocking forever.
+            -- The worker advances its heartbeat only when receive returns, so an idle receive
+            -- must return [] within its 50ms window. The 2s timeout fails loudly if it blocks.
             (q, _drops) <- boundedQueue 4
             result <- timeout 2_000_000 (unwrap (receive q))
             result `shouldBe` Just []
@@ -43,9 +40,8 @@ spec = do
             unwrap (ack q (msgReceipt msg))
 
         it "dead-letters a received job without redelivering it (the memory terminus is a drop; issue #846)" $ do
-            -- The in-memory backend has no dead-letter queue, so a terminal fault is
-            -- the drop a delivered job already is. The deadLetter call succeeds and the
-            -- message does not reappear: this backend never redelivers.
+            -- This backend has no dead-letter queue, so a terminal fault is the drop a delivered
+            -- job already is. It never redelivers.
             (q, _drops) <- boundedQueue 10
             unwrap (enqueue q sampleJob)
             [msg] <- unwrap (receive q)
@@ -54,9 +50,8 @@ spec = do
             afterDeadLetter `shouldBe` []
 
         it "reports every delivery as a first delivery, so the redelivery budget never bites" $ do
-            -- This backend removes a job at delivery and never redelivers it, so every
-            -- delivery it makes is a first delivery. A truthful count of one keeps the
-            -- worker's budget inert here.
+            -- This backend removes a job at delivery, so every delivery is a first delivery.
+            -- The truthful count of 1 keeps the worker's redelivery budget inert here.
             (q, _drops) <- boundedQueue 10
             unwrap (enqueue q sampleJob)
             unwrap (enqueue q otherJob)
@@ -70,10 +65,8 @@ spec = do
             deadLetterTerminus q `shouldBe` Right TerminusAbsent
 
         it "carries every job field through unchanged from enqueue to receive" $ do
-            -- The queue is a transparent carrier: each field the producer set must
-            -- arrive on the consumer side byte-for-byte. Assert field by field through
-            -- the 'MirrorJob' selectors, not on the whole record, so a regression names
-            -- the single field it mangled.
+            -- Assert field by field rather than on the whole record, so a regression names the
+            -- single field the queue mangled.
             (q, _drops) <- boundedQueue 10
             unwrap (enqueue q sampleJob)
             [msg] <- unwrap (receive q)
@@ -91,9 +84,6 @@ spec = do
             received `shouldBe` [sampleJob, otherJob]
 
         it "drops the newest enqueue at the cap and keeps the earlier jobs" $ do
-            -- The load-bearing bound: at the cap the queue rejects a fresh enqueue
-            -- (drop-newest). It then holds exactly the first 'cap' jobs, and the
-            -- overflowing newest one never arrives.
             (q, drops) <- boundedQueue 2
             traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob]
             received <- map msgJob <$> unwrap (receive q)
@@ -111,19 +101,15 @@ spec = do
             readIORef drops `shouldReturn` [1]
 
         it "reports the first drop then every interval-th, rate-limiting a flood" $ do
-            -- A sustained flood must not spam the log. The queue reports the first drop
-            -- and every 'memoryQueueDropReportInterval'-th drop after it, each carrying
-            -- the running total, so log volume stays bounded under load.
+            -- A sustained flood must not spam the log, so the queue reports the first drop and
+            -- every 'memoryQueueDropReportInterval'-th drop after it, with the running total.
             (q, drops) <- boundedQueue 1
             unwrap (enqueue q sampleJob) -- fills the single slot: nothing receives it
             traverse_ (unwrap . enqueue q) (replicate memoryQueueDropReportInterval sampleJob)
             readIORef drops `shouldReturn` [1, memoryQueueDropReportInterval]
   where
-    -- A bounded in-memory queue at the given cap, paired with an 'IORef' recording the
-    -- running drop totals its drop callback saw, in order. A test can then assert both
-    -- the cap behaviour and the rate-limited drop reporting. The idle poll window is
-    -- 50ms here, against a production default of about 20s. An idle-receive test then
-    -- returns promptly rather than waits out a real long-poll.
+    -- A bounded queue at the given cap, plus an 'IORef' of the running drop totals its
+    -- callback saw. Its poll window is 50ms, against a production default of about 20s.
     boundedQueue :: Int -> IO (MirrorQueue, IORef [Int])
     boundedQueue cap = do
         drops <- newIORef []

@@ -50,10 +50,8 @@ import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | One bench's CSV row: its group and bench name (see 'splitName'), the measured
-mean, the achieved two-standard-deviation bound, and the GC-stats columns. Mean and
-bound are both picoseconds per iteration. The GC-stats columns are absent when the run
-lacked @+RTS -T@.
+{- | One bench's CSV row, as 'parseCsv' reads it. The GC-stats columns are absent when the
+run lacked @+RTS -T@.
 -}
 data BenchRow = BenchRow
     { rowGroup :: Text
@@ -73,17 +71,13 @@ data BenchRow = BenchRow
     }
     deriving stock (Eq, Show)
 
--- The tasty path prefix shared by every bench in the tree: the root tasty-bench
--- inserts plus the single top-level group Main declares. Removing it leaves group
--- headings with only the distinguishing path.
+-- The tasty path prefix every bench shares: the tasty-bench root inserts plus the one
+-- top-level group Main declares. Stripping it leaves only the distinguishing path.
 tierPrefix :: Text
 tierPrefix = "All.ecluse-core (work-per-request)."
 
-{- | Split a CSV @Name@ into its group heading and bench name. Strip the shared tier
-prefix, or the bare @All.@ root when that prefix is absent. The last dot segment is
-then the bench and the rest is the group. That is correct for every current bench
-name: groups contain dots but no leaf does. The module header has the caveat. A name
-with no dot at all lands under an explicit ungrouped heading.
+{- | Split a CSV @Name@ into its group heading and bench name at the last dot. That is
+correct only while groups contain dots and no leaf name does, as is true today.
 -}
 splitName :: Text -> (Text, Text)
 splitName name =
@@ -93,10 +87,8 @@ splitName name =
   where
     stripped = fromMaybe name (T.stripPrefix tierPrefix name <|> T.stripPrefix "All." name)
 
-{- | Parse the @tasty-bench --csv@ output. Accepts the six-column GC-stats shape
-(@+RTS -T@, the CI posture) and the plain three-column shape. Anything else yields a
-@Left@ with the offending content: a missing header, a row of the wrong arity, or an
-unreadable number. The renderer surfaces that @Left@ as a loud note.
+{- | Parse the @tasty-bench --csv@ output. It accepts the six-column GC-stats shape
+(@+RTS -T@, the CI posture) and the plain three-column shape, and rejects anything else.
 -}
 parseCsv :: Text -> Either Text [BenchRow]
 parseCsv raw =
@@ -142,10 +134,8 @@ parseRow gcStats line = do
             ("could not read the " <> label <> " column of: " <> line)
             (readMaybe (toString t))
 
--- Split one CSV record into its fields: bare fields up to a comma, quoted fields
--- RFC-4180 style with doubled quotes as a literal quote. Names never contain
--- newlines (tasty-bench's own comparison tooling assumes the same), so a record is
--- always one line.
+-- RFC 4180 quoting, where a doubled quote inside a quoted field is a literal quote.
+-- Names never contain newlines, so one record is always one line.
 splitRecord :: Text -> Either Text [Text]
 splitRecord line = go line
   where
@@ -177,10 +167,8 @@ groupRows rows =
     , grouped <- maybeToList (nonEmpty (filter ((== grp) . rowGroup) rows))
     ]
 
-{- | What the renderer works from: the CSV parse outcome and the raw console output,
-when the run captured it. The renderer turns a @Left@ into a loud note and never drops
-it. The console output is the only carrier of the generator-test and
-complexity-assertion verdicts.
+{- | What 'renderReport' works from. The console output is the only carrier of the
+generator-test and complexity-assertion verdicts.
 -}
 data ReportInput = ReportInput
     { riCsv :: Either Text [BenchRow]
@@ -188,11 +176,8 @@ data ReportInput = ReportInput
     }
     deriving stock (Eq, Show)
 
-{- | Render the full Markdown report. It opens with the inform-only preamble, an
-operating-point table, and an at-a-glance table of one row per group, each anchor-linked
-to its section. Then comes a detail table per group, the raw console output in a
-collapsed section, and closing reading notes. A failed or empty CSV renders the loud
-note in place of the tables, so the summary never silently shows nothing.
+{- | Render the full Markdown report. A failed or empty CSV renders the loud note in place
+of the tables, so the summary never silently shows nothing.
 -}
 renderReport :: ReportInput -> Text
 renderReport input =

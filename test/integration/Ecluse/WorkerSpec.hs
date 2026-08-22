@@ -39,13 +39,9 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Package (sriSha512Of, unsafeHash)
 import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped)
 
-{- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
-through "Ecluse.Integration.Ministack") and WAI upstream/mirror stubs. These cases cover
-the queue semantics the in-memory double cannot faithfully reproduce: real visibility
-timeouts, redelivery, and @extendVisibility@-held messages. They also drive the
-supervised worker loop ('Ecluse.runWorker') polling a real queue, heartbeat included.
-
-Hermetic and gating, but requires a Docker daemon (for ministack) and no real AWS.
+{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI
+stubs. It covers the queue semantics the in-memory double cannot reproduce: visibility
+timeouts, redelivery, and held messages. Needs a Docker daemon and no real AWS.
 -}
 spec :: Spec
 spec =
@@ -72,10 +68,8 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
                         env <- envFor queue
-                        -- The version's current-metadata digest (the set the worker
-                        -- re-admits and verifies against) is well-formed but does not
-                        -- match the served bytes: a tampered artifact. The worker must
-                        -- refuse to publish.
+                        -- The re-admitted digest is well-formed but does not match the served
+                        -- bytes: a tampered artifact. The worker must refuse to publish.
                         tamperPolicies <- policiesFor mirrorUrl (unsafeHash SRI mismatchSri :| [])
                         unwrapQ (enqueue queue (job upstreamUrl))
                         runLoopFor tamperPolicies env 4_000_000
@@ -84,9 +78,8 @@ spec =
 
             it "treats a 409 (version already present) as idempotent success and acks" $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    -- The mirror target answers 409 Conflict (the version is already
-                    -- present). 409-is-success means the worker treats this as a
-                    -- successful publish and acks, so the job does not redeliver.
+                    -- The mirror target answers 409 (the version is already present). 409-is-
+                    -- success, so the worker acks and the job does not redeliver.
                     withMirrorTarget status409 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         env <- envFor queue
@@ -105,38 +98,15 @@ spec =
                         env <- envFor queue
                         policies <- faithfulPolicies mirrorUrl
                         unwrapQ (enqueue queue (job upstreamUrl))
-                        -- Observe the redelivery through the worker's /own/ second
-                        -- publish attempt. The worker never acks a transient 503, so the
-                        -- message becomes visible again. The running loop re-consumes it
-                        -- and PUTs the same artifact a second time. Wait for two recorded
-                        -- publish PUTs, then tear the loop down: that second PUT only
-                        -- exists because the un-acked message genuinely redelivered.
-                        --
-                        -- The worker's 'releaseForRetry' drives redelivery on this path.
-                        -- It resets the message to visible the instant the 503 comes
-                        -- back. The visibility timeout does not. The success-path
-                        -- 'holdForLongPublish' already extends the in-flight window to
-                        -- 300s, so a bare timeout never redelivers within a test's
-                        -- patience.
-                        --
-                        -- Tearing the loop down on the first PUT instead would race. The
-                        -- stub records the PUT before it answers 503, so the log fills a
-                        -- beat before the worker runs 'releaseForRetry'. Under the slower
-                        -- -fhpc-instrumented loop the teardown can win and cancel the
-                        -- loop before the release runs, leaving the message held under
-                        -- the 300s hold. Waiting on the second PUT removes the race: that
-                        -- PUT cannot happen unless the release ran and the message
-                        -- redelivered.
+                        -- Wait for a second publish PUT: it exists only because the un-acked 503
+                        -- message redelivered through 'releaseForRetry', which makes it visible at
+                        -- once (the success path's 'holdForLongPublish' holds it 300s). Stopping at
+                        -- the first PUT races that release.
                         runLoopUntil policies env (publishedAtLeast publishLog 2)
                         published <- readIORef publishLog
-                        -- The queue delivered the one un-acked job more than once, a
-                        -- real redelivery, and every PUT targeted its publish path. The
-                        -- assertion is "at least twice, all to the publish path" rather
-                        -- than an exact count. Once the condition trips the loop keeps
-                        -- redriving, each redelivery another 503 and another redelivery,
-                        -- until the 'race_' teardown lands. The exact tally therefore
-                        -- depends on teardown timing, while "redelivered at least once"
-                        -- is the invariant.
+                        -- At least twice, not an exact count: the loop keeps redriving until
+                        -- teardown, so the tally depends on timing while "redelivered at least
+                        -- once" is the invariant.
                         length published `shouldSatisfy` (>= 2)
                         published `shouldSatisfy` all (== npmPublishPath)
 
@@ -145,13 +115,9 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-overcap" defaultQueueOptions
                         env <- envFor queue
-                        -- A fetch cap below the served artifact's size. The bounded
-                        -- fetch aborts fail-closed, and the worker classifies that as a
-                        -- terminal fault and dead-letters the job. The job rides the
-                        -- queue's redrive policy to the DLQ, and the worker never acks or
-                        -- deletes it. Ecluse.MirrorQueueSpec pins the not-deleted
-                        -- realisation at the queue level. The over-cap artifact is never
-                        -- mirrored.
+                        -- A fetch cap below the artifact's size. The bounded fetch aborts fail-
+                        -- closed, so the worker dead-letters the job to the redrive policy and
+                        -- never acks, deletes, or mirrors it.
                         policies <- cappedPolicies mirrorUrl 8
                         unwrapQ (enqueue queue (job upstreamUrl))
                         runLoopFor policies env 4_000_000
@@ -187,16 +153,14 @@ whose digest the served bytes cannot satisfy, distinct from a malformed digest.
 mismatchSri :: Text
 mismatchSri = sriSha512Of "completely-different-bytes"
 
-{- | The faithful current-metadata policies for a mirror target. The re-admitted
-artifact carries the served bytes' true digest, so verification passes and the pipeline
-publishes through the bundle's marriage at that target.
+{- | Policies whose re-admitted artifact carries the served bytes' true digest, so
+verification passes and the pipeline publishes at that mirror target.
 -}
 faithfulPolicies :: Text -> IO WorkerPolicies
 faithfulPolicies mirrorUrl = policiesFor mirrorUrl (unsafeHash SRI trueSri :| [])
 
-{- | Admit-everything policies whose bundle publishes through the production marriage
-(npm's codec over the shared transport) at the given mirror target, with a static test
-bearer. This is the same construction the composition root performs.
+{- | Admit-everything policies publishing through the production marriage (npm's codec
+over the shared transport) at the given mirror target, as the composition root builds it.
 -}
 policiesFor :: Text -> NonEmpty Hash -> IO WorkerPolicies
 policiesFor mirrorUrl digests = do
@@ -231,9 +195,8 @@ cappedPolicies mirrorUrl cap = do
 artifactPath :: Text
 artifactPath = "/left-pad/-/left-pad-1.3.0.tgz"
 
--- The request path an npm publish PUTs to: @\/{package}@ (the unscoped @left-pad@
--- needs no escaping). This is what the mirror-target stub records in its publish
--- log, so the redelivery case asserts each delivery's PUT landed here.
+-- The path an npm publish PUTs to: @\/{package}@. The mirror-target stub records it, so
+-- the redelivery case asserts each delivery's PUT landed here.
 npmPublishPath :: ByteString
 npmPublishPath = "/left-pad"
 
@@ -255,36 +218,24 @@ envFor queue = do
     manager <- newManager defaultManagerSettings
     newTestEnvWith queue (manager, manager) telemetryDisabled
 
-{- Run the supervised mirror worker ('runWorker') under the given re-evaluation
-policies against the real queue until a condition holds, then tear it down. The loop
-never returns on its own, so 'race_' runs it against a condition-poller. When the poller
-observes the condition, 'race_' cancels the loop, the same cooperative cancellation
-process shutdown uses. A hard timeout bounds the whole thing, so a failing test cannot
-hang. -}
+{- Run the supervised worker against the real queue until a condition holds, then cancel
+it with 'race_'. A hard timeout bounds the run, so a failing test cannot hang. -}
 runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
 runLoopUntil policies env done =
     void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
 
-{- The hard ceiling on a 'runLoopUntil' run. It clears even the slowest positive
-condition under @-fhpc@ instrumentation, where the loop runs several times slower than
-uninstrumented. The slowest is the redelivery case waiting on a /second/ publish: two
-full fetch → verify → publish cycles plus a real redelivery in between. Uninstrumented
-those steps take well under a second. 45s sits far above that, so the ceiling never
-clips a healthy run and only fires on a genuine hang. -}
+{- The ceiling on a 'runLoopUntil' run. 45s clears the slowest healthy case (the
+redelivery wait, several times slower under @-fhpc@), so it fires only on a real hang. -}
 loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
 
-{- Run the supervised mirror worker ('runWorker') under the given re-evaluation
-policies for a fixed wall-clock window, then cancel it. For the cases that assert a
-/negative/ (nothing published, an idle heartbeat), where no positive condition exists
-to wait on. -}
+{- Run the supervised worker for a fixed wall-clock window, then cancel it. For the
+cases asserting a negative, where no positive condition exists to wait on. -}
 runLoopFor :: WorkerPolicies -> Env -> Int -> IO ()
 runLoopFor policies env micros = void (timeout micros (runWorker policies env))
 
--- Poll a condition until it holds, bounded so a failing test does not hang. The bound
--- (~40s of 200ms ticks) sits just under 'loopHardTimeout', so that ceiling fires on a
--- genuine hang rather than this poller. The bound still leaves the slowest healthy
--- positive condition (the -fhpc redelivery wait) room to land.
+-- Poll until the condition holds, bounded at ~40s of 200ms ticks. That sits just under
+-- 'loopHardTimeout', so the ceiling fires on a genuine hang rather than this poller.
 waitFor :: IO Bool -> IO ()
 waitFor done = go (200 :: Int)
   where
@@ -306,12 +257,9 @@ withUpstream body =
     app :: Application
     app _ respond = respond (responseLBS status200 [] tarballBytes)
 
-{- A WAI mirror-target stub accepting an npm publish @PUT@ and answering with the
-given status (201 success, 409 idempotent-conflict, 503 transient). It records each
-publish PUT's path into an 'IORef' and hands the body the base URL and that log. The
-worker's mirror-presence probe (a metadata @GET@) receives the same fixed answer. That
-@{}@ body never parses as a version list, so every job here runs the full pipeline
-rather than the dedup short-circuit. -}
+{- A WAI mirror-target stub answering the given status and recording each publish PUT's
+path. The presence probe gets the same @{}@ body, which never parses as a version list,
+so every job runs the full pipeline rather than the dedup short-circuit. -}
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget status body = do
     logRef <- newIORef []

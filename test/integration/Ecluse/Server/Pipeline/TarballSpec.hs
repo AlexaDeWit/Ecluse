@@ -108,10 +108,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
                            ]
 
     it "serve-only mount: streams the admitted public artifact and enqueues nothing (NoMirrorWrite)" $ do
-        -- The same private-miss-to-public-admit flow as above, on a mount that never
-        -- mirrors. The gate and the stream are identical, and the queue stays empty.
-        -- The absent capability is the discriminant, so no producer span or enqueue
-        -- metric fires either.
+        -- A mount that never mirrors: the gate and the stream are identical, and the absent
+        -- capability is the discriminant, so no job, producer span, or enqueue metric follows.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
@@ -195,9 +193,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
             drainJobs env `shouldReturn` []
 
     it "relays a public artifact 404 verbatim and enqueues nothing (the relay verdict gates the back-fill)" $ do
-        -- The packument admits the version, but the artifact slot answers with a 404.
-        -- The serve path relays the miss verbatim to the client. The verdict refuses to
-        -- enqueue a mirror job the worker could only drop after a round trip.
+        -- The packument admits the version, but the artifact slot answers 404. The serve path
+        -- relays the miss verbatim and enqueues no job the worker could only drop.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status404 [] "gone")
         queue <- newTestMemoryQueue
@@ -207,9 +204,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
             drainJobs env `shouldReturn` []
 
     it "relays an oddly-shaped public 2xx verbatim (body untouched) and enqueues nothing" $ do
-        -- A 2xx that is visibly not the artifact: an HTML page where the gate admitted
-        -- a tarball. The bytes still relay verbatim, because the verdict is a tripwire
-        -- and never a validator, but the serve path enqueues no mirror job for it.
+        -- An HTML page where the gate admitted a tarball. The bytes still relay verbatim, because
+        -- the verdict is a tripwire and never a validator, and no mirror job is enqueued.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status200 [("Content-Type", "text/html")] "<html>not a tarball</html>")
         queue <- newTestMemoryQueue
@@ -296,11 +292,9 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        -- The double advertises its dist.tarball on cross.localhost at its own
-        -- runtime port, so the tarball authority is cross.localhost:<publicPort>.
-        -- Declare that authority as the adapter's ecosystem artifact host, the PyPI
-        -- files-host shape. It derives from the public base URL, which already carries
-        -- the real port, rather than from a hardcoded placeholder.
+        -- The double advertises its dist.tarball on cross.localhost at its own runtime port.
+        -- Declare that authority from the public base URL, which carries the real port, not a
+        -- placeholder.
         let crossBase d = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
         withProxyEnvQueueDepsHosts queue privateUp publicUp Nothing (\d -> [crossBase d]) id $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app

@@ -52,9 +52,8 @@ benchmarks loaded =
         | le@(_, _, value) <- loaded
         ]
             <> [ -- A smaller upper bound than the other scaled benches: the serve op is the
-                 -- heaviest (filter + rewrite + a full re-serialise + a SHA-256 over the
-                 -- body), so each measured size costs more. The range still spans 128x,
-                 -- enough to fit the curve and flag a super-linear regression.
+                 -- heaviest of the scaled ops, so each measured size costs more. The 128x range
+                 -- still fits the curve and flags a super-linear regression.
                  notWorseThanLinearIO
                     "scales linearly in version count"
                     (32, 4096)
@@ -62,12 +61,8 @@ benchmarks loaded =
                     serveDepth
                ]
 
-{- | The full serve transform, mirroring the serve pipeline's composition: build the
-filter plan over the versions (the engine's effectful rule sweep), merge the gated
-survivor set, assemble the served document from the plan, and re-serialise. The assemble
-takes each surviving version from the raw body and rewrites its tarball URL in the same
-pass. The validator derives from the inputs rather than a hash over the output, so the
-measured tail is plan, merge, assemble, encode.
+{- | The full serve transform, mirroring the serve pipeline: plan, merge, assemble,
+encode. The validator derives from the inputs, not from a hash over the output.
 -}
 serveDepth :: (Value, PackageInfo) -> IO Int
 serveDepth (value, info) = do
@@ -79,9 +74,8 @@ serveDepth (value, info) = do
                  in fromIntegral (BSL.length body)
         _ -> 0
 
-{- | A permissive rule set: every legitimately-aged version survives. The bench therefore
-exercises the assemble and re-serialise path over the whole packument, never
-short-circuiting to a no-survivors denial.
+{- | A permissive rule set: every legitimately-aged version survives, so the bench never
+short-circuits to a no-survivors denial.
 -}
 serveRules :: [PrecededRule]
 serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]

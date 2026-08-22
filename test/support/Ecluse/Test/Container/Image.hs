@@ -35,18 +35,15 @@ module Ecluse.Test.Container.Image (
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
-{- | A container image reference nailed to an immutable digest: @\<name\>\@sha256:\<64
-lowercase hex\>@. The constructor is hidden, so the only way to build one is
-'mkPinnedImageRef', which rejects a bare tag. A value of this type therefore already
-carries the "is pinned" invariant, so no unpinned reference can reach a pull site.
+{- | A container image reference nailed to an immutable digest: @\<name\>\@sha256:\<64 lowercase
+hex\>@. The constructor is hidden and 'mkPinnedImageRef' rejects a bare tag, so no unpinned
+reference can reach a pull site.
 -}
 newtype PinnedImageRef = PinnedImageRef Text
     deriving stock (Eq, Show)
 
-{- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@, returning the
-'PinnedImageRef' or a reason. Rejects a bare tag (no digest at all) and an empty
-repository name. It also rejects a digest that is not exactly 64 lowercase hexadecimal
-characters: short, long, or upper-cased.
+{- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@. Rejects a bare tag, an
+empty repository name, and a digest that is not exactly 64 lowercase hexadecimal characters.
 -}
 mkPinnedImageRef :: Text -> Either Text PinnedImageRef
 mkPinnedImageRef raw =
@@ -74,10 +71,8 @@ isLowerHex c = isDigit c || (c >= 'a' && c <= 'f')
 renderPinnedImageRef :: PinnedImageRef -> Text
 renderPinnedImageRef (PinnedImageRef ref) = ref
 
-{- | An image a harness names at a @docker run@ or @docker build FROM@ site. A
-'PinnedExternal' image comes from a registry and must carry a digest. The run produces a
-'LocallyBuilt' image itself, each run and never pulled, so it carries no digest and takes
-its plain tag as its name.
+{- | An image a harness names at a @docker run@ or @docker build FROM@ site. A locally built image
+carries no digest because the run produces it itself and never pulls it.
 -}
 data ImageRef
     = -- | An external image pulled from a registry, digest-pinned by construction.

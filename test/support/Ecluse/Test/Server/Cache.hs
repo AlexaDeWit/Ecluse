@@ -17,11 +17,8 @@ module Ecluse.Test.Server.Cache (
 
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 
-{- | The standard cache-tunables fixture: a 60-second TTL over a 256 MiB aggregate.
-The fixture splits that aggregate into three sub-budgets the way the live
-composition root does. Full takes 60%, version takes 15% at four times the
-entries, and assembled takes the remainder. Suites and harnesses pass the fixture
-to 'Ecluse.Core.Server.Cache.newMetadataCache' wherever a spec needs a cache and
+{- | The standard cache-tunables fixture: a 60-second TTL over a 256 MiB aggregate, split into
+three sub-budgets the way the live composition root does. Pass it wherever a spec needs a cache and
 the tunables are not the axis under test.
 -}
 defaultCacheConfig :: CacheConfig

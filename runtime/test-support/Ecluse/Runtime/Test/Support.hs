@@ -33,9 +33,8 @@ newTestEnv = do
     manager <- newManager defaultManagerSettings
     newTestEnvWith queue (manager, manager) telemetryDisabled
 
-{- | Build a test environment over the given queue, managers, and telemetry handle.
-The log environment, heartbeat, serve admission, and metadata cache take their
-defaults.
+{- | Build a test environment over the given queue, managers, and telemetry handle. Everything
+else takes its default.
 -}
 newTestEnvWith :: MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
 newTestEnvWith queue (manager, privateManager) telemetry = do

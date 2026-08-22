@@ -14,9 +14,8 @@ module Ecluse.Test.Cve (
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..))
 
-{- | Build the fake from (package name, range) rows, mirroring the artifact's
-vocabulary. That vocabulary is OSV wire names and verbatim version text, with the
-probe as exact string equality on the fixed bound.
+{- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
+on the fixed bound, matching the artifact's verbatim version text.
 -}
 fakeCveLookup :: [(Text, AdvisoryRange)] -> CveLookup
 fakeCveLookup rows =

@@ -57,15 +57,10 @@ spec :: Spec
 spec = do
     describe "the worker verifies what the public floor admits (the #409 invariant)" $ do
         it "every algorithm that meets the default public floor is computable" $
-            -- The load-bearing cross-module invariant: the floor admits by algorithm
-            -- authority ('meetsFloor'\/'HashAlg' 'Ord') and the worker verifies by
-            -- computation ('isComputable'\/'Ecluse.Core.Package.computeDigest'). The
-            -- second set must cover the first, or the mirror enqueues an admitted
-            -- public artifact and then drops it permanently (issue #409).
-            -- 'computeDigest''s totality forces a compute arm for any new 'HashAlg'.
-            -- This case pins that the arm is present for every floor-clearing
-            -- algorithm. It enumerates the whole 'HashAlg' set, so it covers a new
-            -- constructor automatically.
+            -- The floor admits by algorithm authority ('meetsFloor') and the worker verifies by
+            -- computation ('isComputable'), so the computable set must cover the floor-clearing
+            -- set. Otherwise the mirror enqueues an admitted public artifact and then drops it
+            -- permanently.
             [alg | alg <- universe, meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
                 `shouldBe` []
 
@@ -134,9 +129,8 @@ spec = do
             (unMinIntegrity <$> parseMinIntegrity "blake2b") `shouldBe` Right Blake2b
 
         it "rejects a below-floor name and an unknown name with distinct messages" $ do
-            -- A recognised but weak name fails the floor. An unrecognised name fails
-            -- the parse. The two error texts differ, so the message names which mistake
-            -- the operator made.
+            -- A recognised but weak name fails the floor. An unrecognised name fails the parse.
+            -- The distinct texts tell the operator which mistake they made.
             parseMinIntegrity "sha1" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
             parseMinIntegrity "md5" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             parseMinIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
@@ -196,9 +190,6 @@ spec = do
             classify defaultMinIntegrity [unsafeHash SRI validSha512Sri] `shouldBe` MeetsFloor
 
         it "MeetsFloor when the only digest is a sha384 SRI (clears the SHA-256 floor)" $
-            -- A sha384 SRI resolves to the modelled SHA384, which ranks above the
-            -- SHA-256 floor. A version carrying only it is admissible from a public
-            -- upstream.
             classify defaultMinIntegrity [unsafeHash SRI validSha384Sri] `shouldBe` MeetsFloor
 
         it "MeetsFloor when a strong digest sits beside a weak one" $

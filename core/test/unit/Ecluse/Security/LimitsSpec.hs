@@ -68,9 +68,8 @@ details name version =
         , pkgPublisher = Nothing
         }
 
-{- | Drive 'boundedRead' purely with a 'State'-monad chunk producer. It pops one
-chunk per call and yields an empty 'ByteString' (the @BodyReader@ EOF signal) once
-the list runs out. This exercises the @Monad m@ polymorphism without 'IO'.
+{- | Drive 'boundedRead' with a 'State'-monad chunk producer. It pops one chunk per call and
+yields an empty 'ByteString', the @BodyReader@ EOF signal, once the list runs out.
 -}
 runBounded :: Limits -> [ByteString] -> Either LimitError ByteString
 runBounded limits = evalState (boundedRead limits next)
@@ -117,9 +116,8 @@ boundedReadSpec = describe "boundedRead" $ do
         runBounded (defaultLimits{maxBodyBytes = 0}) [] `shouldBe` Right ""
 
     it "treats an empty chunk as EOF (the BodyReader contract), stopping early" $
-        -- An empty 'ByteString' is the reader's end signal, so nothing reads the
-        -- chunk after it: the body is just what preceded the empty chunk. This pins
-        -- the @http-client@ @BodyReader@ semantics 'boundedRead' relies on.
+        -- An empty 'ByteString' is the reader's end signal, so nothing reads the chunk after
+        -- it. This pins the @http-client@ @BodyReader@ semantics 'boundedRead' relies on.
         runBounded limits ["ab", "", "cd"] `shouldBe` Right "ab"
 
     it "passes a small body under the generous default budget" $
@@ -203,22 +201,11 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
 
-{- | The default 'Limits' (12 MiB body, 100k versions, depth 64) must __never__
-refuse a legitimate trusted package. This case drives the sequence the data plane
-applies on the serve path: the bounded read, the decode, the depth check on the
-decoded document, the projection, and the version-count check of
-@Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest@. It runs that sequence over a
-__real, untrimmed__ packument committed under the fixtures directory. At every step
-the document must be __admissible__ under the default budget.
-
-The fixture is @registry.npmjs.org/express@'s full packument, a large and widely
-trusted package: about 805 KB, 288 versions, JSON depth 7. It is a genuine capture,
-not hand-trimmed, so a default that was accidentally too tight would fail here. That
-is exactly the regression this guards. @react@ (the architect's example) is about
-6.7 MB and 2841 versions, too large to commit comfortably, so @express@ is the
-representative large-but-committable choice. The live smoke tier
-("Ecluse.RegistryProtocolSpec") validates @react@ and other large packuments against
-__current__ data without committing megabytes.
+{- | The default 'Limits' (12 MiB body, 100k versions, depth 64) must never refuse a legitimate
+trusted package. This case drives the serve-path sequence (bounded read, decode, depth check,
+projection, version count) over a real untrimmed @express@ packument: about 805 KB, 288 versions,
+JSON depth 7. The live smoke tier ("Ecluse.RegistryProtocolSpec") covers larger packuments against
+current data.
 -}
 realPackumentSpec :: Spec
 realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
@@ -267,10 +254,8 @@ propertiesSpec :: Spec
 propertiesSpec = describe "properties" $ do
     it "boundedRead reconstructs the body iff it fits the budget" $
         hedgehog $ do
-            -- Chunks are non-empty: a faithful @BodyReader@ emits an empty
-            -- 'ByteString' only as its EOF signal, never as an interior chunk.
-            -- 'runBounded' stops at the first empty chunk, so it sees the whole list
-            -- and 'BS.concat' is a faithful oracle for the body.
+            -- Chunks are non-empty: a faithful @BodyReader@ emits an empty 'ByteString' only at
+            -- EOF, so 'BS.concat' of the whole list is a faithful oracle for the body.
             chunks <- forAll (Gen.list (Range.linear 0 8) (Gen.bytes (Range.linear 1 6)))
             cap <- forAll (Gen.int (Range.linear 0 40))
             let total = BS.concat chunks

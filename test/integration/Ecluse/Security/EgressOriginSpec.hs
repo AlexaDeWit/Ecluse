@@ -30,16 +30,13 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 {- | The data-plane egress posture, driven through the real npm fetch path against an
 in-process upstream on loopback.
 
-Egress is __https-only by construction__. In production the data-plane manager is the
-standard validating TLS manager. The per-origin split lives in credential handling,
-not in the manager: both origins share it. These tests reach an in-process
-@http:\/\/127.0.0.1@ upstream through the test-only http opt-in ('loopbackRegistryUrl'),
-compiled only under the @dev-http-egress@ Cabal flag. The suite therefore needs no TLS,
-and the production posture stays https-only.
+Production egress is https-only by construction. These cases reach an
+@http:\/\/127.0.0.1@ upstream through the test-only opt-in ('loopbackRegistryUrl'),
+compiled only under the @dev-http-egress@ Cabal flag.
 
-These cases also cover the credential-redirect invariant, @redirectCount = 0@. The
-client does __not__ follow an upstream @302@, so an upstream cannot bounce a fetch off
-the build-time host allowlist or downgrade the scheme.
+They also cover the credential-redirect invariant, @redirectCount = 0@. The client does
+not follow an upstream @302@, so an upstream cannot bounce a fetch off the build-time host
+allowlist or downgrade the scheme.
 -}
 spec :: Spec
 spec = do
@@ -61,8 +58,7 @@ spec = do
     describe "no upstream redirect is followed (redirectCount = 0)" $
         it "does not chase a 302 to an off-allowlist location" $
             -- The upstream answers 302 to an off-allowlist host. With redirect-following
-            -- disabled the fetch never reaches that host. It surfaces the 3xx and no body
-            -- from the redirect target, so no hop escapes the allowlist or downgrades.
+            -- disabled the fetch never reaches it, so no hop escapes the allowlist.
             withRedirector $ \port -> do
                 manager <- newManager defaultManagerSettings
                 result <- fetchMetadata manager port Nothing

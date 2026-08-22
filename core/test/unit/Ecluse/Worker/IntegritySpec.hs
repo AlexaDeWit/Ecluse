@@ -45,10 +45,9 @@ spec = do
                 `shouldBe` IntegrityVerified
 
         it "verifies a raw SHA512-tagged digest against its hex sha512 (the tag arm, not SRI)" $
-            -- A digest carried under the raw 'SHA512' tag (hex), distinct from the same
-            -- hash inside an SRI string. The worker computes hex SHA-512 and matches it,
-            -- so this exercises the SHA512-tag compute arm rather than the SRI path.
-            -- (Pkg.SHA512 is the HashAlg constructor. The bare SHA512 here is Crypto's.)
+            -- A raw 'SHA512'-tagged hex digest, not the same hash inside an SRI string, so this
+            -- exercises the SHA512-tag compute arm. Pkg.SHA512 is the HashAlg constructor, the bare
+            -- one is Crypto's.
             verifyIntegrity (unsafeHash Pkg.SHA512 trueSha512Hex :| []) tarballBytes `shouldBe` IntegrityVerified
 
         it "verifies against the strongest digest when both sha512 and sha1 match" $
@@ -89,9 +88,8 @@ spec = do
                 `shouldBe` IntegrityMismatch "the SRI sha512 digest did not match the fetched bytes"
 
         it "verifies a sha256-only digest (the worker now computes sha256, the default floor)" $
-            -- sha256 is the default public floor and the worker computes it, so a
-            -- sha256-only admitted artifact verifies rather than being admitted and then
-            -- permanently dropped.
+            -- sha256 is the default public floor and the worker computes it, so a sha256-only
+            -- admitted artifact verifies rather than being admitted and then permanently dropped.
             verifyIntegrity (unsafeHash SHA256 trueSha256 :| []) tarballBytes `shouldBe` IntegrityVerified
 
         it "REJECTS a sha256 digest that does not match the fetched bytes (tamper guard)" $
@@ -121,9 +119,8 @@ spec = do
                 `shouldBe` IntegrityMismatch "the SRI sha256 digest did not match the fetched bytes"
 
         it "does not downgrade to a matching sha1 when a co-present strong sha256 SRI fails" $
-            -- The downgrade guard, multi-digest: a co-present strong sha256 SRI that does
-            -- NOT match must OUTRANK a matching SHA-1 the attacker also controls. The gate
-            -- reports the strong digest's mismatch rather than admitting on the weak one.
+            -- A co-present strong sha256 SRI that does not match must outrank a matching SHA-1 the
+            -- attacker also controls, so the gate reports the strong digest's mismatch.
             mismatchDetail (verifyIntegrity (unsafeHash SRI someSha256Sri :| [unsafeHash SHA1 trueSha1]) tarballBytes)
                 `shouldBe` Just "the SRI sha256 digest did not match the fetched bytes"
 

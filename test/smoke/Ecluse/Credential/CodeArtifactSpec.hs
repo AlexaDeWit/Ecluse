@@ -15,23 +15,16 @@ import Ecluse.Runtime.Credential.CodeArtifact (
  )
 import Ecluse.Test.Credential (noCredentialReporters)
 
-{- | Smoke test for the one outbound-credential surface no emulator covers:
-CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so, like the
-live-registry oracles, it is __allowed to fail by design__ and never gates a
-merge.
-
-It is __secret-gated__: it runs only when the environment configures a sandbox
-CodeArtifact domain, and otherwise __pends__. A bare checkout, CI, or any
-environment without AWS credentials therefore sees a skipped test, not a red one.
-To exercise it, point it at a sandbox domain with credentials on the ambient AWS
-chain (env vars, instance\/container role, SSO, STS):
+{- | Smoke test for the one outbound-credential surface no emulator covers: CodeArtifact
+@GetAuthorizationToken@. It makes a __live__ AWS call, so it is allowed to fail and never gates a
+merge. It runs only when the environment configures a sandbox domain, and otherwise __pends__:
 
 > ECLUSE_SMOKE_CODEARTIFACT_REGION=us-east-1 \
 > ECLUSE_SMOKE_CODEARTIFACT_DOMAIN=my-sandbox-domain \
 > cabal test ecluse-smoke
 
-The optional @ECLUSE_SMOKE_CODEARTIFACT_DOMAIN_OWNER@ overrides the owning
-account when the domain is cross-account.
+The optional @ECLUSE_SMOKE_CODEARTIFACT_DOMAIN_OWNER@ overrides the owning account when the
+domain is cross-account.
 -}
 spec :: Spec
 spec = describe "live CodeArtifact GetAuthorizationToken" $
@@ -53,9 +46,8 @@ spec = describe "live CodeArtifact GetAuthorizationToken" $
                     Left (e :: SomeException) ->
                         expectationFailure ("CodeArtifact mint failed: " <> show e)
                     Right token -> do
-                        -- The mint reached CodeArtifact and returned a usable
-                        -- bearer: a non-empty secret carrying its own expiry. The
-                        -- refresh policy can schedule off that real lifetime.
+                        -- A usable bearer: non-empty, and carrying the real expiry the refresh
+                        -- policy schedules off.
                         T.null (unSecret (authSecret token)) `shouldBe` False
                         authExpiresAt token `shouldSatisfy` isJust
             _ ->

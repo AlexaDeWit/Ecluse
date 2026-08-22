@@ -75,18 +75,15 @@ hostAddressSpec = describe "hostAddress" $ do
     it "drops a path on a schemeless bare host" $
         hostAddress "registry.npmjs.org/thing" `shouldBe` "registry.npmjs.org"
     it "composes with the SSRF guards to catch a metadata URL" $
-        -- The realistic call shape: each guard tests its own projection of the URL.
-        -- The internal block gets the bare host, the allowlist the host:port
-        -- authority.
+        -- Each guard tests its own projection of the URL: the internal block gets the bare host,
+        -- the allowlist the host:port authority.
         let url = "http://169.254.169.254/latest/meta-data/"
          in (isBlockedTarget [] (hostAddress url), isAllowedUpstreamHost upstreams <$> hostPortAddress url)
                 `shouldBe` (True, Just False)
 
-{- | The authorisation-side extraction: the same authority stripping as
-'hostAddress', with the effective port parsed rather than discarded. These cases pin
-the default 443, the strict port grammar, and the IPv6 bracket discipline, because
-each is load-bearing for the gate. A lenient port fallback or a mangled colon split
-would alias an attacker-chosen authority onto an authorised one.
+{- | The authorisation-side extraction: the same authority stripping as 'hostAddress', with
+the effective port parsed rather than discarded. A lenient port fallback or a mangled colon
+split would alias an attacker-chosen authority onto an authorised one.
 -}
 hostPortAddressSpec :: Spec
 hostPortAddressSpec = describe "hostPortAddress" $ do
@@ -139,9 +136,8 @@ hostPortAddressSpec = describe "hostPortAddress" $ do
         it "refuses a signed port" $
             hostPortAddress "https://registry.npmjs.org:-443/" `shouldBe` Nothing
         it "refuses a trailing colon with no port digits (fail closed)" $
-            -- A written-but-empty port is malformed, never the default: "host:" and
-            -- "[::1]:" are both undialable, so the gate refuses both rather than
-            -- folding "host:" to 443.
+            -- A written-but-empty port is malformed, never the default. "host:" and "[::1]:" are
+            -- both undialable, so the gate refuses both rather than folding "host:" to 443.
             hostPortAddress "https://registry.npmjs.org:/x" `shouldBe` Nothing
         it "refuses a leading-zero port so each port has one canonical spelling" $ do
             -- 0443 reads as 443 and 080 as 80 under a lenient decimal parse, aliasing
@@ -156,9 +152,8 @@ hostPortAddressSpec = describe "hostPortAddress" $ do
         hostPortAddress "" `shouldBe` Nothing
         hostPortAddress ":8443" `shouldBe` Nothing
 
-{- The log-safe reduction that every log line and span attribute applies to a URL. What
-it must never emit is the point. Userinfo and the query string can carry a credential. A
-malformed authority yields no host at all, never a fragment of the input. -}
+{- The log-safe reduction every log line and span attribute applies to a URL. Userinfo and the
+query string can carry a credential, and a malformed authority yields no host at all. -}
 authorityLabelSpec :: Spec
 authorityLabelSpec = describe "authorityLabel" $ do
     it "drops userinfo, path, query, and fragment, keeping host and port" $
@@ -186,10 +181,9 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
 
--- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS
--- endpoint parser. These assert host/port extraction only. The split is purely
--- structural and carries no classification or gating: the OTLP and SQS endpoints
--- are trusted, operator-declared destinations (see #326).
+-- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS endpoint parser.
+-- The split is purely structural and gates nothing: the OTLP and SQS endpoints are trusted,
+-- operator-declared destinations.
 splitHostPortSpec :: Spec
 splitHostPortSpec = describe "splitHostPort" $ do
     it "splits a bracketed IPv6 literal with a port on the closing bracket" $

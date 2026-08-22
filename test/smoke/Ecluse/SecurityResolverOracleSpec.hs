@@ -25,36 +25,15 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Security (isBlockedIP, isBlockedTarget, parseIpLiteral)
 
-{- | Smoke tier: a /generative, live/ differential between the SSRF literal
-recogniser's IPv4 octet coercion and the __real__ libc resolver. The hand-rolled
-recogniser in "Ecluse.Core.Security" reads a leading-zero octet as octal and a
-@0x@ octet as hex. That is exactly what @inet_aton@, and therefore
-'Network.Socket.getAddrInfo', coerces a spelling to. The resolved address is
-therefore the ground-truth oracle, and this module hard-codes no verdict.
+{- | Smoke tier: a /generative, live/ differential between the SSRF literal recogniser in
+"Ecluse.Core.Security" and the __real__ libc resolver. The recogniser reads a leading-zero octet as
+octal and a @0x@ octet as hex, exactly as @inet_aton@ and so 'Network.Socket.getAddrInfo' coerce
+them, so the resolved address is the ground-truth oracle and this module hard-codes no verdict.
 
-The property generates four-part dotted-quad spellings whose octets come in a random
-mix of bases: decimal, leading-zero octal, and @0x@ hex. It biases them toward the
-internal ranges so blocked cases actually occur, with an occasional malformed octet
-(invalid-octal @08@, overflowing @0400@\/@256@\/@0x100@). For each spelling it
-resolves numerically (@AI_NUMERICHOST@: local, no DNS) and asserts:
-
-  * The resolver accepts it as address @a@ ⟹ @'isBlockedTarget' [] spelling ==
-    'isBlockedIP' [] a@. Our literal-layer block decision agrees with how the resolver
-    classifies the address it would dial, with no operator-configured extra ranges in
-    play.
-  * The resolver rejects it ⟹ @'parseIpLiteral' spelling == 'Nothing'@. We never claim
-    a literal the resolver will not accept.
-
-A 'H.cover' guard requires that blocked, not-blocked, and resolver-rejected results
-each appear across a run, so a degenerate generator cannot pass vacuously.
-
-The four-part recogniser deliberately does /not/ model the short @inet_aton@ forms (a
-bare 32-bit number, a @127.1@). It treats them as names the host allowlist constrains,
-so this oracle covers only the four-part dotted-quad recogniser.
-
-Numeric resolution needs no network, so this is reliable rather than flaky. It still
-lives in the non-gating smoke tier because it depends on the host platform's resolver.
-It pends rather than fails if 'getAddrInfo' cannot even resolve a plain literal.
+The recogniser deliberately does /not/ model the short @inet_aton@ forms (a bare 32-bit number, a
+@127.1@). It treats them as names the host allowlist constrains. Resolution is numeric
+(@AI_NUMERICHOST@) and needs no network. It __pends__ if 'getAddrInfo' cannot resolve a plain
+literal.
 -}
 spec :: Spec
 spec = describe "IPv4 literal classification vs the real resolver (getAddrInfo)" $ do
@@ -87,11 +66,9 @@ generativeOracleSpec =
                         -- The resolver rejected it: we must not claim a literal either.
                         Nothing -> H.assert (isNothing (parseIpLiteral spelling))
 
-{- | A four-part dotted-quad spelling whose octets come in a random mix of bases:
-decimal, leading-zero octal, and @0x@ hex. It therefore spans exactly the @inet_aton@
-octet coercions the recogniser models. One spelling in ten replaces one octet with a
-malformed token (an invalid-octal @08@, an overflowing @0400@\/@256@\/@0x100@), which
-both the recogniser and the resolver reject.
+{- | A four-part dotted-quad spelling whose octets mix decimal, leading-zero octal, and @0x@ hex,
+spanning the @inet_aton@ coercions the recogniser models. One spelling in ten corrupts an octet
+with a malformed token both the recogniser and the resolver reject.
 -}
 genSpelling :: Gen Text
 genSpelling = do
@@ -106,9 +83,8 @@ genSpelling = do
         bad <- genMalformedToken
         pure (T.intercalate "." [if j == i then bad else p | (j, p) <- zip [0 :: Int ..] parts])
 
-{- | Four octet /values/ for an address, biased toward the internal ranges, so the
-generator exercises the blocked arm alongside public and edge addresses. Uniform
-random bytes almost never land in RFC1918.
+{- | Four octet /values/ for an address, biased toward the internal ranges so the blocked arm is
+exercised. Uniform random bytes almost never land in RFC1918.
 -}
 genOctets :: Gen [Word8]
 genOctets =
@@ -170,11 +146,9 @@ genMalformedToken =
         , "0x1ff" -- hex 511 overflows an octet
         ]
 
-{- | Resolve @host@ as a numeric IPv4 literal through the real 'getAddrInfo' (the
-@inet_aton@ coercion path), returning its 'SockAddr' or 'Nothing' if the resolver
-rejects it. The @AI_NUMERICHOST@ flag forbids a DNS lookup, so a non-numeric spelling fails
-locally rather than touching the network. This is the same coercion the differential
-checks the literal recogniser against, isolated from name resolution.
+{- | Resolve @host@ as a numeric IPv4 literal through the real 'getAddrInfo', returning 'Nothing'
+when the resolver rejects it. The @AI_NUMERICHOST@ flag forbids a DNS lookup, so a non-numeric
+spelling fails locally rather than touching the network.
 -}
 resolveNumeric :: Text -> IO (Maybe SockAddr)
 resolveNumeric host = do

@@ -59,19 +59,13 @@ spec = do
     transportFaultSpec
     configAndWiringSpec
 
-{- | The metadata fetch reads the upstream body through 'boundedRead' against the
-config's 'npmLimits'. A body past 'maxBodyBytes' fails closed as a 'FetchBoundExceeded'
-__value__, never buffered whole. A body within budget comes back verbatim. This is the
-body-size half of invariant 4 at the @http-client@ boundary. The serve pipeline's decode
-step enforces the version-count and nesting-depth halves, asserted through the request
-path in "Ecluse.Server.PipelineSpec".
+{- | The metadata fetch reads the upstream body through 'boundedRead' against the config's
+'npmLimits'. A body past 'maxBodyBytes' fails closed as a 'FetchBoundExceeded' value, never
+buffered whole. This is the body-size half of invariant 4 at the @http-client@ boundary.
 -}
 boundedBodySpec :: Spec
 boundedBodySpec = describe "bounded metadata body read" $ do
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
-        -- The stub serves a body larger than the tight cap. The bounded read must report
-        -- the breach, never a truncated RegistryResponse. It reports it as a value the
-        -- serve adapter threads into a MetadataError, with no throw-then-catch round-trip.
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig stub
             let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
@@ -87,13 +81,9 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
 
     it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap is refused" $
-        -- The load-bearing security property: the metadata request advertises
-        -- @Accept-Encoding: gzip@ and http-client decompresses transparently. The cap
-        -- must therefore bound the inflated bytes, not the wire size. The stub serves a
-        -- gzip body whose COMPRESSED size is well under the cap and whose DECOMPRESSED
-        -- size is well over it. The bounded read must still refuse fail-closed. That
-        -- guards against a change that quietly moves the cap to compressed bytes, which
-        -- a gzip bomb would then walk straight through.
+        -- The metadata request advertises @Accept-Encoding: gzip@ and http-client decompresses
+        -- transparently, so the cap must bound the inflated bytes, not the wire size. A cap on
+        -- compressed bytes would let a gzip bomb straight through.
         withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do
             base <- stubConfig stub
             let config = base{npmLimits = defaultLimits{maxBodyBytes = 1024}}
@@ -111,10 +101,9 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd
         outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
 
-{- | The transport half of the typed fetch channel. 'classifyTransport' folds each
-@http-client@ exception shape onto the bounded 'TransportCause' the logs and metrics
-read. The bounded fetch reports a live transport failure as a 'FetchTransport' value,
-never as an escaping exception.
+{- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded
+'TransportCause'. The bounded fetch reports a live transport failure as a 'FetchTransport'
+value, never as an escaping exception.
 -}
 transportFaultSpec :: Spec
 transportFaultSpec = describe "transport faults as values" $ do
@@ -131,9 +120,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         causeOf (HttpExceptionRequest defaultRequest (InternalException handshake)) `shouldBe` TransportTls
 
     it "classifies every other client fault as TransportProtocol" $ do
-        -- A non-TLS internal exception, a protocol-level fault, and an unparseable URL
-        -- all land in the closed catch-all. The sum stays total over whatever
-        -- http-client reports.
+        -- The closed catch-all keeps the sum total over whatever http-client reports.
         causeOf (HttpExceptionRequest defaultRequest (InternalException (toException FakeInnerFault))) `shouldBe` TransportProtocol
         causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportProtocol
         causeOf (InvalidUrlException "::" "bad") `shouldBe` TransportProtocol
@@ -155,9 +142,8 @@ configAndWiringSpec = describe "config wiring" $ do
         let config = defaultNpmConfig manager
         npmBaseUrl config `shouldBe` publicRegistryBaseUrl
         isJust (npmToken config) `shouldBe` False
-        -- The config carries the secure-default response bounds, so they bound an
-        -- anonymous public fetch out of the box. A deployment overrides them per its
-        -- budget.
+        -- The secure-default bounds apply to an anonymous public fetch out of the box. A
+        -- deployment overrides them per its budget.
         npmLimits config `shouldBe` defaultLimits
         -- A 'Manager' is opaque (no Eq/Show), so forcing it to WHNF is the
         -- assertion that the field carries the manager we passed, not a bottom.
@@ -171,18 +157,16 @@ isOdd = mkPackageName Npm Nothing "is-odd"
 oversizedBody :: ByteString
 oversizedBody = "{\"name\":\"is-odd\",\"_padding\":\"" <> BS.replicate 256 0x78 <> "\"}"
 
-{- | A gzip-compressed JSON body. It __decompresses__ to a long run of one byte, about
-64 KiB, far past the 1 KiB cap the gzip test sets. The __compressed__ size stays well
-under the cap, because a long single-byte run deflates tiny. Serving this under
-@Content-Encoding: gzip@ proves the bounded read measures inflated bytes, not wire bytes.
+{- | A gzip body that decompresses to about 64 KiB, far past the 1 KiB cap the gzip test sets,
+while its compressed size stays well under that cap. It proves the bounded read measures
+inflated bytes, not wire bytes.
 -}
 gzippedOversizedBody :: ByteString
 gzippedOversizedBody =
     toStrict (GZip.compress (toLazy ("{\"name\":\"is-odd\",\"_padding\":\"" <> BS.replicate 65536 0x78 <> "\"}")))
 
-{- | A typed stand-in for a client library's wrapped inner exception. 'ConnectionFailure'
-and 'InternalException' carry a 'SomeException'. The classification must read the
-wrapper's type, TLS or not, never the inner rendering.
+{- | A typed stand-in for a client library's wrapped inner exception. The classification must
+read the wrapper's type, TLS or not, never the inner rendering.
 -}
 data FakeInnerFault = FakeInnerFault
     deriving stock (Show)

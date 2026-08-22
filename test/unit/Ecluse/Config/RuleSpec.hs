@@ -289,10 +289,8 @@ hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
 
-{- | A minimal well-formed "add" patch for each rule type, keyed by its type name.
-The "covers exactly" expectation ties it to 'knownRuleTypes'. A new 'Rule' type
-cannot join without an entry here, and through it a round-trip pin. The round-trip
-proves each type's 'buildRule' branch and 'ruleName' agree on the name.
+{- | A minimal well-formed "add" patch for each rule type, keyed by its type name. The "covers
+exactly" expectation ties it to 'knownRuleTypes', so a new 'Rule' type cannot join without an entry.
 -}
 knownRuleAdds :: [(Text, ByteString)]
 knownRuleAdds =

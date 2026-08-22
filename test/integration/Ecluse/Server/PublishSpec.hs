@@ -41,10 +41,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
 {- | An in-process publication-target double. It records the @Authorization@ header and
-the body of every @PUT@ it receives, so a test can assert the credential-passthrough
-and body-relay invariants. It answers with a fixed status and body, so a test can
-assert the relay-back-to-client path. The one double stands in for the operator's
-first-party registry (Verdaccio / CodeArtifact / Artifact Registry).
+the body of every @PUT@ it receives, and answers with a fixed status and body.
 -}
 data Target = Target
     { tgApp :: Application
@@ -61,9 +58,8 @@ newTarget code body = do
             respond (responseLBS (mkStatus code "OK") [(hContentType, "application/json")] body)
     pure (Target app seen)
 
-{- | Host a publication-target double (answering @code@/@body@) on an ephemeral port.
-The continuation gets the port, to point the proxy at, and the 'Target', to inspect
-what it saw. This is the in-process integration harness: no Docker required.
+{- | Host a publication-target double on an ephemeral port. The continuation gets the
+port to point the proxy at, and the 'Target' to inspect what it saw.
 -}
 withTarget :: Int -> LByteString -> (Int -> Target -> IO a) -> IO a
 withTarget code body k = do
@@ -78,11 +74,8 @@ authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
 targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
 targetSaw target = reverse <$> readIORef (tgSeen target)
 
-{- | The first-party publish dependencies for the tests: a @\@acme@ publish-scope
-allow-list, the publication target at the given loopback port, and the given static
-fallback credential. The relay uses that fallback only when a client sends none. The
-default model is passthrough, the client's own token, so 'pubStaticToken' is usually
-'Nothing'.
+{- | Publish dependencies pointing at the loopback target, allowing the @\@acme@ scope.
+The relay forwards 'pubStaticToken' only when the client sends no token of its own.
 -}
 publishDepsAt :: Int -> Maybe Secret -> ByteAdmission -> PublishDeps
 publishDepsAt targetPort staticToken bodyBudget =
@@ -101,8 +94,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         }
 
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps.
-'Nothing' leaves the publish path off, so the route answers @405@. Each application
-gets its own large body-byte budget these relay tests never contend on.
+'Nothing' leaves the publish path off, so the route answers @405@.
 -}
 proxyWith :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
 proxyWith mkPublishDeps = do
@@ -120,10 +112,8 @@ proxyWith mkPublishDeps = do
                 ]
     pure (application cfg env)
 
-{- | A proxy 'Application' whose publish path caps the request body at @cap@ bytes
-('pubMaxRequestBytes'). A body crossing the cap drives the route's own bounded read. The
-request never reaches the publication target, because the cap fires before the relay, so
-its port is an unconnectable placeholder.
+{- | A proxy whose publish path caps the request body at @cap@ bytes ('pubMaxRequestBytes').
+The cap fires before the relay, so the target port is an unconnectable placeholder.
 -}
 cappedProxyWith :: Int -> IO Application
 cappedProxyWith cap = do
@@ -172,10 +162,8 @@ status = statusCode . simpleStatus
 publishBody :: LByteString
 publishBody = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{}}"
 
--- A populated single-version publish whose declared names all agree with the
--- @\@acme\/widget@ URL: its @_id@, its top-level @name@, and the one @versions[].name@.
--- A legitimate npm client's shape, which the body-name agreement check must still
--- relay.
+-- A legitimate npm client's shape: @_id@, top-level @name@, and the one @versions[].name@
+-- all agree with the @\@acme\/widget@ URL, so the agreement check must still relay it.
 matchingVersionBody :: LByteString
 matchingVersionBody =
     "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
@@ -236,20 +224,16 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
 
     it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
-        -- A chunked body declares no length. The publish route's counted bounded read
-        -- therefore enforces the cap as a VALUE: a fail-closed 413. It never throws
-        -- across the request perimeter. The route renders the 413 through its own
-        -- contract. That 413 excludes the perimeter's neutral 500 fault path, which
-        -- proves the perimeter never saw an over-cap signal.
+        -- A chunked body declares no length, so the route's counted bounded read enforces the cap
+        -- as a value: a fail-closed 413, never a throw. The 413 excludes the perimeter's neutral
+        -- 500 fault path, which proves the perimeter never saw an over-cap signal.
         app <- cappedProxyWith 8
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
 
     it "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)" $ do
-        -- A declared Content-Length over the cap fails closed before the route reads
-        -- a byte, answered as the route's own 413 response. That is the same status the
-        -- chunked path yields, so both over-cap shapes render uniformly through the
-        -- route contract.
+        -- A declared Content-Length over the cap fails closed before the route reads a byte.
+        -- Both over-cap shapes render the same 413 through the route contract.
         app <- cappedProxyWith 8
         resp <- putPublishKnownLength "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
@@ -323,11 +307,9 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 409
             simpleBody resp `shouldBe` "{\"error\":\"version already exists\"}"
 
-    -- The body-name agreement leg of the anti-shadowing guard. The URL path is in-scope
-    -- and passes 'inPublishScope'. The document body declares a DIFFERENT package name,
-    -- so the relay would publish a name the scope guard never authorised. The
-    -- guard checks every declared name present: @_id@, top-level @name@, and
-    -- @versions[].name@. A disagreement is a 403 before any upstream write.
+    -- The body-name agreement leg of the anti-shadowing guard. An in-scope URL whose body
+    -- declares a different package would publish a name the scope guard never authorised, so
+    -- the guard checks @_id@, top-level @name@, and @versions[].name@, and 403s before any relay.
     it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))

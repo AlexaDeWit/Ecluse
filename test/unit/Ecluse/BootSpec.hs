@@ -54,9 +54,8 @@ spec = do
             outcome `shouldBe` Nothing
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            -- The two-variable start for a real install, ECLUSE_SERVER__PUBLIC_URL
-            -- being the other. No mount mirrors, so the shipped sqs default is never
-            -- consulted and no queue configuration is needed.
+            -- ECLUSE_MOUNTS__NPM__ENABLED and ECLUSE_SERVER__PUBLIC_URL are the whole start for a
+            -- real install. No mount mirrors, so the shipped sqs default is never consulted.
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE__URL"
@@ -101,9 +100,8 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $ do
-            -- A directory is the portable unreadable-path shape, with no chmod games.
-            -- The read failure must land on the same typed exit-2 path as every
-            -- other config refusal.
+            -- A directory is the portable unreadable-path shape, with no chmod games. The read
+            -- failure must land on the same typed exit-2 path as every other config refusal.
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 traverse_ (uncurry setEnv) awsRunEnv
                 setEnv "ECLUSE_CONFIG" dir
@@ -233,10 +231,9 @@ spec = do
                                                   , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
                                                   , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
                                                   ]
-                            -- ...and the value survives the whole load verbatim (a
-                            -- JSON-looking secret must never be coerced to a non-string).
-                            -- Loaded with the auth token alone: the mount tokens would
-                            -- rightly refuse to load without their mirror target.
+                            -- The value must survive the whole load verbatim: a JSON-looking secret
+                            -- must never be coerced to a non-string. Only the auth token is loaded,
+                            -- because the mount tokens rightly refuse without their mirror target.
                             case loadConfig (filter ((== "ECLUSE_SERVER__AUTH_TOKEN") . fst) env) Nothing of
                                 Left e -> expectationFailure ("unexpected decode error for " <> toString payload <> ": " <> show e)
                                 Right cfg ->
@@ -328,10 +325,9 @@ spec = do
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
-            -- A genuine asynchronous delivery through base 'Conc.throwTo', the
-            -- channel 'killThread' and the RTS use. The case pins that the perimeter
-            -- observes real kills: an async-hygienic catch would rethrow the
-            -- delivery before the classification ran.
+            -- A genuine asynchronous delivery, as base 'Conc.throwTo', 'killThread' and the RTS
+            -- use. An async-hygienic catch would rethrow it before the classification ran, so this
+            -- pins that the perimeter observes real kills.
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled)
                 `shouldReturn` RunCancelled
 

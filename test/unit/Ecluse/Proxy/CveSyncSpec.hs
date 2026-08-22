@@ -144,10 +144,8 @@ spec = do
 
     describe "bootBurstPolicy -- the boot burst compiled to a retry policy" $
         it "attempts immediately, backs off over the shipped schedule, then concedes" $ do
-            -- 'simulatePolicy' walks the policy without sleeping, so this case pins the
-            -- burst schedule directly. It expects an immediate first attempt, a retry
-            -- after each 'bootBackoffDelays' entry in turn, then a stop ('Nothing') once
-            -- the list is spent. The list length is the retry budget.
+            -- 'simulatePolicy' walks the policy without sleeping, so this case pins the burst
+            -- schedule directly. The length of 'bootBackoffDelays' is the retry budget.
             delays <- simulatePolicy (length bootBackoffDelays) (bootBurstPolicy bootBackoffDelays)
             map snd delays `shouldBe` map Just bootBackoffDelays <> [Nothing]
 
@@ -183,9 +181,8 @@ appConfigFrom envVars doc = case loadConfig envVars doc of
     Right c -> pure (configApp c)
     Left e -> fail ("Config error: " <> show e)
 
--- 'Ecluse.Runtime.Cve.Sync.newS3CveSource' builds the S3 env, which discovers
--- credentials from the process environment. The plan only wires the transport and
--- makes no request, so dummies satisfy it.
+-- The S3 env discovers credentials from the process environment. The plan only wires
+-- the transport and makes no request, so dummies satisfy it.
 setDummyAwsCredentials :: IO ()
 setDummyAwsCredentials = do
     setEnv "AWS_ACCESS_KEY_ID" "test"
@@ -212,9 +209,8 @@ plan, not on any log line, so a no-output environment satisfies the dependency.
 quietLogEnv :: IO LogEnv
 quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
-{- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
-severity admitted. A swept-temp warning's serialised bytes are then assertable
-through 'captureStdout'.
+{- | A 'LogEnv' with one stdout scribe in compact one-line JSON, every severity admitted,
+so 'captureStdout' can assert on a warning's serialised bytes.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do
@@ -222,9 +218,8 @@ jsonLogEnv = do
     base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     registerScribe "stdout" scribe defaultScribeSettings base
 
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file, and return what
-the action wrote. Restore 'stdout' on every exit path, so a test can capture what a
-scribe emits without leaking it into the run.
+{- | Run an action with 'stdout' redirected to a temporary file and return what it wrote.
+'stdout' is restored on every exit path, so scribe output never leaks into the run.
 -}
 captureStdout :: IO () -> IO Text
 captureStdout act =

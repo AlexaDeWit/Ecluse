@@ -13,10 +13,8 @@ spec = do
     mkRegistryUrlSpec
     resolveTarballUrlSpec
 
-{- | 'mkRegistryUrl' is the production boundary: a registry target is https by
-construction, so a running system cannot hold a plain-HTTP value. The rejection is
-the load-bearing half. In a release build, 'Ecluse.Core.Security.Egress.RegistryUrl'
-comes only from this function, and this function refuses http.
+{- | 'mkRegistryUrl' is the production boundary: a registry target is https by construction, so
+a running system cannot hold a plain-HTTP value. The rejection is the load-bearing half.
 -}
 mkRegistryUrlSpec :: Spec
 mkRegistryUrlSpec = describe "mkRegistryUrl (https-only by construction)" $ do

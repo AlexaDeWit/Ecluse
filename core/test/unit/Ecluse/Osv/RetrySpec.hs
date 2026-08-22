@@ -53,9 +53,8 @@ transientFailure = HttpExceptionRequest defaultRequest ConnectionTimeout
 permanentFailure :: HttpException
 permanentFailure = InvalidUrlException "http://osv.example/npm/all.zip" "unusable"
 
-{- | A stand-in low-level cause wrapped by a 'ConnectionFailure'. The classifier
-inspects only the constructor, not the wrapped cause, so a small typed exception
-serves. It also keeps us clear of a stringly @userError@ (STYLE section 11).
+{- | A stand-in low-level cause wrapped by a 'ConnectionFailure'. The classifier inspects only the
+constructor, not the wrapped cause.
 -}
 data StubCause = StubCause
     deriving stock (Show)
@@ -102,9 +101,8 @@ spec = do
             delays `shouldSatisfy` all (<= cap)
 
         it "is jittered: full jitter does not produce a fixed schedule" $ do
-            -- Full jitter randomises each wait in [0, capped exponential], so
-            -- repeated simulations of the same policy differ. A non-jittered
-            -- exponential backoff would be identical every run.
+            -- Full jitter randomises each wait in [0, capped exponential], so repeated
+            -- simulations of the same policy differ. A fixed exponential backoff would not.
             let policy = limitRetries 6 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
             runs <- replicateM 5 (map snd <$> simulatePolicy 6 policy)
             length (ordNub runs) `shouldSatisfy` (> 1)

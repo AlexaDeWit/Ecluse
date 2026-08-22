@@ -46,17 +46,14 @@ tokenExpiringIn :: Text -> NominalDiffTime -> AuthToken
 tokenExpiringIn s ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl t0)}
 
-{- | A controllable clock: a mutable instant the test sets, returned as the
-@IO UTCTime@ the wrapper reads plus a setter.
--}
+-- | A controllable clock: a mutable instant the test sets, plus a setter.
 newClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
 newClock start = do
     ref <- newIORef start
     pure (readIORef ref, writeIORef ref)
 
-{- | A 'RefreshConfig' wired to an injected clock and mint, with zero jitter and a
-small breaker. The breaker behaviour is then easy to drive in a test. Refresh fires
-at 80% of token lifetime.
+{- | A 'RefreshConfig' wired to an injected clock and mint, with zero jitter and a small
+breaker, so a test drives the breaker behaviour deterministically.
 -}
 testConfig :: IO UTCTime -> IO AuthToken -> RefreshConfig
 testConfig clock mint =
@@ -69,9 +66,8 @@ testConfig clock mint =
         , rcBreakerCooldown = 30
         }
 
-{- | Poll a boolean action until it holds or a generous timeout elapses, returning
-whether it became true. It awaits a background refresh deterministically, without
-sleeping for a fixed (and flaky) duration.
+{- | Poll a boolean action until it holds or a generous timeout elapses. It awaits a
+background refresh without a fixed, flaky sleep.
 -}
 waitUntil :: IO Bool -> IO Bool
 waitUntil check = fromMaybe False <$> timeout 2_000_000 loop
@@ -80,15 +76,12 @@ waitUntil check = fromMaybe False <$> timeout 2_000_000 loop
         ok <- check
         if ok then pure True else threadDelay 1_000 >> loop
 
-{- | Spin until a counter reaches at least @n@, or a timeout elapses. A test can then
-wait for a background mint to start before asserting on it.
--}
+-- | Spin until a counter reaches @n@, so a test can wait for a background mint to start.
 waitForCount :: IORef Int -> Int -> IO Bool
 waitForCount ref n = waitUntil ((>= n) <$> readIORef ref)
 
-{- | A baseline 'CacheState' for the direct helper tests: a healthy, not-yet-
-refreshing provider holding a long-lived token. Each test tweaks it on the one axis
-it exercises. (The token is a benign default. A test that cares overrides it.)
+{- | A baseline 'CacheState' for the direct helper tests: healthy, not refreshing, holding
+a long-lived token. Each test tweaks the one axis it exercises.
 -}
 aCacheState :: CacheState
 aCacheState =
@@ -99,9 +92,8 @@ aCacheState =
         , csBreaker = initialBreaker
         }
 
-{- | A 'RefreshConfig' carrying only the breaker knobs the pure fold helpers read
-(threshold 3, cooldown 30s). Its effectful leaves stay at the loud
-'defaultRefreshConfig' defaults, which these helpers never touch.
+{- | A 'RefreshConfig' carrying only the breaker knobs the pure fold helpers read. Its
+effectful leaves stay at the loud 'defaultRefreshConfig' defaults, which these helpers never touch.
 -}
 breakerCfg :: RefreshConfig
 breakerCfg = defaultRefreshConfig{rcBreakerThreshold = 3, rcBreakerCooldown = 30}
@@ -112,9 +104,8 @@ remaining-lifetime seconds it carried.
 data RefreshEvent = ReportedSuccess (Maybe Int) | ReportedFailure (Maybe Int)
     deriving stock (Eq, Show)
 
-{- | A pair of capturing reporters appending to their own logs, oldest first. A test
-can then assert exactly which breaker transitions and refresh outcomes a provider
-recorded, in order.
+{- | A pair of capturing reporters appending to their own logs, oldest first. A test can then
+assert the exact order of breaker transitions and refresh outcomes.
 -}
 capturingReporters :: IO (IORef [Breaker], IORef [RefreshEvent], BreakerReporter, RefreshReporter)
 capturingReporters = do
@@ -128,9 +119,8 @@ capturingReporters = do
                 }
     pure (breakerLog, refreshLog, breakerR, refreshR)
 
-{- | A mint that runs the next scripted action on each call. The eager construction
-mint consumes the head. A test can then drive a deterministic sequence of mint
-outcomes, successes and failures, past the provider.
+{- | A mint that runs the next scripted action on each call, so a test drives a deterministic
+sequence of mint outcomes. The eager construction mint consumes the head.
 -}
 scriptedMint :: IORef [IO AuthToken] -> IO AuthToken
 scriptedMint ref = join (atomicModifyIORef' ref next)
@@ -179,9 +169,8 @@ spec = do
 
         it "is single-flight: a cohort past the threshold triggers at most one refresh mint" $ do
             (clock, setClock) <- newClock t0
-            -- The refresh mint blocks on an (initially empty) gate until released,
-            -- so it is demonstrably in flight while the cohort piles in. The seed
-            -- mint (call #1) does not block. Only the refresh (call #2+) waits.
+            -- The refresh mint blocks on the gate, so it is demonstrably in flight while the
+            -- cohort piles in. The seed mint (call #1) does not block.
             gate <- newEmptyTMVarIO
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -232,17 +221,10 @@ spec = do
             (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
 
         it "releases the single-flight flag when the serving thread is cancelled at the claim handoff (no wedge)" $ do
-            -- Regression for the parent-side gap the mid-flight test above does not
-            -- cover. The serve transaction claims the flag, but nothing releases it
-            -- until the mint runner installs its handler. An async exception in that
-            -- handoff, before the runner takes ownership, must still release it, or
-            -- every later expired caller wedges on the STM retry.
-            --
-            -- The window is otherwise a smooth, interruptible point in pure dispatch,
-            -- and about 0.15% of naive cancels land there empirically. The test drives
-            -- it deterministically through the 'afterClaim' hook. That hook runs on the
-            -- serving thread at exactly that handoff. It signals that it reached the
-            -- window, then parks, so the test can cancel the thread there.
+            -- Regression for the parent-side gap: the serve transaction claims the flag, but
+            -- nothing releases it until the mint runner installs its handler. A cancel in that
+            -- handoff must still release the flag, or every later expired caller wedges on the STM
+            -- retry.
             (clock, setClock) <- newClock t0
             reached <- newEmptyTMVarIO
             release <- newEmptyTMVarIO
@@ -253,10 +235,8 @@ spec = do
                     if n == 1
                         then pure (tokenExpiringIn "seed" 1000)
                         else pure (tokenExpiringIn "recovered" 5000)
-                -- Run on the serving thread in the claim -> mint-runner window. On the
-                -- first (to-be-cancelled) claim only, mark that the flag is claimed and
-                -- the thread is parked here. Then block (interruptibly) so the cancel
-                -- lands inside this window. Later claims pass straight through.
+                -- Runs on the serving thread in the claim -> mint-runner window. Only the first
+                -- claim parks here, interruptibly, so the cancel lands inside the window.
                 afterClaim = do
                     wasArmed <- atomicModifyIORef' armed (False,)
                     when wasArmed $ do
@@ -347,9 +327,8 @@ spec = do
             setClock (addUTCTime 2000 t0)
             -- Trip the breaker.
             replicateM_ 3 (currentToken provider `shouldThrow` anyException)
-            -- Cooldown elapses: the breaker admits the next call as a half-open probe.
-            -- It fails, so the breaker re-opens (no recovery) and a further immediate
-            -- call fast-fails again without minting.
+            -- Cooldown elapsed: the breaker admits a half-open probe. It fails, so the breaker
+            -- re-opens and the next call fast-fails without minting.
             setClock (addUTCTime 60 (addUTCTime 2000 t0))
             currentToken provider `shouldThrow` anyException
             afterProbe <- readIORef mintCount
@@ -360,12 +339,9 @@ spec = do
             (clock, setClock) <- newClock t0
             gate <- newEmptyTMVarIO
             mintCount <- newIORef (0 :: Int)
-            -- The refresh mint (call #2) blocks on the gate. The token expires while
-            -- it is in flight. A concurrent caller then hits the expired path and must
-            -- wait for the in-flight mint rather than start its own. The seed token
-            -- (call #1) is short-lived, so a refresh is soon due. The refreshed token
-            -- (call #2) lives well past the waiter's clock, so it is genuinely valid
-            -- once installed.
+            -- The refresh mint (call #2) blocks on the gate and the token expires while it is in
+            -- flight. A concurrent caller on the expired path must wait for that mint rather than
+            -- start its own.
             let mint = do
                     n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
                     if n >= 2
@@ -392,10 +368,9 @@ spec = do
 
         it "stops hammering the mint once repeated background refreshes trip the breaker" $ do
             (clock, setClock) <- newClock t0
-            -- The token stays valid throughout (expires at t0+10000) but sits past its
-            -- refresh threshold, so every request wants to refresh. The seed mint
-            -- succeeds and every later mint fails. The breaker must cap the failing
-            -- background mints rather than retry one per request.
+            -- The token stays valid throughout but sits past its refresh threshold, so every
+            -- request wants to refresh. The breaker must cap the failing background mints rather
+            -- than retry one per request.
             seeded <- newIORef True
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -409,9 +384,8 @@ spec = do
             setClock (addUTCTime 8500 t0)
             -- Drive a burst of requests. Each tries to refresh in the background.
             replicateM_ 8 (currentToken provider >> threadDelay 5_000)
-            -- Let things settle. The breaker caps the failing mints at the seed plus at
-            -- most the threshold, rather than one per request. Callers got the
-            -- still-valid token throughout.
+            -- Let things settle. The breaker caps the failing mints at the seed plus at most the
+            -- threshold, rather than one per request.
             threadDelay 30_000
             final <- readIORef mintCount
             final `shouldSatisfy` (<= 4) -- seed + at most threshold (3) failures
@@ -452,9 +426,8 @@ spec = do
             readIORef mintCount `shouldReturn` 1
 
         it "fails loudly when built from defaults without wiring the mint and clock" $ do
-            -- defaultRefreshConfig leaves rcMint/rcClock unconfigured, so a provider
-            -- assembled without them fails at construction rather than silently. That
-            -- holds whether the clock or the mint leaf is the one left unwired.
+            -- defaultRefreshConfig leaves rcMint and rcClock unwired, so construction must fail
+            -- loudly whichever leaf is the missing one.
             refreshingProvider defaultRefreshConfig `shouldThrow` anyException
             (clock, _setClock) <- newClock t0
             refreshingProvider defaultRefreshConfig{rcClock = clock} `shouldThrow` anyException
@@ -480,10 +453,8 @@ spec = do
             setClock (addUTCTime 30 (addUTCTime 2000 t0))
             currentToken provider `shouldThrow` (== BreakerOpen)
 
-    -- Direct, deterministic unit tests for the pure / state-transition helpers,
-    -- so a regression localises to the function rather than only surfacing
-    -- through 'currentToken'. These complement (do not replace) the behavioural
-    -- and orphan-window tests above, which cover the concurrent serve/mask path.
+    -- Direct unit tests for the pure state-transition helpers, so a regression localises to
+    -- the function rather than only surfacing through 'currentToken'.
     describe "refreshDueAt" $ do
         it "schedules the refresh at the configured fraction of the lifetime" $ do
             -- Default knobs: 0.8 fraction, 30s floor, no jitter. A 1000s token
@@ -573,17 +544,15 @@ spec = do
             -- Construction's eager mint records nothing: the reporters fire on refreshes.
             readIORef breakerLog `shouldReturn` []
             readIORef refreshLog `shouldReturn` []
-            -- The eager token (expires t0+10) is expired at t0+20, so the serve mints
-            -- synchronously and that mint fails. It trips the breaker open and records
-            -- the failed refresh with the still-cached token's (now zero) remaining
-            -- lifetime.
+            -- The eager token (expires t0+10) is expired at t0+20, so the serve mints synchronously
+            -- and fails. That trips the breaker and reports the failed refresh with the cached
+            -- token's (now zero) remaining lifetime.
             setClock (addUTCTime 20 t0)
             currentToken provider `shouldThrow` anyException
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0)]
             readIORef refreshLog `shouldReturn` [ReportedFailure (Just 0)]
-            -- The 30s cooldown elapses by t0+51. The breaker admits the next mint as a
-            -- half-open probe and it succeeds, resetting the breaker and recording the
-            -- fresh token's ttl.
+            -- The 30s cooldown elapses by t0+51, so the breaker admits a half-open probe. It
+            -- succeeds, resetting the breaker and recording the fresh token's ttl.
             setClock (addUTCTime 51 t0)
             recovered <- currentToken provider
             unSecret (authSecret recovered) `shouldBe` "recovered"
@@ -632,19 +601,16 @@ spec = do
         it "blocks (STM retry) on an expired token when a mint is already in flight" $ do
             let token' = tokenExpiringIn "stale" 1000
             stateVar <- newTVarIO aCacheState{csToken = token', csRefreshing = True}
-            -- Expired and a mint already holds the flag: 'decide' must block rather
-            -- than launch a second mint. The transaction never commits, so the timed
-            -- wait yields Nothing.
+            -- Expired with a mint already holding the flag: 'decide' must block rather than launch
+            -- a second mint. The transaction never commits, so the timed wait yields Nothing.
             timeout 50_000 (atomically (decide stateVar (addUTCTime 2000 t0))) `shouldReturn` Nothing
 
     describe "refreshingProvider (model-based)" $
         it "agrees with a pure cache/clock/breaker model under random operation sequences" $
             hedgehog refreshModelProperty
 
-{- | Policy constants the model and the provider-under-test share. They mirror the
-'testConfig' knobs the example tests above use: refresh at 80% of lifetime, zero
-jitter, a 30-second floor, breaker threshold 3, and a 30-second cooldown. The pure
-model can then predict the implementation exactly.
+{- | Policy constants the model and the provider under test share. They mirror the 'testConfig'
+knobs, so the pure model predicts the implementation exactly.
 -}
 modelRefreshAt :: Double
 modelRefreshAt = 0.8
@@ -663,19 +629,15 @@ tokenLiving :: Text -> UTCTime -> NominalDiffTime -> AuthToken
 tokenLiving s issuedAt ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl issuedAt)}
 
-{- | The breaker, modelled exactly as 'Ecluse.Core.Credential.Refresh's private one:
-healthy with a consecutive-failure count, open until an instant, or half-open.
--}
+-- | The breaker, modelled exactly as 'Ecluse.Core.Credential.Refresh's private one.
 data MBreaker
     = MClosed Int
     | MOpen UTCTime
     | MHalfOpen
     deriving stock (Eq, Show)
 
-{- | The pure model of a 'refreshingProvider's cache: a mirror of its private
-@CacheState@, plus the injected clock and fail flag the commands drive. It also holds
-a count of the mints the implementation should have performed, so the harness can
-settle the background refresh deterministically before each observation.
+{- | The pure model of a 'refreshingProvider's cache, mirroring its private @CacheState@.
+The expected mint count lets the harness settle a background refresh before each observation.
 -}
 data RModel (v :: Type -> Type) = RModel
     { rmToken :: AuthToken
@@ -721,9 +683,8 @@ mRefreshDueAt issuedAt token = case authExpiresAt token of
   where
     clamp01 = max 0 . min 1
 
-{- | Whether the breaker admits a mint at @now@, and the breaker state it leaves
-behind. It mirrors the breaker admission gate: an elapsed 'MOpen' flips to half-open
-and admits, an open breaker otherwise denies, and closed or half-open always admit.
+{- | Whether the breaker admits a mint at @now@, and the breaker state it leaves behind. An
+elapsed 'MOpen' flips to half-open and admits.
 -}
 mAdmit :: UTCTime -> MBreaker -> (Bool, MBreaker)
 mAdmit now = \case
@@ -748,10 +709,8 @@ mOnFailure now = \case
   where
     tripped = MOpen (addUTCTime modelBreakerCooldown now)
 
-{- | The model's outcome of a 'RequestToken' at the current clock: the token (or
-'Nothing' for a thrown error) the caller should observe. It also carries the model
-after the call has fully settled, background refresh included. This is the heart of
-the oracle: it folds the same decisions 'serve' makes, but purely.
+{- | The outcome the model predicts for a 'RequestToken' at the current clock: the token the
+caller observes, or a thrown error.
 -}
 data RequestOutcome
     = ServedToken AuthToken
@@ -788,9 +747,8 @@ stepRequest m
                             then (RaisedError, m') -- expired + failed mint surfaces
                             else (ServedToken (rmToken m'), m')
 
-    -- Apply one mint. Success installs a fresh token and resets the breaker and the
-    -- refresh schedule. Failure keeps the cached token and advances the breaker.
-    -- Either way the mint counter advances by one.
+    -- Apply one mint. Success installs a fresh token and resets the breaker and the refresh
+    -- schedule. Failure keeps the cached token and advances the breaker.
     mintInto base failed
         | failed =
             base
@@ -811,10 +769,8 @@ stepRequest m
 mintName :: Int -> Text
 mintName n = "tok-" <> show n
 
-{- | The mutable wiring a model run drives: a settable clock, a fail flag, a running
-mint count, and the index of the next token to hand out. It also holds a live gauge
-of mints in flight together with the high-water mark, which catches a single-flight
-violation (two mints overlapping) directly.
+{- | The mutable wiring a model run drives. The in-flight gauge and its high-water mark
+catch a single-flight violation, meaning two mints overlapping.
 -}
 data RefreshHarness = RefreshHarness
     { hClock :: IORef UTCTime
@@ -835,10 +791,8 @@ newHarness start =
         <*> newIORef 0
         <*> newIORef 0
 
-{- | Build a provider whose clock and mint the harness wires. The mint records its
-concurrency (to catch single-flight violations) and counts itself. It then either
-fails, when the fail flag is set, or hands out the next distinct token, matching the
-model's 'mintInto' arithmetic.
+{- | Build a provider the harness clock and mint drive. The mint records its concurrency,
+so an overlapping pair breaks single-flight, and hands out the next distinct token.
 -}
 harnessProvider :: RefreshHarness -> IO CredentialProvider
 harnessProvider h =
@@ -895,9 +849,8 @@ instance FunctorB SetFailInput where
 instance TraversableB SetFailInput where
     btraverse _ (SetFailInput b) = pure (SetFailInput b)
 
-{- | 'AdvanceClock dt': move the injected clock forward by @dt@ seconds. The clock
-only ever advances (time does not run backwards), so the generated deltas are
-non-negative. Advancing alone can never trigger a mint.
+{- | 'AdvanceClock dt': move the injected clock forward by @dt@ seconds. The generated
+deltas are non-negative, and advancing alone never triggers a mint.
 -}
 advanceCommand :: RefreshHarness -> Command H.Gen (H.PropertyT IO) RModel
 advanceCommand h =
@@ -918,12 +871,8 @@ setFailCommand h =
         [ Update $ \m (SetFailInput b) _out -> m{rmFail = b}
         ]
 
-{- | 'RequestToken': call 'currentToken'. After it returns, the command settles any
-background refresh by waiting for the predicted mint count. The 'Ensure' oracle can
-then assert deterministically that the served token, or the thrown error, exactly
-matches the model. It also asserts that the served secret is never fabricated, that a
-served token is always valid at the current clock, and that nothing violated
-single-flight.
+{- | 'RequestToken': call 'currentToken', then wait for the predicted mint count so the
+oracle can assert the served token or error, token validity, and single-flight exactly.
 -}
 requestCommand :: RefreshHarness -> CredentialProvider -> Command H.Gen (H.PropertyT IO) RModel
 requestCommand h provider =
@@ -945,24 +894,20 @@ requestCommand h provider =
             -- Single-flight: at no point did two mints overlap (high-water mark of
             -- the in-flight gauge, captured by the harness mint, never exceeds 1).
             H.assert (maxInFlight <= 1)
-            -- Non-vacuity: a generated sequence must reach each interesting policy
-            -- arm often enough, so the oracle is not silently testing only the
-            -- happy path (serve-cached). The percentages are per *step*.
+            -- Non-vacuity: a generated sequence must reach each interesting policy arm often enough
+            -- that the oracle is not silently testing only serve-cached. Percentages are per step.
             let tag = coverTag beforeState expected
             H.cover 1 "valid-bg-refresh" (tag == "valid-bg-refresh")
             H.cover 1 "expired-mint-ok" (tag == "expired-mint-ok")
             H.cover 1 "expired-error" (tag == "expired-error")
         ]
   where
-    -- Run currentToken, capture either the token or the fact it threw, then let
-    -- the background refresh (if the model predicts one) land before returning.
-    -- Reports the served outcome together with the single-flight high-water mark,
-    -- so the (pure 'Test') 'Ensure' can assert on both without touching 'IO'.
+    -- Reports the served outcome together with the single-flight high-water mark, so the
+    -- pure 'Ensure' can assert on both without touching 'IO'.
     execute RequestInput = liftIO $ do
         result <- try (currentToken provider)
-        -- The conservative settle below waits for quiescence: it polls the in-flight
-        -- gauge to zero and the mint count to a standstill. That is enough to make the
-        -- asynchronous background refresh deterministic under the sequential model.
+        -- The settle polls for quiescence, which makes the asynchronous background refresh
+        -- deterministic under the sequential model.
         settleQuiescent h
         maxInFlight <- readIORef (hMaxInFlight h)
         pure (toObserved result, maxInFlight)
@@ -988,10 +933,8 @@ requestCommand h provider =
             annotateShow ("outcome mismatch" :: Text, expected, fmap (unSecret . authSecret) observed)
             H.failure
 
-{- | Wait until no mint is in flight and the count has stopped moving, so a
-fire-and-forget background refresh has fully landed before the next observation.
-A short stability window guards against sampling the gauge in the gap before the
-async refresh has even started.
+{- | Wait until no mint is in flight and the count has stopped moving. The stability window
+guards against sampling the gauge before the async refresh has even started.
 -}
 settleQuiescent :: RefreshHarness -> IO ()
 settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
@@ -1006,9 +949,8 @@ settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
                     else threadDelay 500 >> go (stable + 1) count
             else threadDelay 500 >> go 0 count
 
-{- | The property: seed a fresh provider whose first (construction) mint installs
-@tok-0@. Then drive a random sequence of request, advance-clock, and set-fail
-operations against it and the pure model, asserting they agree at every step.
+{- | Drive a random sequence of request, advance-clock, and set-fail operations against a
+fresh provider and the pure model, asserting they agree at every step.
 -}
 refreshModelProperty :: H.PropertyT IO ()
 refreshModelProperty = do

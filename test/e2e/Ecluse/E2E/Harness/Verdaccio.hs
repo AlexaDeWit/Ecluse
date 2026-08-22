@@ -21,9 +21,8 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Harness.Types
 
-{- | Poll Verdaccio (the mirror) until it serves the given version of a package, or
-the timeout lapses. A test awaits an asynchronous mirror with it, or asserts one never
-happens: a 'False' after the patience window.
+{- | Poll Verdaccio (the mirror) until it serves the given version of a package, or the
+timeout lapses. A 'False' means the version never appeared within the patience window.
 -}
 verdaccioHasVersion :: E2E -> Text -> Text -> IO Bool
 verdaccioHasVersion e2e pkg version = go (40 :: Int)
@@ -33,9 +32,8 @@ verdaccioHasVersion e2e pkg version = go (40 :: Int)
         present <- verdaccioHasVersionNow e2e pkg version
         if present then pure True else threadDelay 500000 >> go (n - 1)
 
-{- | A single, non-retrying check of whether the mirror already serves a version: the
-precondition probe (\"absent now\"). It skips the patience window 'verdaccioHasVersion'
-spends to confirm an absence.
+{- | Check once whether the mirror already serves a version, with no retry. Use it for an
+absent-now precondition, to skip the patience window 'verdaccioHasVersion' spends.
 -}
 verdaccioHasVersionNow :: E2E -> Text -> Text -> IO Bool
 verdaccioHasVersionNow e2e pkg version =

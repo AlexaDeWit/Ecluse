@@ -17,15 +17,10 @@ import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..), providerForEnv)
 import Ecluse.Test.Credential (noCredentialReporters)
 
-{- | Component test for the CodeArtifact credential leaf with __no live AWS__. An
-in-process HTTP stub answers @GetAuthorizationToken@ with a canned response, the shape
-from the API reference: @{"authorizationToken": string, "expiration": number}@ and a
-@200@. An @amazonka@ 'AWS.Env' points at it through an endpoint override with static
-credentials. This drives the real mint path that the secret-gated smoke test can only
-reach against the real service. That path is request build, SigV4 signing, response
-parse, and token plus expiry extraction. The token is a control-plane AWS API call, not the npm
-protocol, so an npm-registry emulator cannot stand in. The endpoint shim is the
-injection point.
+{- | Component test for the CodeArtifact credential leaf with no live AWS. An in-process HTTP
+stub answers @GetAuthorizationToken@, driving the real request build, SigV4 signing, response
+parse, and token plus expiry extraction. The mint is a control-plane AWS API call, not the npm
+protocol, so an npm-registry emulator cannot stand in.
 -}
 spec :: Spec
 spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
@@ -56,9 +51,7 @@ spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
                 "{\"authorizationToken\":\"the-canned-token\",\"expiration\":2000000000}"
             )
 
-    -- An amazonka Env with static (dummy) credentials, its endpoint overridden to
-    -- the in-process stub. The stub ignores the SigV4 signature, so any well-formed
-    -- credentials suffice. The provider supplies the region from the config.
+    -- The stub ignores the SigV4 signature, so any well-formed dummy credentials suffice.
     stubEnv :: Int -> IO AWS.Env
     stubEnv port = do
         base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))

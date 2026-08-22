@@ -30,16 +30,10 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Registry.Npm.Wire
 
-{- | Decoding tests for the npm wire types. Every fixture under
-@core\/test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
-in @docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §3 errors).
-The suite is pure and offline, and never touches the network. The non-gating smoke suite
-surfaces protocol drift separately.
-
-The cases pin down the two things the decoders promise. The first is __faithful__ capture
-of the rule-decisive fields: @hasInstallScript@, @deprecated@, the @dist@ integrity
-triple, and the @scripts@ map. The second is __lenient__ input handling: string-or-object
-@license@\/@person@\/@bugs@\/@repository@, the bare-string 404, and ignored unknown keys.
+{- | Decoding tests for the npm wire types, pure and offline over the fixtures in
+@core\/test\/unit\/fixtures\/npm\/@, derived from the captures in
+@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §3 errors).
+They pin faithful capture of the rule-decisive fields and lenient string-or-object handling.
 -}
 spec :: Spec
 spec = do
@@ -249,11 +243,9 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             bugsUrl b `shouldBe` Just "https://x/issues"
             bugsEmail b `shouldBe` Just "b@x"
 
-    -- A string-or-object scalar must reject any other JSON kind rather than silently
-    -- mis-parsing it. We spread the four rejected kinds (number, array, boolean, null)
-    -- across the lenient decoders. Each one then proves it refuses a shape it was never
-    -- meant to accept. Asserting the full message rather than `isLeft` pins the
-    -- descriptive error, which names both the accepted shapes and the JSON kind found.
+    -- A string-or-object scalar must reject any other JSON kind rather than mis-parsing it.
+    -- Asserting the full message, not `isLeft`, pins the error text that names both the accepted
+    -- shapes and the JSON kind found.
     describe "rejecting the wrong JSON kind" $ do
         it "rejects a number for License, naming the number kind" $
             (eitherDecode "42" :: Either String License)
@@ -292,11 +284,9 @@ errorResponseSpec = describe "ErrorResponse" $ do
             `shouldBe` ErrorObject
                 ErrorBody{errMessage = Just "you must be logged in", errError = Just "Unauthorized"}
 
-{- | The wire types appear inside JSON arrays on the registry: maintainer and signature
-lists. The @versions@\/@dist-tags@ fields are objects of them. Each type must decode as an
-element of a homogeneous list too. These cases decode a JSON array of each type and assert
-the decoded elements. That drives the list path of every decoder with real values. HPC
-tracks that path as a distinct @parseJSONList@ box.
+{- | The wire types appear inside registry arrays and objects, so each must also decode as a
+list element. These cases drive every decoder's list path, which HPC tracks as a distinct
+@parseJSONList@ box.
 -}
 jsonListSpec :: Spec
 jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
@@ -340,21 +330,12 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
                        , ErrorObject ErrorBody{errMessage = Just "nope", errError = Nothing}
                        ]
 
-{- | The wire decoders eat __untrusted__ upstream JSON, so every one must be __total__.
-An arbitrary input may never make a decoder bottom by throwing or by hitting a partial
-function. It must always return a typed 'Success'\/'Error' for a 'Value', or a
-'Right'\/'Left' for raw bytes. These generative properties feed each 'FromJSON' instance
-a bounded-but-arbitrary 'Value' and a run of arbitrary bytes. They then assert the result
-is fully evaluable without an exception. That is the totality half of /parse, don't
-validate/, which the fixture suite above only spot-checks. The companion projection-layer
-properties live in "Ecluse.Registry.Npm.ProjectSpec".
+{- | The wire decoders eat __untrusted__ upstream JSON, so each must be __total__: no input
+may make one bottom, only a typed 'Success'\/'Error' or 'Right'\/'Left'. The companion
+projection-layer properties live in "Ecluse.Registry.Npm.ProjectSpec".
 -}
 totalitySpec :: Spec
 totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
-    -- Each decoder must be total over an arbitrary 'Value': the result is a typed
-    -- Success or a typed Error, never a ⊥ value. We force the whole decoded structure
-    -- through its 'Show' rendering. A partial function anywhere in it then surfaces as a
-    -- caught exception rather than slipping past in a thunk.
     describe "every wire decoder is total over an arbitrary Value" $ do
         it "Person" $ hedgehog (valueDecodeIsTotal @Person)
         it "Repository" $ hedgehog (valueDecodeIsTotal @Repository)
@@ -373,10 +354,6 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
         it "VersionManifest" $ hedgehog (bytesDecodeIsTotal @VersionManifest)
         it "ErrorResponse" $ hedgehog (bytesDecodeIsTotal @ErrorResponse)
 
-    -- For the permissive string-or-object scalars the generator must reach BOTH
-    -- the success and the failure arm, so the totality check above is not
-    -- vacuously all-failures. 'H.cover' fails the property if either arm is
-    -- under-sampled.
     describe "the Value generator reaches both arms of a permissive decoder" $ do
         it "Person decodes both ways" $ hedgehog (valueDecodeCoversBothArms @Person)
         it "Repository decodes both ways" $ hedgehog (valueDecodeCoversBothArms @Repository)
@@ -384,9 +361,7 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
         it "License decodes both ways" $ hedgehog (valueDecodeCoversBothArms @License)
         it "ErrorResponse decodes both ways" $ hedgehog (valueDecodeCoversBothArms @ErrorResponse)
 
-    -- A raw-fidelity invariant the fixture suite implies: a successfully decoded
-    -- 'ErrorString' carries the generated string __verbatim__. This proves a
-    -- generated success is a genuine round-trip, not a coincidental accept.
+    -- A generated success must be a genuine round-trip, not a coincidental accept.
     it "a String that decodes as an ErrorResponse is captured verbatim" $
         hedgehog $ do
             s <- forAll (Gen.text (Range.linear 0 12) Gen.unicode)
@@ -394,11 +369,9 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
                 Success (ErrorString captured) -> captured H.=== s
                 other -> annotateShow other >> H.failure
 
-{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value'. Feed it a
-bounded-but-arbitrary value and fully evaluate the typed 'Result'. A bottom anywhere in
-the decoded structure then surfaces as a caught exception rather than a pass. 'H.eval' runs
-the forcing in pure code and turns any thrown bottom into a test failure. Forcing the
-'Show' rendering walks the whole structure, down past its outermost constructor.
+{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value'. Forcing the 'Show'
+rendering walks the whole decoded structure, so a bottom past the outermost constructor
+surfaces as a caught failure rather than a pass.
 -}
 valueDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeIsTotal = do
@@ -407,9 +380,8 @@ valueDecodeIsTotal = do
     _ <- H.eval (resultRendering (fromJSON v :: Result a))
     H.success
 
-{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over arbitrary
-bytes: random (mostly non-JSON) bytes must yield a typed 'Left', never a crash. As above,
-the rendering forces the whole 'Either'.
+{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over arbitrary bytes:
+random, mostly non-JSON bytes must yield a typed 'Left', never a crash.
 -}
 bytesDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 bytesDecodeIsTotal = do
@@ -442,13 +414,9 @@ isSuccess = \case
     Success{} -> True
     Error{} -> False
 
-{- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value': the
-five scalar kinds (null\/bool\/number\/string) plus small arrays and objects of
-recursively-generated values. 'Gen.recursive' shrinks toward the scalar (non-recursive)
-cases, and the small ranges keep it terminating. It covers the JSON shapes a registry
-might send, and many it never would, without diverging. The object keys lean on a small
-alphabet that includes the real wire field names, so generated objects routinely land on
-a decoder's expected keys.
+{- | A depth- and breadth-__bounded__ arbitrary 'Value'. The small ranges keep it terminating
+and 'Gen.recursive' shrinks toward the scalar cases, so it covers the JSON shapes a registry
+might send and many it never would.
 -}
 genValue :: H.Gen Value
 genValue =
@@ -472,13 +440,9 @@ is cheap. 'fromInteger' lifts it into aeson's 'Number' 'Scientific'.
 genInteger :: H.Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
 
-{- | A small arbitrary JSON number. Most draws are modest integers, cheap to 'Show'. A
-deliberate minority are hostile to a strict 'Int' decode: fractional, or far outside
-'Int' range. Those come from a bounded coefficient and a wide base-10 exponent, so the
-magnitude is astronomical yet the value stays cheap to render. This reaches the
-fractional, huge, and overflowing shapes a plain integer generator never produces. The
-totality fuzz therefore drives the lenient numeric @dist@ decoders' graceful degradation,
-beyond the absence of a crash.
+{- | A small arbitrary JSON number. A deliberate minority are hostile to a strict 'Int'
+decode, fractional or far out of 'Int' range, built from a bounded coefficient and a wide
+exponent so the magnitude is astronomical yet cheap to render.
 -}
 genNumber :: H.Gen Scientific
 genNumber =
@@ -491,10 +455,9 @@ genNumber =
 genJsonText :: H.Gen Text
 genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
 
-{- | An object key drawn from a pool biased toward the real wire field names
-(@name@, @version@, @dist@, @tarball@, …). Generated objects then frequently satisfy
-a decoder's required\/optional keys. Without the bias almost every object would miss
-@.: \"name\"@ and the success arm would go unsampled.
+{- | An object key drawn from a pool biased toward the real wire field names. Without the
+bias almost every generated object would miss @.: \"name\"@ and the success arm would go
+unsampled.
 -}
 genKey :: H.Gen Key.Key
 genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
@@ -526,9 +489,8 @@ genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
         , "hasInstallScript"
         ]
 
-{- | Decode a committed fixture by file name, under @core\/test\/unit\/fixtures\/npm\/@,
-a path relative to the package root that Cabal runs tests from. A decode failure fails
-the example with the aeson error.
+{- | Decode a committed fixture by file name under @core\/test\/unit\/fixtures\/npm\/@, a path
+relative to the package root that Cabal runs tests from.
 -}
 decodeFixture :: forall a. (FromJSON a) => FilePath -> IO a
 decodeFixture name = do
@@ -537,15 +499,12 @@ decodeFixture name = do
         Right a -> pure a
         Left e -> fail ("failed to decode " <> name <> ": " <> e)
 
-{- | Assert that a JSON literal decodes to an expected value. Keeps the inline
-lenient-form cases to a single readable line.
--}
+-- | Assert that a JSON literal decodes to an expected value.
 decodesTo :: forall a. (FromJSON a, Eq a, Show a) => LByteString -> a -> Expectation
 decodesTo json expected = eitherDecode json `shouldBe` Right expected
 
-{- | A 'Dist' carrying only its required tarball, every advisory field at its
-absent\/empty default. This is the expected shape when a poisoned advisory field
-degrades. Record-update one selector for the cases that keep a good value.
+{- | A 'Dist' carrying only its required tarball, every advisory field at its absent\/empty
+default. This is the expected shape when a poisoned advisory field degrades.
 -}
 bareDist :: Text -> Dist
 bareDist tarball =

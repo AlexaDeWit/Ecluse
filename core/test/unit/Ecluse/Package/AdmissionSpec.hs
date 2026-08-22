@@ -148,9 +148,8 @@ spec = do
             case admission of
                 AdmissionAdmit artifact digests -> do
                     artFilename artifact `shouldBe` "thing-1.0.0.tgz"
-                    -- The carried digest set is the admitted artifact's own, so both
-                    -- consumers (mirror enqueue, worker tamper gate) act on exactly
-                    -- what the floor checked.
+                    -- The carried digest set is the admitted artifact's own, so the mirror enqueue
+                    -- and the worker tamper gate act on exactly what the floor checked.
                     toList digests `shouldBe` artHashes artifact
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
@@ -198,10 +197,9 @@ spec = do
 
     describe "the closed divergences, replayed (golden corpus)" $ do
         it "#738: a multi-component SRI is admitted at the floor AND verified by the worker" $ do
-            -- The split-brain: serve admitted on the first component while the worker
-            -- compared against the joined tail and never matched. Écluse served that
-            -- version from public forever and never mirrored it. Split into
-            -- components, both gates read the same digest.
+            -- Serve admitted on the first component while the worker compared against the joined
+            -- tail, so the version was served and never mirrored. Per-component hashes keep both
+            -- gates on the same digest.
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 details = detailsWith hashes

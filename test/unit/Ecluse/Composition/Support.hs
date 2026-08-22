@@ -32,9 +32,7 @@ import Ecluse.Test.Credential (noCredentialReporters)
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 
-{- | The resolved 'Limits' the composition root would pass in (the memory budget's
-fallback byte cap married to the pinned structural counts).
--}
+-- | The resolved 'Limits' the composition root would pass in.
 testLimits :: Limits
 testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}
 
@@ -51,9 +49,7 @@ staticEnvVars =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     ]
 
-{- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test that supplies its own
-is not shadowed by the base fixture's value.
--}
+-- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
 
@@ -71,16 +67,12 @@ overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
 expectEnv :: [(String, String)] -> IO AppConfig
 expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) (pure . configApp) . (`loadConfig` Nothing)
 
-{- | Build the credential providers from a resolved 'Config', failing the test on a
-boot error (the static-path examples expect a clean build).
--}
+-- | Build the credential providers from a resolved 'Config', failing the test on a boot error.
 expectProviders :: Config -> IO CredentialProviders
 expectProviders config =
     initCredentialProviders noCredentialReporters config >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
-{- | Build a 'Config' from an env + optional document, failing the test on a policy
-error (the composeBindings examples want a successfully-loaded config).
--}
+-- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
     either (\errs -> fail ("config load failed: " <> show errs)) pure (loadConfig env mDoc)

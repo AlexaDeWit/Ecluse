@@ -22,10 +22,7 @@ import Ecluse.Core.Server.Conditional (
     renderETag,
  )
 
-{- | Two distinct strong tags, built over distinct digests, standing in for two
-served documents. (The packument fingerprint that feeds 'mkStrongETag' in
-production has its own spec beside the pipeline.)
--}
+-- | Two distinct strong tags, built over distinct digests, standing in for two served documents.
 tagA, tagB :: ETag
 tagA = mkStrongETag (hash ("input-fingerprint-a" :: ByteString) :: Digest SHA256)
 tagB = mkStrongETag (hash ("input-fingerprint-b" :: ByteString) :: Digest SHA256)
@@ -76,9 +73,8 @@ spec = do
                 Modified _ -> expectationFailure "a match anywhere in the list is a 304"
 
         it "matches our ETag across two separate If-None-Match header lines" $ do
-            -- A client may legally repeat If-None-Match as distinct header lines
-            -- rather than one comma-joined value. The match must scan all the lines,
-            -- through the lookupAll/any path, rather than the first alone.
+            -- A client may legally repeat If-None-Match as distinct header lines rather than one
+            -- comma-joined value, so the match must scan every line.
             let etag = tagA
                 req =
                     [ (hIfNoneMatch, "\"deadbeef\"")

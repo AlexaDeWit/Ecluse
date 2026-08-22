@@ -46,20 +46,15 @@ shouldFail res = liftIO $ case npmExit res of
     ExitSuccess -> expectationFailure ("npm incorrectly succeeded!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)) >> pure res
     _ -> pure res
 
-{- | Bracket an isolated npm consumer project (see 'NpmProject'): a fixed consumer
-@package.json@, an __empty__ @.npmrc@, and the pinned isolated environment. It runs the
-action, then removes the project tree on every exit path. For a publish-capable project
-(a scoped name plus an authorising @.npmrc@), see 'withPublishProject'.
+{- | Bracket an isolated npm consumer project: a consumer @package.json@, an empty @.npmrc@, and
+the pinned isolated environment. For a publish-capable project, see 'withPublishProject'.
 -}
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
 withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 
-{- An isolated npm project with the given @package.json@ and @.npmrc@ contents. This is
-the shared body behind 'withNpmProject' (a consumer project, empty @.npmrc@) and
-'withPublishProject' (a publishable project, an authorising @.npmrc@). It creates the
-directories and the pinned, isolated environment: own cache, userconfig, prefix, and
-@HOME@. No developer global state leaks in, and the only registry is the proxy. It runs
-the action, then removes the tree on every exit path. -}
+{- The shared body behind 'withNpmProject' and 'withPublishProject'. It pins an isolated
+environment (own cache, userconfig, prefix, and @HOME@), so no developer global state leaks in and
+the only registry is the proxy. -}
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withProjectContents e2e packageJson npmrcContents use = do
     sfx <- uniqueSuffix
@@ -86,10 +81,9 @@ withProjectContents e2e packageJson npmrcContents use = do
                     , ("npm_config_progress", "false")
                     , -- Écluse is a supply-chain policy proxy, so no npm child it spawns may
                       -- execute an upstream package's lifecycle scripts, an arbitrary-code-
-                      -- execution surface. This project lives outside the repo tree, where the
-                      -- committed root @.npmrc@'s @ignore-scripts@ is unreachable. The harness
-                      -- therefore sets the guard in the child environment instead,
-                      -- unconditionally, on every npm call.
+                      -- execution surface. This project lives outside the repo tree, so the
+                      -- committed root @.npmrc@'s @ignore-scripts@ is unreachable and the harness
+                      -- sets the guard here instead, on every npm call.
                       ("npm_config_ignore_scripts", "true")
                     , ("HOME", projectDir)
                     ]
@@ -103,14 +97,10 @@ withProjectContents e2e packageJson npmrcContents use = do
         (\_ -> handleAny (const pass) (removePathForcibly projectDir))
         use
 
-{- | Bracket an isolated, __publishable__ npm project: a @package.json@ carrying the
-scoped name and version, plus an @.npmrc@ authorising the proxy registry with a bearer
-token. The npm CLI packs the project directory, so the project needs no prebuilt fixture.
-The token satisfies npm's client-side publish gate: without one npm refuses the publish
-with @ENEEDAUTH@ before it reaches the proxy. The relay then forwards that token. The
-publication target accepts the publish on its own terms, so the token's identity is
-immaterial here. The @.npmrc@ exercises the forward, and the integration tier asserts the
-forwarded-credential identity.
+{- | Bracket an isolated, __publishable__ npm project: a @package.json@ with the scoped name and
+version, plus an @.npmrc@ authorising the proxy registry with a bearer token. Without a token npm
+refuses the publish with @ENEEDAUTH@ before it reaches the proxy, and the token's identity is
+immaterial here.
 -}
 withPublishProject :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withPublishProject e2e name version =
@@ -131,26 +121,19 @@ runNpm proj args = do
             , npmStderr = decodeUtf8 (LBS.toStrict err)
             }
 
-{- | @npm install \<pkg\>@ in a project. It resolves through the packument and writes the
-lockfile (@package.json@ + @package-lock.json@) for a later 'npmCiIn'.
--}
+-- | @npm install \<pkg\>@ in a project. It writes the lockfile for a later 'npmCiIn'.
 npmInstallIn :: NpmProject -> Text -> IO NpmResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
 
-{- | @npm ci@ in a project: a deterministic install from the lockfile. It fetches each
-artifact from the lockfile's @resolved@ URL (the proxy's __private-first__ tarball path)
-and checks @integrity@. It never re-resolves through the packument, so once the worker
-mirrors a version, @npm ci@ never contacts the public upstream.
+{- | @npm ci@ in a project: a deterministic install from the lockfile's @resolved@ URLs with an
+@integrity@ check. It never re-resolves through the packument, so it never contacts the public
+upstream.
 -}
 npmCiIn :: NpmProject -> IO NpmResult
 npmCiIn proj = runNpm proj ["ci"]
 
-{- | @npm publish@ in a publishable project (see 'withPublishProject'). It packs the
-project directory and @PUT \/{pkg}@s the publish document to the proxy. The proxy gates
-it on the publish-scope allow-list before it relays it to the publication target. The
-exit code reflects what the proxy returned. Success means the proxy admitted the publish
-and the target accepted it. Non-zero means the anti-shadowing guard refused the name (a
-@403@).
+{- | @npm publish@ in a publishable project. A zero exit means the proxy admitted the publish and
+the target accepted it, and a non-zero means the anti-shadowing guard refused the name with a @403@.
 -}
 npmPublishIn :: NpmProject -> IO NpmResult
 npmPublishIn proj = runNpm proj ["publish"]
@@ -161,13 +144,8 @@ for the one-shot cases that only need the install's outcome.
 npmInstall :: E2E -> Text -> IO NpmResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 
-{- | Install an isolated project whose own @postinstall@ would create a sentinel file in
-the project root. Returns the install result and whether that sentinel appeared. The npm
-CLI runs a root package's lifecycle scripts on @npm install@ unless they are disabled.
-The harness disables them for every npm child it spawns. A faithful harness creates
-no sentinel: the returned 'Bool' is 'False' even on a successful install. This is the
-regression guard that script suppression holds. Drop the guard and the @postinstall@ runs,
-flipping the 'Bool' to 'True'.
+{- | Install a project whose own @postinstall@ would create a sentinel file, and report whether it
+appeared. The 'Bool' is 'False' on a faithful run, and flips to 'True' if script suppression breaks.
 -}
 installWithLifecycleProbe :: E2E -> IO (NpmResult, Bool)
 installWithLifecycleProbe e2e =
@@ -176,15 +154,13 @@ installWithLifecycleProbe e2e =
         ran <- doesFileExist (npDir proj </> lifecycleSentinel)
         pure (res, ran)
 
--- The file a lifecycle script would create. Its absence after an install proves no script
--- ran. The path is relative, so it lands in the project root: npm's working directory for
--- a root package's own lifecycle scripts.
+-- The file a lifecycle script would create. The path is relative, so it lands in the project root:
+-- npm's working directory for a root package's own lifecycle scripts.
 lifecycleSentinel :: FilePath
 lifecycleSentinel = "lifecycle-script-ran"
 
--- A minimal project whose own @postinstall@ would @touch@ 'lifecycleSentinel'. The npm
--- CLI runs a root package's lifecycle scripts on @npm install@ unless they are disabled.
--- The sentinel is therefore a faithful probe for suppressed script execution.
+-- The npm CLI runs a root package's lifecycle scripts on @npm install@ unless they are disabled,
+-- so this @postinstall@ is a faithful probe for suppressed script execution.
 lifecycleProbePackageJson :: Text
 lifecycleProbePackageJson =
     "{\"name\":\"e2e-lifecycle-probe\",\"version\":\"1.0.0\",\"private\":true,\"scripts\":{\"postinstall\":\"touch lifecycle-script-ran\"}}\n"
@@ -192,14 +168,11 @@ lifecycleProbePackageJson =
 consumerPackageJson :: Text
 consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
 
-{- | The extra proxy environment that turns the first-party publish path __on__, layered
-over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@. Only the scenarios that ask
-for it see a publication target, so the base topology keeps the implicit publish→@405@
-default. The target is Verdaccio, the same registry the base topology reads as the private
-upstream (@mirror@). A published package is therefore readable back over the private leg.
-@ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW@ is the anti-shadowing allow-list, required once a target is
-set. The publish is __passthrough__: the relay forwards the client's own bearer (the
-project @.npmrc@\'s 'publishAuthToken'), so the harness configures no static target token.
+{- | The extra proxy environment that turns the first-party publish path __on__, layered over the
+base 'proxyEnv' through @ecExtraEnv@. The target is Verdaccio, the registry the base topology
+also reads as the private upstream, so a published package is readable back over the private
+leg. The publish is passthrough: the relay forwards the client's own bearer, so no static
+target token is set.
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
@@ -230,10 +203,9 @@ publishOutOfScopeName = "@rogue/e2e-shadow"
 publishVersion :: Text
 publishVersion = "1.0.0"
 
--- The bearer token a publishable project's @.npmrc@ carries. Its only job is to satisfy
--- npm's client-side publish gate (no token ⇒ @ENEEDAUTH@) and exercise the forward. The
--- publication target accepts the publish regardless, so the identity is immaterial at
--- this tier. The integration tier covers the forwarded-credential identity.
+-- The bearer token a publishable project's @.npmrc@ carries. It satisfies npm's client-side publish
+-- gate (no token means @ENEEDAUTH@), and the target accepts regardless, so the identity is
+-- immaterial at this tier.
 publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 
@@ -243,9 +215,8 @@ publishPackageJson :: Text -> Text -> Text
 publishPackageJson name version =
     "{\"name\":\"" <> name <> "\",\"version\":\"" <> version <> "\"}\n"
 
--- The npm @.npmrc@ line authorising a registry with a bearer token. The npm CLI keys auth
--- by the registry URL's host and path, with the scheme stripped and a leading @\/\/@. A
--- publish to the proxy registry therefore carries this token.
+-- The npm CLI keys auth by the registry URL's host and path, with the scheme stripped and a leading
+-- @\/\/@.
 npmAuthLine :: Text -> Text -> Text
 npmAuthLine registry token =
     "//" <> withoutScheme registry <> ":_authToken=" <> token <> "\n"
