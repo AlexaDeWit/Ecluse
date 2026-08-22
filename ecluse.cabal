@@ -17,8 +17,8 @@ build-type:    Simple
 
 -- Test fixtures the pure unit suite reads at run time. The version-ordering file is
 -- reference-oracle output. Regenerate it with `task gen-version-fixtures`. The
--- `npm/*.json` bodies are captures derived from
--- docs/research/reverse-engineering/npm.md, and Ecluse.Registry.Npm.Wire decodes them.
+-- `npm/*.json` bodies are live captures of registry.npmjs.org, and
+-- Ecluse.Registry.Npm.Wire decodes them.
 -- `express.full.json` is a real, untrimmed capture of a large trusted package's full
 -- packument (registry.npmjs.org/express). A test can then prove that the
 -- response-bound defaults do not false-positive on a legitimate large package.

@@ -52,8 +52,7 @@ It rebuilds @dist-tags@ and @time@ from the plan's reconciled decisions: the tim
 normalised ISO-8601, keeping the base document's @created@\/@modified@ bookkeeping.
 Every other top-level key comes from the base document. A version not in the plan's
 survivors is never taken, so a client's resolver only ever sees admitted versions.
-Presence in the packument /is/ availability (see
-@docs\/research\/reverse-engineering\/npm.md@ §8).
+Presence in the packument /is/ availability.
 
 The fused single pass is deliberate. Restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times

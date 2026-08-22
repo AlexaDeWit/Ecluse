@@ -31,8 +31,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Registry.Npm.Wire
 
 {- | Decoding tests for the npm wire types, pure and offline over the fixtures in
-@core\/test\/unit\/fixtures\/npm\/@, derived from the captures in
-@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §3 errors).
+@core\/test\/unit\/fixtures\/npm\/@, live captures of @registry.npmjs.org@.
 They pin faithful capture of the rule-decisive fields and lenient string-or-object handling.
 -}
 spec :: Spec
