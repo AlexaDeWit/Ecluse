@@ -9,7 +9,9 @@ server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
-  # URLs against it. Required as soon as any mount is active.
+  # URLs against it. http(s) with a dialable authority, and http stays legal for
+  # loopback. Required as soon as any mount is active, else the boot refuses
+  # (PublicUrlRequired).
   # publicUrl: https://registry.example.com
   # Set via ECLUSE_SERVER__AUTH_TOKEN (a secret): clients must then present it.
   # authToken:
@@ -128,11 +130,14 @@ advisories:
 #   privateConnectionsPerHost: 256
 
 observability:
+  # json: one JSON object per line, for log collectors. console: human-readable.
   logFormat: json
   # The lowest severity Écluse logs: debug, info, warn, or error. Debug carries the
   # per-decision diagnostics, such as mirror probes and artifact fetches, and is
   # verbose under load.
   logLevel: info
+  # The OpenTelemetry master switch, on or off. Off, Écluse emits no telemetry. Logs
+  # go to stdout either way.
   telemetry: "off"
 
 mounts:
@@ -155,8 +160,9 @@ mounts:
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
     # mirrorTargetToken:
-    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200. Unset, Écluse
-    # sends no duration and CodeArtifact applies its own default.
+    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200. Unset,
+    # CodeArtifact defaults it to the caller's role-credential expiry. The refresh
+    # policy adapts to the minted token's actual expiry, so this is a preference.
     # mirrorCodeArtifactTokenDuration: 3600
     # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
     # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
