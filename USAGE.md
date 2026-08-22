@@ -313,11 +313,12 @@ Secrets never live in the config document. Client and registry tokens are always
 CodeArtifact mirror target needs none: Écluse mints its short-lived write token from the
 container's ambient AWS credentials. A registry URL never carries a token either. Écluse refuses an
 endpoint written with userinfo (`https://user:token@host/`), a query string, or a fragment at boot,
-and the error names the key. The same refusal covers `server.publicUrl` and
-`advisories.osvExportBaseUrl`. That is why the `config:` boot echo and `ecluse check-config` print
-each endpoint in full. A **mirrored** mount holds a mirror-target **write** credential. A
-serve-only mount never writes and holds none. What Écluse does with a client's own token is under
-[Connecting your clients](#connecting-your-clients). The credential model is in
+and the error names the key. The same refusal covers `server.publicUrl`,
+`advisories.osvExportBaseUrl`, and `queue.url`. That is why the `config:` boot echo and
+`ecluse check-config` print each endpoint in full. A **mirrored** mount holds a mirror-target
+**write** credential. A serve-only mount never writes and holds none. What Écluse does with a
+client's own token is under [Connecting your clients](#connecting-your-clients).
+The credential model is in
 [Credential flow and authority](docs/architecture/registry-model.md#credential-flow-and-authority) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 

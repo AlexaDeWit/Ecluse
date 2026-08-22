@@ -19,6 +19,7 @@ import Ecluse.Config (
     EgressSettings (..),
     IntegritySettings (..),
     ObservabilitySettings (..),
+    QueueSettings (..),
     RuntimeSettings (..),
     ServerSettings (..),
     loadConfig,
@@ -396,8 +397,8 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
 
     describe "non-registry configured URLs (the same boot echo prints these keys)" $ do
-        -- server.publicUrl and advisories.osvExportBaseUrl are not registry endpoints, so the
-        -- mount-side refusal above never sees them. Each carries the refusal under its own key.
+        -- server.publicUrl, advisories.osvExportBaseUrl, and queue.url are not registry endpoints,
+        -- so the mount-side refusal above never sees them. Each carries the refusal under its own key.
         it "rejects server.publicUrl carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://deploy:hunter2@registry.example.test")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry userinfo"
@@ -442,6 +443,45 @@ spec = describe "decodeDocument" $ do
                 Right doc ->
                     unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
                         `shouldBe` "http://localhost:8080/osv"
+
+        -- queue.url goes to a cloud SDK, so no scheme or authority check in the parser
+        -- quotes it. The unrecognised-shape boot error and the check-config queue line
+        -- print it whole, and both run after a successful load.
+        it "rejects queue.url carrying userinfo, naming the key and not the credential" $ do
+            let outcome = loadConfig [("ECLUSE_QUEUE__URL", "https://deploy:hunter2@sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "queue.url must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+
+        it "names the key and the requirement in a queue.url refusal, never the value" $ do
+            let outcome = loadConfig [] (Just "{\"queue\":{\"url\":\"https://deploy:hunter2@queue.example.test/q\"}}")
+            outcome `shouldSatisfy` decodeErrorMentions "queue.url must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+            outcome `shouldSatisfy` (not . decodeErrorMentions "queue.example.test")
+
+        it "rejects queue.url carrying a query string, naming the key" $
+            loadConfig [("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror?token=abc")] Nothing
+                `shouldSatisfy` decodeErrorMentions "queue.url must not carry a query string"
+
+        it "rejects queue.url carrying a fragment, naming the key" $
+            loadConfig [] (Just "{\"queue\":{\"url\":\"https://sqs.us-east-1.amazonaws.com/123456789012/mirror#frag\"}}")
+                `shouldSatisfy` decodeErrorMentions "queue.url must not carry a fragment"
+
+        it "accepts a plain queue.url through both layers" $ do
+            case loadConfig [("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc ->
+                    fmap unUrl (qsUrl (cfgQueue (configApp doc)))
+                        `shouldBe` Just "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
+            case loadConfig [] (Just "{\"queue\":{\"url\":\"projects/acme/topics/mirror\"}}") of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc ->
+                    fmap unUrl (qsUrl (cfgQueue (configApp doc)))
+                        `shouldBe` Just "projects/acme/topics/mirror"
+
+        it "leaves queue.url unset, which is the in-memory rollover" $
+            case loadConfig [] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> qsUrl (cfgQueue (configApp doc)) `shouldBe` Nothing
 
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do

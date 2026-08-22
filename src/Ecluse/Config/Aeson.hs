@@ -126,7 +126,7 @@ queueParser :: KeyMap.KeyMap Value -> Parser QueueSettings
 queueParser o = do
     rejectUnknownKeys "queue" ["url", "memoryMaxDepth", "maxReceiveCount"] o
     QueueSettings
-        <$> (o .:? "url" >>= traverse parseUrl)
+        <$> (o .:? "url" >>= traverse (parseUrl "queue.url"))
         <*> (o .:? "memoryMaxDepth" >>= traverse (parsePositiveInt "queue.memoryMaxDepth"))
         <*> (o .: "maxReceiveCount" >>= parsePositiveInt "queue.maxReceiveCount")
 
