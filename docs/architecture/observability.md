@@ -68,9 +68,11 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   default. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
   own identifiers stay on the sync log line, never a label.
 - `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). It reads the seconds since
-  that ecosystem last swapped in an advisory database, and the sync task records it on every
-  attempt. It climbs while swaps stop, so one threshold alarms on a stale database and on a sync
-  that stopped. Before the first swap it measures from the sync task's own start.
+  that ecosystem's serving advisory database was installed. Écluse measures it at each collection,
+  from the slot that holds the database, so it climbs on its own whether or not a sync task is
+  alive. One threshold therefore alarms on a stale database, on a sync that stopped swapping, and
+  on a sync task that is crash-looping. Before the first swap it reads from the slot's creation,
+  which is process start.
 - `ecluse.advisory.compile.accepted` and `ecluse.advisory.compile.dropped` (both counters) carry
   (ecosystem), and the dropped counter adds (cause), one of `oversize` or `malformed`. Pilot records
   both once per compile pass, so a backend computes the drop rate from the pair. The dropped entry's

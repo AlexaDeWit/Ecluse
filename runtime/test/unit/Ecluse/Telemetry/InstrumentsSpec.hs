@@ -4,6 +4,9 @@
 
 module Ecluse.Telemetry.InstrumentsSpec (spec) where
 
+import GHC.Clock (getMonotonicTime)
+import OpenTelemetry.Attributes (Attributes)
+import OpenTelemetry.Metric.Core (ObservableResult (ObservableResult))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -17,12 +20,14 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
+    Label (LEcosystem),
     MirrorResult (Failed, Published),
     Provider (CodeArtifact, GcpArtifactRegistry, Static),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
     StatusClass (Status2xx, Status5xx),
     Tier (Effectful, Structural),
     Upstream (Private, Public),
+    metricAttributes,
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
@@ -32,7 +37,6 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordAdvisoryCompileAccepted,
     recordAdvisoryCompileDropped,
     recordAdvisoryCompileRun,
-    recordAdvisoryDatabaseAge,
     recordAdvisorySyncAttempt,
     recordAdvisorySyncDuration,
     recordBreakerState,
@@ -50,6 +54,8 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordServeDecision,
     recordUpstreamFetch,
     recordUpstreamFetchError,
+    registerAdvisoryDatabaseAge,
+    reportAdvisoryDatabaseAge,
     timedSeconds,
  )
 
@@ -94,12 +100,31 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
             [AdvisorySwapped, AdvisoryUnchanged, AdvisoryNonePublished, AdvisoryFetchFailed, AdvisoryRefused]
         recordAdvisorySyncDuration m Npm AdvisorySwapped 1.5
         recordAdvisorySyncDuration m PyPI AdvisoryFetchFailed 0
-        recordAdvisoryDatabaseAge m Npm 0
-        recordAdvisoryDatabaseAge m PyPI 86400
         recordAdvisoryCompileAccepted m Npm 12000
         traverse_ (\cause -> recordAdvisoryCompileDropped m Npm cause 3) [DropOversize, DropMalformed]
         traverse_ (recordAdvisoryCompileRun m Npm) [CompileCompleted, CompileAborted]
         pure () :: Expectation
+
+    it "registers the advisory-age callback against the inert instrument without throwing" $ do
+        m <- newMetrics telemetryDisabled
+        stamp <- getMonotonicTime
+        registerAdvisoryDatabaseAge m Npm (pure stamp)
+        registerAdvisoryDatabaseAge m PyPI (pure stamp)
+        pure () :: Expectation
+
+    it "reports the advisory database's age as whole seconds since its generation was installed" $ do
+        reported <- newIORef []
+        now <- getMonotonicTime
+        -- An install stamp an hour and a half-second in the past. The sub-second gap between
+        -- this reading and the callback's own floors away, so the answer is exactly 3600.
+        reportAdvisoryDatabaseAge Npm (pure (now - 3600.5)) (capture reported)
+        readIORef reported `shouldReturn` [(3600, metricAttributes [LEcosystem Npm])]
+
+    it "reports zero rather than a negative age for a stamp that is not in the past" $ do
+        reported <- newIORef []
+        now <- getMonotonicTime
+        reportAdvisoryDatabaseAge PyPI (pure (now + 60)) (capture reported)
+        readIORef reported `shouldReturn` [(0, metricAttributes [LEcosystem PyPI])]
 
     it "binds the compile port to one ecosystem, and stays total for a name outside the closed enum" $ do
         m <- newMetrics telemetryDisabled
@@ -115,3 +140,9 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         (value, seconds) <- timedSeconds (pure (42 :: Int))
         value `shouldBe` 42
         seconds `shouldSatisfy` (>= 0)
+
+{- | A stand-in for the SDK's collection sink: it keeps every value the callback observes,
+paired with the attributes it observed them under.
+-}
+capture :: IORef [(Int64, Attributes)] -> ObservableResult Int64
+capture reported = ObservableResult (\value attrs -> modifyIORef' reported (<> [(value, attrs)]))

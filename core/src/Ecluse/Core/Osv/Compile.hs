@@ -90,9 +90,8 @@ compileOsvToSqlite metrics mTracerProvider outDir ecosystem urlStr = do
 
     pure dbFile
 
-{- The verdict once the stream completes. The stream drops a poisoned advisory rather than
-halting. A systemic drop rate must not ship as a fresh-looking artifact that silently omits
-advisories, so this abandons the run before 'writeMeta' finalises it. -}
+-- A systemic drop rate must not ship as a fresh-looking artifact that silently omits
+-- advisories, so this abandons the run before 'writeMeta' finalises it.
 concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> Text -> String -> IngestStats -> m ()
 concludeCompile metrics mSpan conn ecosystem urlStr stats = do
     forM_ mSpan $ \sp -> do

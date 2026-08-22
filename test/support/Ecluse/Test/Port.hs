@@ -27,7 +27,6 @@ module Ecluse.Test.Port (
     -- * Advisory sync ports
     noopAdvisorySyncMetricsPort,
     recordingAdvisorySyncMetricsPort,
-    RecordedSync (..),
     passthroughAdvisorySyncTracingPort,
     recordingAdvisorySyncTracingPort,
 
@@ -139,30 +138,26 @@ noopAdvisorySyncMetricsPort =
     AdvisorySyncMetricsPort
         { asmpSyncAttempt = \_ _ -> pass
         , asmpSyncDuration = \_ _ _ -> pass
-        , asmpDatabaseAge = \_ _ -> pass
         }
 
--- | What one sync run recorded through 'recordingAdvisorySyncMetricsPort', each list in record order.
-data RecordedSync = RecordedSync
-    { rsAttempts :: [(Ecosystem, AdvisorySyncResult)]
-    , rsDurations :: [(Ecosystem, AdvisorySyncResult, Double)]
-    , rsAges :: [(Ecosystem, Int)]
-    }
-    deriving stock (Eq, Show)
-
-{- | An 'AdvisorySyncMetricsPort' that captures every attempt, latency sample, and age sample it
-receives, with one reader for the lot.
+{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it receives,
+in record order, with a reader for each.
 -}
-recordingAdvisorySyncMetricsPort :: IO (AdvisorySyncMetricsPort, IO RecordedSync)
+recordingAdvisorySyncMetricsPort ::
+    IO
+        ( AdvisorySyncMetricsPort
+        , IO [(Ecosystem, AdvisorySyncResult)]
+        , IO [(Ecosystem, AdvisorySyncResult, Double)]
+        )
 recordingAdvisorySyncMetricsPort = do
-    seen <- newTVarIO (RecordedSync [] [] [])
+    attempts <- newTVarIO []
+    durations <- newTVarIO []
     let port =
             AdvisorySyncMetricsPort
-                { asmpSyncAttempt = \eco result -> bump seen (\r -> r{rsAttempts = rsAttempts r <> [(eco, result)]})
-                , asmpSyncDuration = \eco result seconds -> bump seen (\r -> r{rsDurations = rsDurations r <> [(eco, result, seconds)]})
-                , asmpDatabaseAge = \eco seconds -> bump seen (\r -> r{rsAges = rsAges r <> [(eco, seconds)]})
+                { asmpSyncAttempt = \eco result -> atomically (modifyTVar' attempts (<> [(eco, result)]))
+                , asmpSyncDuration = \eco result seconds -> atomically (modifyTVar' durations (<> [(eco, result, seconds)]))
                 }
-    pure (port, readTVarIO seen)
+    pure (port, readTVarIO attempts, readTVarIO durations)
 
 {- | An 'AdvisoryCompileMetricsPort' that discards every measurement, for a spec that compiles an
 artifact but asserts nothing about metrics.

@@ -18,10 +18,13 @@ double.
 There are four ports. 'MetricsPort' serves the serve path: serve decisions, the rule
 gate, the data-plane upstream fetch, the metadata cache, and mirror enqueue.
 'WorkerMetricsPort' serves the mirror worker: jobs processed, publish latency.
-'AdvisorySyncMetricsPort' serves the advisory sync task: attempts, their latency, and the
-served database's age. 'AdvisoryCompileMetricsPort' serves the Pilot compile: the entries
-one pass accepted or dropped, and how the pass concluded. The credential signals stay in
-the application instrument set. Each port carries exactly the signals its consumer emits.
+'AdvisorySyncMetricsPort' serves the advisory sync task: attempts and their latency.
+'AdvisoryCompileMetricsPort' serves the Pilot compile: the entries one pass accepted or
+dropped, and how the pass concluded. The credential signals stay in the application
+instrument set. Each port carries exactly the signals its consumer emits.
+
+The advisory database's age is not here. It reads from the slot at each collection
+(@Ecluse.Runtime.Telemetry.Instruments@), so no consumer has to push it.
 -}
 module Ecluse.Core.Telemetry.Record (
     -- * The serve-path recording port
@@ -158,11 +161,6 @@ data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
     , asmpSyncDuration :: Ecosystem -> AdvisorySyncResult -> Double -> IO ()
     {- ^ Record one advisory sync attempt's latency in seconds
     (@ecluse.advisory.sync.duration@) by ecosystem and result.
-    -}
-    , asmpDatabaseAge :: Ecosystem -> Int -> IO ()
-    {- ^ Record the seconds since this ecosystem's advisory database was last swapped in
-    (@ecluse.advisory.database.age.seconds@). The sync task records it on every attempt, so
-    the value climbs while swaps stop and an operator alarms on one threshold.
     -}
     }
 
