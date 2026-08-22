@@ -26,15 +26,15 @@ A PR flips **ready for review** only when both hold:
    critical findings.
 2. **CI `gate` green.** Every job the terminal `gate` needs is green on the PR.
 
-**The flip is the hand-off.** Marking a PR ready for review is how the team lead hands work to the
-architect; nothing else is. Verify that the commit the reviewer passed is the one the gate ran on
-and that `CI gate` and every context the ruleset requires (`codecov/project`) pass, then
-`gh pr ready`, then report. A PR still in draft is never reported to the architect as done, green,
-or reviewed. `codecov/patch` is non-gating and does not hold a flip.
-
 A green gate is necessary but not sufficient. It verifies build and test; it does not judge
 requirements, quality, or security, which the evaluation does. Neither substitutes for the other. Do
 not flip a PR ready on a green gate alone. This is the failure the procedure exists to prevent.
+
+**The flip is the hand-off.** Marking a PR ready for review is how the team lead hands work to the
+architect; nothing else is. Verify that the commit the reviewer passed is the one the gate ran on
+and that every context the ruleset requires (today `CI gate` and `codecov/project`) passes, then
+`gh pr ready`, then report. A draft is never reported to the architect as done, green, or
+reviewed. `codecov/patch` is informational and does not hold a flip.
 
 ## Per-PR loop
 
@@ -125,8 +125,7 @@ Detail: [Guardrails](../../orchestration-strategy.md#guardrails-always-on) and [
   harness task list where available, otherwise a short-lived `.agents/design-queue.md`), then
   ask the first question alone: the decision, two or three options, a recommendation, and
   nothing the answer does not need. Record the ruling and act on it before asking the next.
-  Never stack several questions in one message; a wall of detail costs the architect more
-  than the serialised round-trips cost the lead.
+  Never stack several questions in one message.
 - **Reference work by PR or issue number**, never an internal task-tracker ID the architect cannot
   see.
 - After every merge, rebase the dependent worktrees onto the new base and re-run their gate. Between

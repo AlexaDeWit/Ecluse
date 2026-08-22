@@ -84,10 +84,10 @@ lead is confident handing it over. Marking it **ready for review** is the hand-o
 the architect to review and potentially merge, nothing less. Marking it is the act of handing off:
 the team lead verifies that the reviewer's head commit is the one the gate ran on and that every
 context the ruleset requires passes, flips it with `gh pr ready`, and only then reports it to the
-architect; a draft is never reported as done. A PR still building, mid-review,
-evaluation-blocked, gate-red, or that the team lead is simply unsure of stays a draft, so the
-architect never spends attention on, or merges, work that was not deliberately offered. This is the
-one definition of ready-for-review; later sections reference it.
+architect; a draft is never reported as done. A PR still building, mid-review, evaluation-blocked,
+gate-red, or that the team lead is simply unsure of stays a draft, so the architect never spends
+attention on, or merges, work that was not deliberately offered. This is the one definition of
+ready-for-review; later sections reference it.
 
 **Fix routing.** A reviewer's "changes required" routes one of three ways. A **background**
 implementer agent can be **resumed** (`SendMessage` to its agent ID) with its full build context
@@ -305,8 +305,9 @@ A PR reaches the architect only when **all** hold:
       critical findings. Mandatory for every PR; a green CI `gate` does not substitute.
 - [ ] Local verification passed before pushing: `task check` for single-slice work, `task format`
       plus a green CI run for batch work.
-- [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop, not a
-      number chased locally).
+- [ ] Foreseeable branches tested by intent; `codecov/project` (a context the ruleset requires)
+      green; `codecov/patch` (≥ 85% on changed lines) read as a prompt for a unit or integration
+      test, not as a gate.
 - [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11).
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
@@ -364,8 +365,7 @@ checklist. These are the standing rules it does not capture:
   `design-queue.md` under `.agents/`, spun up when decisions accumulate and removed once drained
   into `docs/` and issues), and each question is brought alone, lead-with-a-recommendation,
   resolved and recorded before the next is asked. This complements _escalate, don't guess_:
-  surface proactively, but serialised, so the architect answers one short question at a time
-  rather than a wall of detail.
+  surface proactively, but serialised.
 - **Reference work by identifiers the architect can see.** Name a piece of work by its PR or issue
   number (`#168`) or a short descriptive title, never an internal task-tracker ID the architect's
   view does not render.
