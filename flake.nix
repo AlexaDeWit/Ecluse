@@ -533,12 +533,19 @@
         # dependency freshness".
         opsInputs = [
           pkgs.skopeo
+          # regclient ships `regctl`, which assembles the two per-arch OCI
+          # layouts skopeo writes into the single multi-arch index a release
+          # publishes (scripts/push-multiarch.sh). Daemonless like skopeo, so
+          # the publish job needs no container engine.
+          pkgs.regclient
           pkgs.sbomnix
           pkgs.grype
           pkgs.vulnix
           pkgs.osv-scanner
           # jq: scripts/sarif-locations.sh post-processes both scanners' SARIF for
-          # GitHub code scanning. Pinned here rather than relying on the runner's.
+          # GitHub code scanning, and scripts/push-multiarch.sh reads the pushed
+          # index for its per-platform digests. Pinned here rather than relying on
+          # the runner's.
           pkgs.jq
           # reuse: per-file SPDX licence headers. `task lint-spdx` stamps and gates
           # through `reuse lint-file` and `reuse annotate`. A Python tool, justified
