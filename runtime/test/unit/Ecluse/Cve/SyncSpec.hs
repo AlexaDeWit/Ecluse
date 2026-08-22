@@ -5,6 +5,7 @@
 module Ecluse.Cve.SyncSpec (spec) where
 
 import Conduit (runConduit, yieldMany, (.|))
+import Control.Concurrent.STM (check)
 import Data.Conduit.Combinators qualified as C
 import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
 import System.Directory (doesFileExist)
@@ -14,6 +15,7 @@ import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (mask_, throwIO)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
@@ -85,22 +87,43 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
 
-{- | Poll a condition for about 5 seconds and fail the case naming what never happened.
-The sync task runs on its own schedule, so every assertion about it is a wait.
+-- | The gap between two reads of a polled condition, in microseconds.
+pollInterval :: Int
+pollInterval = 25_000
+
+{- | The ceiling on every wait in this spec, in microseconds. One artifact build under
+coverage has taken five seconds, so only a condition that never arrives reaches it.
+-}
+pollBudget :: Int
+pollBudget = 60_000_000
+
+{- | Poll a condition until the budget runs out, then fail the case naming what never
+happened. A recorder that another thread appends to is readable only this way.
 -}
 waitFor :: Text -> IO Bool -> IO ()
-waitFor what ready = go (200 :: Int)
+waitFor what ready = go (pollBudget `div` pollInterval)
   where
     go 0 = expectationFailure ("timed out waiting for " <> toString what)
     go n =
         ready >>= \case
             True -> pass
-            False -> threadDelay 25_000 >> go (n - 1)
+            False -> threadDelay pollInterval >> go (n - 1)
 
--- | Wait until the slot serves a generation probing True for the package.
-awaitServing :: CveSlot -> Text -> IO ()
-awaitServing slot pkg =
-    waitFor ("the slot to serve an artifact for " <> pkg) ((== Just True) <$> probesFor slot pkg)
+{- | Block until a counter that another thread advances reaches @wanted@, or fail the case
+naming what never happened once the budget runs out, so a dead task cannot hang the suite.
+-}
+awaitCount :: Text -> TVar Int -> Int -> IO ()
+awaitCount what counter wanted =
+    timeout pollBudget (atomically (readTVar counter >>= check . (>= wanted)))
+        >>= maybe (expectationFailure ("timed out waiting for " <> toString what)) (const pass)
+
+{- | A counter over the sync task's swap notifications, with the action to hand
+'runCveSync'. The task notifies after the swap publishes, so a counted swap already serves.
+-}
+newSwapCounter :: IO (TVar Int, IO ())
+newSwapCounter = do
+    swaps <- newTVarIO (0 :: Int)
+    pure (swaps, atomically (modifyTVar' swaps (+ 1)))
 
 -- | Run a Katip-constrained action against a scribe-less environment.
 runQuiet :: KatipContextT IO a -> IO a
@@ -306,7 +329,7 @@ spec = do
         it "the boot burst retries through typed fetch faults until the artifact lands" $
             withSyncEnv $ \_ slot envWith -> do
                 calls <- newIORef (0 :: Int)
-                notified <- newIORef (0 :: Int)
+                (swaps, onSwap) <- newSwapCounter
                 let flaky =
                         CveFetch
                             { fetchHeadEtag = do
@@ -318,30 +341,38 @@ spec = do
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
-                withAsync (runQuiet (runUnobserved (envWith flaky) schedule (modifyIORef' notified (+ 1)))) $ \_ -> do
-                    awaitServing slot "pkg-a"
-                    readIORef notified `shouldReturn` 1
+                withAsync (runQuiet (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
+                    awaitCount "the first swap to publish" swaps 1
+                    probesFor slot "pkg-a" `shouldReturn` Just True
+                    readTVarIO swaps `shouldReturn` 1
 
         it "the boot burst is allowed to fail; the poll recovers when the artifact appears" $
             withSyncEnv $ \_ slot envWith -> do
                 published <- newTVarIO False
+                attempted <- newTVarIO (0 :: Int)
+                (swaps, onSwap) <- newSwapCounter
                 let lateFetch =
                         CveFetch
-                            { fetchHeadEtag =
-                                readTVarIO published <&> \case
+                            { fetchHeadEtag = atomically $ do
+                                modifyTVar' attempted (+ 1)
+                                readTVar published <&> \case
                                     False -> Right Nothing
                                     True -> Right (Just (DbEtag "e1"))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
-                    -- A short burst that will exhaust before publication, then a
-                    -- fast poll that finds the artifact once it exists.
+                    -- A short burst that finds nothing published, then a fast poll
+                    -- that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
-                withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule pass)) $ \_ -> do
-                    -- Burst window passes with nothing published. Still serving nothing.
-                    threadDelay 100_000
+                    -- Mirrors bootBurstPolicy in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
+                    burstAttempts = length (schedBootBackoff schedule) + 1
+                withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
+                    -- Each attempt reads the flag in one transaction with the counter, so
+                    -- the burst spends its whole budget before the publication below.
+                    awaitCount "the boot burst to spend every attempt" attempted burstAttempts
                     probesFor slot "pkg-a" `shouldReturn` Nothing
                     atomically (writeTVar published True)
-                    awaitServing slot "pkg-a"
+                    awaitCount "the poll to swap the artifact in" swaps 1
+                    probesFor slot "pkg-a" `shouldReturn` Just True
 
         it "the boot burst concedes on a rejected artifact and its remembered ETag stops re-downloads" $
             withSyncEnv $ \_ slot envWith -> do
@@ -408,11 +439,12 @@ spec = do
 
         it "syncs identically over inert ports, so observation is never load-bearing" $
             withSyncEnv $ \_ slot envWith -> do
-                notified <- newIORef (0 :: Int)
+                (swaps, onSwap) <- newSwapCounter
                 let env = envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))
-                withAsync (runQuiet (runUnobserved env oneAttempt (modifyIORef' notified (+ 1)))) $ \_ -> do
-                    awaitServing slot "pkg-a"
-                    readIORef notified `shouldReturn` 1
+                withAsync (runQuiet (runUnobserved env oneAttempt onSwap)) $ \_ -> do
+                    awaitCount "the first swap to publish" swaps 1
+                    probesFor slot "pkg-a" `shouldReturn` Just True
+                    readTVarIO swaps `shouldReturn` 1
 
     describe "cappedAt" $ do
         it "passes a stream that ends exactly at the cap through unchanged" $ do
