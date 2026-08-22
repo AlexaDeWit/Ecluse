@@ -30,6 +30,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
     TransportFault (tfCause),
+    transportRetryable,
  )
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName, mkPackageName)
@@ -114,6 +115,9 @@ transportFaultSpec = describe "transport faults as values" $ do
     it "classifies connection failures and resets as TransportUnreachable" $ do
         causeOf (HttpExceptionRequest defaultRequest (ConnectionFailure (toException FakeInnerFault))) `shouldBe` TransportUnreachable
         causeOf (HttpExceptionRequest defaultRequest ConnectionClosed) `shouldBe` TransportUnreachable
+        -- A peer that hung up before the first response byte never reached a protocol
+        -- exchange, so it reads as unreachable rather than as a protocol fault.
+        causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportUnreachable
 
     it "classifies a wrapped TLS exception as TransportTls" $ do
         let handshake = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
@@ -122,8 +126,13 @@ transportFaultSpec = describe "transport faults as values" $ do
     it "classifies every other client fault as TransportProtocol" $ do
         -- The closed catch-all keeps the sum total over whatever http-client reports.
         causeOf (HttpExceptionRequest defaultRequest (InternalException (toException FakeInnerFault))) `shouldBe` TransportProtocol
-        causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportProtocol
         causeOf (InvalidUrlException "::" "bad") `shouldBe` TransportProtocol
+
+    it "retries a timeout and an unreachable peer, and nothing else" $ do
+        -- One table decides transience for every classifyTransport consumer, so no
+        -- caller re-derives it from the client library's constructors.
+        map transportRetryable [TransportTimeout, TransportUnreachable] `shouldBe` [True, True]
+        map transportRetryable [TransportTls, TransportProtocol] `shouldBe` [False, False]
 
     it "reports a refused connection as a FetchTransport value, never thrown" $ do
         -- Port 1 on the loopback is privileged and unbound, so the kernel refuses the
