@@ -17,7 +17,7 @@ measurement rather than a branch.
 Datadog is a first-class, tested target and what the maintainer runs. It is never required and
 never a lock-in: nothing in the core depends on it, and switching backends is a config change. The
 Datadog-specific pieces are optional add-ons on the OTLP baseline: the `dd` trace-correlation object
-on a log line, Agent-side sampling, and the [Operator recipe](../../USAGE.md#datadog-on-kubernetes).
+on a log line, Agent-side sampling.
 
 ## What gets traced
 

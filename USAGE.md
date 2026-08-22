@@ -6,7 +6,7 @@ _why_.
 
 > **Status: pre-launch.** Écluse is under active development. This manual is the configuration
 > and operational contract: the env vars, the config schema, the client setup, and the security
-> responsibilities. A **(planned)** mark means the feature is still landing.
+> responsibilities.
 
 ## Contents
 
@@ -24,18 +24,14 @@ _why_.
 - [Locking down CI egress (recommended)](#locking-down-ci-egress-recommended)
 - [Rule policy](#rule-policy)
 - [Operating Écluse](#operating-écluse)
-- [Planned controls](#planned-controls)
 - [Appendix: runtime-sizing arithmetic](#appendix-runtime-sizing-arithmetic)
 - [Learn more](#learn-more)
 
 ## What Écluse does
 
-Écluse sits between your build (developer machine or CI) and the upstream registry and applies a
-deny-by-default policy before any package reaches a build. It reads through a private upstream
-first, falls back to the gated public registry, and mirrors approved packages asynchronously. It's
-a policy gate, not a registry, and hosts nothing itself. npm is the first supported ecosystem. The
-engine is ecosystem-agnostic, and PyPI is planned. The design is in
-[`docs/architecture.md`](docs/architecture.md).
+Écluse sits between your build and the upstream registry and applies a deny-by-default policy
+before any package reaches a build. [`README.md`](README.md) and
+[`docs/architecture.md`](docs/architecture.md) describe the design.
 
 ## Deployment model
 
@@ -183,115 +179,26 @@ string, or a fragment at boot.
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
 > spells `cache.maxBytes`, and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` spells `mounts.npm.mirrorTarget`.
 
+The default configuration the binary embeds documents every key, its default, and its meaning. A
+commented key is inactive and names the computed default that applies while it stays unset:
+
+[config/default.yaml](config/default.yaml)
+
+`ECLUSE_CONFIG` (default `/etc/ecluse/config.yaml`) is the one process-level setting with no
+document key: the path of the [config document](#the-configuration-document). With it set, a
+missing file there is a boot error. At the default path an absent document is fine.
+
 The secret-typed variables also accept the container-secret file pattern. Set the `_FILE` form
 (`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE`,
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE`) to a file path. The file's contents, with
 trailing newlines stripped, become the value, so the token never enters the environment. Setting
 both a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud boot error.
 
-#### Process
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_CONFIG` | No | `/etc/ecluse/config.yaml` | Path of the [config document](#the-configuration-document). A process-level setting, not a document key. With it set, a missing file there is a **boot error**. At the default path an absent document is fine. |
-
-#### Server (`server.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_SERVER__PORT` | No | `8080` | TCP port, in `0..65535` (`0` binds an OS-assigned ephemeral port). The loader rejects a value out of range. |
-| `ECLUSE_SERVER__PUBLIC_URL` | When any mount is active |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`). Écluse rewrites each served `dist.tarball` to an **absolute** URL under it. Must be `http(s)` with a dialable authority (`http` stays legal for loopback). Required the moment a mount is active, else the boot refuses with `PublicUrlRequired`. |
-| `ECLUSE_SERVER__AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
-| `ECLUSE_SERVER__HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
-| `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and artifact streams before exit. Positive integer. |
-
-#### Mounts (`mounts.npm.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_MOUNTS__NPM__ENABLED` | No |  | The mount's on/off switch. Any declared `ECLUSE_MOUNTS__NPM__*` key activates the mount, so `ENABLED=true` exists for the mount that needs no other key: the serve-only pure public gate (`ENABLED=true` plus `ECLUSE_SERVER__PUBLIC_URL`). `ENABLED=false` switches off a mount whose other keys remain. |
-| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Depends | Mirrored mounts | URL of the private upstream (the read authority under the default passthrough strategy). Required on a **mirrored** mount, so the mirror reads back. Optional on a serve-only mount, where it still merges with the gated public set if present. |
-| `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No |  | Registry approved packages mirror to. **Declaring it makes the mount mirrored.** Absent, the mount is serve-only and never writes. May equal `PRIVATE_UPSTREAM`. **The write credential derives from this URL:** a CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) mints a short-lived token scoped to that domain. Any other host uses the static `MIRROR_TARGET_TOKEN`. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | Depends |  | Static write token for a **non-CodeArtifact** mirror target. Required when the target is not CodeArtifact (absent ⇒ boot error). Forbidden when it is one, since Écluse mints that token, and forbidden on a serve-only mount. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No |  | Lifetime in seconds of the minted CodeArtifact write token (CodeArtifact mirror target only). Accepts `900` to `43200` (15 minutes to 12 hours). The loader rejects a value outside that range. |
-| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No |  | Where Écluse writes a client `npm publish` (first-party packages). **Opt-in: unset ⇒ `PUT /{pkg}` is `405`.** May equal the private upstream. Protect this surface: see the warning below. |
-| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No |  | Static fallback for the publication target, forwarded only when a publishing client sends none. Default is **passthrough** (the publisher's own token). ⚠️ A static token with an open edge lets any unauthenticated client publish under it. See the warning below. |
-| `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` | Conditionally | If `PUBLICATION_TARGET` is set | Comma-separated allow-list of package names a client may publish, in the ecosystem's native form (npm scopes such as `@acme,@beta`). It is the anti-shadowing guard, refusing a publish outside the list before any upstream write. It limits names, not callers, and is not authentication. An empty list with a publication target set is a fail-loud boot error, as is a malformed entry (an empty segment from a stray comma, a wrong separator, or a character a scope cannot contain such as `/`, an interior `@`, or whitespace). A typo fails the load rather than seed a dead allow-list that refuses every publish. |
-| `ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY` | No | global `ECLUSE_INTEGRITY__MIN_TRUSTED` | Per-mount refinement of the trusted-integrity floor, so one legacy private registry's loosening (e.g. `sha1`) doesn't leak onto other mounts. |
-| `ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY` | No | global `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | Per-mount refinement of the cross-upstream divergence policy (`warn`/`fail-closed`). |
-
-#### Mirror queue (`queue.*`) and the ambient AWS environment
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination. **Its shape selects the backend.** A real SQS URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, taking the region from the host, validated in full (https, single-label region, 12-digit account, one queue segment, no port/query/fragment). A Pub/Sub resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot. **Unset with a mirroring mount ⇒ the bounded in-process queue**: non-durable, best-effort (single-node, trial, or air-gapped), warned loudly at boot. Never consulted serve-only. **On SQS, attach a redrive policy (a dead-letter queue) to the mirror queue.** The worker leaves undeleted a poison message it can never mirror, such as an over-cap artifact or an undecodable payload. The message then rides that policy to the DLQ for inspection instead of cycling. Écluse checks at boot whether the queue has one attached and **warns loudly when it does not**. Without one, `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` is the only terminus such a message has. |
-| `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Depth cap, computed by the memory plan (`50000` with no ceiling datapoint) unless set. Écluse drops an enqueue past the cap (drop-newest), and the package re-mirrors on next demand. Positive integer. |
-| `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` | No | `5` | How many deliveries one mirror job gets before the worker **discards it outright**. A discard writes an error log naming the job, and increments the `ecluse.mirror.jobs.processed` counter at `result="discarded"`. This is the terminus a queue with no dead-letter queue has. Without it a permanently-failing message cycles, re-fetching each time, until SQS's retention window drops it unseen. The count is a **floor, not a ceiling**. When the queue has a redrive policy attached, Écluse runs one delivery above that policy's own `maxReceiveCount`, so the dead-letter queue always captures first. You never need to tune this value to match it. Positive integer. A value of `1` still grants a first delivery, so the worker retires a job no earlier than its second. Irrelevant on the in-memory queue, which never redelivers. |
-| `AWS_REGION` | Depends | AWS backends only | Region for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (a real SQS URL carries its own region), and for the S3 advisory client. **Never consulted for CodeArtifact**, where the mint reads its region from the mirror-target host. Ambient AWS-SDK environment, read from the process env, **not** a document key: the loader rejects `awsRegion:` in the document as unknown. |
-| `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, scoped by `AWS_REGION`, signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Ambient, like `AWS_REGION`. |
-| `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can't silently redirect the queue. Ambient, like `AWS_REGION`. |
-
-#### Limits (`limits.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Computed by the memory plan, floored at 12 MiB so real packuments fit, unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before refusal. Computed by the memory plan (25 MiB with no ceiling datapoint) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES` | No | Memory budget | Largest **mirror-worker artifact** (tarball) buffered before the back-fill fetch aborts fail-closed. Computed by the memory plan's mirror-artifact tenant (512 MiB with no ceiling datapoint) so the transient publish envelope stays within the heap ceiling. An over-cap artifact is **dead-lettered**. On the durable SQS backend the worker leaves the message undeleted to ride the operator's redrive policy to the dead-letter queue, never silently dropped. The in-memory backend has no DLQ, so it drops the artifact with an error log and a failure metric. On a queue with no redrive policy, `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` retires the message instead. The memory plan may refuse a raised cap if the pod cannot hold the envelope. Positive integer. |
-| `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before refusal. Bounds per-version rule evaluation. Pinned policy. Positive integer. |
-| `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before refusal. Bounds CPU/stack. Pinned policy. Positive integer. |
-
-#### Cache (`cache.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_CACHE__TTL` | No | `60` | Seconds the shared packument cache keeps metadata. Non-negative integer. The loader refuses a fractional value rather than silently truncate it. |
-| `ECLUSE_CACHE__MAX_ENTRIES` | No | Memory budget | Maximum items the metadata cache holds. The memory plan computes it (`1024` with no ceiling datapoint) unless set. |
-| `ECLUSE_CACHE__MAX_BYTES` | No | Memory budget | The metadata cache's **one aggregate** resident-byte budget, split across its three stores (full-packument 60%, single-version 15%, assembled the remainder) so they sum exactly to it. Computed by the memory plan (256 MiB with no ceiling datapoint) unless set. On a pod too small for the tenants' floors the plan sheds this aggregate first, to zero if needed, a loud warning after which the proxy serves uncached. |
-
-#### Integrity (`integrity.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_INTEGRITY__MIN_PUBLIC` | No | `sha256` | Minimum integrity algorithm a **public** (untrusted) version's digest must meet: `sha256`, `sha384`, `sha512`, or `blake2b`. Écluse refuses a weaker or absent digest with `403`. Hard-floored at SHA-256: the loader rejects `sha1`, `md5`, and an unknown name at startup. |
-| `ECLUSE_INTEGRITY__MIN_TRUSTED` | No | `sha256` | Minimum integrity algorithm a **trusted** (private) version's digest must meet. Defaults to `sha256`, so Écluse drops a SHA-1-only or hashless private version like a public one. Unlike the public floor, this one is **loosenable below SHA-256** (`sha1`/`md5`) for a legacy private mirror. The loader rejects an unknown name. |
-| `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` | No | `warn` | What to do when a shared version's private and public copies contradict on a shared integrity algorithm. Either way the trusted copy wins the bytes, a `WARNING` logs, and `ecluse.registry.merge.divergence` increments. `warn` serves the trusted copy and relies on the alarm. `fail-closed` also withholds the contested version, dropping any `dist-tag`, including `latest`, that pointed at it. The loader rejects an unknown value. See [configuration.md](docs/architecture/configuration.md#cross-upstream-divergence-policy). |
-
-#### Egress (`egress.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` | No |  | Comma-separated CIDR ranges (e.g. `10.99.0.0/16,fd12::/8`) added to the fixed internal-address block, applied identically across every mount. Extends the block only, never narrows it. A malformed entry **fails closed at boot**. See [Securing network egress](#securing-network-egress-required). |
-
-#### Advisories (`advisories.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_ADVISORIES__COMPILE_INTERVAL` | Depends | Pilot only, `3600` | How often the Pilot singleton refreshes the advisory database from upstream. Positive integer. |
-| `ECLUSE_ADVISORIES__BUCKET` | No |  | The object-store bucket carrying the compiled advisory artifacts. Pilot uploads to it. The proxy polls it and shadow-swaps fresh artifacts into the rules engine. Unset, the proxy runs no advisory sync and `AllowIfRemediatesCve` abstains. |
-| `ECLUSE_ADVISORIES__POLL_INTERVAL` | No | `60` | Proxy only: how often each ecosystem's sync task polls the bucket (a cheap conditional `HEAD`). Deliberately more frequent than Pilot's `COMPILE_INTERVAL`. Positive integer. |
-| `ECLUSE_ADVISORIES__MAX_DATABASE_BYTES` | No | `536870912` | Proxy only: refuse to download an advisory database larger than this (default 512 MiB). The declared length fails fast and the streaming download enforces the cap. |
-| `ECLUSE_ADVISORIES__DATA_DIR` | No | `data/osv` | Directory for the OSV advisory databases: where Pilot compiles them and where the proxy lands its synced per-ecosystem artifacts. |
-| `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` | No | `https://osv-vulnerabilities.storage.googleapis.com` | Base URL of the per-ecosystem OSV advisory exports Pilot compiles from (`<base>/<ecosystem>/all.zip`). This is the host Pilot dials for raw advisories: allowlist it, not `osv.dev`. Override it if the upstream moves or you mirror the exports. |
-
-#### Runtime (`runtime.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_RUNTIME__CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the cgroup CPU quota (floored, at least 1, clamped to the visible processors). With no cgroup limit, the runtime's own detection stands. Give the container **whole cores** (see the [appendix](#appendix-runtime-sizing-arithmetic)). Positive integer. |
-| `ECLUSE_RUNTIME__MAX_HEAP_BYTES` | No | derived | Heap ceiling in bytes, enforced by the GHC runtime (a breach is a clean heap-overflow error, not a kernel OOM kill). Unset ⇒ derived from the cgroup memory limit less the nursery budget and 10% slack. With no cgroup limit, unbounded unless your `GHCRTS -M` says otherwise. Enforcing a ceiling re-executes the binary once, in place (same PID). Positive integer. |
-| `ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT` | No | computed | Process-wide cap on concurrent metadata materialisation. Unset, computed at boot as `max(8, 10 x cores)`. Over the cap, a request waits up to 1 second for a slot: a bounded waiting room, no queue-jumping. Only a request that finds the room full or waits out that budget gets `503` with `Retry-After: 1`. Trusted private tarball hits, health probes, and local routes stream outside the cap. Positive integer. A `503` **with** `Retry-After: 1` is intentional backpressure: exclude it from alerts (a real upstream failure returns `503` without that header). |
-| `ECLUSE_RUNTIME__PUBLIC_CONNECTIONS_PER_HOST` | No | computed | Maximum pooled (kept-for-reuse) connections per public upstream host. Unset, computed as `clamp(32, 1024, nofile / 8)`. Connections beyond the pool still open, but re-handshake TLS each time. Positive integer. |
-| `ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST` | No | computed | Maximum pooled connections to the private upstream host. Unset, computed as a quarter of the soft `RLIMIT_NOFILE`, clamped to `64..4096`. Sized for the trusted tarball hit, which streams outside `SERVE_MAX_IN_FLIGHT`. Positive integer. |
-
-#### Observability (`observability.*`)
-
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ECLUSE_OBSERVABILITY__LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
-| `ECLUSE_OBSERVABILITY__LOG_LEVEL` | No | `info` | Lowest severity kept: `debug`, `info`, `warn`, or `error`. Écluse drops anything below the floor before it renders the line. `debug` adds the per-decision diagnostics (mirror presence probes, artifact fetches) and is verbose under load. |
-| `ECLUSE_OBSERVABILITY__TELEMETRY` | No | `off` | OpenTelemetry master switch (`on`/`off`). With it `off`, Écluse emits no telemetry. See [Operating Écluse](#operating-écluse) for the export configuration. |
+Three ambient AWS-SDK variables are read from the process environment and are not document keys.
+`AWS_REGION` scopes SQS only under an `AWS_ENDPOINT_URL_SQS` override (a real SQS URL carries its
+own region) and the S3 advisory client, never CodeArtifact. `AWS_ENDPOINT_URL_SQS` overrides the
+SQS endpoint and forces the SQS interpretation of `queue.url`. `AWS_ENDPOINT_URL` overrides the S3
+advisory client only, never SQS.
 
 Écluse validates the configuration in full at startup and refuses to start on any problem. An
 unknown rule type, a bad URL, or an unresolved policy reference all stop the boot. A
@@ -299,15 +206,11 @@ misconfiguration is then a loud, immediate failure rather than a quietly mis-enf
 validation model is in
 [Validation: fail fast, reject the unknown](docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
 
-> ⚠️ **The first-party publish surface authorises _names_, not _callers_.** With publishing enabled
-> (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`), `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` limits which
-> package names a client may publish. It is not authentication. So a static
-> `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` (used only when a publisher forwards none) is
-> **fail-closed**. Set it without `ECLUSE_SERVER__AUTH_TOKEN` and Écluse refuses to start
-> (`PublishStaticCredentialNeedsEdge`), so "static publish credential + open edge" is
-> unrepresentable. `ECLUSE_SERVER__AUTH_TOKEN` is the edge Écluse can verify itself. An external
-> layer is good defence-in-depth but does not satisfy this. Pure passthrough (the default) needs
-> none of it. See
+> ⚠️ **The first-party publish surface authorises _names_, not _callers_.**
+> `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` limits which package names a client may publish. It is not
+> authentication. A static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without
+> `ECLUSE_SERVER__AUTH_TOKEN` refuses to boot (`PublishStaticCredentialNeedsEdge`), because that
+> pairing would let any unauthenticated client publish under it. See
 > [Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ### The configuration document
@@ -315,13 +218,8 @@ validation model is in
 A YAML file mounted at `/etc/ecluse/config.yaml`. Relocate it with `ECLUSE_CONFIG`, where a
 non-existent explicit path is a boot error. It carries the **rule policy** (see
 [Rule policy](#rule-policy)) and, for multi-mount deployments, the **mount map**. Single-mount
-deployments desugar from the env vars above and need no document. Schema and examples:
-[Configuration and authentication](docs/architecture/configuration.md#configuration). Deployments
-derive their initial policy from the [default baseline configuration](config/default.yaml).
-
-Each key resolves independently, strongest last: the built-in default, then this document, then the
-environment. The document therefore carries only what you change. An unknown key anywhere in it is a
-boot error, not a silent no-op.
+deployments need no document. The schema is the [embedded default](#environment-variables) above.
+The document carries only what you change, and an unknown key anywhere in it is a boot error.
 
 A worked document for a mirrored npm deployment. Reads resolve against a private CodeArtifact
 endpoint, approved public packages mirror into a separate CodeArtifact store, and the quarantine
@@ -351,8 +249,7 @@ rules:
     ageSeconds: 1209600
 ```
 
-That mount mirrors because it declares `mirrorTarget`, and for no other reason. There is no mode
-key to set. Delete that one line and the same mount is serve-only. It still merges the private
+Delete the `mirrorTarget` line and the same mount is serve-only. It still merges the private
 upstream with the gated public registry, it never writes, and `queue` then goes unread. Delete
 `privateUpstream` as well and the mount is the pure public gate of
 [the two-variable start](#the-two-variable-start-serve-only-gate) in document form. `enabled: true`
@@ -531,8 +428,8 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 [Rules engine](docs/architecture/rules-engine.md#evaluation-model).
 
 Independent of the rules, Écluse serves a **public** version only if it carries a digest meeting
-the public integrity floor. That floor is `ECLUSE_INTEGRITY__MIN_PUBLIC`, default `sha256`, in the
-table above. One **gotcha:** on a custom or off-spec public upstream, versions without a
+the public integrity floor. That floor is `ECLUSE_INTEGRITY__MIN_PUBLIC` (`integrity.minPublic`, default
+`sha256`). One **gotcha:** on a custom or off-spec public upstream, versions without a
 floor-meeting digest silently disappear and their tarballs `403`. To serve such a source, point it
 at the **private** upstream slot and loosen `ECLUSE_INTEGRITY__MIN_TRUSTED` below `sha256`. The
 mechanics are in [Integrity floors](docs/architecture/security.md#integrity-floors).
@@ -609,7 +506,7 @@ refuse traffic when the advisory database is briefly unavailable. The default `d
   a URL to its host and port. Neither token material nor a signed query string reaches a log field.
   The boot-time configuration echo prints each configured upstream and mirror URL as you gave it.
   That URL holds no token, because Écluse refuses a registry URL carrying a credential or a query
-  string at boot. The shape is in [observability → Logs](docs/architecture/observability.md#logs).
+  string at boot.
 - **Telemetry (opt-in).** Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then `DD_*` (`DD_SERVICE`,
   `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for Datadog or the standard `OTEL_*` for any other
   backend. `DD_*` wins where both are set, and the resolved identity stamps both traces and every
@@ -617,9 +514,7 @@ refuse traffic when the advisory database is briefly unavailable. The default `d
   running binary's own build version. The version tag is never blank. `DD_API_KEY`/`DD_SITE` have
   no effect, because Écluse exports only to a node-local collector or Agent, at
   `http://localhost:4318` by default or wherever `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT`
-  points. Authenticate a remote collector out of band with `OTEL_EXPORTER_OTLP_HEADERS`. Export is
-  async and batched, off the request path, so an
-  unreachable collector never slows a request.
+  points. Authenticate a remote collector out of band with `OTEL_EXPORTER_OTLP_HEADERS`.
 - **The memory plan.** Every byte-valued bound is a named tenant of the effective heap ceiling, not
   an independent multiplier. The tenants are the cache, response cap, publish aggregate, and
   in-memory queue. Each one boot-logs as a `memory plan:` line. A pod too small for the tenants'
@@ -659,73 +554,6 @@ refuse traffic when the advisory database is briefly unavailable. The default `d
   Mirroring is demand-driven, so the next client request for that artifact re-enqueues the job. It
   fails the same way until you fix the cause.
 
-### Datadog on Kubernetes
-
-Deploy via the Datadog Operator. A `DatadogAgent` custom resource (`datadoghq.com/v2alpha1`)
-manages the node Agent, and traces and metrics go OTLP over TCP to that Agent. The Agent collects
-the container's stdout once the CR turns log collection on.
-
-1. Enable the Agent's OTLP receiver in the CR. Sampling lives Agent-side (the probabilistic
-   sampler needs Agent v7.70+):
-
-   ```yaml
-   apiVersion: datadoghq.com/v2alpha1
-   kind: DatadogAgent
-   spec:
-     features:
-       otlp:
-         receiver:
-           protocols:
-             http: { enabled: true }   # :4318
-     override:
-       nodeAgent:
-         env:
-           - { name: DD_APM_PROBABILISTIC_SAMPLER_ENABLED, value: "true" }
-           - { name: DD_APM_PROBABILISTIC_SAMPLER_SAMPLING_PERCENTAGE, value: "20" }
-   ```
-
-2. Point Écluse at the node-local Agent with the Downward API, one OTLP endpoint for traces
-   and metrics both:
-
-   ```yaml
-   env:
-     - name: HOST_IP
-       valueFrom: { fieldRef: { fieldPath: status.hostIP } }
-     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-       value: "http://$(HOST_IP):4318"
-     - name: OTEL_EXPORTER_OTLP_PROTOCOL
-       value: "http/protobuf"
-   ```
-
-3. Turn on container log collection in the same CR. It is off by default, so without this
-   step the JSONL stream never reaches Datadog:
-
-   ```yaml
-   spec:
-     features:
-       logCollection:
-         enabled: true
-         containerCollectAll: true   # else give the Écluse pod an Autodiscovery log config
-   ```
-
-   Datadog needs no custom log pipeline. Its JSON preprocessing reads `timestamp`,
-   `status`, `message`, and `service` straight off each line, and correlates a line to its
-   trace through `dd.trace_id`.
-
-## Planned controls
-
-The controls below are still landing, listed here so the configuration surface is known.
-
-- **GCP backends** (**planned**): the Pub/Sub `MirrorQueue` and ADC credential leaf. The AWS
-  equivalents are built and wired: the SQS `MirrorQueue`, the CodeArtifact credential leaf, the
-  mirror worker, and the composition root.
-- **Per-mount credential strategies and trusted-edge identity** (**planned**): today reads are
-  passthrough, forwarding the caller's credential, and the edge is open or static-token. The
-  target model (a `service` read strategy, a trusted-edge identity mode) is in
-  [security posture](docs/architecture/security.md#a-static-publish-credential-is-fail-closed).
-
-The full deployment runbook ships with the launch.
-
 ## Appendix: runtime-sizing arithmetic
 
 **Give Écluse whole cores.** A fractional CPU limit, say 3.5, has no good option. Claiming 4
@@ -756,7 +584,7 @@ The internal design, for when you need the _why_:
 
 - [Architecture overview](docs/architecture.md)
 - [Configuration and authentication](docs/architecture/configuration.md)
-- [Security invariants and network egress](docs/architecture/security.md)
+- [Security posture](docs/architecture/security.md)
 - [Threat model](https://ecluse-proxy.com/threat-model.html), the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting and URL rewriting](docs/architecture/web-layer.md#web-layer)
