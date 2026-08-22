@@ -95,15 +95,15 @@ spec = describe "resolveMemoryPlan" $ do
             mpMirrorArtifactTenant (planFor NoQueueTenant) `shouldBe` Nothing
 
         it "charges the transient envelope, not just the tarball (at least the ~3.7x peak)" $
-            -- #846: the buffered tarball, its base64 text, and the serialised publish
-            -- document coexist at ~3.7x before collection; the tenant must charge at
-            -- least that (the combined invariant multiplies the cap by this), never the
-            -- bare cap, so the plan does not under-provision the peak.
+            -- The buffered tarball, its base64 text, and the serialised publish
+            -- document coexist at ~3.7x before collection. The tenant must charge at
+            -- least that, never the bare cap, so the plan does not under-provision the
+            -- peak. The combined invariant multiplies the cap by this.
             mirrorArtifactEnvelopeMultiplier `shouldSatisfy` (>= 4)
 
         it "sizes the worker cap from the heap share, below the 512 MiB constant on a modest pod" $ do
-            -- The pre-fix hard-coded 512 MiB fetch cap is gone: the cap is now a
-            -- plan-derived share of the heap, and a 4 GiB pod computes a far smaller one.
+            -- The cap is a plan-derived share of the heap, not a hard-coded 512 MiB,
+            -- so a 4 GiB pod computes a far smaller one.
             let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (4 * gib))) MemoryQueueTenant True
             (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 34359738
             (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldSatisfy` maybe False (< 512 * mib)
@@ -116,8 +116,8 @@ spec = describe "resolveMemoryPlan" $ do
             (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 0
 
         it "refuses an explicit maxArtifactBytes that alone breaks the ceiling" $ do
-            -- A 2 GiB explicit artifact cap charges an 8 GiB envelope on a 2 GiB pod; the
-            -- override-free plan fits, so the pin is the named cause (parallels #845).
+            -- A 2 GiB explicit artifact cap charges an 8 GiB envelope on a 2 GiB pod.
+            -- The override-free plan fits, so the pin is the named cause.
             let limits' = bareLimits{limMaxArtifactBytes = Just (2 * gib)}
                 (plan, _) = resolve bareCache limits' bareQueue Nothing (planWith (Just (2 * gib))) MemoryQueueTenant False
             mpOverrideViolations plan `shouldSatisfy` (not . null)
@@ -134,7 +134,7 @@ spec = describe "resolveMemoryPlan" $ do
             mpCacheAggregateBytes plan `shouldSatisfy` (< 67108864)
 
         it "reaches the irreducible minimum on a tiny pod and boots anyway" $ do
-            -- 64 MiB cannot hold even one materialisation envelope; the plan says
+            -- 64 MiB cannot hold even one materialisation envelope. The plan says
             -- so at its loudest and boots regardless.
             let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) NoQueueTenant False
             mpOverrideViolations plan `shouldBe` []
@@ -144,7 +144,7 @@ spec = describe "resolveMemoryPlan" $ do
 
         it "sheds the capability count when the nursery is the pressure" $ do
             -- 8 capabilities x 64 MiB allocation area = a 512 MiB nursery over a
-            -- 512 MiB ceiling: the capability count itself is the tenant to shed.
+            -- 512 MiB ceiling. The capability count itself is the tenant to shed.
             let runtime = (planWith (Just (512 * mib))){erpCapabilities = enforcedAxis 8, erpAllocAreaBytes = 64 * mib}
                 (plan, _) = resolve bareCache bareLimits bareQueue Nothing runtime NoQueueTenant False
             mpShedCapabilities plan `shouldSatisfy` maybe False (< 8)
@@ -160,10 +160,10 @@ spec = describe "resolveMemoryPlan" $ do
 
     describe "attributes a residual overshoot before refusing (issue #845)" $ do
         it "boots, never refuses, on an explicit queue depth equal to the floor the ladder would compute" $ do
-            -- The traced regression: a 64 MiB pod overshoots and must boot with the
-            -- loud warning. Pinning queue.memoryMaxDepth to the very floor the shed
-            -- ladder reaches on its own adds no byte, so it must not flip the boot
-            -- into an exit-2 refusal that blames a pin contributing nothing.
+            -- A 64 MiB pod overshoots and must boot with the loud warning. Pinning
+            -- queue.memoryMaxDepth to the floor the shed ladder reaches on its own
+            -- adds no byte. It must not flip the boot into an exit-2 refusal that
+            -- blames a pin contributing nothing.
             let queue' = bareQueue{qsMemoryMaxDepth = Just 5000} -- the queue-depth floor
                 (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
                 (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
@@ -176,7 +176,7 @@ spec = describe "resolveMemoryPlan" $ do
         it "never refuses on an explicit queue depth under a non-memory backend (the depth charges no heap)" $ do
             -- Under a durable (or absent) queue backend queueCharge is identically
             -- zero, so queue.memoryMaxDepth contributes to no overshoot whatever its
-            -- value; the too-small pod boots with its warning, unblamed.
+            -- value. The too-small pod boots with its warning, unblamed.
             let queue' = bareQueue{qsMemoryMaxDepth = Just 100000} -- the cap, deliberately large
                 (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MirroringWithoutMemoryQueue False
             mpOverrideViolations plan `shouldBe` []
@@ -184,9 +184,9 @@ spec = describe "resolveMemoryPlan" $ do
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
 
         it "names only the contributing override when an innocent one is co-present" $ do
-            -- A 1 GiB cache on a 256 MiB pod genuinely cannot fit; a queue depth
-            -- pinned to the floor beside it contributes nothing and must not be
-            -- named, and the message must not claim it pushes the plan past bytes.
+            -- A 1 GiB cache on a 256 MiB pod genuinely cannot fit. A queue depth
+            -- pinned to the floor beside it contributes nothing. The plan must not name
+            -- it, and the message must not claim it pushes the plan past bytes.
             let cache' = bareCache{csMaxBytes = Just (1 * gib)}
                 queue' = bareQueue{qsMemoryMaxDepth = Just 5000}
                 (plan, _) = resolve cache' bareLimits queue' Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
@@ -196,19 +196,19 @@ spec = describe "resolveMemoryPlan" $ do
 
     describe "attributeOverrideViolations (the refusal decision, in isolation)" $ do
         it "refuses on the joint check, naming the single culprit whose removal fits" $ do
-            -- The pinned plan overshoots by 40; with all pins out it fits; removing
-            -- the one pin fits. It is named, and the message reports only the 40
-            -- bytes past the ceiling that the pin is responsible for.
+            -- The pinned plan overshoots by 40. With every pin out it fits, and
+            -- removing the one pin fits. The message names it and reports only the
+            -- 40 bytes past the ceiling that the pin is responsible for.
             let violations = attributeOverrideViolations 1000 40 0 [("cache.maxBytes", 0)]
             violations `shouldSatisfy` (not . null)
             violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
             violations `shouldSatisfy` any (T.isInfixOf "40")
             violations `shouldSatisfy` any (T.isInfixOf "override-free minimum fits")
-            -- The message no longer claims bytes the pins do not contribute.
+            -- The message never claims bytes the pins do not contribute.
             violations `shouldNotSatisfy` any (T.isInfixOf "even after every computed tenant")
 
         it "names only the pins whose individual removal flips the verdict" $ do
-            -- Removing the cache fits (0); removing the depth does not (12 over).
+            -- Removing the cache fits (0). Removing the depth does not (12 over).
             let violations = attributeOverrideViolations 1000 30 0 [("cache.maxBytes", 0), ("queue.memoryMaxDepth", 12)]
             violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
             violations `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
@@ -250,8 +250,8 @@ spec = describe "resolveMemoryPlan" $ do
             withCache - without `shouldBe` 12345678
 
         it "charges an explicit artifact cap its envelope (cap x multiplier) when mirroring, nothing otherwise" $ do
-            -- An explicit limits.maxArtifactBytes never sheds; it adds cap x 4 to the
-            -- minimum when mirroring, and nothing at all when no mount mirrors.
+            -- An explicit limits.maxArtifactBytes never sheds. It adds cap x 4 to the
+            -- minimum when mirroring, and nothing when no mount mirrors.
             let base = 100000000
                 mirroring = overrideMinShedSum base 26214400 False False True (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
                 notMirroring = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
@@ -301,8 +301,8 @@ spec = describe "resolveMemoryPlan" $ do
                 pub <- forAll Gen.bool
                 let runtime = (planWith (Just h)){erpCapabilities = enforcedAxis caps}
                     (plan, _) = resolveMemoryPlan bareCache bareLimits bareQueue Nothing runtime demand pub
-                -- Without explicit overrides the plan never refuses, always admits at
-                -- least one operation, and either fits the ceiling or says at its
+                -- Without explicit overrides the plan never refuses and always admits
+                -- at least one operation. It either fits the ceiling or says at its
                 -- loudest that even the irreducible minimum exceeds it.
                 mpOverrideViolations plan === []
                 assert (mpAdmissionCapacity plan >= 1)
@@ -310,7 +310,7 @@ spec = describe "resolveMemoryPlan" $ do
                     ( tenantSum plan <= h
                         || any (T.isInfixOf "irreducible minimum") (mpDegradations plan)
                     )
-                -- The ladder's order: admission never sheds before the cache gave way.
+                -- The ladder's order: admission never sheds before the cache gives way.
                 when (any (T.isInfixOf "admission shed") (mpDegradations plan)) $
                     assert (any (T.isInfixOf "cache aggregate shed") (mpDegradations plan))
 

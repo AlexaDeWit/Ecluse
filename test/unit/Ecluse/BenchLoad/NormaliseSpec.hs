@@ -105,8 +105,8 @@ spec = do
             rendered `shouldSatisfy` T.isInfixOf "queuing-bound: merge-cold"
 
         it "surfaces the best-effort deadline-abort count in the table" $ do
-            -- The count is a best-effort signal (oha's error label, nix-pinned); it reaches
-            -- the operator-visible table verbatim, defaulting to a plain 0 when there is none.
+            -- The count is a best-effort signal: oha's error label, nix-pinned. It reaches
+            -- the operator-visible table verbatim, and defaults to a plain 0 when there is none.
             let bound = deriveSaturation 0.5 (SaturationInput "merge-cold" 42 50 (Just 255) (Just 1090))
                 ok = deriveSaturation 0.5 (SaturationInput "worker" 130 0 (Just 153) (Just 160))
             renderSaturation 0.5 [bound] `shouldSatisfy` T.isInfixOf "| 50 |"

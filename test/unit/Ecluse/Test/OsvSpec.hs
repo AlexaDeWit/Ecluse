@@ -14,11 +14,11 @@ import Ecluse.Test.Osv (CorpusVersion (..), mkDbWithViewShadowingRanges, mkDbWit
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- (package, cve, introduced, fixed, severity). Severity is the numeric CVSS score
--- the writer stores; these label-only fixtures map to their band ceiling.
+-- the writer stores. These label-only fixtures map to their band ceiling.
 type RangeRow = (Text, Text, Maybe Text, Maybe Text, Maybe Double)
 
 -- The pins are literal on purpose: editing the corpus means updating them,
--- deliberately, in the same PR. LOW->3.9, MODERATE->6.9, HIGH->8.9, CRITICAL->10.0.
+-- deliberately, in the same change. LOW->3.9, MODERATE->6.9, HIGH->8.9, CRITICAL->10.0.
 corpusV1Rows :: [RangeRow]
 corpusV1Rows =
     [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9)
@@ -52,8 +52,8 @@ rangeRows db = do
 spec :: Spec
 spec = do
     describe "the OSV fixture corpus" $ do
-        -- Full-table equality: the malformed corpus entry contributing zero
-        -- rows is asserted by omission.
+        -- Full-table equality: the malformed corpus entry contributes zero rows, so
+        -- its omission is the assertion.
         it "compiles CorpusV1 to exactly the pinned advisory ranges" $
             withFixtureOsvDb CorpusV1 (\db -> rangeRows db `shouldReturn` corpusV1Rows)
 

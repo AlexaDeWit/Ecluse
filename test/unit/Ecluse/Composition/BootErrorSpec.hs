@@ -26,7 +26,7 @@ spec = describe "renderBootError" $
             `shouldSatisfy` infixed "https://queue.example.test/q"
         renderBootError (QueueUrlUnrecognised "x") `shouldSatisfy` infixed "projects/{project}/topics/{topic}"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
-        -- The mint-failure render makes the transient-vs-permanent distinction legible.
+        -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"

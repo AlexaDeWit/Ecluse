@@ -17,8 +17,8 @@ import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
 {- | The composed npm front door: a single npm mount with __inert__ packument-serve
-dependencies (every upstream a closed port) and no publish target, assembled through the
-public binding resolver exactly as the composition root would ('mountBindingFor' over npm).
+dependencies (every upstream a closed port) and no publish target. The public binding
+resolver assembles it exactly as the composition root would ('mountBindingFor' over npm).
 -}
 npmApp :: IO Application
 npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
@@ -31,10 +31,10 @@ spec = do
                 get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
 
             it "routes an npm packument under the mount into the data plane (503; upstreams closed)" $
-                -- The route is recognised AND reaches the pipeline: with both upstreams
-                -- bound to a closed port, no version survives and the most recoverable
-                -- cause is transient, so the serve path answers 503. A 404 here would mean
-                -- the mount's router never claimed the path at all.
+                -- The router recognises the route AND the request reaches the pipeline.
+                -- With both upstreams bound to a closed port, no version survives and the
+                -- most recoverable cause is transient. The serve path therefore answers 503,
+                -- where a 404 would mean the mount's router never claimed the path at all.
                 get "/npm/is-odd" `shouldRespondWith` 503
 
             it "does NOT mount npm at the root -- /-/ping there is the neutral 404" $

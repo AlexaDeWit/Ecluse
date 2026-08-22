@@ -117,14 +117,14 @@ spec = do
             buildEnvAst env `shouldBe` Object KeyMap.empty
 
         it "ignores the reserved process-level ECLUSE_CONFIG path override" $ do
-            -- ECLUSE_CONFIG is consumed by Ecluse.Boot before resolution; were it not
-            -- reserved, it would transliterate to an unknown "config" document key and
-            -- fail every boot that uses the override.
+            -- Ecluse.Boot consumes ECLUSE_CONFIG before resolution. Unreserved, it
+            -- would transliterate to an unknown "config" document key and fail every
+            -- boot that uses the override.
             buildEnvAst [("ECLUSE_CONFIG", "/etc/other/config.yaml")] `shouldBe` Object KeyMap.empty
 
         it "provides a comprehensive regression test for all documented environment variables" $ do
-            -- This verifies that all top-level Ecluse documented variables correctly map to camelCase keys
-            -- expected by `FromJSON EnvConfig` and `FromJSON ConfigDoc`.
+            -- Every documented top-level Ecluse variable maps to the camelCase key
+            -- `FromJSON EnvConfig` and `FromJSON ConfigDoc` expect.
             let env =
                     [ ("ECLUSE_SERVER__PORT", "4873")
                     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.com")

@@ -55,14 +55,14 @@ import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Rules (inertRuleDeps)
 
-{- | Tests for the composition root's boot-time wiring. They exercise the two
-promises of the slice: a valid configuration produces served mount bindings with
-real packument-serve dependencies (so packuments are merged, not @501@ stubs), and
-every boot problem -- an unresolved rule policy, a configured mount with no adapter,
-a credential reference that does not resolve -- is a fail-fast, __aggregated__ boot
-error. Pure of IO: the clock and the ecosystem-to-adapter resolver are injected, so
-nothing here opens a socket. The sibling composition modules' specs live beside
-them ("Ecluse.Composition.CredentialSpec", "Ecluse.Composition.MirrorQueueSpec",
+{- | Tests for the composition root's boot-time wiring, on two promises. A valid
+configuration produces served mount bindings with real packument-serve dependencies,
+so the root merges packuments rather than serving @501@ stubs. Every boot problem is
+a fail-fast, __aggregated__ boot error: an unresolved rule policy, a configured mount
+with no adapter, or an unresolvable credential reference. Pure of IO: the
+clock and the ecosystem-to-adapter resolver are injected, so nothing here opens a
+socket. The sibling composition modules' specs live beside them
+("Ecluse.Composition.CredentialSpec", "Ecluse.Composition.MirrorQueueSpec",
 "Ecluse.Composition.SizingSpec", "Ecluse.Composition.BootErrorSpec").
 -}
 spec :: Spec
@@ -75,8 +75,8 @@ expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
 
 {- | A complete document mount keyed by the given ecosystem, with a non-CodeArtifact
-mirror target and a static write token so its credential resolves -- for the
-no-adapter boot-error case (where the adapter, not the credential, is the fault).
+mirror target and a static write token so its credential resolves. For the
+no-adapter boot-error case, where the adapter, not the credential, is the fault.
 -}
 mountDoc :: Text -> ByteString
 mountDoc eco =
@@ -111,8 +111,8 @@ planFromWith limits envVars mDocBytes = do
             initCredentialProviders noCredentialReporters cfg >>= \case
                 Left pErrs -> pure (Left pErrs)
                 Right providers -> do
-                    -- The root always pairs a publishing mount with a body budget; a
-                    -- generous test one keeps these specs about the wiring.
+                    -- The root always pairs a publishing mount with a body budget. A
+                    -- generous test budget keeps these specs about the wiring.
                     bodyBudget <- newByteAdmission (128 * 1024 * 1024)
                     let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
                     planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
@@ -135,10 +135,11 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     -- The mirror serve plan is wired from the mount's config: an
                     -- admitted public artifact enqueues toward the declared target.
                     pdMirror deps `shouldBe` MirrorOnAdmit "https://mirror.example.test"
-                    -- The tarball-host gate is derived from the very upstreams the deps
-                    -- carry, never from a second reading of the configuration, so
-                    -- rebinding those three values reproduces it exactly. npm declares
-                    -- no ecosystem artifact hosts, so the allowlist is the upstreams'.
+                    -- The binding derives the tarball-host gate from the upstreams the
+                    -- deps carry, never from a second reading of the configuration.
+                    -- Rebinding those three values reproduces the gate exactly. npm
+                    -- declares no ecosystem artifact hosts, so the allowlist is the
+                    -- upstreams'.
                     pdTarballHostGate deps
                         `shouldBe` upstreamTarballHostGate (mountUpstreams [] (pdPrivateBaseUrl deps) (pdPublicBaseUrl deps) (pdMirror deps))
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
@@ -172,9 +173,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
-        -- Forces the remaining 'PackumentDeps' fields: the inbound token (from
-        -- ECLUSE_SERVER__AUTH_TOKEN), the injected clock ('pdNow'), and the operator help
-        -- message -- all wired by the composition root.
+        -- Forces the remaining 'PackumentDeps' fields, all wired by the composition
+        -- root: the inbound token (from ECLUSE_SERVER__AUTH_TOKEN), the injected clock
+        -- ('pdNow'), and the operator help message.
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
         composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
@@ -218,7 +219,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
 
     it "threads the resolved limits onto every mount's deps" $ do
         -- The byte cap arrives resolved from the memory budget (a config override
-        -- or a heap share) married to the pinned structural counts; the bindings
+        -- or a heap share) married to the pinned structural counts. The bindings
         -- carry the record verbatim.
         let custom = defaultLimits{maxBodyBytes = 2048, maxVersionCount = 10, maxNestingDepth = 16}
         planFromWith custom staticEnvVars Nothing >>= \case
@@ -258,8 +259,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
 
     it "threads a loosened trusted-integrity floor (sha1) onto the deps" $ do
         -- The trusted floor is loosenable below SHA-256, so a SHA-1 value flows from
-        -- config to the deps the trusted gate consults -- the asymmetry with the public
-        -- floor's hard SHA-256 minimum.
+        -- config to the deps the trusted gate consults. That is the asymmetry with the
+        -- public floor's hard SHA-256 minimum.
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         _ <- expectEnv (("ECLUSE_INTEGRITY__MIN_TRUSTED", "sha1") : staticEnvVars)
         planFrom (("ECLUSE_INTEGRITY__MIN_TRUSTED", "sha1") : staticEnvVars) Nothing >>= \case
@@ -270,7 +271,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
 
     it "refines the trusted floor and divergence policy per mount over the global defaults" $ do
         -- The two knobs describe trust in a particular registry, so a legacy mount's
-        -- loosening must not leak onto other mounts: the mount key overrides, the
+        -- loosening must not leak onto other mounts. The mount key overrides, and the
         -- global default stands elsewhere.
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         let env =
@@ -285,8 +286,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do
-        -- The builder over an already-loaded Config is the testable core (it opens no
-        -- listener, only 'prepare's each mount's rules); planMounts is just loadConfig
+        -- The builder over an already-loaded Config is the testable core: it opens no
+        -- listener, only 'prepare's each mount's rules. planMounts is loadConfig
         -- sequenced into it.
         config <- expectConfig staticEnvVars Nothing
         providers <- expectProviders config
@@ -349,18 +350,19 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish-scope allow-list" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW empty: the anti-shadowing guard
-        -- would have nothing to enforce, so the boot refuses rather than defaulting.
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW empty leaves
+        -- the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
             Left errs -> errs `shouldBe` [PublishAllowMissing Npm]
             Right _ -> expectationFailure "expected a publish-scopes-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN set with ECLUSE_SERVER__AUTH_TOKEN unset (the default open edge):
-        -- Écluse would substitute its own write credential for a caller who forwards none,
-        -- so any unauthenticated client could publish within scope. The boot refuses rather
-        -- than leaving the internal credential coupled to no edge.
+        -- ECLUSE_SERVER__AUTH_TOKEN unset is the default open edge. With
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN set, Écluse would substitute its own write
+        -- credential for a caller who forwards none, so any unauthenticated client could
+        -- publish within scope. The boot refuses rather than leaving the internal
+        -- credential coupled to no edge.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
@@ -373,10 +375,10 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
     it "accumulates both publish boot errors when scopes are missing and the static credential has no edge" $ do
-        -- A publication target with no ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW and a static credential behind an
-        -- open edge trips both couplings at once: they surface together, in a stable order
-        -- (scopes first, then the edge requirement), so the operator fixes both before the
-        -- next boot rather than swatting them one reboot at a time.
+        -- A publication target with no ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW and a static credential
+        -- behind an open edge trips both couplings at once. They surface together, in a
+        -- stable order: scopes first, then the edge requirement. The operator then fixes
+        -- both before the next boot rather than one reboot at a time.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
@@ -405,9 +407,9 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
             _ -> expectationFailure "expected a single wired binding"
 
     it "boots a static publish credential when a verifiable inbound edge is configured" $ do
-        -- The safe pairing -- the positive control for the fail-loud boot test above: the
-        -- same static publish credential boots once ECLUSE_SERVER__AUTH_TOKEN gates the edge, so the
-        -- internal credential is only ever reachable behind edge authentication.
+        -- The safe pairing, the positive control for the fail-loud boot test above. The
+        -- same static publish credential boots once ECLUSE_SERVER__AUTH_TOKEN gates the
+        -- edge, so the internal credential is only ever reachable behind edge authentication.
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
@@ -423,8 +425,8 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
             _ -> expectationFailure "expected a single wired binding"
 
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do
-        -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET the mount carries no publish deps,
-        -- so a PUT /{pkg} is 405 -- there is no implicit write path.
+        -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET the mount carries no
+        -- publish deps, so a PUT /{pkg} is 405. There is no implicit write path.
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of

@@ -57,7 +57,7 @@ spec = do
                 setDummyAwsCredentials
                 let dataDir = dir </> "osv"
                 -- A stale in-progress download and a canonical artifact from a
-                -- previous run: the sweep takes the former, keeps the latter.
+                -- previous run: the sweep removes the former and keeps the latter.
                 createDirectoryIfMissing True dataDir
                 writeFileBS (dataDir </> "npm-osv-schema3.db.tmp") "stale partial download"
                 writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
@@ -144,10 +144,10 @@ spec = do
 
     describe "bootBurstPolicy -- the boot burst compiled to a retry policy" $
         it "attempts immediately, backs off over the shipped schedule, then concedes" $ do
-            -- 'simulatePolicy' walks the policy without sleeping, so the burst
-            -- schedule is pinned directly: an immediate first attempt, a retry
-            -- after each 'bootBackoffDelays' entry in turn, then a stop ('Nothing')
-            -- once the list is spent (its length the retry budget).
+            -- 'simulatePolicy' walks the policy without sleeping, so this case pins the
+            -- burst schedule directly. It expects an immediate first attempt, a retry
+            -- after each 'bootBackoffDelays' entry in turn, then a stop ('Nothing') once
+            -- the list is spent. The list length is the retry budget.
             delays <- simulatePolicy (length bootBackoffDelays) (bootBurstPolicy bootBackoffDelays)
             map snd delays `shouldBe` map Just bootBackoffDelays <> [Nothing]
 
@@ -174,7 +174,7 @@ stubSyncHandle = do
                     }
             }
 
--- An owning handle over an in-memory lookup; closing is a no-op.
+-- An owning handle over an in-memory lookup. Closing is a no-op.
 fakeDb :: CveDb
 fakeDb = CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
 
@@ -184,8 +184,8 @@ appConfigFrom envVars doc = case loadConfig envVars doc of
     Left e -> fail ("Config error: " <> show e)
 
 -- 'Ecluse.Runtime.Cve.Sync.newS3CveSource' builds the S3 env, which discovers
--- credentials from the process environment; the plan only wires the transport (no
--- request is made), so dummies satisfy it.
+-- credentials from the process environment. The plan only wires the transport and
+-- makes no request, so dummies satisfy it.
 setDummyAwsCredentials :: IO ()
 setDummyAwsCredentials = do
     setEnv "AWS_ACCESS_KEY_ID" "test"
@@ -200,21 +200,21 @@ mountedNpmDoc =
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}}}"
 
--- | A non-'IO' exception, to prove the sweep no longer swallows every fault.
+-- | A non-'IO' exception, to prove the sweep does not swallow every fault.
 data SweepBoom = SweepBoom
     deriving stock (Show)
 
 instance Exception SweepBoom
 
-{- | A scribe-free 'LogEnv': the planning tests thread a logger but assert on the
+{- | A scribe-free 'LogEnv'. The planning tests thread a logger but assert on the
 plan, not on any log line, so a no-output environment satisfies the dependency.
 -}
 quietLogEnv :: IO LogEnv
 quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
 {- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
-severity admitted, so a swept-temp warning's serialised bytes are assertable through
-'captureStdout'.
+severity admitted. A swept-temp warning's serialised bytes are then assertable
+through 'captureStdout'.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do
@@ -222,8 +222,8 @@ jsonLogEnv = do
     base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     registerScribe "stdout" scribe defaultScribeSettings base
 
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning what
-was written, and restore 'stdout' on every exit path, so a test can capture what a
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file, and return what
+the action wrote. Restore 'stdout' on every exit path, so a test can capture what a
 scribe emits without leaking it into the run.
 -}
 captureStdout :: IO () -> IO Text

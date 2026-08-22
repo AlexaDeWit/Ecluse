@@ -21,14 +21,13 @@ spec = describe "parseQueueTarget" $ do
         parseQueueTarget "sqs.us-east-1.amazonaws.com/123456789012/mirror" `shouldBe` Nothing
 
     it "rejects an explicit port, :443 included (the canonical form carries none)" $ do
-        -- A nearly-but-not canonical URL is a transcription error to surface,
-        -- never to repair.
+        -- A nearly canonical URL is a transcription error to surface, never to repair.
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com:443/123456789012/mirror" `shouldBe` Nothing
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com:8443/123456789012/mirror" `shouldBe` Nothing
 
     it "rejects an AWS host that is not an SQS endpoint" $ do
-        -- A dotted region slot means some other AWS endpoint shape (never an SQS
-        -- queue's), so it must not mis-parse into a bogus region.
+        -- A dotted region slot means some other AWS endpoint shape, never an SQS
+        -- queue's, so the parse must not yield a bogus region.
         parseQueueTarget "https://sqs.foo.bar.amazonaws.com/123456789012/mirror" `shouldBe` Nothing
         parseQueueTarget "https://s3.us-east-1.amazonaws.com/bucket/key" `shouldBe` Nothing
 

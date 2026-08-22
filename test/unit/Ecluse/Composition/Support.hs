@@ -28,7 +28,7 @@ import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Test.Credential (noCredentialReporters)
 
--- | A fixed clock for the injected 'pdNow'; never advanced (no timing here).
+-- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 

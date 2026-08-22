@@ -290,9 +290,9 @@ hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
 
 {- | A minimal well-formed "add" patch for each rule type, keyed by its type name.
-Tied to 'knownRuleTypes' by the "covers exactly" expectation, so a new 'Rule' type
-cannot be added without extending this table (and through it the round-trip pin), and
-the round-trip proves each type's 'buildRule' branch and 'ruleName' agree on the name.
+The "covers exactly" expectation ties it to 'knownRuleTypes'. A new 'Rule' type
+cannot join without an entry here, and through it a round-trip pin. The round-trip
+proves each type's 'buildRule' branch and 'ruleName' agree on the name.
 -}
 knownRuleAdds :: [(Text, ByteString)]
 knownRuleAdds =
