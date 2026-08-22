@@ -4,13 +4,15 @@
 
 module Ecluse.Config.DocCoverageSpec (spec) where
 
+import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config (loadConfig)
 
 {- | Every operator-facing @ECLUSE_*@ spelling, paired with a value the loader must accept.
-Each must appear in @USAGE.md@ and must load, so listing a new key here is part of adding it.
+Each must have its document key in @config\/default.yaml@ (active or commented) and must load,
+so listing a new key here is part of adding it.
 -}
 documentedEnvVars :: [(String, String)]
 documentedEnvVars =
@@ -60,8 +62,8 @@ documentedEnvVars =
     , ("ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY", "warn")
     ]
 
-{- | Process-level and indirection spellings: documented, but consumed before (or
-beside) config resolution, so only the USAGE assertion applies.
+{- | Process-level and indirection spellings: documented in @USAGE.md@ prose, because
+they are consumed before (or beside) config resolution and have no document key.
 -}
 documentedProcessVars :: [String]
 documentedProcessVars =
@@ -72,13 +74,57 @@ documentedProcessVars =
     , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE"
     ]
 
+{- | The document key an @ECLUSE_*@ spelling resolves to: its top-level section and its
+leaf, camel-cased the way the resolver reads them (@ECLUSE_CACHE__MAX_BYTES@ is
+@cache.maxBytes@). The mount segment in between is irrelevant to the lookup. 'Nothing'
+for a string that is not an @ECLUSE_@ spelling, which the test then reports as missing.
+-}
+documentKey :: String -> Maybe (Text, Text)
+documentKey var = do
+    body <- T.stripPrefix "ECLUSE_" (T.pack var)
+    top :| rest <- nonEmpty (T.splitOn "__" body)
+    pure (T.toLower top, camel (lastOf top rest))
+  where
+    lastOf x [] = x
+    lastOf _ (y : ys) = lastOf y ys
+    camel segment = case T.splitOn "_" (T.toLower segment) of
+        (w : ws) -> w <> T.concat (map T.toTitle ws)
+        [] -> ""
+
+{- | Whether @config/default.yaml@ documents a leaf key under a top-level section. A
+commented key (@# key:@) counts, section and leaf alike: it is how the file documents a
+computed default and a dormant section.
+-}
+documentsKey :: Text -> (Text, Text) -> Bool
+documentsKey yaml (section, leaf) = any keyLine sectionLines
+  where
+    sectionLines =
+        takeWhile (not . isSection)
+            . drop 1
+            . dropWhile (not . isHeader)
+            $ T.lines yaml
+    uncomment = T.stripStart . T.dropWhile (== '#') . T.stripStart
+    topLevel l = not (T.isPrefixOf " " l)
+    isHeader l = topLevel l && uncomment l == section <> ":"
+    isSection l = topLevel l && maybe False (T.all isAsciiLower) (T.stripSuffix ":" (uncomment l))
+    keyLine l = T.isPrefixOf (leaf <> ":") (uncomment l)
+
 spec :: Spec
-spec = describe "the environment reference (USAGE.md) covers the accepted variables" $ do
-    it "mentions every golden-list spelling" $ do
+spec = describe "the configuration reference covers the accepted variables" $ do
+    it "config/default.yaml documents every golden-list key" $ do
+        yaml <- decodeUtf8 <$> readFileBS "config/default.yaml"
+        let missing =
+                [ var
+                | var <- map fst documentedEnvVars
+                , maybe True (not . documentsKey yaml) (documentKey var)
+                ]
+        missing `shouldBe` []
+
+    it "USAGE.md mentions every process-level spelling" $ do
         usage <- decodeUtf8 <$> readFileBS "USAGE.md"
         let missing =
                 [ var
-                | var <- map fst documentedEnvVars <> documentedProcessVars
+                | var <- documentedProcessVars
                 , not (T.pack var `T.isInfixOf` usage)
                 ]
         missing `shouldBe` []
