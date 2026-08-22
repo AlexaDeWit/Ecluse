@@ -24,7 +24,7 @@ module Ecluse.Core.Security.Authority (
     hostAddress,
     hostPortAddress,
     splitHostPort,
-    authoritySpan,
+    carriesUserinfo,
 
     -- * Log-safe rendering
     authorityLabel,
@@ -136,19 +136,29 @@ parsePort t = do
     guard (n >= 1 && n <= 65535)
     pure (fromInteger n)
 
-{- | The authority component of a URI or bare @host[:port]@ value __with its userinfo
-intact__: the text after the scheme separator, truncated at the first
-path\/query\/fragment delimiter.
+{- | Whether a URI or bare @host[:port]@ value carries __userinfo__ in its authority
+(@https:\/\/user:token\@host\/@).
 
-The configured-endpoint refusal in "Ecluse.Core.Security.Egress" tests for userinfo
-here, at the same boundary 'authorityOf' strips it at. A path segment beginning with
-@\@@ (an npm scope) sits past the truncation and is not userinfo.
+A caller outside this module can ask only this about an authority's credential half,
+and the answer hands back no credential-bearing text. The configured-endpoint refusal
+in "Ecluse.Core.Security.Egress" asks it, so that refusal and 'authorityOf' read the
+userinfo boundary the same way. A path segment beginning with @\@@ (an npm scope) sits
+past the authority and is not userinfo.
 
->>> authoritySpan "https://deploy:hunter2@registry.npmjs.org/thing?sig=abc"
-"deploy:hunter2@registry.npmjs.org"
+>>> carriesUserinfo "https://deploy:hunter2@registry.npmjs.org/thing?sig=abc"
+True
 
->>> authoritySpan "https://registry.npmjs.org/@acme/thing"
-"registry.npmjs.org"
+>>> carriesUserinfo "https://registry.npmjs.org/@acme/thing"
+False
+-}
+carriesUserinfo :: Text -> Bool
+carriesUserinfo = T.isInfixOf "@" . authoritySpan
+
+{- The authority component of a URI or bare @host[:port]@ value with its userinfo
+intact: the text after the scheme separator, truncated at the first
+path\/query\/fragment delimiter. Kept module-private, because a caller holding the
+credential-bearing span is the exposure 'authorityLabel' exists to prevent.
+'carriesUserinfo' answers the one question about it from outside.
 -}
 authoritySpan :: Text -> Text
 authoritySpan raw = T.takeWhile (`notElem` ['/', '?', '#']) (afterFirst "://" raw)

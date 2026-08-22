@@ -126,8 +126,8 @@ An upstream supplies the artifact location. An operator supplies the advisory ex
 can carry a credential in its userinfo or in a pre-signed query string, and both logs and spans
 leave the node. So on every running path Écluse reduces a URL to its validated `host:port` before it
 names anything, through the one shared reduction in `Ecluse.Core.Security.Authority`. A value with
-no dialable authority renders as `<unresolved>`,
-never as a fragment of the input. The paths this covers:
+no dialable authority renders as `<unresolved>`, never as a fragment of the input. The paths this
+covers:
 
 - **Serve.** The packument origin and upstream fields on the degrade warnings, the URL a
   url-formation fault carries, and the artifact URL a dropped-entry record holds.

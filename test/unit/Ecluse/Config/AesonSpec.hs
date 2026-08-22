@@ -388,6 +388,12 @@ spec = describe "decodeDocument" $ do
             loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test/npm#frag")] Nothing
                 `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry a fragment"
 
+        -- A second endpoint key, so a key name hand-written into the wrong call site
+        -- cannot pass by matching a neighbour's.
+        it "rejects a mirror-target URL carrying userinfo, naming that key" $
+            loadConfig [] (Just (mountDocWithMirrorTarget "https://deploy:hunter2@mirror.example.test/npm"))
+                `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
+
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do
             case loadConfig [] (Just "{\"server\":{\"port\":0}}") of
