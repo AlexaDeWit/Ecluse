@@ -60,8 +60,8 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
     it "never serves one client's assembled document to another with a different private view" $ do
         -- The private upstream answers per credential: client A's token sees 9.0.0,
         -- client B's sees 9.0.1. Interleaved requests must each get their own merged
-        -- document -- the assembled store is keyed by content, so B's entry can never
-        -- answer A (and the last request proves A's own entry still serves A).
+        -- document. The assembled store is keyed by content, so B's entry can never
+        -- answer A. The last request proves A's own entry still serves A.
         seen <- newIORef []
         let perToken req respond = do
                 modifyIORef' seen (lookupAuth (requestHeaders req) :)

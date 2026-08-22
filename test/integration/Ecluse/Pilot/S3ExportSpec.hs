@@ -25,8 +25,6 @@ import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
--- We just need a basic spec to test bucket creation and export loop
-
 spec :: Spec
 spec = do
     describe "S3 Export Integration" $ do
@@ -47,7 +45,6 @@ spec = do
                                 env
                         regioned = base{AWS.region = AWS.Region' "us-east-1"}
 
-                    -- Retry loop for S3.newCreateBucket
                     let createBucketLoop retries = do
                             catchAny (void $ runResourceT $ AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket))) $ \e -> do
                                 if retries > 0
@@ -57,17 +54,14 @@ spec = do
                                     else throwIO e
                     createBucketLoop (20 :: Int)
 
-                    -- create a dummy DB
                     let dummyDb = tmpDir <> "/dummy.sqlite"
                     liftIO $ writeFile dummyDb "dummy sqlite data"
 
-                    -- Run exportToS3 with Katip context; the endpoint override is the
-                    -- ambient AWS_ENDPOINT_URL a released image would carry, here passed
-                    -- straight through as the composition root does.
+                    -- The endpoint override is the ambient AWS_ENDPOINT_URL a released
+                    -- image carries, passed straight through as the composition root does.
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (parseEndpointUrl endpoint) bucket dummyDb)
 
-                    -- Verify upload
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
                     let objects = fromMaybe [] (S3.contents resp)
 

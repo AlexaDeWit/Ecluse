@@ -136,8 +136,8 @@ newtype AssembleBottom = AssembleBottom Text
 
 instance Exception AssembleBottom
 
--- A deps transform breaking the pdAssemble never-throws contract on purpose,
--- for the request-perimeter case: the assembled render bottoms when forced.
+-- A deps transform that breaks the pdAssemble never-throws contract on purpose, for
+-- the request-perimeter case: the assembled render bottoms when forced.
 withBottomingAssemble :: PackumentDeps -> PackumentDeps
 withBottomingAssemble d = d{pdAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}
 
@@ -306,11 +306,11 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
     it "answers a bottoming assembly with the route's declared neutral 500, never a torn session" $ do
-        -- Both origins serve happily; the assembly hook then bottoms when the
-        -- render forces it -- an invariant break escaping the handler pre-commit.
-        -- The perimeter must answer it: the session survives (an unanswered
-        -- escape would abort it), the status is the neutral 500, and the body is
-        -- the route's own error shape carrying no fault detail.
+        -- Both origins serve happily. The assembly hook then bottoms when the render
+        -- forces it, an invariant break escaping the handler pre-commit. The perimeter
+        -- must answer it. The session survives, since an unanswered escape would abort
+        -- it. The status is the neutral 500, and the body is the route's own error
+        -- shape carrying no fault detail.
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
