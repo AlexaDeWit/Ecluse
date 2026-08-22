@@ -60,16 +60,16 @@ lastCaptured stub =
     readIORef (stubCaptured stub)
         >>= maybe (fail "stub served no request") pure
 
-{- | Run an action against a stub that records each request and answers every one
-with a fixed status and body. @testWithApplication@ binds a free port for the
-action's duration, so the test never collides on a fixed port.
+{- | Run an action against a stub that records each request and answers every one with
+a fixed status and body. The @testWithApplication@ helper binds a free port for the
+action's duration, so a test never collides on a fixed port.
 -}
 withStub :: Status -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []
 
-{- | 'withStub' with extra response headers -- e.g. @Content-Encoding: gzip@ so the
-@http-client@ body reader decompresses the served bytes, letting a test assert the
-bounded read bounds /decompressed/ size rather than wire size.
+{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@, for example,
+and the @http-client@ body reader decompresses the served bytes. A test can then assert
+that the bounded read bounds /decompressed/ size, not wire size.
 -}
 withStubHeaders :: Status -> [Header] -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStubHeaders status extraHeaders body action = do

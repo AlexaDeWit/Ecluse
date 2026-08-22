@@ -4,18 +4,16 @@
 
 {- | Hedgehog generators of structurally valid version strings, per ecosystem.
 
-This mirrors the module under test: generators that support exercising
-@Ecluse.Core.Version@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
-support library follows. Each generator emits a /structurally valid/ version
-string for its ecosystem -- one 'Ecluse.Core.Version.mkVersion' parses to a key -- drawn
-from a deliberately small space so two independent draws collide often enough to
-exercise the @EQ@ branch of an ordering law, while still ranging widely enough to
-span @LT@\/@GT@.
+The module name follows this support library's @Ecluse.X → Ecluse.Test.X@ convention.
+Each generator emits a /structurally valid/ version string for its ecosystem, one that
+'Ecluse.Core.Version.mkVersion' parses to a key. The draw space is deliberately small,
+so two independent draws collide often enough to exercise the @EQ@ branch of an ordering
+law. It still ranges widely enough to span @LT@\/@GT@.
 
-A suite that wants /invalid/ inputs too (the smoke oracle differential mixes in
-deliberately malformed strings) composes these with its own adversarial generator
-at the use site; that malformed-input generator is single-use and stays local to
-the suite that needs it.
+A suite that wants /invalid/ inputs too composes these with its own adversarial
+generator at the use site. The smoke oracle differential does this, mixing in
+deliberately malformed strings. That malformed-input generator is single-use and stays
+local to the suite that needs it.
 -}
 module Ecluse.Test.Version (
     genNpm,
@@ -38,8 +36,7 @@ genNpm = do
     build <- Gen.maybe (("+" <>) <$> alnumRun)
     pure (core <> fromMaybe "" pre <> fromMaybe "" build)
   where
-    -- Either a numeric id or a letter-led alphanumeric id; both are accepted by
-    -- the semver parser.
+    -- Either a numeric id or a letter-led alphanumeric id: the semver parser takes both.
     preId = Gen.choice [numSeg, alnumId]
 
 {- | PEP 440 (PyPI): a release tuple + optional @aN@\/@bN@\/@rcN@ prerelease +

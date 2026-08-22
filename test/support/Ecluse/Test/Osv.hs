@@ -5,19 +5,20 @@
 {- | The shared OSV advisory fixture corpus and the artifacts derived from it.
 
 The committed JSON advisories under @test\/fixtures\/osv\/@ are the single
-source of truth for advisory-shaped test data. Everything a suite consumes is
-derived from them at test time: 'osvCorpusZip' assembles the osv.dev-shaped
+source of truth for advisory-shaped test data. Every suite derives what it
+consumes from them at test time. 'osvCorpusZip' assembles the osv.dev-shaped
 export archive in memory, and @Ecluse.Test.OsvDb@ compiles that archive into a
-real @osv.db@ through the same pipeline Pilot runs. Deriving instead of committing binaries means a
-fixture can never drift from the artifact contract ("Ecluse.Core.Osv.Schema").
+real @osv.db@ through the same pipeline Pilot runs. Deriving instead of
+committing binaries means a fixture can never drift from the artifact contract
+("Ecluse.Core.Osv.Schema").
 
-The corpus is versioned: 'CorpusV2' is 'CorpusV1' plus an advisory for a
-package V1 leaves clean, so a V1-to-V2 shadow-swap flips an observable rule
+The corpus is versioned. 'CorpusV2' is 'CorpusV1' plus an advisory for a package
+V1 leaves clean. A V1-to-V2 shadow-swap therefore flips an observable rule
 outcome as well as the artifact's ETag.
 
 The hostile builders are the deliberate exception to "the real compiler is
-the only writer": they model tampered artifacts the compiler must never be
-able to produce, for the reader's rejection tests.
+the only writer". They model tampered artifacts the compiler must never
+produce, for the reader's rejection tests.
 -}
 module Ecluse.Test.Osv (
     -- * The corpus
@@ -122,9 +123,9 @@ mkDbWithWrongEpoch path = withConnection path $ \conn -> do
     createRangesTable conn
     setEpoch conn (osvSchemaEpoch + 1)
 
-{- | An artifact with the right epoch whose ranges relation is a __view__:
-schema-borne SQL that a hardened reader (read-only,
-@PRAGMA trusted_schema = OFF@) must refuse to evaluate on the file's terms.
+{- | An artifact with the right epoch whose ranges relation is a __view__. A view
+is schema-borne SQL, and a hardened reader (read-only,
+@PRAGMA trusted_schema = OFF@) must refuse to evaluate it on the file's terms.
 Schema conformance refuses it as not a real @STRICT@ table.
 -}
 mkDbWithViewShadowingRanges :: FilePath -> IO ()
@@ -147,7 +148,7 @@ mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
 
 {- | An artifact that passes acceptance (right epoch, real ranges table, npm
 @meta@ row) but carries a malicious trigger poised on the ranges table. A
-read-only consumer must behave exactly as it would on a clean artifact: a
+read-only consumer must behave exactly as it would on a clean artifact. A
 trigger can only ever fire on a write, and the hardened connection refuses
 writes outright.
 -}
@@ -164,11 +165,11 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
     setEpoch conn osvSchemaEpoch
 
 {- | An artifact forged to look conformant whose stored @meta@ values violate
-the declaration: the @meta@ table is authored __lax__ (TEXT affinity stores a
-BLOB verbatim, so the hostile row can exist at all), then the stored
-@CREATE TABLE@ text is rewritten to the canonical @STRICT@ DDL under
+the declaration. The builder authors the @meta@ table __lax__, since TEXT
+affinity stores a BLOB verbatim and the hostile row can then exist at all. It
+then rewrites the stored @CREATE TABLE@ text to the canonical @STRICT@ DDL under
 @PRAGMA writable_schema@. The declaration alone therefore passes schema
-conformance; only the integrity walk (@PRAGMA quick_check@), verifying stored
+conformance. Only the integrity walk (@PRAGMA quick_check@), verifying stored
 values against the @STRICT@ declaration, catches the BLOB. The reader must
 refuse it as a rejection value, never a thrown decode error.
 -}
@@ -184,7 +185,7 @@ mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
     setEpoch conn osvSchemaEpoch
 
 {- | An artifact whose tables carry the right names and columns but without
-@STRICT@ (the epoch-2 shape): the declared types are affinity hints, not
+@STRICT@ (the epoch-2 shape). The declared types are affinity hints, not
 enforced storage types, so the reader cannot trust its decodes. Schema
 conformance must refuse it as a value.
 -}
@@ -205,13 +206,13 @@ mkDbWithLaxSchema path = withConnection path $ \conn -> do
     setEpoch conn osvSchemaEpoch
 
 {- | A structurally corrupt artifact: a valid, right-epoch database whose
-interior b-tree pages have been overwritten with garbage on disk. Page 1 (the
-file header and the schema) is left intact, so the file still opens, reports the
-current 'osvSchemaEpoch', and presents a real @package_vulnerability_ranges@
-table; only the @PRAGMA quick_check@ integrity walk, reading the wrecked table
-b-tree, catches it. This models a tampered or truncated download that parses as
-SQLite but is not a sound database. The ranges table is created first, so its
-b-tree root is page 2; a handful of rows keep that page a populated leaf.
+interior b-tree pages carry garbage on disk. Page 1 (the file header and the
+schema) stays intact, so the file still opens, reports the current
+'osvSchemaEpoch', and presents a real @package_vulnerability_ranges@ table. Only
+the @PRAGMA quick_check@ integrity walk, reading the wrecked table b-tree,
+catches it. This models a tampered or truncated download that parses as SQLite
+but is not a sound database. The builder creates the ranges table first, so its
+b-tree root is page 2. A handful of rows keep that page a populated leaf.
 -}
 mkDbWithCorruptPage :: FilePath -> IO ()
 mkDbWithCorruptPage path = do
@@ -226,17 +227,17 @@ mkDbWithCorruptPage path = do
                 (Only (show i :: Text))
         setEpoch conn osvSchemaEpoch
     -- Overwrite page 2 (the ranges b-tree root, at the default 4096-byte page
-    -- size) with 0xFF; page 1's header and schema stay readable.
+    -- size) with 0xFF. Page 1's header and schema stay readable.
     withBinaryFile path ReadWriteMode $ \h -> do
         hSeek h AbsoluteSeek 4096
         BS.hPut h (BS.replicate 4096 255)
 
 {- | A minimal artifact 'Ecluse.Core.Cve.openCveDb' accepts: the ranges table,
-an npm @meta@ row, the current epoch stamp, and one advisory row whose package
-name is the given tag with @1.0.0@ as its exact fixed bound, so sync and slot
-tests can tell generations apart by which package answers the remediation
-probe. The corpus-compiled fixtures stay the schema's conformance authority;
-this builder exists for mechanics tests below the app tier.
+an npm @meta@ row, the current epoch stamp, and one advisory row. That row's
+package name is the given tag, with @1.0.0@ as its exact fixed bound. Sync and
+slot tests can then tell generations apart by which package answers the
+remediation probe. The corpus-compiled fixtures stay the schema's conformance
+authority. This builder exists for mechanics tests below the app tier.
 -}
 mkMinimalValidDb :: FilePath -> Text -> IO ()
 mkMinimalValidDb path pkg = withConnection path $ \conn -> do

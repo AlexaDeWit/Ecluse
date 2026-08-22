@@ -6,20 +6,19 @@
 version-capture oracles.
 
 This is __oracle apparatus__ mirroring "Ecluse.Test.Registry.Pypi.Wire". It decodes a live
-RubyGems response as far as the one shape the capture path reads: the published version
-strings of the @\/api\/v1\/versions\/{gem}.json@ response, a JSON array with one entry per
-version. "Ecluse.Test.RegistryCapture" dispatches a RubyGems capture through
-'listingVersions' to feed the version-ordering differential and to detect protocol drift
-against the live registry. Only each entry's @number@ (the version string) is modelled;
-the rest of the entry (platform, SHA, timestamps) is ignored.
+RubyGems response as far as the one shape the capture path reads. That shape is the
+published version strings of the @\/api\/v1\/versions\/{gem}.json@ response, a JSON array
+with one entry per version. "Ecluse.Test.RegistryCapture" dispatches a RubyGems capture
+through 'listingVersions' to feed the version-ordering differential and to detect
+protocol drift against the live registry. This decoder models only each entry's @number@
+(the version string) and ignores the rest of the entry (platform, SHA, timestamps).
 
-The RubyGems adapter (roadmap #767-775) is born from its own adapter design with its own
-production wire module; this decoder serves the test oracles.
+This decoder serves the test oracles only. It is not the production RubyGems wire module,
+which belongs to the RubyGems adapter's own design.
 
 Unlike the npm and PyPI listings, the document is a top-level array, so 'parseJSON'
-decodes it as a list of 'VersionEntry'. An entry without a @number@ is a decode failure
-rather than a silently-dropped element, since a version entry that names no version is
-meaningless.
+decodes it as a list of 'VersionEntry'. An entry without a @number@ is a decode failure,
+not a silently-dropped element: a version entry that names no version is meaningless.
 -}
 module Ecluse.Test.Registry.Rubygems.Wire (
     VersionEntry (..),

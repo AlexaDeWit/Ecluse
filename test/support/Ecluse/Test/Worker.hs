@@ -5,10 +5,11 @@
 {- | Worker-test fixtures: a ready-made ingest re-evaluation policy.
 
 The mirror worker re-runs current policy against a job's version before mirroring it (see
-"Ecluse.Core.Worker"), so any end-to-end worker test must supply per-ecosystem policies.
-This carries the admit-everything policy those tests reuse: every version resolves present
-through an injected resolver (no real fetch) and an always-allow rule clears it, so the
-worker's ingest gate admits and the test exercises the fetch → verify → publish path.
+"Ecluse.Core.Worker"). Any end-to-end worker test must therefore supply per-ecosystem
+policies. This module carries the admit-everything policy those tests reuse. Every version
+resolves present through an injected resolver, with no real fetch, and an always-allow
+rule clears it. The worker's ingest gate then admits, and the test exercises the
+fetch → verify → publish path.
 -}
 module Ecluse.Test.Worker (
     admitAllPolicies,
@@ -32,32 +33,33 @@ import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 
-{- | An admit-everything worker policy for the npm ecosystem: every version
-resolves present through an injected resolver (no real metadata fetch) and an always-allow
-rule clears it, so the worker's ingest gate admits and an end-to-end test exercises the
-fetch → verify → publish path unchanged. The caller supplies the bundle's publish
-capability (the marriage aimed at its own mirror stub, or a recording double), since
-the mirror write rides the bundle.
+{- | An admit-everything worker policy for the npm ecosystem. Every version resolves
+present through an injected resolver, with no real metadata fetch, and an always-allow
+rule clears it. The worker's ingest gate then admits, and an end-to-end test exercises
+the fetch → verify → publish path unchanged. The caller supplies the bundle's publish
+capability, because the mirror write rides the bundle. That capability is the marriage
+aimed at its own mirror stub, or a recording double.
 
 The worker's ingest gate is the __same shared admission oracle the serve path runs__
-('Ecluse.Core.Package.Admission.admitArtifact'), so the resolved snapshot must also
-pass artifact selection and the integrity floor: the resolver synthesises the
-conventional @{name}-{version}.tgz@ artifact (matching a conventionally-named job's
-'Ecluse.Core.Queue.jobArtifactFilename') carrying the caller's digest set, the host
-gate honours every host (a test upstream is loopback), and the floor is the
-production default (so the set must include a floor-clearing digest).
+('Ecluse.Core.Package.Admission.admitArtifact'). The resolved snapshot must therefore
+also pass artifact selection and the integrity floor. The resolver synthesises the
+conventional @{name}-{version}.tgz@ artifact, matching a conventionally-named job's
+'Ecluse.Core.Queue.jobArtifactFilename', and gives it the caller's digest set. The host
+gate honours every host, because a test upstream is loopback. The floor is the production
+default, so the digest set must include a floor-clearing digest.
 
 The digest set is the caller's because the worker's tamper gate verifies the fetched
-bytes against the __re-admitted__ artifact's digests, the ones this resolver carries:
-a test passes the true digests of the bytes its stub upstream serves for the faithful
-posture, or a deliberately mismatching set to drive the tamper refusal.
+bytes against the __re-admitted__ artifact's digests, the ones this resolver carries. For
+the faithful posture, a test passes the true digests of the bytes its stub upstream
+serves. To drive the tamper refusal, it passes a deliberately mismatching set.
 -}
 admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
 admitAllPolicies = admitAllPoliciesCapped (512 * 1024 * 1024)
 
-{- | 'admitAllPolicies' with an explicit artifact fetch byte cap, for tests that
-exercise the worker's over-cap drop: a body past the cap is a terminal
-'Ecluse.Core.Worker.Fetch.ArtifactOverCap' and the job is dropped, not retried.
+{- | 'admitAllPolicies' with an explicit byte cap for the artifact fetch, for tests that
+exercise the worker's over-cap drop. A body past the cap is a terminal
+'Ecluse.Core.Worker.Fetch.ArtifactOverCap', and the worker drops the job instead of
+retrying it.
 -}
 admitAllPoliciesCapped :: Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
 admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
@@ -85,10 +87,10 @@ admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
             , prepEval = \_ _ -> pure (Allow "admitted for test")
             }
 
-    -- The sample snapshot with its artifact renamed to the conventional
-    -- @{name}-{version}.tgz@ and given the caller's digest set, so the shared
-    -- admission oracle's file selection passes and the tamper gate verifies the
-    -- fetched bytes against exactly this set.
+    -- The sample snapshot, with its artifact renamed to the conventional
+    -- @{name}-{version}.tgz@ and given the caller's digest set. The shared admission
+    -- oracle's file selection then passes, and the tamper gate verifies the fetched
+    -- bytes against exactly this set.
     mirrorableDetails :: PackageName -> Version -> PackageDetails
     mirrorableDetails name version =
         (sampleDetails name version)

@@ -48,9 +48,9 @@ proxyGet e2e path = do
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), responseBody resp)
 
-{- | @HEAD@ a proxy path, returning the status, the declared @Content-Length@ (if
-any), and how many body bytes actually arrived -- so a test can assert a @HEAD@ does
-not stream a body.
+{- | @HEAD@ a proxy path. Returns the status, the declared @Content-Length@ (if any),
+and how many body bytes actually arrived. A test asserts from that count that a @HEAD@
+does not stream a body.
 -}
 proxyHead :: E2E -> Text -> IO (Int, Maybe Int, Int)
 proxyHead e2e path = do
@@ -63,10 +63,10 @@ proxyHead e2e path = do
                 readMaybe (toString (decodeUtf8 raw :: Text))
         pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
 
-{- | @PUT@ a proxy path with an empty body, returning the status -- the raw publish probe.
-A publish on a mount with __no__ publication target configured is refused (@405@) before
-the request body is read, so an empty @PUT@ is enough to assert the opt-in posture without
-driving the @npm@ CLI.
+{- | @PUT@ a proxy path with an empty body, returning the status: the raw publish probe.
+The proxy refuses a publish (@405@) on a mount with __no__ publication target before it
+reads the request body. An empty @PUT@ is therefore enough to assert the opt-in posture
+without driving the @npm@ CLI.
 -}
 proxyPut :: E2E -> Text -> IO Int
 proxyPut e2e path = do
@@ -74,23 +74,24 @@ proxyPut e2e path = do
     resp <- httpLbs base{method = "PUT"} (e2eManager e2e)
     pure (statusCode (responseStatus resp))
 
-{- | The proxy container's combined stdout+stderr as docker has captured it so far -- the
-JSONL stream the proxy writes (@ECLUSE_OBSERVABILITY__LOG_FORMAT=json@), so a test can assert the proxy
-logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
+{- | The proxy container's combined stdout+stderr, as far as docker captured it. This is
+the JSONL stream the proxy writes (@ECLUSE_OBSERVABILITY__LOG_FORMAT=json@). A test asserts
+from it that the proxy logs at all (the stdout\/stderr property), and inspects the @dd@
+object on its lines.
 -}
 proxyContainerLogs :: E2E -> IO Text
 proxyContainerLogs = containerLogs . e2eProxyContainer
 
-{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse --
-for an assertion that has to await an asynchronous line (e.g. the worker's
-@mirrored artifact published@, or a throttled telemetry export-error warning).
+{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse.
+Use it for an assertion that has to await an asynchronous line: the worker's
+@mirrored artifact published@, or a throttled telemetry export-error warning.
 -}
 awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
 
-{- | Poll the OTLP collector's debug-exporter output until the predicate holds. Fails
-loudly if the environment was booted without a collector (a scenario wiring error: only
-a @ecCollector = True@ environment has one to read).
+{- | Poll the OTLP collector's debug-exporter output until the predicate holds. It fails
+loudly when the environment booted without a collector, a scenario wiring error: only a
+@ecCollector = True@ environment has one to read.
 -}
 awaitCollectorLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitCollectorLog e2e matches attempts =
@@ -108,8 +109,8 @@ awaitContainerLog cname matches = go
             logs <- containerLogs cname
             if matches logs then pure True else threadDelay 250000 >> go (n - 1)
 
--- A container's combined stdout+stderr so far ('docker logs'); empty on any docker
--- error (e.g. the container does not exist yet, mid image-pull).
+-- A container's combined stdout+stderr so far ('docker logs'). Empty on any docker
+-- error, such as the container not existing yet, mid image-pull.
 containerLogs :: String -> IO Text
 containerLogs cname =
     handleAny (\_ -> pure "") $ do
@@ -117,9 +118,9 @@ containerLogs cname =
         pure (decodeUtf8 (LBS.toStrict out) <> decodeUtf8 (LBS.toStrict err))
 
 {- | Whether any @dd@ object across the given log text carries a __populated__ (digit-
-leading) @trace_id@ -- the active-span correlation, present only when telemetry is on and
-a span is in scope. Split on the @"trace_id":"@ prefix and require a value that begins
-with a digit, so an absent or empty id does not satisfy it.
+leading) @trace_id@. That id is the active-span correlation, present only when telemetry
+is on and a span is in scope. It splits on the @"trace_id":"@ prefix and requires a value
+that begins with a digit, so an absent or empty id does not satisfy it.
 -}
 hasPopulatedTraceId :: Text -> Bool
 hasPopulatedTraceId logs =

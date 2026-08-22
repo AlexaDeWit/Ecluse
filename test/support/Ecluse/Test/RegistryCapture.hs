@@ -5,27 +5,28 @@
 {- | The shared registry-capture support: one curated package catalogue and one
 live-registry fetch path for the test tiers that reach real registries.
 
-It exists so the curated package lists and the registry fetch live in a single
-place rather than being re-spelled per consumer:
+The curated package lists and the registry fetch live here in one place instead of
+being re-spelled per consumer:
 
   * the __catalogue__ ('Catalogue') is the one source for the curated package
-    lists -- the gnarly-version names the version-oracle smoke differential
-    exercises ('smokeRegistryPackages') and the benchmark-corpus capture pins
-    ('catBenchPins'). It is read from a language-neutral JSON file
-    ('cataloguePath') so the Haskell consumers here and the Node corpus-capture
-    script read the same committed source;
+    lists. Those are the gnarly-version names the version-oracle smoke
+    differential exercises ('smokeRegistryPackages') and the benchmark-corpus
+    capture pins ('catBenchPins'). A language-neutral JSON file holds it
+    ('cataloguePath'), so
+    the Haskell consumers here and the Node corpus-capture script read the same
+    committed source.
 
   * the __fetch__ ('fetchPackumentBody', 'fetchVersions') is the single live
-    HTTP path to a registry's version-listing endpoint ('registryUrl'), with
-    parsing routed through each ecosystem's canonical wire decoder
+    HTTP path to a registry's version-listing endpoint ('registryUrl'). Parsing
+    routes through each ecosystem's canonical wire decoder
     ('parseRegistryVersions').
 
-Per-consumer processing stays at the call site: the version-oracle differential
-keeps every published version (prereleases included, since ordering is the point),
-while the benchmark corpus trims to stable releases in its own Node capture script.
+Per-consumer processing stays at the call site. The version-oracle differential keeps
+every published version, prereleases included, because ordering is the point. The
+benchmark corpus trims to stable releases in its own Node capture script.
 
-Every fetch is total: a network failure, a non-2xx status, or an undecodable body
-yields 'Nothing', so a live tier can pend on absence rather than crash.
+Every fetch is total. A network failure, a non-2xx status, or an undecodable body yields
+'Nothing', so a live tier pends on absence instead of crashing.
 -}
 module Ecluse.Test.RegistryCapture (
     -- * The curated catalogue
@@ -99,24 +100,24 @@ cataloguePath = "bench/corpus/pins.json"
 decodeCatalogue :: LByteString -> Either String Catalogue
 decodeCatalogue = eitherDecode
 
-{- | Read and decode the committed catalogue from 'cataloguePath'. Fails loudly if
-the file is missing or malformed -- a committed-data defect, not a runtime condition
-a caller decides on.
+{- | Read and decode the committed catalogue from 'cataloguePath'. A missing or
+malformed file fails loudly: that is a committed-data defect, not a runtime condition a
+caller decides on.
 -}
 loadCatalogue :: IO Catalogue
 loadCatalogue = do
     raw <- readFileLBS cataloguePath
     either (\e -> fail (cataloguePath <> " did not decode: " <> e)) pure (decodeCatalogue raw)
 
-{- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem --
-the shape the version-oracle differential iterates.
+{- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem. This
+is the shape the version-oracle differential iterates.
 -}
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]
 smokeRegistryPackages = Map.toList . catSmokeNames
 
-{- | The registry endpoint that lists a package's published versions. A scoped npm
-name is percent-encoded (@\@types\/node@ → @\@types%2Fnode@); the other ecosystems
-take a bare name.
+{- | The registry endpoint that lists a package's published versions. It percent-encodes
+a scoped npm name (@\@types\/node@ → @\@types%2Fnode@). The other ecosystems take a bare
+name.
 -}
 registryUrl :: Ecosystem -> Text -> Text
 registryUrl eco pkg = case eco of
@@ -128,9 +129,9 @@ registryUrl eco pkg = case eco of
 captureUserAgent :: ByteString
 captureUserAgent = "ecluse-registry-capture"
 
-{- | Fetch a package's raw version-listing body from its registry. 'Nothing' on any
-network failure, a non-2xx status (a 404 throws via 'parseUrlThrow'), or a missing
-endpoint -- so a live tier pends on absence rather than failing.
+{- | Fetch a package's raw version-listing body from its registry. The result is
+'Nothing' on any network failure, a non-2xx status ('parseUrlThrow' throws on a 404), or
+a missing endpoint. A live tier therefore pends on absence instead of failing.
 -}
 fetchPackumentBody :: Manager -> Ecosystem -> Text -> IO (Maybe LByteString)
 fetchPackumentBody manager eco pkg = do
@@ -146,23 +147,24 @@ fetchPackumentBody manager eco pkg = do
         Left (_ :: SomeException) -> Nothing
         Right body -> Just body
 
-{- | Fetch a package's published version strings from its registry -- the fetch
-layered with each ecosystem's canonical decode. 'Nothing' when the fetch fails or
-the body does not decode for that ecosystem. Every published version is kept,
-prereleases included; trimming, where wanted, is the caller's job.
+{- | Fetch a package's published version strings from its registry: the fetch layered
+with each ecosystem's canonical decode. The result is 'Nothing' when the fetch fails or
+the body does not decode for that ecosystem. It keeps every published version,
+prereleases included. Trimming, where wanted, is the caller's job.
 -}
 fetchVersions :: Manager -> Ecosystem -> Text -> IO (Maybe [Text])
 fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
-{- | Extract a registry response's published version strings through each
-ecosystem's __canonical__ wire decoder -- npm through the production version-list
-extractor ('Ecluse.Core.Registry.Npm.Project.parseVersionList'), the PyPI project
-JSON ('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
-('Ecluse.Test.Registry.Rubygems.Wire.VersionListing') -- rather than re-parsing the
-JSON here. Routing npm through the production decoder keeps the version-oracle
-differential honest: it compares what the serve path actually decodes, not a parallel
-decoder. 'Nothing' if the body does not decode for that ecosystem.
+{- | Extract a registry response's published version strings through each ecosystem's
+__canonical__ wire decoder, not a re-parse of the JSON here. The npm path goes through
+the production version-list extractor
+('Ecluse.Core.Registry.Npm.Project.parseVersionList'), PyPI through the project JSON
+('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), and RubyGems through the versions array
+('Ecluse.Test.Registry.Rubygems.Wire.VersionListing'). Routing npm through the
+production decoder keeps the version-oracle differential honest: it compares what the
+serve path decodes, not a parallel decoder. The result is 'Nothing' if the body does not
+decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of

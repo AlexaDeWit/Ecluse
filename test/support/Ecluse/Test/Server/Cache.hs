@@ -4,11 +4,11 @@
 
 {- | Test and bench fixtures for "Ecluse.Core.Server.Cache".
 
-This mirrors the module under test, under the @Ecluse.X -> Ecluse.Test.X@
-convention this support library follows: the cache tunables the suites and the
-performance harnesses build a metadata cache with when the tunables themselves
-are not the axis under test. The live proxy derives its 'CacheConfig' from
-configuration; this fixture stands in for that config-derived value.
+The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@
+convention. It holds the cache tunables the suites and the performance harnesses
+build a metadata cache with when the tunables are not the axis under test. The
+live proxy derives its 'CacheConfig' from configuration. This fixture stands in
+for that config-derived value.
 -}
 module Ecluse.Test.Server.Cache (
     -- * Cache configuration fixtures
@@ -17,12 +17,12 @@ module Ecluse.Test.Server.Cache (
 
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 
-{- | The standard cache-tunables fixture: a 60-second TTL over a 256 MiB cache
-aggregate split into the three stores' sub-budgets the way the live composition
-root splits it (full 60%, version 15% at four times the entries, assembled the
-remainder). Suites and harnesses pass it to
-'Ecluse.Core.Server.Cache.newMetadataCache' wherever a cache is needed and the
-tunables are not the axis under test.
+{- | The standard cache-tunables fixture: a 60-second TTL over a 256 MiB aggregate.
+The fixture splits that aggregate into three sub-budgets the way the live
+composition root does. Full takes 60%, version takes 15% at four times the
+entries, and assembled takes the remainder. Suites and harnesses pass the fixture
+to 'Ecluse.Core.Server.Cache.newMetadataCache' wherever a spec needs a cache and
+the tunables are not the axis under test.
 -}
 defaultCacheConfig :: CacheConfig
 defaultCacheConfig =

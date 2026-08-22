@@ -5,22 +5,21 @@
 {- | Digest-pinned container image references for the integration and end-to-end
 suites.
 
-Écluse is a supply-chain-security tool, so every image its test harness pulls, runs,
-or builds @FROM@ must be nailed to an immutable @\@sha256:@ digest and never a mutable
-tag: a tag can be re-pointed at a poisoned image between one pull and the next, while a
-content-addressed digest verifies the bytes on every pull. Rather than scan the harness
-for stray tags after the fact, this module makes an unpinned reference /unrepresentable/
-at a pull site: the only way to obtain a 'PinnedImageRef' is through the validating
-'mkPinnedImageRef', which rejects a bare tag, so a pull site (which accepts only a
-'PinnedImageRef') can never be handed one. A harness resolves its raw literals through
-'mkPinnedImageRef' at startup and fails loudly on a 'Left', so an unpinned literal aborts
-the suite before it pulls anything.
+Écluse is a supply-chain policy proxy. Every image its test harness pulls, runs, or
+builds @FROM@ must therefore name an immutable @\@sha256:@ digest, never a mutable tag.
+An attacker can re-point a tag at a poisoned image between one pull and the next. A
+content-addressed digest verifies the bytes on every pull. This module makes an unpinned
+reference /unrepresentable/ at a pull site, rather than scanning the harness for stray
+tags after the fact. The only way to obtain a 'PinnedImageRef' is the validating
+'mkPinnedImageRef', which rejects a bare tag. A pull site accepts only a
+'PinnedImageRef', so no unpinned reference can reach it. A harness resolves its raw
+literals through 'mkPinnedImageRef' at startup and fails loudly on a 'Left'. An unpinned
+literal therefore aborts the suite before it pulls anything.
 
-'ImageRef' then distinguishes the two kinds of image a harness names: a 'PinnedExternal'
-image pulled from a registry (which /must/ be pinned) and a 'LocallyBuilt' image
-produced by the run itself (built each run, never pulled, so never pinned). Making that a
-sum type turns the distinction into a type-checked fact instead of a special case at the
-@docker run@ site.
+'ImageRef' then distinguishes the two kinds of image a harness names. A 'PinnedExternal'
+image comes from a registry and /must/ be pinned. The run produces a 'LocallyBuilt' image
+itself: built each run, never pulled, so never pinned. The sum type turns that
+distinction into a type-checked fact, instead of a special case at the @docker run@ site.
 -}
 module Ecluse.Test.Container.Image (
     -- * A pinned reference
@@ -39,15 +38,15 @@ import Data.Text qualified as T
 {- | A container image reference nailed to an immutable digest: @\<name\>\@sha256:\<64
 lowercase hex\>@. The constructor is hidden, so the only way to build one is
 'mkPinnedImageRef', which rejects a bare tag. A value of this type therefore already
-carries the "is pinned" invariant, and no pull site can be handed an unpinned reference.
+carries the "is pinned" invariant, so no unpinned reference can reach a pull site.
 -}
 newtype PinnedImageRef = PinnedImageRef Text
     deriving stock (Eq, Show)
 
 {- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@, returning the
-'PinnedImageRef' or a reason. Rejects a bare tag (no digest at all), an empty repository
-name, and a digest that is not exactly 64 lowercase hexadecimal characters (a short,
-long, or upper-cased digest).
+'PinnedImageRef' or a reason. Rejects a bare tag (no digest at all) and an empty
+repository name. It also rejects a digest that is not exactly 64 lowercase hexadecimal
+characters: short, long, or upper-cased.
 -}
 mkPinnedImageRef :: Text -> Either Text PinnedImageRef
 mkPinnedImageRef raw =
@@ -75,13 +74,13 @@ isLowerHex c = isDigit c || (c >= 'a' && c <= 'f')
 renderPinnedImageRef :: PinnedImageRef -> Text
 renderPinnedImageRef (PinnedImageRef ref) = ref
 
-{- | An image a harness names at a @docker run@ or @docker build FROM@ site: either a
-'PinnedExternal' image pulled from a registry (which must carry a digest) or a
-'LocallyBuilt' image the run produced itself (built each run, never pulled, so it carries
-no digest and is named by its plain tag).
+{- | An image a harness names at a @docker run@ or @docker build FROM@ site. A
+'PinnedExternal' image comes from a registry and must carry a digest. The run produces a
+'LocallyBuilt' image itself, each run and never pulled, so it carries no digest and takes
+its plain tag as its name.
 -}
 data ImageRef
-    = -- | An external image pulled from a registry; digest-pinned by construction.
+    = -- | An external image pulled from a registry, digest-pinned by construction.
       PinnedExternal PinnedImageRef
     | -- | An image built by the run itself, named by its plain local tag.
       LocallyBuilt Text

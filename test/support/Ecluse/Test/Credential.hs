@@ -6,9 +6,9 @@
 
 'noCredentialReporters' is the inert 'CredentialReporters': a provider built with it
 records nothing on either the mint breaker's transitions or a refresh outcome. The
-suites hand it to the provider constructors as the "do not observe" argument, so a
-credential test drives the refresh/mint policy without wiring a telemetry substrate.
-The production composition root passes real reporters instead.
+suites hand it to the provider constructors as the "do not observe" argument. A
+credential test then drives the refresh and mint policy without wiring a telemetry
+substrate. The production composition root passes real reporters instead.
 -}
 module Ecluse.Test.Credential (
     noCredentialReporters,

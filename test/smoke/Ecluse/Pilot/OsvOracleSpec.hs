@@ -2,12 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Smoke tier: compile the /live/ osv.dev npm export through the same
-one-shot path operators script ('Ecluse.Pilot.runPilotCompile') and
-sanity-check the artifact's advisory population. This is the drift alarm for
-the upstream feed: a schema change at osv.dev that our parser silently drops
-shows up here as a collapsed row count long before it would surface in a
-production sync.
+{- | Smoke tier: compile the /live/ osv.dev npm export through the same one-shot
+path operators script ('Ecluse.Pilot.runPilotCompile'), and sanity-check the
+artifact's advisory population. This is the drift alarm for the upstream feed. A
+schema change at osv.dev that our parser silently drops collapses the row count
+here. That happens long before a production sync would surface it.
 
 Non-gating by design (the smoke tier): osv.dev is an uncontrolled external
 service, so the test pends rather than fails when it is unreachable. A red
@@ -56,8 +55,8 @@ spec = describe "osv.dev npm export (live oracle)" $
                     close conn
                     -- Floors, not exact counts: the live dataset only grows.
                     -- npm carries thousands of advisories, and lodash's are
-                    -- years old and permanent; dropping below either floor
-                    -- means the parser and the feed have stopped agreeing.
+                    -- years old and permanent. Dropping below either floor
+                    -- means the parser and the feed no longer agree.
                     map fromOnly total `shouldSatisfy` any (>= 1000)
                     map fromOnly lodash `shouldSatisfy` any (>= 1)
 

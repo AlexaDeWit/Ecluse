@@ -11,10 +11,10 @@ structurally aligned while leaving each suite's axis-specific values at the call
 calculation without owning their clock.
 
 'defaultNpmConfig' is the anonymous public-registry config a suite hands to the npm data
-plane ("Ecluse.Core.Registry.Npm"); 'publicRegistryBaseUrl' and 'publicRegistryUrl' are the
-canonical public npm registry as text and as an https 'RegistryUrl' (built through
-'Ecluse.Test.Package.unsafeRegistryUrl', over the https-only
-'Ecluse.Core.Security.Egress.mkRegistryUrl').
+plane ("Ecluse.Core.Registry.Npm"). 'publicRegistryBaseUrl' and 'publicRegistryUrl' give
+the canonical public npm registry as text and as an https 'RegistryUrl'. That
+'RegistryUrl' comes from 'Ecluse.Test.Package.unsafeRegistryUrl', over the https-only
+'Ecluse.Core.Security.Egress.mkRegistryUrl'.
 -}
 module Ecluse.Test.Registry.Npm (
     -- * Packument fixtures
@@ -45,7 +45,7 @@ import Ecluse.Test.Package (unsafeRegistryUrl)
 
 {- | The common fields of an npm version object. 'vsExtraPairs' carries fields whose
 exact representation belongs to a particular test axis, such as dependencies or an
-explicit @hasInstallScript@ signal; an extra pair overrides the common field with the
+explicit @hasInstallScript@ signal. An extra pair overrides the common field with the
 same key.
 -}
 data VersionSpec = VersionSpec
@@ -66,8 +66,8 @@ data VersionSpec = VersionSpec
     }
     deriving stock (Eq, Show)
 
-{- | Start a version fixture with its identity and tarball URL; optional digests,
-install scripts, and site-specific fields are absent until the caller opts into them.
+{- | Start a version fixture with its identity and tarball URL. Optional digests,
+install scripts, and site-specific fields stay absent until the caller opts into them.
 -}
 versionSpec :: Text -> Text -> Text -> VersionSpec
 versionSpec name version tarballUrl =
@@ -81,9 +81,8 @@ versionSpec name version tarballUrl =
         , vsExtraPairs = []
         }
 
-{- | Build the faithful npm version-object shape shared by the test suites. Optional
-digest fields are absent when unspecified, matching registry metadata rather than
-encoding them as @null@.
+{- | Build the npm version-object shape the test suites share. An unspecified digest
+field is absent, matching registry metadata instead of encoding it as @null@.
 -}
 versionValue :: VersionSpec -> Value
 versionValue spec =
@@ -102,7 +101,7 @@ versionValue spec =
         )
 
 {- | Build an npm packument from its decision-bearing fields. The caller supplies the
-complete @time@ map because created/modified bookkeeping differs by fixture; extra
+complete @time@ map because created and modified bookkeeping differs by fixture. Extra
 top-level pairs preserve site-specific relay or benchmark fields.
 -}
 packumentValue ::
@@ -132,7 +131,7 @@ publishedDaysAgo :: UTCTime -> Integer -> Text
 publishedDaysAgo now ageDays =
     toText (iso8601Show (addUTCTime (negate (fromInteger ageDays * nominalDay)) now))
 
--- Apply site-specific fields last so their exact representation wins deliberately.
+-- Apply site-specific fields last so their exact representation wins.
 objectWithExtraPairs :: [Pair] -> [Pair] -> Value
 objectWithExtraPairs common extra =
     Object (foldl' insertPair (KeyMap.fromList common) extra)
