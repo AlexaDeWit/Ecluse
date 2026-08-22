@@ -218,10 +218,8 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
         let regs = mountRegistries mount
         pure
             PackumentDeps
-                { -- The mount's upstreams and the tarball-host gate they derive, bound
-                  -- once: the gate falls out of the same URL values the cluster carries
-                  -- (the adapter's declared artifact hosts are the ecosystem's own
-                  -- same-host equivalence), so no second argument list can drift from it.
+                { -- The leading argument is the adapter's declared artifact hosts: the
+                  -- ecosystem's own same-host equivalence for the tarball gate.
                   pdUpstreams =
                     mountUpstreams
                         (artifactHosts (adapterArtifact adapter))

@@ -58,7 +58,9 @@ data MirrorServePlan
 
 {- | A mount's three configured upstreams and the tarball-host gate they derive, as one
 value. Exported __abstract__: 'mountUpstreams' is the only way to obtain one, so the
-carried gate is always the gate of the carried URLs.
+carried gate is always the gate of the carried URLs. The derived 'Eq' and 'Show' are a
+test and debug affordance (an assertion's failure message, a fixture comparison), not a
+way around the builder.
 -}
 data MountUpstreams = MountUpstreams
     { muPrivateBaseUrl :: Maybe Text
@@ -74,11 +76,12 @@ base URL ('Nothing' for a serve-only pure public gate), the public upstream base
 the mirror serve plan.
 
 The tarball-host gate falls out of these arguments rather than being supplied beside
-them: this is the only caller of 'Ecluse.Core.Security.tarballHostGate' outside
-"Ecluse.Core.Security" itself, so a mount's allowlist and reference authorities have one
-derivation and cannot be assembled from a second, drifting argument list. The composition
-root calls this once per mount (test fixtures likewise); the result is carried on the
-serve dependencies, so the per-request gate reads precomputed fields.
+them: across the library and the application this is the only caller of
+'Ecluse.Core.Security.tarballHostGate' (the gate's own specs call it directly, as an
+oracle), so a mount's allowlist and reference authorities have one derivation and cannot
+be assembled from a second, drifting argument list. The composition root calls this once
+per mount (test fixtures likewise); the result is carried on the serve dependencies, so
+the per-request gate reads precomputed fields.
 -}
 mountUpstreams :: [Text] -> Maybe Text -> Text -> MirrorServePlan -> MountUpstreams
 mountUpstreams ecosystemHostUrls privateBaseUrl publicBaseUrl mirror =

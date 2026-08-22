@@ -117,19 +117,23 @@ inertPackumentDeps =
     fixedNow :: UTCTime
     fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
-{- | Rebind a fixture's upstreams with the private base URL replaced. The
-tarball-host gate re-derives, since the cluster is rebuilt through its one builder.
+{- | Rebind a fixture's upstreams with the private base URL replaced. The tarball-host
+gate re-derives, since the cluster is rebuilt through its one builder. Rebinds with no
+ecosystem artifact hosts, so a fixture wanting both applies 'withEcosystemHosts' last.
 -}
 withPrivateBaseUrl :: Maybe Text -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
 {- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the
 old one (rewriting a host, say); a mount with no private upstream stays without one.
+Drops any declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
 -}
 overPrivateBaseUrl :: (Text -> Text) -> PackumentDeps -> PackumentDeps
 overPrivateBaseUrl f = rebind [] (fmap f) id
 
--- | Rebind a fixture's upstreams with the mirror serve plan replaced.
+{- | Rebind a fixture's upstreams with the mirror serve plan replaced. Drops any
+declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
+-}
 withMirrorPlan :: MirrorServePlan -> PackumentDeps -> PackumentDeps
 withMirrorPlan mirror = rebind [] id (const mirror)
 
@@ -140,9 +144,10 @@ upstream URLs are carried over unchanged; the hosts join the gate's allowlist.
 withEcosystemHosts :: [Text] -> PackumentDeps -> PackumentDeps
 withEcosystemHosts ecosystemHosts = rebind ecosystemHosts id id
 
--- The one rebinding point every fixture tweak routes through: read the upstream axes
--- back off the deps, change the ones asked for, and rebuild the cluster so the gate is
--- derived from what the result actually carries.
+-- The one rebinding point every fixture tweak routes through: rebuild the cluster from
+-- the given ecosystem hosts and the URL axes read back off the deps, so the gate is
+-- derived from what the result actually carries. The hosts are an argument, not a value
+-- the cluster carries, so each rebind states them or drops them.
 rebind :: [Text] -> (Maybe Text -> Maybe Text) -> (MirrorServePlan -> MirrorServePlan) -> PackumentDeps -> PackumentDeps
 rebind ecosystemHosts onPrivate onMirror d =
     d{pdUpstreams = mountUpstreams ecosystemHosts (onPrivate (pdPrivateBaseUrl d)) (pdPublicBaseUrl d) (onMirror (pdMirror d))}
