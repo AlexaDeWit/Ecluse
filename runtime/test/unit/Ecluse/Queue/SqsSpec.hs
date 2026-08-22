@@ -90,9 +90,9 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
-{- | A job body carrying every required field and __no @traceContext@ key at all__
-(a job enqueued with tracing off) -- the shape the optional-carrier decode must
-accept, decoding it to a 'Nothing' carrier.
+{- | A job body carrying every required field and __no @traceContext@ key at all__, as
+a job enqueued with tracing off does. This is the shape the optional-carrier decode
+must accept, decoding it to a 'Nothing' carrier.
 -}
 noTraceContextBody :: Text
 noTraceContextBody =
@@ -126,8 +126,8 @@ spec = do
 
         it "decodes a job body with no traceContext key to a Nothing carrier" $
             -- A job enqueued with tracing off carries no "traceContext" key at all
-            -- (not even a null). It must decode to a valid job with no carrier -- the
-            -- '.:?'-absent path -- rather than fail, so an absent carrier costs
+            -- (not even a null). It must decode to a valid job with no carrier, the
+            -- '.:?'-absent path, rather than fail. An absent carrier then costs
             -- nothing but the span link.
             case decodeJob mkRegistryUrl noTraceContextBody of
                 Left err -> expectationFailure (toString err)
@@ -200,7 +200,7 @@ spec = do
         it "defaults the visibility timeout to 30 seconds" $
             sqsVisibilityTimeout cfg `shouldBe` Seconds 30
         it "defaults the redelivery budget to the shared shipped value" $
-            -- The floor an unconfigured backend runs on; a configured deployment gets
+            -- The floor an unconfigured backend runs on. A configured deployment gets
             -- the operator's ECLUSE_QUEUE__MAX_RECEIVE_COUNT here instead.
             sqsMaxReceiveCount cfg `shouldBe` defaultDeliveryBudget
 
@@ -219,13 +219,13 @@ spec = do
                 `shouldBe` TerminusAttached (Just (DeliveryBudget 10))
 
         it "reads the capture count from a policy that states it as a number" $
-            -- Emulators and some SDK paths render it unquoted; both are the same policy.
+            -- Emulators and some SDK paths render it unquoted. Both spell one policy.
             deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":4}")
                 `shouldBe` TerminusAttached (Just (DeliveryBudget 4))
 
         it "still reports a terminus when the policy's count cannot be read" $ do
-            -- An operator who has a dead-letter queue must never be warned that they
-            -- have none; only the capture count is lost, so the configured floor stands.
+            -- The boot warning must never fire for an operator who has a dead-letter
+            -- queue. Only the capture count is lost, so the configured floor stands.
             deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\"}")
                 `shouldBe` TerminusAttached Nothing
             deadLetterTerminusOf (Just "not json at all") `shouldBe` TerminusAttached Nothing
@@ -234,8 +234,9 @@ spec = do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
-            -- Only the well-formed message is delivered; the three poison ones are dropped
-            -- (omitted from the result and left un-acked for redelivery / dead-lettering).
+            -- Only the well-formed message is delivered. The three poison ones are
+            -- dropped, omitted from the result and left un-acked for redelivery or
+            -- dead-lettering.
             map msgJob delivered `shouldBe` [npmJob]
 
         it "logs each drop at Debug with its reason and message id, never the body" $ do
@@ -261,15 +262,15 @@ spec = do
             map msgReceiveCount delivered `shouldBe` [1, 3, 17]
 
         it "reads a missing or unusable count as a first delivery" $ do
-            -- A message is only ever judged past its budget on evidence: an absent
-            -- attribute (SQS omits it unless asked for), or one that is not a usable
-            -- count, must never retire a job that may only have been tried once.
+            -- Only evidence ever puts a message past its budget. SQS omits the
+            -- attribute unless a request asks for it. A value that is not a usable
+            -- count says nothing. Neither may retire a job tried only once.
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
-{- | One well-formed message and one of each drop cause (missing body, missing
-receipt, undecodable body), each with a distinct message id so the drop log's id
+{- | One well-formed message and one of each drop cause: missing body, missing
+receipt, undecodable body. Each carries a distinct message id, so the drop log's id
 field is assertable. The well-formed and the missing-receipt entries carry valid
 bodies, isolating the receipt check from the decode.
 -}
@@ -282,7 +283,7 @@ poisonBatch =
     ]
 
 -- A well-formed received message carrying the given raw @ApproximateReceiveCount@,
--- so the delivery-count lift is exercised without the AWS types.
+-- so a test drives the delivery-count lift without the AWS types.
 deliveredWithCount :: Maybe Text -> ReceivedMessage
 deliveredWithCount raw =
     ReceivedMessage
@@ -293,8 +294,7 @@ deliveredWithCount raw =
         }
 
 {- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
-severity admitted, so a drop line's serialised bytes are assertable through
-'captureStdout'.
+severity admitted. 'captureStdout' can then assert a drop line's serialised bytes.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do
@@ -303,7 +303,7 @@ jsonLogEnv = do
     registerScribe "stdout" scribe defaultScribeSettings base
 
 {- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning what
-was written, and restore 'stdout' on every exit path, so a test can capture what a
+was written, and restore 'stdout' on every exit path. A test then captures what a
 scribe emits without leaking it into the run.
 -}
 captureStdout :: IO () -> IO Text

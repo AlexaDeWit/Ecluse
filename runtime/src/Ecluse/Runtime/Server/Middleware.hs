@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The front door's cross-cutting middleware pieces and the control-plane health
-endpoints: the drain-aware going-away header, the per-request timeout knob, and the
-@\/livez@ \/ @\/readyz@ probe application. "Ecluse.Runtime.Server"'s @serverMiddleware@
-composes the pieces around the proxy 'Application'; its dispatch answers the probes
+endpoints. Those are the drain-aware going-away header, the per-request timeout knob,
+and the @\/livez@ \/ @\/readyz@ probe application. "Ecluse.Runtime.Server"'s @serverMiddleware@
+composes the pieces around the proxy 'Application'. Its dispatch answers the probes
 through 'probeApplication'. The request-body cap is not here: it is a route concern,
 enforced at the read site by the only body-consuming route (publish).
 -}
@@ -28,11 +28,12 @@ import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modif
 
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
-{- | While the instance is draining, stamp @Connection: close@ on every response so a
-keep-alive client (or a mesh connection pool) does not reuse the socket on a closing
-instance; while serving, pass responses through untouched. The flag is read
-per-response -- the same one-way 'DrainSignal' the readiness probe observes -- so the
-header appears the moment the drain begins and on every response thereafter.
+{- | While the instance is draining, stamp @Connection: close@ on every response. A
+keep-alive client, or a mesh connection pool, then does not reuse the socket on a
+closing instance. While serving, pass responses through untouched. The middleware
+reads the flag per response, the same one-way 'DrainSignal' the readiness probe
+observes. The header therefore appears the moment the drain begins, and on every
+response after it.
 -}
 goingAwayMiddleware :: DrainSignal -> Middleware
 goingAwayMiddleware drain app request respond = do
@@ -41,8 +42,8 @@ goingAwayMiddleware drain app request respond = do
         then modifyResponse closeConnection app request respond
         else app request respond
   where
-    -- Add @Connection: close@ to the response's header set. A streaming response
-    -- keeps streaming -- only its headers are rewritten.
+    -- Add @Connection: close@ to the response's header set. A streaming response keeps
+    -- streaming: only its headers are rewritten.
     closeConnection :: Response -> Response
     closeConnection = mapResponseHeaders ((hConnection, "close") :)
 
@@ -52,10 +53,10 @@ fetch, bounded so a stuck upstream cannot pin a handler indefinitely.
 timeoutSeconds :: Int
 timeoutSeconds = 60
 
-{- | The control-plane health probes, answered above any mount: @\/livez@ from the
-injected liveness check (the worker-heartbeat arm folded in by the caller),
-@\/readyz@ from the drain signal ANDed with the composition root's startup gate,
-and any other unmounted path as the neutral @404@.
+{- | The control-plane health probes, answered above any mount. The @\/livez@ probe
+answers from the injected liveness check, the worker-heartbeat arm folded in by the
+caller. The @\/readyz@ probe answers from the drain signal ANDed with the composition
+root's startup gate. Any other unmounted path is the neutral @404@.
 -}
 probeApplication :: DrainSignal -> IO Bool -> IO Bool -> Application
 probeApplication drain checkReady checkLiveness request respond =
@@ -70,18 +71,18 @@ probeApplication drain checkReady checkLiveness request respond =
 
 {- Readiness (@\/readyz@): @200@ when config is loaded and the listener is serving,
 @503@ once the instance is __draining__. It is deliberately __lenient about
-public-upstream reachability__ -- the proxy still serves private-upstream hits when
-public is down -- so readiness must not flap on an upstream blip and pull a healthy
+public-upstream reachability__, because the proxy still serves private-upstream hits
+when public is down. Readiness must not flap on an upstream blip and pull a healthy
 pod from rotation.
 
-The drain flip is the load-balancer signal of a graceful rollover: while the
-'DrainSignal' is raised, readiness fails so an upstream LB or service mesh stops
-routing __new__ traffic here, while in-flight requests finish (see
+The drain flip is the load-balancer signal of a graceful rollover. While the
+'DrainSignal' is raised, readiness fails. An upstream load balancer or service mesh
+then stops routing __new__ traffic here while in-flight requests finish (see
 @docs\/architecture\/web-layer.md@ → "Graceful shutdown").
 
-The additional check is the composition root's startup gate (@scCheckReady@):
-a one-way flip (today, the advisory database's first sync), so it cannot flap
-a pod out of rotation once ready.
+The second check is the composition root's startup gate (@scCheckReady@). It is a
+one-way flip, today the advisory database's first sync, so it cannot flap a pod out of
+rotation once ready.
 -}
 readiness :: DrainSignal -> IO Bool -> IO Response
 readiness drain checkReady =
@@ -93,8 +94,8 @@ readiness drain checkReady =
                 True -> jsonResponse status200 "{\"status\":\"ready\"}"
 
 {- A path matching no configured mount: a generic @404 Not Found@ in @text\/plain@.
-This tier sits above the mounts, so there is no ecosystem to shape it -- the body is
-kept as readable as possible to whatever client reached an unmounted path.
+This tier sits above the mounts, so there is no ecosystem to shape it. The body stays
+as readable as possible to whatever client reached an unmounted path.
 -}
 notFound :: Response
 notFound =

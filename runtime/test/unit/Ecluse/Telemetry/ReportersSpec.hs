@@ -22,13 +22,13 @@ import Ecluse.Runtime.Telemetry.Reporters (
  )
 
 {- | Tests for the bridge from the providers' telemetry-agnostic reporters to the live
-instruments, and for the deferral that lets a pre-telemetry provider record once the
-substrate exists. The crux is that the bridge is __total and inert when telemetry is
-off__: a record through it before installation does nothing, and after installation of
-the no-op-meter instruments ('newMetrics' on a disabled handle) still discards every
-measurement -- the property the boot-time providers rely on to record unconditionally.
-The state projection is checked directly. No SDK is initialised (that is the integration
-tier), so these run pure of any exporter.
+instruments. They also cover the deferral that lets a pre-telemetry provider record
+once the substrate exists. The crux is that the bridge is __total and inert when
+telemetry is off__. A record through it before installation does nothing. After
+installation of the no-op-meter instruments ('newMetrics' on a disabled handle) it
+still discards every measurement. That is the property the boot-time providers rely on
+to record unconditionally. These cases check the state projection directly. No SDK is
+initialised, since that is the integration tier, so these run pure of any exporter.
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Reporters" $ do

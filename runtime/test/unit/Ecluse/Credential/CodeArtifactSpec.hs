@@ -17,15 +17,15 @@ import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..), providerForEnv)
 import Ecluse.Test.Credential (noCredentialReporters)
 
-{- | Component test for the CodeArtifact credential leaf with __no live AWS__: an
-in-process HTTP stub answers @GetAuthorizationToken@ with a canned response (the
-shape from the API reference -- @{"authorizationToken": string, "expiration":
-number}@, a @200@), and an @amazonka@ 'AWS.Env' is pointed at it via an endpoint
-override with static credentials. This drives the real mint path -- request build,
-SigV4 signing, response parse, token + expiry extraction -- that the secret-gated
-smoke test can only reach against the real service. (The token is a control-plane
-AWS API call, not the npm protocol, so an npm-registry emulator cannot stand in;
-the endpoint shim is the injection point.)
+{- | Component test for the CodeArtifact credential leaf with __no live AWS__. An
+in-process HTTP stub answers @GetAuthorizationToken@ with a canned response, the shape
+from the API reference: @{"authorizationToken": string, "expiration": number}@ and a
+@200@. An @amazonka@ 'AWS.Env' points at it through an endpoint override with static
+credentials. This drives the real mint path that the secret-gated smoke test can only
+reach against the real service. That path is request build, SigV4 signing, response
+parse, and token plus expiry extraction. The token is a control-plane AWS API call, not the npm
+protocol, so an npm-registry emulator cannot stand in. The endpoint shim is the
+injection point.
 -}
 spec :: Spec
 spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
@@ -58,7 +58,7 @@ spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
 
     -- An amazonka Env with static (dummy) credentials, its endpoint overridden to
     -- the in-process stub. The stub ignores the SigV4 signature, so any well-formed
-    -- credentials suffice; the region is supplied by the provider from the config.
+    -- credentials suffice. The provider supplies the region from the config.
     stubEnv :: Int -> IO AWS.Env
     stubEnv port = do
         base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))

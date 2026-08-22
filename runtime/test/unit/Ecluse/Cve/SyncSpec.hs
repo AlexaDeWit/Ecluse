@@ -57,8 +57,8 @@ withSyncEnv use =
                     }
         use dir slot envWith
 
-{- | A typed stand-in for an exception escaping the fetch's typed contract (a
-broken harness premise or a simulated invariant break), so no double throws a
+{- | A typed stand-in for an exception escaping the fetch's typed contract: a broken
+harness premise, or a simulated invariant break. No test double in this spec throws a
 stringly exception.
 -}
 newtype SyncSpecEscape = SyncSpecEscape Text
@@ -86,9 +86,9 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
 
-{- | Poll a condition (bounded, ~5s) and fail the case naming what never happened. The
-one wait shape the asynchronous cases share: the sync task runs on its own schedule, so
-every assertion about it is a wait rather than a synchronous read.
+{- | Poll a condition (bounded, ~5s) and fail the case naming what never happened. This
+is the one wait shape the asynchronous cases share. The sync task runs on its own
+schedule, so every assertion about it is a wait rather than a synchronous read.
 -}
 waitFor :: Text -> IO Bool -> IO ()
 waitFor what ready = go (200 :: Int)
@@ -110,15 +110,15 @@ runQuiet action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
 
-{- | The sync task over inert observation ports, for the scheduling cases: telemetry is
-observation only, so the loop's behaviour is asserted with nothing recording.
+{- | The sync task over inert observation ports, for the scheduling cases. Telemetry is
+observation only, so these cases assert the loop's behaviour with nothing recording.
 -}
 runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
 runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
 
-{- | A schedule that yields exactly __one__ attempt: an empty boot backoff spends the
-burst budget on the first attempt whatever it concludes, and the steady poll's first
-interval outlasts any test. That determinism is what lets the observation cases assert an
+{- | A schedule that yields exactly __one__ attempt. An empty boot backoff spends the
+burst budget on the first attempt, whatever that attempt concludes. The steady poll's
+first interval outlasts any test. That determinism lets the observation cases assert an
 exact count rather than a lower bound.
 -}
 oneAttempt :: SyncSchedule
@@ -133,10 +133,10 @@ data Observed = Observed
     , obsDurations :: [(Ecosystem, AdvisorySyncResult, Double)]
     }
 
-{- | Drive the sync loop over recording ports until it has bracketed @wanted@ attempts,
-then read back everything the three recorders saw. The wait is on the __span__ reader,
-which the bracket records after the body, so the metric readers are settled for every
-attempt the span reader has already seen.
+{- | Drive the sync loop over recording ports until it brackets @wanted@ attempts, then
+read back everything the three recorders saw. The wait reads the __span__ reader, which
+the bracket records after the body. The metric readers are therefore settled for every
+attempt the span reader already shows.
 -}
 observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
@@ -247,7 +247,7 @@ spec = do
         it "residue: a download that throws past its typed contract still discards the partial temp file" $
             withSyncEnv $ \_ _ envWith -> do
                 -- The fetch contract reports every failure as a value, so a throw
-                -- here is an invariant break; the onException guard must still
+                -- here is an invariant break. The onException guard must still
                 -- discard the partial download on its way up.
                 let fetch =
                         CveFetch
@@ -340,7 +340,7 @@ spec = do
                     -- fast poll that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
                 withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule pass)) $ \_ -> do
-                    -- Burst window passes with nothing published; still serving nothing.
+                    -- Burst window passes with nothing published. Still serving nothing.
                     threadDelay 100_000
                     probesFor slot "pkg-a" `shouldReturn` Nothing
                     atomically (writeTVar published True)
@@ -369,8 +369,8 @@ spec = do
     describe "advisory sync observation" $ do
         -- One span, one counter increment, and one latency sample per attempt, each
         -- labelled by the ecosystem and the attempt's own result. The five cases below
-        -- are the five outcomes 'observedStep' folds, so the result vocabulary is covered
-        -- end to end.
+        -- are the five outcomes 'observedStep' folds, so they cover the result
+        -- vocabulary end to end.
         it "observes a swapped-in artifact as one attempt" $
             withSyncEnv $ \_ _ envWith -> do
                 observed <- observeAttempts 1 oneAttempt (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
@@ -404,8 +404,8 @@ spec = do
         it "observes the poll that finds the artifact unchanged" $
             withSyncEnv $ \_ _ envWith -> do
                 -- The burst can only ever start from no last-seen ETag, so an unchanged
-                -- attempt is the poll that follows a settled one; the loop keeps polling,
-                -- so this pins the first two attempts rather than the whole run.
+                -- attempt is the poll that follows a settled one. The loop keeps polling,
+                -- so this case pins the first two attempts rather than the whole run.
                 let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
                 observed <- observeAttempts 2 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
                 truncateObserved 2 observed `shouldObserve` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
@@ -424,7 +424,7 @@ spec = do
             mconcat out `shouldBe` ("abcd" :: ByteString)
 
         it "throws the confined cap exception the moment the stream oversteps the cap" $
-            -- The conduit's mid-stream escape; the adapter boundary ('s3Download')
+            -- The conduit's mid-stream escape. The adapter boundary ('s3Download')
             -- folds it into the 'OsvDbTooLarge' value on the 'CveFetch' channel.
             runConduit (yieldMany (["ab", "cde"] :: [ByteString]) .| cappedAt 4 .| C.sinkList)
                 `shouldThrow` (== OsvDbCapExceeded 4)

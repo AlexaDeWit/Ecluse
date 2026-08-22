@@ -3,29 +3,30 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The runtime metric instruments and the typed emit helpers the hot path records
-through -- the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Core.Telemetry.Metrics").
+through: the IO layer over the pure @ecluse.*@ catalogue
+("Ecluse.Core.Telemetry.Metrics").
 
-"Ecluse.Core.Telemetry.Metrics" defines /what/ the catalogue is (the names and the closed
-set of bounded labels); this module turns that catalogue into live OpenTelemetry
+"Ecluse.Core.Telemetry.Metrics" defines /what/ the catalogue is: the names and the
+closed set of bounded labels. This module turns that catalogue into live OpenTelemetry
 instruments and exposes one typed @record*@ per signal. Each helper takes only the
-bounded label values its metric carries -- never a free identifier -- so the
-bounded-label discipline is enforced at the call site by the type, and the attribute
-set an instrument ever sees is drawn from a small fixed product of the label domains.
+bounded label values its metric carries, never a free identifier. The type therefore
+enforces the bounded-label discipline at the call site. The attribute set an instrument ever
+sees is drawn from a small fixed product of the label domains.
 
 == Gating: inert when telemetry is off
 
 'newMetrics' builds the instruments from the 'Telemetry' handle's meter provider when
 telemetry is enabled, and from the SDK's __no-op meter provider__ when it is not. A
-no-op instrument discards every measurement, so the @record*@ helpers are called
-__unconditionally__ on the hot path and are genuinely inert when telemetry is off -- no
+no-op instrument discards every measurement, so the hot path calls the @record*@
+helpers __unconditionally__. They are genuinely inert when telemetry is off: no
 per-call branch, no provider fabricated at the edge. The 'Metrics' handle is therefore
-total: every signal has a real instrument whichever posture the proxy is in. The no-op
-recording function ignores its arguments, so the 'metricAttributes' a call passes is
-never forced -- no attribute set is materialised when telemetry is off, only a thunk that
-is discarded.
+total, with a real instrument for every signal whichever posture the proxy is in. The
+no-op recording function ignores its arguments, so the 'metricAttributes' a call passes
+is never forced. No attribute set is materialised when telemetry is off, only a thunk
+that is discarded.
 
-The catalogue and the cardinality rule are described in
-@docs\/architecture\/observability.md@.
+@docs\/architecture\/observability.md@ describes the catalogue and the cardinality
+rule.
 -}
 module Ecluse.Runtime.Telemetry.Instruments (
     -- * The instrument handle
@@ -125,9 +126,9 @@ Held in the composition root ("Ecluse.Runtime.Env") so every layer records throu
 instruments.
 
 @http.server.request.duration@ is __not__ here: the WAI instrumentation emits it from
-the server-span meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would double the
-series. The breaker instrument the catalogue names is present; its wiring is layered on as
-the subsystem that owns it is built.
+the server-span meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would
+double the series. The breaker instrument the catalogue names is present. Its wiring is
+layered on as the subsystem that owns it is built.
 -}
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
@@ -160,7 +161,7 @@ data Metrics = Metrics
     }
 
 {- | Build the metric instruments from a 'Telemetry' handle. When telemetry is enabled
-the instruments are created on the handle's meter provider; when it is disabled they
+the instruments are created on the handle's meter provider. When it is disabled they
 are created on the SDK's no-op meter provider, so every recorded measurement is
 discarded and the @record*@ helpers are inert.
 
@@ -226,9 +227,9 @@ ecluseScope = "ecluse"
 
 {- | Project the OpenTelemetry-backed instruments onto the core 'MetricsPort' the
 serve path ("Ecluse.Core.Server.Pipeline") records through. Each field is the matching
-@record*@ helper partially applied to the instrument handle, so the port is exactly
-this module's recording behaviour behind the core interface -- inert when telemetry is
-off, since the instruments are. ('timedSeconds' is re-exported from the port module, so
+@record*@ helper partially applied to the instrument handle. The port is exactly this
+module's recording behaviour behind the core interface: inert when telemetry is off,
+since the instruments are. ('timedSeconds' is re-exported from the port module, so
 the data-plane timing util has one home beside the durations it feeds.)
 -}
 metricsPortOf :: Metrics -> MetricsPort
@@ -258,8 +259,8 @@ metricsPortOf m =
 
 {- | Project the OpenTelemetry-backed instruments onto the core 'WorkerMetricsPort' the
 mirror worker ("Ecluse.Core.Worker") records through. Each field is the matching
-@record*@ helper partially applied to the instrument handle, so the port is exactly this
-module's recording behaviour behind the core interface -- inert when telemetry is off,
+@record*@ helper partially applied to the instrument handle. The port is exactly this
+module's recording behaviour behind the core interface: inert when telemetry is off,
 since the instruments are.
 -}
 workerMetricsPortOf :: Metrics -> WorkerMetricsPort
@@ -271,9 +272,9 @@ workerMetricsPortOf m =
 
 {- | Project the OpenTelemetry-backed instruments onto the core 'AdvisorySyncMetricsPort'
 the advisory sync task ("Ecluse.Runtime.Cve.Sync") records through. Each field is the
-matching @record*@ helper partially applied to the instrument handle, so the port is
-exactly this module's recording behaviour behind the core interface, inert when telemetry
-is off since the instruments are.
+matching @record*@ helper partially applied to the instrument handle. The port is exactly
+this module's recording behaviour behind the core interface: inert when telemetry is off,
+since the instruments are.
 -}
 advisorySyncMetricsPortOf :: Metrics -> AdvisorySyncMetricsPort
 advisorySyncMetricsPortOf m =
@@ -307,7 +308,7 @@ recordMergeDivergence m =
 
 {- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
 denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)
-carries the reason class alone -- no rule attributed it, so none is labelled.
+carries the reason class alone: no rule attributed it, so none is labelled.
 -}
 recordRuleDenial :: (MonadIO m) => Metrics -> Maybe Text -> ReasonClass -> m ()
 recordRuleDenial m rule reasonClass =
@@ -428,18 +429,15 @@ recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyn
 recordAdvisorySyncDuration m eco result seconds =
     record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]
 
--- Add one to a counter under the given bounded labels.
 addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()
 addOne instrument labels = liftIO (counterAdd instrument 1 (metricAttributes labels))
 
--- Add a delta to an up-down counter under the given bounded labels.
 addDelta :: (MonadIO m) => UpDownCounter Int64 -> Int64 -> [Label] -> m ()
 addDelta instrument delta labels = liftIO (upDownCounterAdd instrument delta (metricAttributes labels))
 
--- Record a histogram measurement under the given bounded labels.
 record :: (MonadIO m) => Histogram -> Double -> [Label] -> m ()
 record instrument value labels = liftIO (histogramRecord instrument value (metricAttributes labels))
 
--- Set a gauge to a value under the given bounded labels (last value wins per collect).
+-- Set a gauge under the given bounded labels: the last value wins per collect.
 set :: (MonadIO m) => Gauge Int64 -> Int64 -> [Label] -> m ()
 set instrument value labels = liftIO (gaugeRecord instrument value (metricAttributes labels))

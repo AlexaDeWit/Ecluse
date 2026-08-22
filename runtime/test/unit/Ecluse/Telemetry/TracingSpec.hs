@@ -70,18 +70,18 @@ import Ecluse.Runtime.Telemetry.Tracing (
     withRuleEvalSpan,
  )
 
-{- | Tests for the request-lifecycle tracing layer. They prove the three promises
-this slice carries that can be proven at the pure\/offline tier: the verdict
-attribute mapping is exact (so a denial is explainable from the trace), a domain-span
-bracket is genuinely inert when telemetry is disabled, and -- the load-bearing one --
-the forwarded client token and the @Authorization@ header are scrubbed from anything
-the http-client and WAI instrumentation capture.
+{- | Tests for the request-lifecycle tracing layer. They prove the three promises this
+layer carries that hold at the pure\/offline tier. The verdict attribute mapping is
+exact, so a denial is explainable from the trace. A domain-span bracket is genuinely
+inert when telemetry is disabled. And, the load-bearing one, the forwarded client token
+and the @Authorization@ header are scrubbed from anything the http-client and WAI
+instrumentation capture.
 
-The scrub tests are not vacuous: each drives a real request carrying a
-@Bearer@ token through the very instrumentation the proxy installs (the http-client
-manager hooks under 'dataPlaneInstrumentationConfig' and the WAI server-span
-middleware), captures the resulting spans through an in-memory exporter, and asserts
-both that a span was produced /and/ that the token appears in no captured attribute.
+The scrub tests are not vacuous. Each drives a real request carrying a @Bearer@ token
+through exactly the instrumentation the proxy installs. That is the http-client manager
+hooks under 'dataPlaneInstrumentationConfig' and the WAI server-span middleware. Each
+then captures the resulting spans through an in-memory exporter. It asserts both that
+the run emitted a span /and/ that the token appears in no captured attribute.
 -}
 spec :: Spec
 spec = do
@@ -94,7 +94,7 @@ spec = do
     enqueueAuthoritySpec
     traceparentInjectionSpec
 
--- A distinctive secret that must never surface on a span; the scrub assertions search
+-- A distinctive secret that must never surface on a span. The scrub assertions search
 -- the captured spans for it.
 secretToken :: Text
 secretToken = "s3cr3t-bearer-tok3n-do-not-leak"
@@ -143,8 +143,8 @@ verdictMappingSpec = describe "ruleVerdictFields" $ do
 gatingSpec :: Spec
 gatingSpec = describe "domain-span brackets (telemetry disabled)" $ do
     it "runs the rule-eval body and returns its result, opening no span" $ do
-        -- With the disabled handle there is no tracer to reach for, so the helper must
-        -- simply run the body and thread its result through, never demanding a provider.
+        -- With the disabled handle there is no tracer to reach for. The helper must
+        -- run the body and thread its result through, never demanding a provider.
         result <-
             withRuleEvalSpan telemetryDisabled (mkPackageName Npm Nothing "left-pad") (mkVersion Npm "1.0.0") $
                 pure (42 :: Int, Admit)
@@ -193,7 +193,7 @@ scrubSpec = describe "secret scrubbing" $ do
         dump <- attributeDump ref
         (secretToken `T.isInfixOf` dump) `shouldBe` False
 
--- A trivial @200@ application: the target the instrumented requests are driven at.
+-- A trivial @200@ application: the target the instrumented requests hit.
 okApp :: Application
 okApp _ respond = respond (responseLBS status200 [] "ok")
 
@@ -208,8 +208,8 @@ withBearer req =
             ]
         }
 
--- The captured spans rendered to text -- every span's name and full attribute set --
--- so a substring search proves the secret is present nowhere on any span.
+-- The captured spans rendered to text: every span's name and full attribute set. A
+-- substring search then proves the secret is present nowhere on any span.
 attributeDump :: IORef [ImmutableSpan] -> IO Text
 attributeDump ref = do
     spans <- readIORef ref
@@ -218,7 +218,7 @@ attributeDump ref = do
         pure (hotName hot <> " " <> show (hotAttributes hot))
     pure (T.intercalate "\n" parts)
 
--- The package/version coordinates the domain spans carry -- fixed, since these tests
+-- The package/version coordinates the domain spans carry. Fixed, since these tests
 -- assert on the trace structure (links, status), not the coordinate attributes.
 samplePackage :: PackageName
 samplePackage = mkPackageName Npm Nothing "left-pad"
@@ -226,11 +226,12 @@ samplePackage = mkPackageName Npm Nothing "left-pad"
 sampleVersion :: Version
 sampleVersion = mkVersion Npm "1.3.0"
 
-{- One advisory sync attempt must produce exactly one @ecluse.advisory.sync.attempt@ span
-whose @ecluse.@ attributes are exactly the ecosystem and the attempt's bounded result: the
-two values the metric labels join on. Driven through the in-memory exporter, and asserted
-on the __number__ of those attributes as well as their two values, so a third one added
-later (a bucket, an object key, an ETag) fails here rather than reaching a backend. -}
+{- One advisory sync attempt must produce exactly one @ecluse.advisory.sync.attempt@ span.
+Its @ecluse.@ attributes must be exactly the ecosystem and the attempt's bounded result,
+the two values the metric labels join on. The in-memory exporter drives the test, which
+asserts on the __number__ of those attributes as well as their two values. A third
+attribute added later (a bucket, an object key, an ETag) therefore fails here rather than
+reaching a backend. -}
 advisorySyncSpanSpec :: Spec
 advisorySyncSpanSpec = describe "advisory sync span" $
     it "opens one span per attempt whose attributes are exactly the ecosystem and the result" $ do
@@ -245,36 +246,37 @@ advisorySyncSpanSpec = describe "advisory sync span" $
         syncSpan <- findSpan ref "ecluse.advisory.sync.attempt"
         attributes <- hotAttributes <$> readIORef (spanHot syncSpan)
         -- The SDK stamps its own code.* and thread.* attributes on every span, so the
-        -- closed-set guard is scoped to the ecluse. namespace: exactly two keys, read off
-        -- the rendered attribute map as the scrub assertions above read theirs.
+        -- closed-set guard covers the ecluse. namespace alone: exactly two keys. It reads
+        -- them off the rendered attribute map, as the scrub assertions above read theirs.
         ecluseAttributeCount attributes `shouldBe` 2
         textAttribute attributes "ecluse.ecosystem" `shouldBe` Just "npm"
         textAttribute attributes "ecluse.advisory.sync.result" `shouldBe` Just "refused"
 
--- Read one span attribute back as the text it was recorded as, 'Nothing' when the key is
--- absent or holds another type.
+-- Read one span attribute back as text, 'Nothing' when the key is absent or holds
+-- another type.
 textAttribute :: Attributes -> Text -> Maybe Text
 textAttribute attributes key = lookupAttribute attributes key >>= fromAttribute
 
 -- How many @ecluse.@-namespaced attributes a span carries, counted off the rendered
--- attribute map's key syntax. A value can never be miscounted as a key: only a key is
--- rendered directly after the pair's opening parenthesis.
+-- attribute map's key syntax. A value can never be miscounted as a key. Only a key
+-- follows the pair's opening parenthesis directly.
 ecluseAttributeCount :: Attributes -> Int
 ecluseAttributeCount = T.count "(\"ecluse." . show
 
-{- The true cross-async span link: capture the originating request's (enqueue) span
-context exactly as the serve path does, hand it to the worker's per-job span exactly as
-the worker does, and assert -- through the in-memory exporter -- that the @ecluse.mirror.job@
-span carries a span __link__ whose trace id is the @ecluse.mirror.enqueue@ span's. This is
-the deterministic proof that the worker job is linked to the request that enqueued it,
-not merely correlated by package\/version. -}
+{- The true cross-async span link. Capture the originating request's (enqueue) span
+context exactly as the serve path does. Hand it to the worker's per-job span exactly as
+the worker does. Then assert through the in-memory exporter that the
+@ecluse.mirror.job@ span carries a span __link__ whose trace id is the
+@ecluse.mirror.enqueue@ span's. This is the deterministic proof that the worker job is
+linked to the request that enqueued it, rather than merely correlated by
+package\/version. -}
 crossAsyncLinkSpec :: Spec
 crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $ do
     it "links the worker-job span back to the enqueueing span's trace" $ do
         (processor, ref) <- inMemoryListExporter
         tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
         let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
-        -- The serve path captures the enqueue span's context; carry it across the hop.
+        -- The serve path captures the enqueue span's context. Carry it across the hop.
         carrier <-
             withMirrorEnqueueSpan telemetry samplePackage sampleVersion "https://artifact" (const Nothing) pure
         -- The worker re-establishes it as a link on its per-job span.
@@ -294,7 +296,7 @@ crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $
         tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
         let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
         -- A job enqueued with no context (tracing was off at enqueue) yields an unlinked
-        -- worker span -- still emitted, just not linked.
+        -- worker span: still emitted, just not linked.
         withMirrorJobSpan telemetry samplePackage sampleVersion Nothing (const (JobSpanOutcome "succeeded" Nothing)) pass
         _ <- forceFlushTracerProvider tracerProvider Nothing
         jobSpan <- findSpan ref "ecluse.mirror.job"
@@ -314,9 +316,9 @@ crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $
         jobHot <- readIORef (spanHot jobSpan)
         toList (appendOnlyBoundedCollectionValues (hotLinks jobHot)) `shouldSatisfy` null
 
-{- The producer span must explain a swallowed best-effort enqueue failure: when the
+{- The producer span must explain a swallowed best-effort enqueue failure. When the
 enqueue-result projection reports a failure detail, the @ecluse.mirror.enqueue@ span's
-status is set to 'Error' carrying that detail; a success leaves it 'Unset'. This is what
+status is set to 'Error' carrying that detail. A success leaves it 'Unset'. This is what
 lets a trace say /why/ the mirror was not enqueued, even though the client response was
 never affected. -}
 enqueueStatusSpec :: Spec
@@ -342,9 +344,9 @@ enqueueStatusSpec = describe "enqueue span status on a swallowed failure" $ do
         hot <- readIORef (spanHot enqueueSpan)
         hotStatus hot `shouldBe` Unset
 
-{- The enqueue span names the artifact's __authority__, never its URL. The location is
-upstream-supplied and its userinfo or query string can carry a credential, and a span
-attribute is exported off the node, so the URL never reaches one. -}
+{- The enqueue span names the artifact's __authority__, never its URL. The location
+comes from upstream, and its userinfo or query string can carry a credential. A span
+attribute leaves the node, so the URL never reaches one. -}
 enqueueAuthoritySpec :: Spec
 enqueueAuthoritySpec = describe "enqueue span artifact authority" $
     it "records the artifact host and port, dropping userinfo, path, and query" $ do
@@ -367,10 +369,10 @@ enqueueAuthoritySpec = describe "enqueue span artifact authority" $
         dump `shouldSatisfy` (not . T.isInfixOf "left-pad-1.3.0.tgz")
 
 {- The data-plane instrumentation must inject a W3C @traceparent@ on each outbound
-request, so a downstream service continues the trace. Drive a request through the very
-instrumented manager the proxy installs (under the global W3C propagator the SDK installs
-in production) at a stub that records the headers it received, and assert @traceparent@
-arrived. -}
+request, so a downstream service continues the trace. Drive a request through exactly
+the instrumented manager the proxy installs, under the global W3C propagator the SDK
+installs in production. The target is a stub that records the headers it received.
+Assert that @traceparent@ arrived. -}
 traceparentInjectionSpec :: Spec
 traceparentInjectionSpec = describe "W3C traceparent injection on the data plane" $
     it "injects a traceparent header on an outbound data-plane request" $ do
@@ -392,14 +394,14 @@ traceparentInjectionSpec = describe "W3C traceparent injection on the data plane
         find ((== "traceparent") . fst) received `shouldSatisfy` isJust
 
 -- A WAI application that records the headers of the request it received, then answers
--- @200@ -- the downstream stub the traceparent-injection assertion inspects.
+-- @200@: the downstream stub the traceparent-injection assertion inspects.
 captureHeadersApp :: IORef [(HeaderName, ByteString)] -> Application
 captureHeadersApp ref req respond = do
     writeIORef ref (Wai.requestHeaders req)
     respond (responseLBS status200 [] "ok")
 
--- Read the captured span with the given name, failing the test loudly if none was
--- exported (so a missing emission is a clear failure, not a pattern-match crash).
+-- Read the captured span with the given name. A missing span fails the test loudly, so
+-- a missing emission is a clear failure rather than a pattern-match crash.
 findSpan :: IORef [ImmutableSpan] -> Text -> IO ImmutableSpan
 findSpan ref name = do
     spans <- readIORef ref
