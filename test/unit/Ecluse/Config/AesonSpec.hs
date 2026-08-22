@@ -371,6 +371,29 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
 
+        -- Boot echoes a successful load key by key, warns on colliding endpoints, and
+        -- prints a posture line per mount. Each line renders a configured registry URL
+        -- as given. Refusing these shapes at load is what keeps a credential off those
+        -- lines, so the refusal names the key and never the value.
+        it "rejects an upstream URL carrying userinfo, naming the key and not the credential" $ do
+            let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://deploy:hunter2@repo.internal.example.test/npm")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+
+        it "rejects an upstream URL carrying a query string, naming the key" $
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test/npm?token=abc")] Nothing
+                `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry a query string"
+
+        it "rejects an upstream URL carrying a fragment, naming the key" $
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test/npm#frag")] Nothing
+                `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry a fragment"
+
+        -- A second endpoint key, so a key name hand-written into the wrong call site
+        -- cannot pass by matching a neighbour's.
+        it "rejects a mirror-target URL carrying userinfo, naming that key" $
+            loadConfig [] (Just (mountDocWithMirrorTarget "https://deploy:hunter2@mirror.example.test/npm"))
+                `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
+
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do
             case loadConfig [] (Just "{\"server\":{\"port\":0}}") of

@@ -133,16 +133,17 @@ spec = do
 
     describe "logUpstreamUnformable (url minimisation)" $
         it "reduces the offending URL to its authority, dropping userinfo and query" $ do
-            -- A configured base URL can carry a credential in its userinfo or query, so
-            -- the rendered fault names the authority alone.
+            -- The URL a fault carries can be an upstream-supplied artifact location.
+            -- That location can hold a credential in its userinfo or a signed query,
+            -- so the rendered fault names the authority alone.
             let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
-            -- The origin is the operator's configured base URL, which mkRegistryUrl
-            -- accepts with userinfo, so the log reduces it on the same line.
+            -- The origin field takes the same reduction on the same line, so it holds
+            -- for every URL the payload names, not only the carried fault.
             logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
             logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
             logged `shouldSatisfy` (not . T.isInfixOf "token=abc")

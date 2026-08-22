@@ -173,7 +173,9 @@ of a mount's endpoints that resolve to the same registry. The design rationale i
 
 A value resolves as defaults < config document < environment variable, so the environment wins. The
 boot log carries one `config:` line per resolved key, naming the layer that supplied it and
-redacting secrets. `ecluse check-config` prints the same dump.
+redacting secrets. `ecluse check-config` prints the same dump. The dump prints each registry
+endpoint in full. That is safe, because Écluse refuses a registry URL carrying userinfo, a query
+string, or a fragment at boot.
 
 ### Environment variables
 
@@ -363,7 +365,9 @@ Every other secret is an environment variable.
 
 Secrets never live in the config document. Client and registry tokens are always env vars, and
 cloud-managed registries (CodeArtifact, Artifact Registry) derive short-lived tokens from ambient
-cloud credentials. A **mirrored** mount holds a mirror-target **write** credential. A serve-only
+cloud credentials. A registry URL never carries one either. Écluse refuses an endpoint written with
+userinfo (`https://user:token@host/`), a query string, or a fragment at boot. The error names the
+key. A **mirrored** mount holds a mirror-target **write** credential. A serve-only
 mount never writes and holds none. What Écluse does with a client's own token is under
 [Connecting your clients](#connecting-your-clients). The credential model, including the planned
 per-mount strategies, is in
@@ -607,9 +611,9 @@ refuse traffic when the advisory database is briefly unavailable. The default `d
   attributes any backend indexes. `ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the floor (`info` by
   default). Bearer tokens render as a redacted placeholder, and on every running path Écluse reduces
   a URL to its host and port. Neither token material nor a signed query string reaches a log field.
-  The boot-time configuration echo is the exception: it prints each configured upstream and mirror
-  URL as you gave it. Keep credentials in the token variables rather than inside a URL. The shape is
-  in [observability → Logs](docs/architecture/observability.md#logs).
+  The boot-time configuration echo prints each configured upstream and mirror URL as you gave it.
+  That URL holds no token, because Écluse refuses a registry URL carrying a credential or a query
+  string at boot. The shape is in [observability → Logs](docs/architecture/observability.md#logs).
 - **Telemetry (opt-in).** Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then `DD_*` (`DD_SERVICE`,
   `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for Datadog or the standard `OTEL_*` for any other
   backend. `DD_*` wins where both are set, and the resolved identity stamps both traces and every

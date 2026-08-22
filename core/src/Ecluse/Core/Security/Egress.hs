@@ -9,13 +9,15 @@ Every outbound registry URL the proxy dials is an 'RegistryUrl', built through t
 https-only 'mkRegistryUrl'. A non-https registry endpoint cannot be represented. A
 plain-HTTP target is therefore refused at the configuration boundary: a non-https
 configured upstream fails closed at boot. A packument's @dist.tarball@ goes through
-'resolveTarballUrl' before the proxy ever dials it. The data-plane
-'Network.HTTP.Client.Manager' is the standard validating @tls@ manager. It checks the
-certificate the dialled host presents against the system trust store, for the requested
-name. An attacker who can steer a name to an internal or rebound address cannot make
-that address present a CA-trusted certificate for the host. Certificate validation
-therefore closes the credential-exfiltration and resolve-to-internal SSRF class, rather
-than a resolved-IP pin.
+'resolveTarballUrl' before the proxy ever dials it. An __operator-configured__ endpoint
+goes through 'mkConfiguredRegistryUrl', which also refuses userinfo, a query string,
+and a fragment. A configured registry URL therefore holds no credential for the boot
+log to echo. The data-plane 'Network.HTTP.Client.Manager' is the standard validating
+@tls@ manager. It checks the certificate the dialled host presents against the system
+trust store, for the requested name. An attacker who can steer a name to an internal or
+rebound address cannot make that address present a CA-trusted certificate for the host.
+Certificate validation therefore closes the credential-exfiltration and
+resolve-to-internal SSRF class, rather than a resolved-IP pin.
 
 Two complementary controls live alongside this and are not part of this module. The
 outbound host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost') is the
@@ -36,6 +38,7 @@ module Ecluse.Core.Security.Egress (
     -- * The https-only egress URL
     RegistryUrl,
     mkRegistryUrl,
+    mkConfiguredRegistryUrl,
     registryUrlText,
 
     -- * Packument @dist.tarball@ normalisation
@@ -45,7 +48,7 @@ module Ecluse.Core.Security.Egress (
 import Data.Text qualified as T
 
 import Ecluse.Core.Security (hostAddress)
-import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
 
 {- | Resolve a packument's @dist.tarball@ URL against the https-only egress policy, given the bare
 host the packument was served from.

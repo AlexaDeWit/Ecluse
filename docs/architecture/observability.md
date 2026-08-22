@@ -122,12 +122,12 @@ costs nothing at `info`. An unrecognised value is a boot error, like every other
 
 ### URL minimisation
 
-An upstream supplies the artifact location. An operator supplies the advisory export URL and the
-configured upstream base URL. Any of them can carry a credential in its userinfo or in a pre-signed
-query string, and both logs and spans leave the node. So on every running path Écluse reduces a URL
-to its validated `host:port` before it names anything, through the one shared reduction in
-`Ecluse.Core.Security.Authority`. A value with no dialable authority renders as `<unresolved>`,
-never as a fragment of the input. The paths this covers:
+An upstream supplies the artifact location. An operator supplies the advisory export URL. Either
+can carry a credential in its userinfo or in a pre-signed query string, and both logs and spans
+leave the node. So on every running path Écluse reduces a URL to its validated `host:port` before it
+names anything, through the one shared reduction in `Ecluse.Core.Security.Authority`. A value with
+no dialable authority renders as `<unresolved>`, never as a fragment of the input. The paths this
+covers:
 
 - **Serve.** The packument origin and upstream fields on the degrade warnings, the URL a
   url-formation fault carries, and the artifact URL a dropped-entry record holds.
@@ -140,11 +140,13 @@ never as a fragment of the input. The paths this covers:
 The span attribute names say what they hold: `ecluse.mirror.artifact_host` and
 `ecluse.osv.source_host`.
 
-The **boot-time configuration echo** is the exception, by design. The resolved-key provenance dump,
-the endpoint-collision warnings, and the mount posture lines print each configured upstream and
-mirror URL as the operator gave it. The effective posture then reads straight from the start-up log.
-The proxy redacts secret-typed keys there, and a credential belongs in one of those keys rather than
-inside a URL (see [Secrets](../../USAGE.md#secrets)).
+The **boot-time configuration echo** prints a URL whole, by design. The resolved-key provenance
+dump, the endpoint-collision warnings, and the mount posture lines print each configured upstream
+and mirror URL as the operator gave it. The effective posture then reads straight from the start-up
+log. Those lines need no reduction, because a configured registry URL has nothing to reduce. The
+loader refuses one carrying userinfo, a query string, or a fragment, and the error names the key.
+The credential then sits in a secret-typed key, which the dump redacts
+(see [Secrets](../../USAGE.md#secrets)).
 
 ## Configuration and deployment
 

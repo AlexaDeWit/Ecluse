@@ -39,12 +39,12 @@ mountConfigParser o = do
     rejectUnknownKeys "mount" acceptedMountKeys o
     MountConfig
         <$> o .:? "enabled"
-        <*> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
-        <*> (o .: "publicUpstream" >>= parseRegistryUrl)
-        <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
+        <*> (o .:? "privateUpstream" >>= traverse (parseRegistryUrl "privateUpstream"))
+        <*> (o .: "publicUpstream" >>= parseRegistryUrl "publicUpstream")
+        <*> (o .:? "mirrorTarget" >>= traverse (parseRegistryUrl "mirrorTarget"))
         <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
         <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse (parseCodeArtifactDuration "mirrorCodeArtifactTokenDuration"))
-        <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
+        <*> (o .:? "publicationTarget" >>= traverse (parseRegistryUrl "publicationTarget"))
         <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
         <*> (o .:? "publishAllow" .!= String "" >>= parseScopes)
         <*> (o .:? "minTrustedIntegrity" >>= traverse (parseEnum parseMinTrustedIntegrity "minTrustedIntegrity"))
