@@ -15,6 +15,7 @@ module Ecluse.Core.Cve.Internal (
     openHardenedConnection,
     probeQuery,
     advisoriesQuery,
+    toRange,
     provenanceQuery,
 ) where
 
@@ -22,18 +23,18 @@ import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_,
 import UnliftIO.Exception (onException, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Osv.Advisory (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Osv.Schema (ColumnSpec (..), MetaKey (MetaEcosystem), TableSpec (..), osvSchemaEpoch, osvTableSpecs, renderMetaKey)
 
 {- | One advisory segment recorded against a package. 'arSeverity' is the CVSS base score
-from 0 to 10, or 'Nothing' when unscored. The bounds are verbatim version text: inclusive
-'arIntroduced', exclusive 'arFixed', inclusive 'arLastAffected', and 'Nothing' for open.
+from 0 to 10, or 'Nothing' when unscored. The bounds are verbatim version text: 'arIntroduced'
+is inclusive and 'Nothing' means from the beginning, and 'arUpperBound' closes the segment.
 -}
 data AdvisoryRange = AdvisoryRange
     { arCveId :: Text
     , arSeverity :: Maybe Double
     , arIntroduced :: Maybe Text
-    , arFixed :: Maybe Text
-    , arLastAffected :: Maybe Text
+    , arUpperBound :: UpperBound
     }
     deriving stock (Eq, Show)
 
@@ -187,15 +188,24 @@ advisoriesQuery :: Connection -> Text -> IO [AdvisoryRange]
 advisoriesQuery conn name = do
     rows <- query conn "SELECT cve_id, introduced_version, fixed_version, last_affected_version, severity FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
     pure (map toRange rows)
+
+{- | One artifact row as an advisory segment, decoding the two nullable bound columns
+into the segment's single upper bound.
+-}
+toRange :: (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double) -> AdvisoryRange
+toRange (cveId, intro, fixed, lastAffected, severity) =
+    AdvisoryRange
+        { arCveId = cveId
+        , arSeverity = severity
+        , arIntroduced = intro
+        , arUpperBound = upper
+        }
   where
-    toRange (cveId, intro, fixed, lastAffected, severity) =
-        AdvisoryRange
-            { arCveId = cveId
-            , arIntroduced = intro
-            , arFixed = fixed
-            , arLastAffected = lastAffected
-            , arSeverity = severity
-            }
+    -- The writer fills at most one bound column. A row carrying both resolves as the fix.
+    upper = case (fixed, lastAffected) of
+        (Just f, _) -> FixedBefore f
+        (Nothing, Just la) -> LastAffected la
+        (Nothing, Nothing) -> Unbounded
 
 {- | The artifact's @meta@ provenance rows, key-sorted for a deterministic snapshot.
 It runs only on an accepted connection, so the @(Text, Text)@ decode cannot throw.

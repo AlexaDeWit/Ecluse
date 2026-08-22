@@ -12,7 +12,7 @@ module Ecluse.Test.Cve (
     fakeCveLookup,
 ) where
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), UpperBound (FixedBefore))
 
 {- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
 on the fixed bound, matching the artifact's verbatim version text.
@@ -21,6 +21,6 @@ fakeCveLookup :: [(Text, AdvisoryRange)] -> CveLookup
 fakeCveLookup rows =
     CveLookup
         { cveRemediationProbe = \name version ->
-            pure (any (\(n, ar) -> n == name && arFixed ar == Just version) rows)
+            pure (any (\(n, ar) -> n == name && arUpperBound ar == FixedBefore version) rows)
         , cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
         }

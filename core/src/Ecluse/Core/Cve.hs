@@ -37,6 +37,7 @@ module Ecluse.Core.Cve (
 
     -- * What a lookup returns
     AdvisoryRange (..),
+    UpperBound (..),
 
     -- * Rejection
     CveDbRejected (..),
@@ -56,6 +57,7 @@ import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Osv.Advisory (UpperBound (..))
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
 import Database.SQLite.Simple (Connection, SQLError, close)
@@ -144,8 +146,8 @@ taggedQuery :: Text -> IO a -> IO a
 taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
 {- | Is this version inside the advisory segment's affected interval, under the ecosystem's
-version ordering? A carried @fixed@ bound wins over @last_affected@. __Fail-closed:__ an
-unprovable comparison, from an unparseable bound or version, counts as __inside__.
+version ordering? __Fail-closed:__ an unprovable comparison, from an unparseable bound or
+version, counts as __inside__.
 -}
 insideAffectedRange :: Ecosystem -> Text -> AdvisoryRange -> Bool
 insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
@@ -160,19 +162,19 @@ insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
             Just _ -> True
             Nothing -> True
 
-    withinUpperBound = case (arFixed ar, arLastAffected ar) of
+    withinUpperBound = case arUpperBound ar of
         -- A fix is an exclusive upper bound: affected while v < fixed.
-        (Just f, _) -> case compareVersions v (mkVersion eco f) of
+        FixedBefore f -> case compareVersions v (mkVersion eco f) of
             Just LT -> True
             Just _ -> False
             Nothing -> True
         -- last_affected is an inclusive upper bound: affected while v <= it.
-        (Nothing, Just la) -> case compareVersions v (mkVersion eco la) of
+        LastAffected la -> case compareVersions v (mkVersion eco la) of
             Just GT -> False
             Just _ -> True
             Nothing -> True
         -- No upper bound: the range never ends.
-        (Nothing, Nothing) -> True
+        Unbounded -> True
 
 {- | Does this advisory segment's severity meet or exceed the threshold, a CVSS base score
 from 0 to 10? __Fail-closed:__ an unscored advisory ('Nothing', most of the npm malware

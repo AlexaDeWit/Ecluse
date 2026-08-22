@@ -10,7 +10,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..), UpperBound (FixedBefore))
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Test.Cve (fakeCveLookup)
 
@@ -20,7 +20,7 @@ tests pin exactly when the slot retires a displaced generation.
 fakeDb :: Text -> IORef [Text] -> CveDb
 fakeDb tag closeLog =
     CveDb
-        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (Just "1.0.0") Nothing)]
+        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (FixedBefore "1.0.0"))]
         , cveDbClose = modifyIORef' closeLog (<> [tag])
         , cveDbMeta = []
         }

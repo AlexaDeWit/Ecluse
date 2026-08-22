@@ -5,6 +5,7 @@
 
 module Ecluse.Core.Osv.Compile (
     compileOsvToSqlite,
+    osvToRow,
 ) where
 
 import Conduit
@@ -21,7 +22,7 @@ import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO)
 
-import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
+import Ecluse.Core.Osv.Advisory (ExtractedOsv (..), UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
 import Ecluse.Core.Osv.Stream (
@@ -179,5 +180,14 @@ sinkSqlite conn = awaitForever $ \batch ->
                 conn
                 "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity) VALUES (?, ?, ?, ?, ?, ?)"
                 (map osvToRow batch)
+
+{- | One extracted segment as its artifact row. The upper bound spreads over the
+@fixed_version@ and @last_affected_version@ columns, and fills at most one of them.
+-}
+osvToRow :: ExtractedOsv -> (Text, Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double)
+osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, fixed, lastAffected, extSeverity osv)
   where
-    osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv, extLastAffected osv, extSeverity osv)
+    (fixed, lastAffected) = case extUpperBound osv of
+        FixedBefore f -> (Just f, Nothing)
+        LastAffected la -> (Nothing, Just la)
+        Unbounded -> (Nothing, Nothing)
