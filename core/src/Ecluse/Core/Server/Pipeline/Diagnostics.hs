@@ -44,7 +44,7 @@ import Ecluse.Core.Package.Merge (
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
  )
-import Ecluse.Core.Security (LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions))
+import Ecluse.Core.Security (LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), authorityLabel)
 import Ecluse.Core.Server.Context (Handler)
 import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
@@ -155,7 +155,8 @@ renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> 
 rather than failing the whole document on, at 'WarningS', so an operator can see that an
 upstream served a malformed entry, which kind (a version manifest, a dist-tag, or a
 per-version publish time), and __the raw value it sent__. The structured payload names the
-package, the per-kind drop counts, and a bounded sample of the dropped entries each
+package, the upstream's authority, the per-kind drop counts, and a bounded sample of the
+dropped entries each
 rendering its raw 'Data.Aeson.Value' (truncated if large, and capped to 'maxRenderedDrops'
 entries so a flood of drops cannot bloat the line). The dropped versions are still served
 minus those entries (graceful degradation), so this is an observability signal, not a
@@ -171,7 +172,7 @@ logInvalidEntries name baseUrl entries =
     payload =
         sl "module" pipelineModule
             <> sl "package" (renderPackageName name)
-            <> sl "upstream" baseUrl
+            <> sl "upstream" (authorityLabel baseUrl)
             <> sl "droppedVersionManifests" manifests
             <> sl "droppedDistTags" distTags
             <> sl "droppedPublishTimes" publishTimes

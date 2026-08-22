@@ -45,13 +45,14 @@ module Ecluse.Core.Registry (
     PublishError (..),
     PublishFault (..),
     UrlFormationError (..),
+    renderUrlFormationError,
     PublishRelayResponse (..),
     PublishRelayFault (..),
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (Hash, HashAlg, hashAlg, hashValue)
-import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Security (LimitError, authorityLabel)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
 document, as returned by 'fetchMetadata'. It is kept opaque-of-bytes here so the
@@ -144,6 +145,25 @@ data UrlFormationError
       -}
       UnparseableUrl Text
     deriving stock (Eq, Show)
+
+{- | Render a 'UrlFormationError' for an operator log line, with any URL it carries
+reduced to its authority ('authorityLabel').
+
+The single rendering every consumer uses, so the reduction cannot be applied on one
+path and forgotten on another. A carried URL is a configured base URL or an
+upstream-supplied artifact location: either can hold a credential in its userinfo or a
+signed query string, and the 'Show' instance prints it whole.
+
+>>> renderUrlFormationError (UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc")
+"UnparseableUrl upstream.test:443"
+
+>>> renderUrlFormationError EmptyBaseUrl
+"EmptyBaseUrl"
+-}
+renderUrlFormationError :: UrlFormationError -> Text
+renderUrlFormationError = \case
+    EmptyBaseUrl -> "EmptyBaseUrl"
+    UnparseableUrl url -> "UnparseableUrl " <> authorityLabel url
 
 {- | Why a metadata fetch could not produce a response body, reported as a __value__
 so a read-path consumer maps each cause onto its own outcome -- the serve read

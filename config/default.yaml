@@ -92,6 +92,9 @@ advisories:
 
 observability:
   logFormat: json
+  # Lowest severity kept: debug, info, warn, or error. Debug carries the per-decision
+  # diagnostics (mirror probes, artifact fetches) and is verbose under load.
+  logLevel: info
   telemetry: "off"
 
 mounts:

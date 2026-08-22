@@ -64,6 +64,7 @@ import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, tracerOptions)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extractFromAdvisory, osvId)
+import Ecluse.Core.Security.Authority (authorityLabel)
 
 {- | The tunable per-advisory ingest bounds. Generous by design: osv.dev is trusted
 in normal operation, so these only backstop a pathological or tampered payload and
@@ -171,13 +172,13 @@ instance Exception PilotIngestAborted
 -- | Fetch the OSV zip and stream its contents, bounded by @ingest@.
 streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ()
 streamOsvUrl mTracerProvider ingest urlStr = do
-    lift $ logFM InfoS (ls ("Initializing OSV stream from URL: " <> urlStr))
+    lift $ logFM InfoS (ls ("Initializing OSV stream from " <> authorityLabel (toText urlStr)))
     let mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     bracketP
         (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.stream" defaultSpanArguments{kind = Internal}) mTracer)
         (mapM_ (`endSpan` Nothing))
         ( \mSpan -> do
-            forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_url" (toText urlStr)
+            forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
             -- 'setRequestCheckStatus' makes a non-2xx response throw a
             -- 'StatusCodeException' at the header boundary. This is deliberate: it
             -- lets the backoff wrapper (see 'Ecluse.Core.Osv.Retry') see a 502

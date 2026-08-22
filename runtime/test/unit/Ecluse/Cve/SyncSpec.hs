@@ -10,7 +10,7 @@ import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), S
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
@@ -20,6 +20,9 @@ import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
+import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
+ )
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
@@ -33,6 +36,12 @@ import Ecluse.Runtime.Cve.Sync (
     syncStep,
  )
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb)
+import Ecluse.Test.Port (
+    noopAdvisorySyncMetricsPort,
+    passthroughAdvisorySyncTracingPort,
+    recordingAdvisorySyncMetricsPort,
+    recordingAdvisorySyncTracingPort,
+ )
 
 -- | An env over a fresh slot and a temp data dir, handed to each case.
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
@@ -77,21 +86,80 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
 
--- | Wait (bounded) until the slot serves a generation probing True for the package.
-awaitServing :: CveSlot -> Text -> IO ()
-awaitServing slot pkg = go (200 :: Int)
+{- | Poll a condition (bounded, ~5s) and fail the case naming what never happened. The
+one wait shape the asynchronous cases share: the sync task runs on its own schedule, so
+every assertion about it is a wait rather than a synchronous read.
+-}
+waitFor :: Text -> IO Bool -> IO ()
+waitFor what ready = go (200 :: Int)
   where
-    go 0 = expectationFailure ("slot never served an artifact for " <> toString pkg)
+    go 0 = expectationFailure ("timed out waiting for " <> toString what)
     go n =
-        probesFor slot pkg >>= \case
-            Just True -> pass
-            _ -> threadDelay 25_000 >> go (n - 1)
+        ready >>= \case
+            True -> pass
+            False -> threadDelay 25_000 >> go (n - 1)
+
+-- | Wait until the slot serves a generation probing True for the package.
+awaitServing :: CveSlot -> Text -> IO ()
+awaitServing slot pkg =
+    waitFor ("the slot to serve an artifact for " <> pkg) ((== Just True) <$> probesFor slot pkg)
 
 -- | Run a Katip-constrained action against a scribe-less environment.
 runQuiet :: KatipContextT IO a -> IO a
 runQuiet action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
+
+{- | The sync task over inert observation ports, for the scheduling cases: telemetry is
+observation only, so the loop's behaviour is asserted with nothing recording.
+-}
+runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
+runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
+
+{- | A schedule that yields exactly __one__ attempt: an empty boot backoff spends the
+burst budget on the first attempt whatever it concludes, and the steady poll's first
+interval outlasts any test. That determinism is what lets the observation cases assert an
+exact count rather than a lower bound.
+-}
+oneAttempt :: SyncSchedule
+oneAttempt = SyncSchedule{schedBootBackoff = [], schedPollDelay = 600_000_000}
+
+{- | What one run of the sync loop recorded: the spans, the attempt counts, and the
+latency samples, each in record order.
+-}
+data Observed = Observed
+    { obsSpans :: [(Ecosystem, AdvisorySyncResult)]
+    , obsAttempts :: [(Ecosystem, AdvisorySyncResult)]
+    , obsDurations :: [(Ecosystem, AdvisorySyncResult, Double)]
+    }
+
+{- | Drive the sync loop over recording ports until it has bracketed @wanted@ attempts,
+then read back everything the three recorders saw. The wait is on the __span__ reader,
+which the bracket records after the body, so the metric readers are settled for every
+attempt the span reader has already seen.
+-}
+observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
+observeAttempts wanted schedule env = do
+    (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
+    (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
+    withAsync (runQuiet (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
+        waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
+        Observed <$> readSpans <*> readAttempts <*> readDurations
+
+{- | Assert that the run bracketed exactly these attempts: one span, one counter
+increment, and one non-negative latency sample each, all under the same labels.
+-}
+shouldObserve :: Observed -> [(Ecosystem, AdvisorySyncResult)] -> Expectation
+shouldObserve observed expected = do
+    obsSpans observed `shouldBe` expected
+    obsAttempts observed `shouldBe` expected
+    map (\(eco, result, _) -> (eco, result)) (obsDurations observed) `shouldBe` expected
+    map (\(_, _, seconds) -> seconds >= 0) (obsDurations observed) `shouldBe` map (const True) expected
+
+-- | Keep only the first @n@ of each recording, for a loop that keeps attempting.
+truncateObserved :: Int -> Observed -> Observed
+truncateObserved n (Observed spans attempts durations) =
+    Observed (take n spans) (take n attempts) (take n durations)
 
 spec :: Spec
 spec = do
@@ -253,7 +321,7 @@ spec = do
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
-                withAsync (runQuiet (runCveSync (envWith flaky) schedule (modifyIORef' notified (+ 1)))) $ \_ -> do
+                withAsync (runQuiet (runUnobserved (envWith flaky) schedule (modifyIORef' notified (+ 1)))) $ \_ -> do
                     awaitServing slot "pkg-a"
                     readIORef notified `shouldReturn` 1
 
@@ -271,7 +339,7 @@ spec = do
                     -- A short burst that will exhaust before publication, then a
                     -- fast poll that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
-                withAsync (runQuiet (runCveSync (envWith lateFetch) schedule pass)) $ \_ -> do
+                withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule pass)) $ \_ -> do
                     -- Burst window passes with nothing published; still serving nothing.
                     threadDelay 100_000
                     probesFor slot "pkg-a" `shouldReturn` Nothing
@@ -290,13 +358,65 @@ spec = do
                                 pure (Right (DbEtag "bad"))
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
-                withAsync (runQuiet (runCveSync (envWith fetch) schedule pass)) $ \_ -> do
+                withAsync (runQuiet (runUnobserved (envWith fetch) schedule pass)) $ \_ -> do
                     threadDelay 200_000
                     -- One download despite the burst budget and several polls:
                     -- identical bytes cannot verify differently, so the
                     -- remembered ETag reads as unchanged until a re-publish.
                     readIORef downloads `shouldReturn` 1
                     probesFor slot "pkg" `shouldReturn` Nothing
+
+    describe "advisory sync observation" $ do
+        -- One span, one counter increment, and one latency sample per attempt, each
+        -- labelled by the ecosystem and the attempt's own result. The five cases below
+        -- are the five outcomes 'observedStep' folds, so the result vocabulary is covered
+        -- end to end.
+        it "observes a swapped-in artifact as one attempt" $
+            withSyncEnv $ \_ _ envWith -> do
+                observed <- observeAttempts 1 oneAttempt (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                observed `shouldObserve` [(Npm, AdvisorySwapped)]
+
+        it "observes an unpublished artifact as one attempt" $
+            withSyncEnv $ \_ _ envWith -> do
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Right Nothing)
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
+                            }
+                observed <- observeAttempts 1 oneAttempt (envWith fetch)
+                observed `shouldObserve` [(Npm, AdvisoryNonePublished)]
+
+        it "observes a failed fetch as one attempt, so a broken bucket still meters" $
+            withSyncEnv $ \_ _ envWith -> do
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Left transportDown)
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
+                            }
+                observed <- observeAttempts 1 oneAttempt (envWith fetch)
+                observed `shouldObserve` [(Npm, AdvisoryFetchFailed)]
+
+        it "observes a refused artifact as one attempt" $
+            withSyncEnv $ \_ _ envWith -> do
+                observed <- observeAttempts 1 oneAttempt (envWith (fetchServing (Just "bad") mkDbWithWrongEpoch))
+                observed `shouldObserve` [(Npm, AdvisoryRefused)]
+
+        it "observes the poll that finds the artifact unchanged" $
+            withSyncEnv $ \_ _ envWith -> do
+                -- The burst can only ever start from no last-seen ETag, so an unchanged
+                -- attempt is the poll that follows a settled one; the loop keeps polling,
+                -- so this pins the first two attempts rather than the whole run.
+                let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                observed <- observeAttempts 2 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                truncateObserved 2 observed `shouldObserve` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
+
+        it "syncs identically over inert ports, so observation is never load-bearing" $
+            withSyncEnv $ \_ slot envWith -> do
+                notified <- newIORef (0 :: Int)
+                let env = envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))
+                withAsync (runQuiet (runUnobserved env oneAttempt (modifyIORef' notified (+ 1)))) $ \_ -> do
+                    awaitServing slot "pkg-a"
+                    readIORef notified `shouldReturn` 1
 
     describe "cappedAt" $ do
         it "passes a stream that ends exactly at the cap through unchanged" $ do

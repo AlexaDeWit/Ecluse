@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Worker (
-    JobOutcome (DeadLettered, Retried, Succeeded),
+    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
     processBatch,
     processJob,
@@ -159,6 +159,21 @@ spec = do
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
+
+        it "renders a failed artifact fetch without the URL's userinfo, path, or query" $
+            -- The fetch fault's text becomes the Retried reason: it is logged at the
+            -- queue-realisation site and set as the mirror-job span's error status, so it
+            -- must name the authority and the bounded transport cause, never the location.
+            withRuntime (Right ()) $ \runtime queue _logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
+                outcome <- runWM runtime (processJob receipt job)
+                case outcome of
+                    Retried reason -> do
+                        reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
+                        reason `shouldSatisfy` (not . T.isInfixOf "hunter2")
+                        reason `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+                        reason `shouldSatisfy` (not . T.isInfixOf "/x")
+                    other -> expectationFailure ("expected a Retried outcome from the refused connect, got " <> show other)
 
         it "treats a registry rejection as retryable (job left for redelivery)" $
             withUpstream $ \url ->
@@ -309,6 +324,13 @@ spec = do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isDropped
+                -- The reason names the authority the fetch would dial, never the URL:
+                -- a queue payload's location can carry userinfo or a signed query.
+                case outcome of
+                    Dropped reason -> do
+                        reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
+                        reason `shouldSatisfy` (not . T.isInfixOf "/thing/-/thing-1.0.0.tgz")
+                    other -> expectationFailure ("expected a Dropped outcome, got " <> show other)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 

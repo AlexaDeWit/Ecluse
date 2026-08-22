@@ -28,7 +28,7 @@ import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Security (parseBlockedRange)
-import Ecluse.Runtime.Log (parseLogFormat)
+import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
 
 instance FromJSON MountConfig where
@@ -186,9 +186,10 @@ runtimeParser o = do
 
 observabilityParser :: KeyMap.KeyMap Value -> Parser ObservabilitySettings
 observabilityParser o = do
-    rejectUnknownKeys "observability" ["logFormat", "telemetry"] o
+    rejectUnknownKeys "observability" ["logFormat", "logLevel", "telemetry"] o
     ObservabilitySettings
         <$> (o .: "logFormat" >>= parseEnum parseLogFormat "observability.logFormat")
+        <*> (o .: "logLevel" >>= parseEnum parseLogLevel "observability.logLevel")
         <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "observability.telemetry")
 
 acceptedDocumentKeys :: [Key.Key]

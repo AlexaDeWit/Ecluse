@@ -8,7 +8,8 @@ npm modules.
 
 Pure assembly, no protocol logic of its own: every field is a function an npm
 module already exports -- the path grammar ("Ecluse.Core.Registry.Npm.Route"), the
-denial renderer ("Ecluse.Core.Registry.Npm.Serve"), the metadata client and served
+denial renderer ("Ecluse.Core.Registry.Npm.Serve"), the credential presentation
+("Ecluse.Core.Registry.Npm.Credential"), the metadata client and served
 packument assembly ("Ecluse.Core.Registry.Npm.Metadata",
 "Ecluse.Core.Registry.Npm.Filter"), the artifact request builders
 ("Ecluse.Core.Registry.Npm.Request"), the publish relay
@@ -32,6 +33,7 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig),
     relayPublishDocument,
  )
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -52,6 +54,7 @@ npmAdapter =
             AdapterServe
                 { serveRouter = NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
+                , serveCredential = npmCredential
                 }
         , adapterMetadata =
             AdapterMetadata

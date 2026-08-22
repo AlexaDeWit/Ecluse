@@ -29,13 +29,14 @@ one coherent tracer and join into one trace.
   continues the trace.
 * __Domain spans__ -- 'withRuleEvalSpan' (the per-version verdict, so a @403@ is
   explainable from the trace alone), 'withMirrorEnqueueSpan' (the synchronous serve
-  handing off to the asynchronous mirror), and 'withMirrorJobSpan' (the worker's
-  fetch → verify → publish). The enqueue span captures its own W3C trace context onto
-  the mirror job, and the worker-job span re-establishes it as an OpenTelemetry __span
-  link__ to that producer span, so the asynchronous mirror hand-off is navigable in a
-  trace rather than only correlated by package\/version. A swallowed best-effort
-  enqueue failure is recorded on the enqueue span's status, so the trace explains why
-  the mirror did not happen.
+  handing off to the asynchronous mirror), 'withMirrorJobSpan' (the worker's
+  fetch → verify → publish), and 'withAdvisorySyncSpan' (one per advisory sync attempt,
+  carrying the ecosystem and the attempt's bounded result). The enqueue span captures
+  its own W3C trace context onto the mirror job, and the worker-job span re-establishes
+  it as an OpenTelemetry __span link__ to that producer span, so the asynchronous
+  mirror hand-off is navigable in a trace rather than only correlated by
+  package\/version. A swallowed best-effort enqueue failure is recorded on the enqueue
+  span's status, so the trace explains why the mirror did not happen.
 
 == Secret discipline
 
@@ -61,12 +62,14 @@ module Ecluse.Runtime.Telemetry.Tracing (
     withMetadataFetchSpan,
     withMetadataDecodeSpan,
     withMirrorJobSpan,
+    withAdvisorySyncSpan,
     JobSpanOutcome (..),
     withDomainSpan,
 
     -- * The core tracing ports
     tracingPortOf,
     workerTracingPortOf,
+    advisorySyncTracingPortOf,
 
     -- * Verdict attribute mapping
     ruleVerdictFields,
@@ -97,15 +100,18 @@ import OpenTelemetry.Trace (
  )
 import UnliftIO (MonadUnliftIO, withRunInIO)
 
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (rejectionMessage, rejectionReason),
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
  )
-import Ecluse.Core.Telemetry.Span (JobSpanOutcome (..), TracingPort (..), WorkerTracingPort (..))
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult, advisorySyncResultName)
+import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), JobSpanOutcome (..), TracingPort (..), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Runtime.Telemetry (
     Telemetry,
@@ -179,8 +185,12 @@ withRuleEvalSpan telemetry name version action =
         pure result
 
 {- | Run a mirror-enqueue domain span around the serve-time hand-off to the
-asynchronous mirror, carrying the package, version, and the artifact's authoritative
-URL. A 'Producer' span, since it produces the work the worker later consumes.
+asynchronous mirror, carrying the package, version, and the authority the artifact is
+fetched from. A 'Producer' span, since it produces the work the worker later consumes.
+
+The artifact URL arrives whole and is recorded as @ecluse.mirror.artifact_host@, the
+host and port alone ('authorityLabel'): the location is upstream-supplied and its
+userinfo or query string can carry a credential, so the URL itself never reaches a span.
 
 The body is handed this span's own W3C trace context ('RemoteSpanContext') -- or
 'Nothing' when telemetry is disabled -- to stamp onto the mirror job, so the worker's
@@ -203,7 +213,7 @@ withMirrorEnqueueSpan ::
     m a
 withMirrorEnqueueSpan telemetry name version artifactUrl project body =
     withDomainSpan telemetry Producer [] "ecluse.mirror.enqueue" $ \mSpan -> do
-        recordFields mSpan (coordinateFields name version <> [("ecluse.mirror.artifact_url", artifactUrl)])
+        recordFields mSpan (coordinateFields name version <> [("ecluse.mirror.artifact_host", authorityLabel artifactUrl)])
         carrier <- traverse captureRemoteContext mSpan
         result <- body carrier
         whenJust mSpan $ \theSpan -> whenJust (project result) (setStatus theSpan . Error)
@@ -237,6 +247,31 @@ withMirrorJobSpan telemetry name version remoteContext project action =
         let JobSpanOutcome label mDetail = project result
         recordFields mSpan [("ecluse.mirror.outcome", label)]
         whenJust mSpan $ \theSpan -> whenJust mDetail (setStatus theSpan . Error)
+        pure result
+
+{- | Run an advisory-sync domain span around one sync attempt, carrying the ecosystem it
+syncs and, once the attempt finishes, the projected bounded result. An 'Internal' span:
+the attempt is background work on a schedule, parented on no request.
+
+The attributes are exactly the ecosystem and the result, the same bounded vocabulary the
+@ecluse.advisory.sync.*@ metrics are labelled by, so a trace and a series join on one
+value. The artifact's bucket, key, ETag, and provenance stay off the span.
+
+Inert when telemetry is disabled: the attempt runs against no span and its result is
+returned unchanged.
+-}
+withAdvisorySyncSpan ::
+    (MonadUnliftIO m) =>
+    Telemetry ->
+    Ecosystem ->
+    (a -> AdvisorySyncResult) ->
+    m a ->
+    m a
+withAdvisorySyncSpan telemetry eco project action =
+    withDomainSpan telemetry Internal [] "ecluse.advisory.sync.attempt" $ \mSpan -> do
+        recordFields mSpan [("ecluse.ecosystem", ecosystemName eco)]
+        result <- action
+        recordFields mSpan [("ecluse.advisory.sync.result", advisorySyncResultName (project result))]
         pure result
 
 -- | Run a packument-gate domain span around the rules and filter application for a public packument.
@@ -289,6 +324,17 @@ workerTracingPortOf :: Telemetry -> WorkerTracingPort
 workerTracingPortOf telemetry =
     WorkerTracingPort
         { wtpMirrorJobSpan = withMirrorJobSpan telemetry
+        }
+
+{- | Project the OpenTelemetry-backed advisory-sync span onto the core
+'AdvisorySyncTracingPort' the sync loop ("Ecluse.Runtime.Cve.Sync") brackets through. The
+single field is 'withAdvisorySyncSpan' closed over the 'Telemetry' handle, so the port is
+exactly this module's tracing behind the core interface, inert when telemetry is off.
+-}
+advisorySyncTracingPortOf :: Telemetry -> AdvisorySyncTracingPort
+advisorySyncTracingPortOf telemetry =
+    AdvisorySyncTracingPort
+        { astpSyncAttemptSpan = withAdvisorySyncSpan telemetry
         }
 
 {- | Map a serve verdict to the rule-evaluation span's attribute fields. Pure and

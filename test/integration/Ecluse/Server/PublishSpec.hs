@@ -29,6 +29,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
@@ -111,6 +112,7 @@ proxyWith mkPublishDeps = do
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingRouter = npmRouter
+                    , bindingCredential = npmCredential
                     , bindingPackumentDeps = inertPackumentDeps
                     , bindingPublishDeps = publishDeps
                     }
@@ -132,6 +134,7 @@ cappedProxyWith cap = do
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingRouter = npmRouter
+                    , bindingCredential = npmCredential
                     , bindingPackumentDeps = inertPackumentDeps
                     , bindingPublishDeps = Just deps
                     }
@@ -212,6 +215,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingRouter = npmRouter
+                            , bindingCredential = npmCredential
                             , bindingPackumentDeps = inertPackumentDeps
                             , bindingPublishDeps = Just (publishDepsAt targetPort Nothing tightBudget)
                             }

@@ -41,7 +41,7 @@ import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashe
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
-import Ecluse.Core.Security (hostPortAddress)
+import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
@@ -301,7 +301,7 @@ dropping a serviceable job or publishing it unvetted. -}
 reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM ReevalOutcome
 reevaluatePolicy policy job
     | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
-        pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> registryUrlText (jobArtifactUrl job) <> "); refusing to fetch or mirror it"))
+        pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> jobArtifactAuthority job <> "); refusing to fetch or mirror it"))
     | otherwise = do
         evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
         case evaluation of
@@ -389,7 +389,7 @@ outcomeOfFetchFault = \case
 
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
-    logFM DebugS (ls ("fetching artifact bytes from " <> registryUrlText (jobArtifactUrl job)))
+    logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
     fetched <- fetchArtifactBytes (wpArtifactLimits policy) (wpBuildArtifactRequest policy) (jobArtifactUrl job)
     case fetched of
         -- The terminal-vs-transient split is 'outcomeOfFetchFault'; the reason is
@@ -482,3 +482,9 @@ releaseForRetry receipt = do
 -- A one-line identifier for a job, for log lines.
 renderJob :: MirrorJob -> Text
 renderJob job = renderPackageName (jobPackage job) <> "@" <> renderVersion (jobVersion job)
+
+{- The job's artifact location as a log-safe authority ('authorityLabel'): the queue
+payload's URL can carry userinfo or a pre-signed query, so a log line names the host and
+port it dials, never the URL. -}
+jobArtifactAuthority :: MirrorJob -> Text
+jobArtifactAuthority = authorityLabel . registryUrlText . jobArtifactUrl

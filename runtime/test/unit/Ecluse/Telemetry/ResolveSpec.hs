@@ -6,6 +6,8 @@ module Ecluse.Telemetry.ResolveSpec (spec) where
 
 import Data.List (lookup)
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
+import Data.Version (showVersion)
+import Paths_ecluse (version)
 import System.Environment (unsetEnv)
 import Test.Hspec
 import UnliftIO (bracket_)
@@ -59,7 +61,7 @@ resolveSpec = describe "resolveTelemetry" $ do
             `shouldBe` "from-attr"
         rtServiceName (resolveTelemetry []) `shouldBe` "ecluse"
 
-    it "resolves env and version DD-first, then the resource attribute, else unset" $ do
+    it "resolves env and version DD-first, then the resource attribute" $ do
         let dd = resolveTelemetry [("DD_ENV", "prod"), ("DD_VERSION", "1.2.3")]
         rtEnvironment dd `shouldBe` Just "prod"
         rtVersion dd `shouldBe` Just "1.2.3"
@@ -68,9 +70,13 @@ resolveSpec = describe "resolveTelemetry" $ do
         rtEnvironment attrs `shouldBe` Just "stg"
         rtVersion attrs `shouldBe` Just "9"
 
+    it "leaves the environment unset but falls the version back to the build version" $ do
+        -- The deployment environment cannot be known from inside the process, so it
+        -- stays optional; the version is a fact about the running binary, so every
+        -- trace and every log line carries one even when the operator names none.
         let none = resolveTelemetry []
         rtEnvironment none `shouldBe` Nothing
-        rtVersion none `shouldBe` Nothing
+        rtVersion none `shouldBe` Just buildVersion
 
     it "treats a present-but-blank value as unset" $
         rtEnvironment
@@ -133,7 +139,7 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
                 , ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")
                 ]
             )
-            `shouldBe` Just "service.name=api,team=core"
+            `shouldBe` Just (toString ("service.name=api,service.version=" <> buildVersion <> ",team=core"))
 
 prepareSpec :: Spec
 prepareSpec = describe "prepareTelemetry" $ do
@@ -163,6 +169,11 @@ prepareSpec = describe "prepareTelemetry" $ do
         , "OTEL_EXPORTER_OTLP_PROTOCOL"
         , "OTEL_RESOURCE_ATTRIBUTES"
         ]
+
+-- The build version the resolver falls back to, read from the same generated module
+-- the resolver reads, so a version bump does not red these expectations.
+buildVersion :: Text
+buildVersion = toText (showVersion version)
 
 throttleSpec :: Spec
 throttleSpec = describe "throttleStep" $ do

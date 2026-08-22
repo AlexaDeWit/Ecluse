@@ -65,9 +65,10 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry (UrlFormationError, renderUrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
@@ -107,7 +108,7 @@ logDecodeFailure name =
 {- | Log an upstream name mismatch at 'WarningS' before the contribution degrades: the
 origin answered, but its packument self-reported a name for a different package than
 the one requested, so it is dropped as untrusted for this request. The structured
-payload carries both names and the origin (its base URL) -- the high-cardinality
+payload carries both names and the origin's authority -- the high-cardinality
 identifiers that belong on the log line -- so an operator can tell a misconfigured or
 hostile upstream from an ordinary outage. Same fail-closed degrade and payload
 convention as 'logDecodeFailure'.
@@ -119,7 +120,7 @@ logNameMismatch requested origin reported =
     payload =
         sl "module" pipelineInternalModule
             <> sl "package" (renderPackageName requested)
-            <> sl "origin" origin
+            <> sl "origin" (authorityLabel origin)
             <> sl "upstreamName" reported
     message :: Text
     message = "dropped an upstream contribution: its packument self-reported a name for a different package"
@@ -130,8 +131,8 @@ request, so no fetch could even be attempted. A __configuration__ fault, surface
 distinctly from a decode failure or a transient outage (it carries its own
 'Ecluse.Core.Registry.Metadata.MetadataUrlUnformable') so an operator sees a misconfigured
 mount rather than an upstream that merely appears unreachable. The structured payload
-carries the origin and the rendered URL fault; same fail-closed degrade and payload
-convention as 'logNameMismatch'.
+carries the origin's authority and the rendered URL fault; same fail-closed degrade and
+payload convention as 'logNameMismatch'.
 -}
 logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
 logUpstreamUnformable name origin urlErr =
@@ -140,15 +141,15 @@ logUpstreamUnformable name origin urlErr =
     payload =
         sl "module" pipelineInternalModule
             <> sl "package" (renderPackageName name)
-            <> sl "origin" origin
-            <> sl "urlError" (show urlErr :: Text)
+            <> sl "origin" (authorityLabel origin)
+            <> sl "urlError" (renderUrlFormationError urlErr)
     message :: Text
     message = "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
 
 {- | Log an unreachable upstream at 'WarningS' before the contribution degrades: the
 transport failed before a usable body returned (a timeout, a refused connection, a TLS
 refusal), so the origin contributes nothing this request. The structured payload
-carries the origin, the bounded 'Ecluse.Core.Fault.TransportCause', and the rendered
+carries the origin's authority, the bounded 'Ecluse.Core.Fault.TransportCause', and the rendered
 detail, so an operator can tell an outage apart from a decode failure or a
 misconfigured mount; same fail-closed degrade and payload convention as
 'logUpstreamUnformable'.
@@ -160,7 +161,7 @@ logUpstreamUnreachable name origin fault =
     payload =
         sl "module" pipelineInternalModule
             <> sl "package" (renderPackageName name)
-            <> sl "origin" origin
+            <> sl "origin" (authorityLabel origin)
             <> sl "transportCause" (show (tfCause fault) :: Text)
             <> sl "transportDetail" (tfDetail fault)
     message :: Text

@@ -27,6 +27,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
@@ -83,6 +84,7 @@ publishMountAt prefix router publishDeps =
     MountBinding
         { bindingPrefix = prefix
         , bindingRouter = router
+        , bindingCredential = npmCredential
         , bindingPackumentDeps = inertPackumentDeps
         , bindingPublishDeps = publishDeps
         }

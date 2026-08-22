@@ -174,9 +174,9 @@ telemetryScenarios = do
             it "starts, serves a real install, and logs JSONL to stdout -- no collector needed" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- It still writes structured JSONL to its stdout/stderr (docker captures
-                -- both): await any log object (keyed on the `msg` field every katip JSONL
+                -- both): await any log object (keyed on the `message` field every JSONL
                 -- line carries) -- the worker's async publish line reliably provides one.
-                logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
+                logged <- awaitProxyLog e2e (T.isInfixOf "\"message\":") 80
                 logged `shouldBe` True
 
     -- #325(b) -- OTLP on but the collector unreachable/absent: the SAME proxy config as the
@@ -192,7 +192,7 @@ telemetryScenarios = do
         aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
             it "surfaces a throttled export-failure warning yet keeps serving -- an absent collector degrades visibly, no crash" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
-                logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
+                logged <- awaitProxyLog e2e (T.isInfixOf "\"message\":") 80
                 logged `shouldBe` True
                 -- The first install's spans (1s batch flush) and metrics (1s reader) export
                 -- and fail against the unreachable endpoint; the wrapped exporters route that
