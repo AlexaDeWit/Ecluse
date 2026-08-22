@@ -123,7 +123,11 @@ runs:
     # Reproducible toolchain: the exact flake-pinned dev shell developers use.
     # extra-conf hardens substitution against transient cache.nixos.org hiccups
     # — the cold path; warm runs restore the store from the cache below and skip
-    # the upstream substituter entirely.
+    # the upstream substituter entirely. auto-optimise-store stays off: the installer
+    # turns it on for Linux, an optimised store hard-links files into
+    # /nix/store/.links, and cache-nix-action cannot restore that archive
+    # (nix-community/cache-nix-action#170: `tar: Cannot hard link`), so every
+    # consumer of a saved entry would die in toolchain setup.
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       with:
@@ -136,6 +140,7 @@ runs:
         extra-conf: |
           connect-timeout = 10
           download-attempts = 5
+          auto-optimise-store = false
 
     # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
     # warm runs are fast and immune to cache.nixos.org flakiness. Most gate jobs
