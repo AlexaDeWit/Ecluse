@@ -110,8 +110,8 @@ docs/     architecture and design documents
 - The CI workflow and tier semantics live in [`docs/testing.md`](docs/testing.md). The terminal
   `gate` job is the branch-protection authority; the weeder and Stan jobs gate through it, while
   smoke, vulnerability scanning, and Codecov's server-side statuses are non-gating.
-- Pin every GitHub Action to a full commit SHA and follow the cache rules in
-  [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Pin every GitHub Action to a full commit SHA ([`CONTRIBUTING.md`](CONTRIBUTING.md)). The CI
+  cache behaviour is documented beside the code, in the `setup-toolchain` action and `ci.yml`.
 - Do not add `.semgrepignore` or `nosemgrep` entries, or Stan `[[ignore]]` entries, without
   repo-owner approval. Prefer fixing the finding.
 - Keep the threat model in `threat-modelling/ecluse.json`; do not create a competing prose risk
