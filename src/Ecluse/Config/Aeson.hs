@@ -170,7 +170,7 @@ advisoriesParser o = do
         <*> (o .: "pollInterval" >>= parseDelaySeconds "advisories.pollInterval")
         <*> (o .: "compileInterval" >>= parseDelaySeconds "advisories.compileInterval")
         <*> o .: "dataDir"
-        <*> o .: "osvExportBaseUrl"
+        <*> (o .: "osvExportBaseUrl" >>= parseHttpUrl "advisories.osvExportBaseUrl")
         <*> (o .: "maxDatabaseBytes" >>= parsePositiveInt "advisories.maxDatabaseBytes")
 
 runtimeParser :: KeyMap.KeyMap Value -> Parser RuntimeSettings

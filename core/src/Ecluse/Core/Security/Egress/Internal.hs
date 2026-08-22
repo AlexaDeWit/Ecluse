@@ -22,7 +22,7 @@ module Ecluse.Core.Security.Egress.Internal (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Security.Authority (carriesUserinfo)
+import Ecluse.Core.Security.Authority (refuseCredentialMaterial)
 
 {- | An outbound registry-egress URL that is https by construction. Both production constructors
 reject any other scheme, so a plain-HTTP registry target cannot be represented in a running system.
@@ -50,13 +50,13 @@ mkRegistryUrl raw
     trimmed = T.strip raw
 
 {- | Build a 'RegistryUrl' for an __operator-configured__ registry endpoint: 'mkRegistryUrl' under
-the further rule that a configured endpoint carries no credential material. It refuses userinfo
-(@https:\/\/user:token\@host\/@), a query string, and a fragment.
+the shared configured-URL rule that refuses credential material
+('Ecluse.Core.Security.Authority.refuseCredentialMaterial').
 
-The refusals run before 'mkRegistryUrl', which quotes the value it rejects. A refusal reaches the
-boot log, so it names the requirement and never the URL. An upstream-supplied @dist.tarball@ keeps
-to 'mkRegistryUrl'. It may carry a signed query, the @host:port@ allowlist authorises it, and every
-log line reduces it to its authority ('Ecluse.Core.Security.Authority.authorityLabel').
+That refusal runs before 'mkRegistryUrl', which quotes the value it rejects. An upstream-supplied
+@dist.tarball@ keeps to 'mkRegistryUrl'. It may carry a signed query, the @host:port@ allowlist
+authorises it, and every log line reduces it to its authority
+('Ecluse.Core.Security.Authority.authorityLabel').
 
 >>> mkConfiguredRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")
@@ -65,12 +65,9 @@ Right (RegistryUrl "https://registry.npmjs.org")
 Left "registry URL must not carry userinfo (a credential belongs in its own configuration key)"
 -}
 mkConfiguredRegistryUrl :: Text -> Either Text RegistryUrl
-mkConfiguredRegistryUrl raw
-    | carriesUserinfo trimmed =
-        Left "registry URL must not carry userinfo (a credential belongs in its own configuration key)"
-    | "?" `T.isInfixOf` trimmed = Left "registry URL must not carry a query string"
-    | "#" `T.isInfixOf` trimmed = Left "registry URL must not carry a fragment"
-    | otherwise = mkRegistryUrl trimmed
+mkConfiguredRegistryUrl raw = do
+    refuseCredentialMaterial "registry URL" trimmed
+    mkRegistryUrl trimmed
   where
     trimmed = T.strip raw
 
