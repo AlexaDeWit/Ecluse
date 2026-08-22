@@ -27,7 +27,7 @@ in a multiline YAML block, so it stays reviewable and runs outside CI. Scripts m
 `shellcheck` (`task lint-scripts`). Reach for `awk` or `sort` before a heavier runtime.
 
 Use another language only when the tool forces it, and say why in review. The pandoc filters in
-[`web/`](web/) are **Lua**, because pandoc's filter API is Lua. A new build-time dependency on
+[`web/`](web/) are Lua, because pandoc's filter API is Lua. A new build-time dependency on
 Python, Node, or similar needs a strong, stated reason. "It reads a little cleaner" is not one.
 
 ## Coverage
@@ -48,12 +48,12 @@ AI-assisted work is welcome, but the bar does not change. **You are the author. 
 understand and be able to explain every line. The contribution must be worth more than the time
 it takes to review.** We close low-effort, unreviewed AI output ("slop").
 
-- **Disclose non-trivial AI use.** Editor autocomplete needs no disclosure. AI-generated or
+- **Disclose non-trivial AI use**. Editor autocomplete needs no disclosure. AI-generated or
   substantially AI-shaped code, prose, or commits do. Add an `Assisted-by:` git trailer that names
   the tool, for example `Assisted-by: <Agent Name> (<Vendor>)`, and mention it in the PR. The
   trailer records a tool that helped. You remain the sole author, so it is **not**
   `Co-authored-by:`.
-- **Verify before you file.** Never open an issue that an AI produced and you have not reproduced
+- **Verify before you file**. Never open an issue that an AI produced and you have not reproduced
   yourself. This matters most for a vulnerability report (see [`SECURITY.md`](SECURITY.md)).
 
 ## Developer Certificate of Origin (DCO)
@@ -64,7 +64,7 @@ that you have the right to submit your work under the project's [MIT licence](LI
 the DCO over a Contributor Licence Agreement on purpose. It asks you only to certify provenance.
 It grants the project no power to relicense or close the code, so Écluse stays permanently FOSS.
 
-**Sign off every commit.** `git commit -s` (or `--signoff`) appends a `Signed-off-by` trailer from
+**Sign off every commit**. `git commit -s` (or `--signoff`) appends a `Signed-off-by` trailer from
 your git identity. It certifies that you wrote the change, or have the right to submit it, and it
 becomes a permanent public record:
 
@@ -75,25 +75,26 @@ Signed-off-by: Your Name <you@example.com>
 - **Every commit in a PR** needs a `Signed-off-by` that matches its author.
 - It is **separate from the GPG signature**. `-S` proves who committed. `-s` certifies your right
   to contribute. Use both: `git commit -S -s`.
-- **We squash-merge, so sign off every commit.** The DCO check verifies each branch commit, and
-  GitHub assembles the squash message from those commits. Editing the PR description does not sign your commits.
+- **We squash-merge, so sign off every commit**. The DCO check verifies each branch commit, and
+  GitHub assembles the squash message from those commits. Editing the PR description does not sign
+  your commits.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit.
   `git rebase --signoff main` signs off a whole branch.
 
 ## Repository requirements
 
-- **Use [Conventional Commits](https://www.conventionalcommits.org/).** Subjects are
+- **Use [Conventional Commits](https://www.conventionalcommits.org/)**. Subjects are
   `type(scope): summary`. `type` is one of `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`,
   `test`, `build`, `perf`. The scope is optional. Keep the summary short and imperative.
 - **Commits are GPG-signed and DCO signed off** (see above). Disclose non-trivial AI assistance
   with an `Assisted-by:` trailer.
-- **Every Haskell source file carries an SPDX licence header.** `task spdx-fix` stamps it
+- **Every Haskell source file carries an SPDX licence header**. `task spdx-fix` stamps it
   ([docs/style.md](docs/style.md#14-licence-headers)).
 - **Pin every GitHub Action to a full commit SHA**, never a tag, with the version in a trailing
   comment. Renovate bumps them.
-- **Keep workflows injection-free.** Never interpolate untrusted `${{ github.event.* }}` or
+- **Keep workflows injection-free**. Never interpolate untrusted `${{ github.event.* }}` or
   `${{ github.head_ref }}` into `run:` blocks. Pass them through `env:` or intermediate files.
-- **Semgrep ignores require the repo owner's approval.** Do not add `.semgrepignore` entries or
+- **Semgrep ignores require the repo owner's approval**. Do not add `.semgrepignore` entries or
   `nosemgrep` comments on your own.
 - **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
   characters.

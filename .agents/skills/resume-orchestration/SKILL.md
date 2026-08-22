@@ -31,13 +31,13 @@ retrievable from repository files.
 4. **Reconcile selective memory:** only if the checkpoint names stale memory, or a current decision
    depends on it, read `MEMORY.md` and the relevant linked file. Verify its volatile claims before
    updating or deleting it.
-5. **Report and wait:** summarise what is merged, what is in review, and what is still draft, plus
+5. **Report and wait:** summarise what has merged, what is in review, and what is still draft, plus
    blockers or conflicts and the next dispatchable action. Wait for explicit architect kickoff
    before dispatching an implementation build.
 
-Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/style.md`, `docs/haddock.md`, all
-of `docs/testing.md`, or the architecture set. Retrieve one
-when the next decision actually depends on it.
+Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/style.md`,
+`docs/haddock.md`, all of `docs/testing.md`, or the architecture set. Retrieve one when the next
+decision actually depends on it.
 
 This routine may query live state, but it does not edit project files, dispatch work, merge, or
 push.

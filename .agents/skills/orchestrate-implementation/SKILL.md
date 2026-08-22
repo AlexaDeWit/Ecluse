@@ -22,49 +22,49 @@ implementation, never push to `main`: all code lands through PRs the architect r
 
 A PR flips **ready for review** only when both hold:
 
-1. **Independent evaluation passed.** A fresh-context reviewer, with no exposure to the
+1. **Independent evaluation passed**. A fresh-context reviewer, with no exposure to the
    implementer's reasoning, ran the mandatory Stage A + Stage B evaluation. It cleared with no open
    critical findings.
-2. **CI `gate` green.** Every job the terminal `gate` needs is green on the PR.
+2. **CI `gate` green**. Every job the terminal `gate` needs is green on the PR.
 
 A green gate is necessary but not sufficient. It verifies build and test. It does not judge
 requirements, quality, or security, which the evaluation does. Neither substitutes for the other. Do
 not flip a PR ready on a green gate alone. This is the failure the procedure exists to prevent.
 
-**The flip is the hand-off.** Marking a PR ready for review is how the team lead hands work to the
-architect; nothing else is. Verify that the commit the reviewer passed is the one the gate ran on
-and that every context the ruleset requires (today `CI gate` and `codecov/project`) passes, then
-`gh pr ready`, then report. A draft is never reported to the architect as done, green, or
+**The flip is the hand-off**. Marking a PR ready for review is how the team lead hands work to the
+architect, and nothing else is. Verify that the commit the reviewer passed is the one the gate ran
+on. Verify that every context the ruleset requires passes, today `CI gate` and `codecov/project`.
+Then run `gh pr ready`, then report. Never report a draft to the architect as done, green, or
 reviewed. `codecov/patch` is informational and does not hold a flip.
 
 ## Per-PR loop
 
-Run this for each DAG node whose dependencies are merged. Detail: [The per-PR
+Run this for each DAG node once its dependencies merge. Detail: [The per-PR
 loop](../../orchestration-strategy.md#the-per-pr-loop).
 
-1. **Pick** a slice whose dependencies are all merged.
-2. **Build.** Brief an implementer subagent in its own worktree. Carry the architect's full
+1. **Pick** a slice once every dependency has merged.
+2. **Build**. Brief an implementer subagent in its own worktree. Carry the architect's full
    acceptance criteria into the brief verbatim, not a paraphrase. A too-terse brief invites a guess.
    Pin the `model` for design-bearing or security-sensitive work. The implementer runs a fast local
    check, not the full gate.
-3. **Evaluate (mandatory).** Dispatch a fresh-context reviewer with no exposure to the implementer's
+3. **Evaluate (mandatory)**. Dispatch a fresh-context reviewer with no exposure to the implementer's
    reasoning, read-and-verify only. It runs both passes below. Read the diff yourself as well.
-4. **Gate.** Open the draft PR and watch the CI `gate` to green.
-5. **Hand off.** Flip the PR ready for review only when both hand-off gates hold on the same head
-   commit (`gh pr checks` for the gate and the ruleset's required contexts, then `gh pr ready`),
-   and report it to the architect only after the flip. Until then it stays a draft and is not
-   reported as done.
+4. **Gate**. Open the draft PR and watch the CI `gate` to green.
+5. **Hand off**. Flip the PR ready for review only when both hand-off gates hold on the same head
+   commit. Check the gate and the ruleset's required contexts with `gh pr checks`, then run
+   `gh pr ready`. Report it to the architect only after the flip. Until then it stays a draft, and
+   nobody reports it as done.
 
 ## Evaluation: the two mandatory passes
 
 Independent evaluation is mandatory for every PR. The implementer's own "it works" is not evidence.
 Detail: [Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes).
 
-- **Stage A, requirements.** Every acceptance criterion met and backed by a deterministic, gating
+- **Stage A, requirements**. Every acceptance criterion met and backed by a deterministic, gating
   (unit or integration) test. A non-gating smoke test never stands in for a criterion. Nothing in
   the slice's architecture scope silently dropped. Changes stay within the slice's file scope.
   Documentation updated in the same PR.
-- **Stage B, quality and security.** Idiomatic, total, `-Werror`-clean Haskell, with no unsafe or
+- **Stage B, quality and security**. Idiomatic, total, `-Werror`-clean Haskell, with no unsafe or
   partial functions. A security review appropriate to a supply-chain tool: input parsing,
   deny-by-default invariants, injection-free workflows. Non-tautological tests, with the foreseeable
   branches covered. Haddock documents the contract and the why only.
@@ -73,8 +73,8 @@ Critical findings block. Route the fix, then re-evaluate.
 
 ## Fix routing
 
-A reviewer's "changes required" routes one of three ways, landing as a distinct, separately-reviewable
-commit:
+A reviewer's "changes required" routes one of three ways, landing as a distinct,
+separately-reviewable commit:
 
 - **Resume** a background implementer (`SendMessage` to its agent ID) with its build context intact:
   the first choice for a fix continuing what it just built.
@@ -116,12 +116,13 @@ done](../../orchestration-strategy.md#definition-of-done) holds. The load-bearin
 
 Detail: [Guardrails](../../orchestration-strategy.md#guardrails-always-on) and [Escalation](../../orchestration-strategy.md#escalation).
 
-- **Escalate, don't guess.** On an ambiguous, missing, or contradictory spec, stop and surface it
+- **Escalate, don't guess**. On an ambiguous, missing, or contradictory spec, stop and surface it
   decision-ready. Give the question, what you tried, 2-3 options with a recommendation, and the
-  blast radius. Make a bounded attempt first. Never fabricate a value, weaken a test, or leave a stub.
-- **PRs only.** The team lead never merges and never pushes to `main`.
+  blast radius. Make a bounded attempt first. Never fabricate a value, weaken a test, or leave a
+  stub.
+- **PRs only**. The team lead never merges and never pushes to `main`.
 - **Cross-cutting invariants live in one shared helper**, called by each slice, never duplicated.
-- **Surface decisions one at a time, paced by a task list.** When the architect must answer a series
+- **Surface decisions one at a time, paced by a task list**. When the architect must answer a series
   of questions, put the series on the task list first, one entry per question. Use the harness task
   list where available, otherwise a short-lived `.agents/design-queue.md`. Then ask the first
   question alone: the decision, two or three options, a recommendation, and nothing the answer does

@@ -32,9 +32,9 @@ hold only the current task contract, the applicable invariants, and volatile evi
 6. **Report briefly:** state the objective, current shipped or in-flight state that matters,
    applicable invariants, sources selected, unresolved questions, and next action.
 
-Before writing Haskell or prose, retrieve the applicable sections of `docs/style.md` and `docs/haddock.md`.
-Before committing or opening a PR, invoke `open-pull-request`. Do not preload its instructions at
-startup.
+Before writing Haskell or prose, retrieve the applicable sections of `docs/style.md` and
+`docs/haddock.md`. Before committing or opening a PR, invoke `open-pull-request`. Do not preload its
+instructions at startup.
 
 For the team-lead seat after restart or compaction, use `resume-orchestration` instead. Never run
 both skills for the same startup.

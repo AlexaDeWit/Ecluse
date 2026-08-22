@@ -33,7 +33,7 @@ because it exists.
 | Plan | Task contract, relevant architecture sections, unresolved design questions |
 | Implement | Acceptance criteria, target modules, applicable style/Haddock sections, current diagnostics |
 | Review | Diff, acceptance criteria, affected invariants, focused verification evidence |
-| Gate and handoff | Checks run, CI/PR state, known limitations, commit and PR requirements |
+| Gate and hand-off | Checks run, CI/PR state, known limitations, commit and PR requirements |
 | Orchestrate | Active slices, agents/worktrees, decisions, blockers, PR state, next dispatchable work |
 
 Start a fresh thread when the objective or phase changes enough that most accumulated evidence no

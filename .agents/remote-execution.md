@@ -26,12 +26,12 @@ git relay. A local contributor session does not need it.
 
 ## Local Verification
 
-Agents **must not** skip local verification (`task check`).
+Agents must not skip local verification (`task check`).
 Run `task format`, then `task check`, inside the Nix shell:
 
 ```bash
 env -u IN_NIX_SHELL nix develop --command task check
 ```
 
-You **must** watch the CI results and follow up on any failure. Your task is not complete until
-both local verification and CI pass.
+You must watch the CI results and follow up on any failure. Your task is not complete until both
+local verification and CI pass.
