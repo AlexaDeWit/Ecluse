@@ -9,8 +9,7 @@ documents.
 
 Both transforms operate __structurally over the raw @aeson@ 'Value'__, never by
 re-serialising a typed model. This is load-bearing. The served packument is an __open__
-document: its schema is @additionalProperties: true@ (see
-@docs\/architecture\/api-surface.md@ → "The synthesized-packument schema"). The proxy
+document: its schema is @additionalProperties: true@. The proxy
 must __relay unchanged__ any field Écluse does not model: author keys, registry
 bookkeeping, per-version extras. Building the served body from the raw @Value@s keeps
 every unmodelled key. Rebuilding it from "Ecluse.Core.Package" would silently drop them.

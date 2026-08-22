@@ -305,11 +305,11 @@ the "no publication target means @PUT \/{pkg}@ is @405 Method Not Allowed@" rule
 The credential posture is passthrough: the publisher's own forwarded token reaches the
 publication target, and 'pubStaticToken' is only a fallback for a client that sends none.
 Écluse mints no token of its own here, so this record carries no
-'Ecluse.Core.Credential.CredentialProvider' (see @docs\/architecture\/access-model.md@).
+'Ecluse.Core.Credential.CredentialProvider' (see @docs\/architecture\/registry-model.md@).
 -}
 data PublishDeps = PublishDeps
     { pubTargetUrl :: Text
-    {- ^ The publication target endpoint (@ECLUSE_PUBLICATION_TARGET@) a client
+    {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubScopes :: [Scope]
@@ -321,7 +321,7 @@ data PublishDeps = PublishDeps
     Never empty when a publication target is configured (config validation rejects that).
     -}
     , pubStaticToken :: Maybe Secret
-    {- ^ The static fallback credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) forwarded to the
+    {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the
     publication target __only when the client sends no token of its own__. It is 'Nothing' on
     the common path, where the publisher's own token passes through.
     -}

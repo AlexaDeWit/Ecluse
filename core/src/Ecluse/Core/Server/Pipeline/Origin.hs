@@ -9,7 +9,7 @@
 * the typed outcome the merge consumes
 
 The credential-authority invariant lives here (see
-@docs\/architecture\/access-model.md@). The private (trusted) origin is fetched
+@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). The private (trusted) origin is fetched
 __uncached__ with the client's own forwarded credential, so the upstream re-authorises
 every client itself. The public origin is fetched __anonymous__: the client's credential
 is stripped before any public-upstream fetch. It resolves through the shared metadata
@@ -133,8 +133,7 @@ rather than an error.
 Under @passthrough@ the private upstream is the per-client authority for who may read what.
 The metadata cache keys on the base URL alone, with no credential dimension, so a cached
 private document would let one client's hit serve another client's document and bypass that
-authorisation. See @docs\/architecture\/access-model.md@ for the non-@passthrough@ strategies
-that share it safely.
+authorisation.
 -}
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
 fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of

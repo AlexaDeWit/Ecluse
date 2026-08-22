@@ -3,13 +3,13 @@
 Reverse-engineering reference for the npm registry HTTP API. It covers the read
 path Écluse proxies: the *packument* (package metadata), the per-version
 *manifest* (package details), and the version-resolution and auth behaviours
-around them. The goal is a JSON type model (see [Type model](#11-type-model)).
+around them. The goal is a JSON type model (see [Type model](#10-type-model)).
 The model lets Écluse act as an npm client that fetches upstream and as an npm
 server that answers a real `npm` CLI.
 
 > **Provenance.** Live examples captured 2026-06-21 against
 > `https://registry.npmjs.org` with `curl`/`jq` (see
-> [Reproducing the probes](#13-reproducing-the-probes)). Normative claims cite
+> [Reproducing the probes](#12-reproducing-the-probes)). Normative claims cite
 > the [npm/registry](https://github.com/npm/registry) docs inline. The registry
 > sits behind Cloudflare and departs from the spec in places. Where they differ,
 > observed behaviour wins.
@@ -27,11 +27,10 @@ server that answers a real `npm` CLI.
 7. [The `dist` object](#7-the-dist-object)
 8. [Version & availability resolution](#8-version--availability-resolution)
 9. [Authentication (in theory)](#9-authentication-in-theory)
-10. [Write path (for completeness)](#10-write-path-for-completeness)
-11. [Type model](#11-type-model)
-12. [Implementing the protocol](#12-implementing-the-protocol)
-13. [Reproducing the probes](#13-reproducing-the-probes)
-14. [References](#14-references)
+10. [Type model](#10-type-model)
+11. [Implementing the protocol](#11-implementing-the-protocol)
+12. [Reproducing the probes](#12-reproducing-the-probes)
+13. [References](#13-references)
 
 ---
 
@@ -372,7 +371,8 @@ The security-critical sub-object, on every manifest (full and abbreviated).
 - The `tarball` URL points at the registry host. A proxy that rewrites
   `registry` to its own URL should rewrite `dist.tarball` too. Otherwise a
   client resolves metadata through Écluse and pulls the bytes straight from
-  `registry.npmjs.org`, bypassing the gate. Whether to rewrite is a policy call.
+  `registry.npmjs.org`, bypassing the gate. Écluse rewrites it to its own host. See
+  [Web layer](../../architecture/web-layer.md).
 - The client fails the install if the bytes don't match `integrity`/`shasum`, so
   any mirror or rewrite must preserve the exact artifact.
 - Path: `/{pkg}/-/{basename}-{version}.tgz`. A scoped name drops the scope from
@@ -451,11 +451,9 @@ and the unauthenticated responses we could observe.
 
 ### How credentials travel
 
-| Scheme | Header | Form |
-|--------|--------|------|
-| Bearer (preferred) | `Authorization: Bearer <token>` | `<token>` is opaque. A legacy token is a UUID. A modern npm token carries the prefix **`npm_…`** (classic and granular access tokens). |
-| Basic | `Authorization: Basic <base64(user:pass)>` | Legacy username/password. |
-| 2FA one-time pass | `npm-otp: <code>` | Six-digit TOTP (30 s window) or a recovery code. The client sends it *alongside* Basic or Bearer. |
+The registry expects `Authorization: Bearer <token>`. The token is opaque. A legacy
+token is a UUID. A modern npm token carries the prefix `npm_` (classic and granular
+access tokens).
 
 `.npmrc` keys the bearer token by "nerf dart", the registry URL minus the
 scheme, so credentials are per-registry:
@@ -466,41 +464,9 @@ scheme, so credentials are per-registry:
 ```
 
 The CLI turns `//host/:_authToken=…` into `Authorization: Bearer …` for that
-host. (`_auth` is base64 user:pass for Basic. See the `npm-registry-fetch`
-options `token`, `_authToken`, `username`, `password`, `otp`, `forceAuth`, and
-`alwaysAuth`.)
+host.
 
-### 2FA modes
-
-Two modes: `auth-only` (only password-bearing requests need an OTP) and
-`auth-and-writes` (all `PUT`/`POST`/`DELETE` need one, except starring and
-non-`latest` dist-tag changes). Without a valid `npm-otp` a 2FA request gets
-`401`. The CLI then prompts and retries.
-
-### Login flows
-
-**Legacy (CouchDB), `PUT /-/user/org.couchdb.user:{user}`**, no prior auth.
-Body `{ name, password, readonly?, cidr_whitelist? }`. `201` →
-`{ token, ok: true, id, rev }`, where `id` and `rev` are vestigial. `401` on bad
-credentials or a missing `npm-otp`.
-
-**Web (modern default), `POST /-/v1/login`**. The registry replies
-`{ loginUrl, doneUrl }`. The CLI opens `loginUrl` and polls `doneUrl` for the
-token, and falls back to legacy when the registry does not support it. The
-public registry rejects an anonymous `POST /-/v1/login`
-(`401 "You must be logged in to publish packages."`), so the handshake needs a
-browser session.
-
-### Tokens (lifecycle)
-
-| Method | Route | Result |
-|--------|-------|--------|
-| `GET` | `/-/npm/v1/tokens` | `Page` of `Token` objects. The response redacts the UUIDs and shows `key`, the sha512 hash. |
-| `POST` | `/-/npm/v1/tokens` | Create. Body `{ password, readonly?, cidr_whitelist? }` → `Token`. |
-| `DELETE` | `/-/npm/v1/tokens/token/{hash}` | Revoke (cache eviction lags **~1 hour**). |
-
-`Token`: `{ token, key, cidr_whitelist, created, updated, readonly }`. A
-`readonly` token authenticates only `GET`/`HEAD`, exactly what a read-through
+A `readonly` token authenticates only `GET`/`HEAD`, exactly what a read-through
 proxy wants for a private upstream. Unauthenticated: `GET /-/whoami` → `401`,
 `GET /-/npm/v1/tokens` → `401`, bogus bearer → `401 {}`.
 
@@ -512,29 +478,10 @@ proxy wants for a private upstream. Unauthenticated: `GET /-/whoami` → `401`,
 - **Server side.** The proxy may gate its own clients (`Bearer`/`_authToken` at
   the edge). It needs no login or token-lifecycle endpoint to serve installs,
   because those are publish-time.
-- Forward `npm-otp` and `Authorization` only if the proxy carries writes. A
-  read-only proxy ignores 2FA.
 
 ---
 
-## 10. Write path (for completeness)
-
-The write path is off the proxy's critical path, because Écluse delegates
-storage. It is here for completeness.
-
-- **Publish**, `PUT /{pkg}` with a packument body:
-  `{ _id, name, "dist-tags", versions: { "<v>": <manifest> }, _attachments: {
-  "<pkg>-<v>.tgz": { content_type, data: "<base64 tarball>", length } } }`.
-  Re-publishing a version → `409`. Unauthenticated `PUT` to a missing package →
-  `404` (obscured, not `401`).
-- **dist-tags**, `PUT`/`DELETE /-/package/{pkg}/dist-tags/{tag}`.
-- **deprecate**, no endpoint. `npm deprecate` re-publishes with `deprecated`
-  set, which is why it surfaces in the abbreviated manifest (§5).
-- **unpublish**, CouchDB-style `DELETE` on package/revision.
-
----
-
-## 11. Type model
+## 10. Type model
 
 A JSON type model for the wire format. Lenient on input (ignore unknown keys,
 tolerate nulls and the string-vs-object license/bugs/person variants), strict on
@@ -649,7 +596,7 @@ Token           = { token: string, key: string, cidr_whitelist: [string]|null,
 
 ---
 
-## 12. Implementing the protocol
+## 11. Implementing the protocol
 
 A checklist that turns this protocol into proxy obligations.
 
@@ -681,7 +628,7 @@ A checklist that turns this protocol into proxy obligations.
 
 ---
 
-## 13. Reproducing the probes
+## 12. Reproducing the probes
 
 All captures 2026-06-21 against `https://registry.npmjs.org`.
 
@@ -723,7 +670,7 @@ curl -s -X POST -H 'content-type: application/json' \
 
 ---
 
-## 14. References
+## 13. References
 
 - npm/registry, package metadata response:
   <https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md>

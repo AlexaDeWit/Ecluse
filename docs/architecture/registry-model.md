@@ -328,8 +328,8 @@ operator-architecture invariant, catalogued in the
 
 `PackageDetails` ([`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs))
 is the ecosystem-agnostic per-version snapshot every adapter produces and the rules engine
-consumes. Its shape follows the npm, PyPI, and RubyGems protocol studies in
-[`research/reverse-engineering/`](../research/reverse-engineering/README.md). Two principles
+consumes. Its shape follows the npm protocol study in
+[`research/reverse-engineering/npm.md`](../research/reverse-engineering/npm.md). Two principles
 govern it:
 
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.

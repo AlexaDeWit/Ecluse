@@ -16,6 +16,9 @@
   --surface:       var(--cream);
   --fg:            var(--charcoal);
   --muted:         var(--slate);
+  /* Water (#6e928b) darkened until link text clears WCAG AA on Sand.
+     --accent-strong is the hover shade. Derive any tint or shade scale from
+     these two anchors instead of picking fresh colours. */
   --accent:        #3f6058;
   --accent-strong: #2e4a45;
   --border:        var(--tan);

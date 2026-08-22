@@ -22,7 +22,7 @@ Two design points are load-bearing:
 * __Failures are values.__ Each exchange reports every failure, transport
   included, in its typed channel, never a throw. A consumer's fall-through or
   retry-vs-drop decision is therefore total at the call site
-  (/parse, don't validate/, see @docs\/architecture\/fault-model.md@).
+  (/parse, don't validate/).
 
 * __The vocabulary carries no authentication.__ Protocol and authentication are
   orthogonal axes. Every managed npm registry (AWS CodeArtifact, GCP Artifact

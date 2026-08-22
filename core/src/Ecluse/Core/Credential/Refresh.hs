@@ -36,14 +36,8 @@ mint (see @docs\/architecture\/cloud-backends.md@ → "Credential Provider").
   as an exception to the caller. The breaker shares its shape with the effectful-rule
   tier (see @docs\/architecture\/rules-engine.md@ → "Effectful-rule failure").
 
-A 'CredentialProvider' always backs the mirror-target __write__. Under the default
-@passthrough@ access strategy that is its only use. Even a fully failed refresh
-therefore touches only the mirror publish, never the client serve path. Where a mount
-instead puts a provider on the private-upstream __read__ (the @service@ and
-service-populated @delegated-cache@ strategies), that dependent operation /is/ a
-client read. An exhausted read credential then degrades serving. The refresh policy
-here is identical either way (see @docs\/architecture\/access-model.md@ →
-"Credential supply").
+A 'CredentialProvider' backs the mirror-target __write__ only. A fully failed refresh
+therefore touches only the mirror publish, never the client serve path.
 
 The implementation lives in "Ecluse.Core.Credential.Refresh.Internal". This module
 re-exports only the stable surface a caller needs.

@@ -34,10 +34,8 @@ fetches it per request and never hands it here. Were a private entry cached unde
 @passthrough@, the credential-free key would let one client's entry serve another
 client's private document within the TTL. That bypasses the upstream's authorisation.
 The public origin is anonymous, so one shared entry serves every client without
-crossing a trust boundary. Other strategies make a shared private entry safe by
-authorising each serve before returning it (see
-@docs\/architecture\/access-model.md@ → "Caching"). That gate lives on the serve
-path, never in this store.
+crossing a trust boundary. The private origin is never cached (see
+@docs\/architecture\/web-layer.md@ → "Metadata cache").
 
 == Coherent pair
 

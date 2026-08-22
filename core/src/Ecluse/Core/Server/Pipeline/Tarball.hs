@@ -48,7 +48,7 @@ the gated version's @dist.tarball@, selected by the requested filename. The prox
 therefore front a public registry that serves its artifacts from a separate host or an
 off-convention path. That covers a CDN or files host, and a signed URL. The location is
 gated, not trusted. It is fetched only when the tarball-host policy
-('Ecluse.Core.Security.tarballHostAllowed', per @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@)
+('Ecluse.Core.Security.tarballHostAllowed')
 admits its @host:port@ authority. The default refuses a cross-authority @dist.tarball@, a
 different host or a different port alike. The untrusted egress is https-only with
 certificate validation.
