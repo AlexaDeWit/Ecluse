@@ -32,8 +32,7 @@ read (see [the V](#registry-level-composition-the-recommended-topology)).
 ### Credential flow and authority
 
 Reads use **passthrough**: Écluse forwards the caller's own credential to the private upstream and
-reads the public upstream anonymously. The per-mount [credential strategy](access-model.md)
-describes the planned edge-authority design. Passthrough is what ships.
+reads the public upstream anonymously.
 
 - **Private upstream (read)**: Écluse forwards the client's credential and the upstream authorises
   each request. Per request, never cached across clients.
@@ -55,10 +54,12 @@ metadata per request and **never enters it into the shared cache**. A credential
 let one client warm an entry that a differently-authorised client then gets as a hit. That is the
 cross-client disclosure hazard in the
 [threat model](https://ecluse-proxy.com/threat-model.html). The cache holds only the anonymous
-public origin (see
-[access model → why Écluse never caches the private origin](access-model.md#why-écluse-never-caches-the-private-origin)).
+public origin (see the [metadata cache](web-layer.md#metadata-cache)).
 The [security invariants](security.md) bound outbound requests further: the host allowlist,
 internal-range blocking, canonicalisation, and response bounds.
+
+Separate Écluse instances per tenant are a blast-radius or policy-isolation choice. They are not
+a substitute for the credential model, and they scale to team granularity, never per-developer.
 
 ## Publishing first-party packages (the publication target)
 
@@ -199,7 +200,7 @@ track which input a survivor came from, so the serve layer can index back to the
   is the exception: the client and the worker verify its bytes. The floors are
   `ECLUSE_INTEGRITY__MIN_PUBLIC` (hard-floored at SHA-256) and `ECLUSE_INTEGRITY__MIN_TRUSTED`
   (loosenable, refinable per mount: see
-  [Configuration](configuration.md#public-integrity-floor)). This is
+  [`config/default.yaml`](../../config/default.yaml)). This is
   [security invariant 5](security.md#invariants).
 - **Reconcile over the union.** `dist-tags.latest` follows the
   [keep-unless-denied, stable-preferring rule](rules-engine.md#applying-verdicts-to-a-packument):
@@ -268,15 +269,6 @@ the winning sources. The rebuild takes only the surviving versions, rewrites the
 carries `latest` from the plan, and relays every unmodeled key unchanged. The proxy never
 re-serialises the body from the lossy typed model, which is why the API surface
 [owns that schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
-
-The neutral pipeline and the metadata cache hold that raw document as an **opaque carrier with a
-private constructor** ([`CachedDoc`](../../core/src/Ecluse/Core/Registry/CachedDocument.hs)). They
-cache, merge-plan, and thread it, and the module boundary forbids them from reading it. An
-ecosystem crosses that boundary through its own inject/project pair at its injected capabilities.
-It injects the fetched document. Its assembly and serialisation capabilities project that
-document back into the representation the ecosystem works in (npm's is a JSON `Value`). The
-compiler enforces the pipeline's opacity to the served document, so the neutral code does not have
-to keep that discipline by hand.
 
 ### Graceful degradation: per-version, not per-package
 
@@ -362,32 +354,9 @@ how trusted and gated provenances combine.
 
 ## Registry abstraction
 
-The proxy core is registry-agnostic. An ecosystem registers one capability record
-(`RegistryAdapter`, resolved through the adapter registry at the composition root). Its slices are
-the sole interface between the proxy logic and the registry protocol. They are the serve surface,
-the metadata capability, the artifact request formation, and the publish capability. The mirror
-write splits along what varies per ecosystem. The adapter contributes a **protocol codec**
-(`PublishCodec`: publish-document assembly, the presence probe, and status semantics). The
-environment supplies a **shared publish transport** (`MirrorTransport`: the connection manager,
-credential mint, response bound, and fault classification). The composition root marries the two
-per mounted ecosystem with `newMirrorPublish`, into the `MirrorPublish` handle each worker bundle
-carries. A new ecosystem therefore contributes protocol and never transport.
-
-The effectful operations return plain `IO`, not `App`. An implementation closes over its own state
-and never imports the proxy's `Env` or `App`, so backends stay decoupled from the core. Each
-operation reports failure as a typed value (`FetchFault` on a read, `PublishFault` on the mirror
-write). No fault rides up as an exception, and a caller's retry-vs-drop decision is total at the
-call site. Nothing above the registry layer imports registry-specific types. The core operates only
-on `PackageInfo` and `PackageDetails` (see
-[The internal domain model](#the-internal-domain-model)), and an adapter projects its wire format
-into these. The packument projection takes the route-requested `PackageName` as a validation input
-(see [route name validation](#the-route-name-is-the-served-names-validation-authority)).
-
-The protocol vocabulary carries no authentication, because protocol and auth are orthogonal. AWS
-CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio or Nexus all speak the same npm
-protocol. They differ only in how Écluse obtains a bearer token. So Écluse uses the npm
-implementation unchanged and pairs it with a
-[`CredentialProvider`](cloud-backends.md#credential-provider) that mints the token. The backend
-matrix is therefore ecosystem × credential provider. Only the npm protocol ships at launch. The
-abstraction exists from day one to make a future backend (PyPI first) additive rather than
-structural. See [Cloud backends](cloud-backends.md#cloud-backends).
+The proxy core is registry-agnostic. An ecosystem contributes a protocol adapter, and the
+environment supplies the transport and a [`CredentialProvider`](cloud-backends.md#credential-provider)
+that mints its token. AWS CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio or
+Nexus all speak the same npm protocol and differ only in how Écluse obtains a bearer token. The
+backend matrix is therefore the product of ecosystem and credential provider. Only npm ships.
+See [Cloud backends](cloud-backends.md#cloud-backends).

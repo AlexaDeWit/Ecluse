@@ -100,7 +100,7 @@ you have a specific reason to diverge.
 2. **Let callers use their own identity.** The default forwards each caller's credential to the
    private upstream and publication target. Access then matches your registry IAM exactly, and
    Écluse holds no standing read credential. Nothing to set. See
-   [access model](docs/architecture/access-model.md).
+   [Credential flow and authority](docs/architecture/registry-model.md#credential-flow-and-authority).
 3. **Mint the mirror-write token from the container role.** Point
    `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint. The worker then mints a
    short-lived token under the task/instance role instead of carrying a static secret. Scope that
@@ -308,7 +308,7 @@ validation model is in
 > unrepresentable. `ECLUSE_SERVER__AUTH_TOKEN` is the edge Écluse can verify itself. An external
 > layer is good defence-in-depth but does not satisfy this. Pure passthrough (the default) needs
 > none of it. See
-> [Access model → Publishing](docs/architecture/access-model.md#publishing-the-publication-target-passthrough-write).
+> [Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ### The configuration document
 
@@ -369,9 +369,8 @@ cloud credentials. A registry URL never carries one either. Écluse refuses an e
 userinfo (`https://user:token@host/`), a query string, or a fragment at boot. The error names the
 key. A **mirrored** mount holds a mirror-target **write** credential. A serve-only
 mount never writes and holds none. What Écluse does with a client's own token is under
-[Connecting your clients](#connecting-your-clients). The credential model, including the planned
-per-mount strategies, is in
-[access model](docs/architecture/access-model.md) and
+[Connecting your clients](#connecting-your-clients). The credential model is in
+[Credential flow and authority](docs/architecture/registry-model.md#credential-flow-and-authority) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
 ## Connecting your clients
@@ -392,9 +391,6 @@ Edge authentication to the proxy has two shipped modes:
 2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Clients send it as
    `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
 
-A third mode is planned: a **trusted edge identity** honoured over a verifiable binding to a
-fronting gateway/IAP/mesh. See
-[access model → edge authentication](docs/architecture/access-model.md#edge-authentication).
 
 Authenticating at the edge is separate from how Écluse reaches the registries behind it. The edge
 token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the caller's own
@@ -406,7 +402,7 @@ mirror target, derived from the mirror-target URL. An `npm publish` forwards the
 token the same way as a read. Opt into a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and
 Écluse publishes as itself instead. Without an edge token it can verify, Écluse refuses that
 combination at boot. The reasoning, the invariants, and the planned extensions are in
-[access model](docs/architecture/access-model.md).
+[security posture](docs/architecture/security.md#a-static-publish-credential-is-fail-closed).
 
 ## Securing network egress (required)
 
@@ -450,8 +446,8 @@ metadata through the AWS SDK to mint its instance-role credentials. Denying it b
 credentials. IMDSv2 hop limit 1 keeps the minting working while stopping a neighbour or forwarded
 request from reaching metadata through extra hops. Grant the proxy only the cloud permissions it
 needs: the mirror-write credential and the advisory-bucket read (`s3:GetObject`) when
-`ECLUSE_ADVISORIES__BUCKET` is set, nothing more. The invariants and their rationale are in
-[Network egress is a shared responsibility](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
+`ECLUSE_ADVISORIES__BUCKET` is set, nothing more. The trust assumptions behind this are in
+[Security posture](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ### Securing Écluse Pilot and Dredger
 
@@ -539,7 +535,7 @@ the public integrity floor. That floor is `ECLUSE_INTEGRITY__MIN_PUBLIC`, defaul
 table above. One **gotcha:** on a custom or off-spec public upstream, versions without a
 floor-meeting digest silently disappear and their tarballs `403`. To serve such a source, point it
 at the **private** upstream slot and loosen `ECLUSE_INTEGRITY__MIN_TRUSTED` below `sha256`. The
-mechanics are in [Public integrity floor](docs/architecture/configuration.md#public-integrity-floor).
+mechanics are in [Integrity floors](docs/architecture/security.md#integrity-floors).
 
 ### Onboarding DenyIfCve
 
@@ -726,7 +722,7 @@ The controls below are still landing, listed here so the configuration surface i
 - **Per-mount credential strategies and trusted-edge identity** (**planned**): today reads are
   passthrough, forwarding the caller's credential, and the edge is open or static-token. The
   target model (a `service` read strategy, a trusted-edge identity mode) is in
-  [access model](docs/architecture/access-model.md).
+  [security posture](docs/architecture/security.md#a-static-publish-credential-is-fail-closed).
 
 The full deployment runbook ships with the launch.
 

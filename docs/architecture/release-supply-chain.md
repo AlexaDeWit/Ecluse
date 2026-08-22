@@ -15,15 +15,6 @@ certificates and nothing else: no shell, no package manager. It runs non-root (u
 bit-for-bit reproducible. Build it locally with `task docker-build`, which writes `./result`, a
 `docker-archive`.
 
-On linux/amd64, the GHC runtime links elfutils' `libdw` and `libelf` for DWARF stack unwinding.
-Nixpkgs normally co-locates those libraries with the unused `libdebuginfod`, whose network client
-retains `curl`, `libssh2`, OpenSSL, Kerberos, and the HTTP/2 and HTTP/3 stacks. The release binary
-substitutes an ABI-compatible elfutils build with debuginfod disabled: stack unwinding remains, while
-the unreachable network-client surface does not ship. GHC does not enable that DWARF support on the
-arm64 release build, so its closure needs no substitution. The amd64 variant is not Nixpkgs' default
-elfutils output, so a cold release runner may build it locally when `cache.nixos.org` has no matching
-path. After that first build, the repository's Nix cache can reuse the stable derivation.
-
 Publishing is a separate, tag-triggered workflow
 ([`release.yml`](../../.github/workflows/release.yml)), never part of the PR `gate`. A `vX.Y.Z` tag
 must match `ecluse.cabal`'s `version:` field, or the release fails fast at a verify-version step. On
@@ -63,35 +54,12 @@ The environment carries no secrets and no variables, and needs none. The only cr
 uses is the ephemeral `GITHUB_TOKEN` that GitHub issues to the job. There is no registry password to
 store and nothing to rotate.
 
-### Publishing the capability manifest
-
-`task docs-site` and `task site` generate the OpenAPI
-[capability manifest](web-layer.md#capability-manifest) at publish time, and the repo never commits
-it. Both run the `openapi-gen` executable, which walks the route records to write `openapi.json`.
-They then render it into a static Redoc page under `./_site` for GitHub Pages. The repo vendors and
-hash-pins the Redoc bundle (the `mermaidJs` `fetchurl` pattern), so the site build needs no Node.
-Output is deterministic (pinned key ordering, fixed base URLs), so a regeneration is a reviewable
-diff. The running proxy has no `GET /openapi.json` route.
-
 ## Multi-architecture image
 
 `ecluse:X.Y.Z` is an OCI index over a `linux/amd64` and a `linux/arm64` image, so a consumer pulls
-one tag and the registry serves the right architecture.
-
-Each architecture builds natively, never cross-compiled. A matrix `build` job runs the Nix image
-build on its own runner: amd64 on `ubuntu-latest`, arm64 on the free public-repo `ubuntu-24.04-arm`
-runner. GHC therefore compiles natively, each per-arch image stays reproducible, and the release
-avoids GHC cross-compilation, which is fragile with Template Haskell. The build legs carry no
-credentials. Each uploads only its image archive and per-arch SBOM as a workflow artifact.
-
-A single privileged `publish` job assembles the index from the two archives
-([`push-multiarch.sh`](../../scripts/push-multiarch.sh)) and pushes only the one canonical tag. The
-assembly is daemonless. `skopeo` writes each archive into an on-disk OCI layout, then
-[`regctl`](https://regclient.org) builds the index and copies it to the registry, index plus both
-platform images. Daemonless OCI layouts leave no per-arch tags behind, which matters because
-nobody could reuse or delete an immutable tag. They also avoid the rootless-container
-user-namespace limits that would otherwise fail the build from `/nix/store`. One central push job
-also keeps the registry credential in the protected `release` environment, off the build legs.
+one tag and the registry serves the right architecture. Each architecture builds natively on its
+own runner, and one publish job assembles the index
+([`push-multiarch.sh`](../../scripts/push-multiarch.sh)).
 
 ## Supply-chain attestations
 

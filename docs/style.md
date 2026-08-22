@@ -400,9 +400,8 @@ async exceptions the runtime delivers: cancellation from `race`/`concurrently`, 
 act on *every* exit including an async one, use `finally`/`withException`/`bracket`, which are
 async-aware by construction.
 
-**11.6 Place a new failure mode in the fault-model vocabulary before choosing its shape.**
-[`docs/architecture/fault-model.md`](architecture/fault-model.md) holds the system-wide map. Before
-you add a throw, a catch, or an error type, name the failure's disposition there. The dispositions
+**11.6 Name a new failure mode's disposition before choosing its shape.** Before you add a
+throw, a catch, or an error type, name the failure's disposition. The dispositions
 are Transient, Permanent, or Cancelled for a loop, Deny or Propagate for a request, and BootAbort,
 FailUp, or Graceful for the process. Then pick the matching shape:
 

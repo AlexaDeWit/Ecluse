@@ -107,15 +107,9 @@ Because the filtered body differs from upstream's, the proxy computes its own `E
 
 ### Initial rule set
 
-| Rule | Type | Description |
-|------|------|-------------|
-| `AllowIfOlderThan ageSeconds` | Pure | Allows a version published more than `ageSeconds` ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion, where an attacker races to publish before detection. |
-| `AllowIfRemediatesCve` | Effectful | Allows a version a synced advisory names as its exact fixed version, provided no advisory still affects it: the [remediation fast lane](#allowifremediatescve-remediation-fast-track) past the quarantine. Abstains when it cannot confirm a remediation, including before a first advisory sync. |
-| `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
-| `AllowByIdentity identity` | Pure | Allows a specific package or `package@version` by exact identity: the allow twin of `DenyByIdentity`. Ranks above `DenyIfCve` (an identity pin overrides an advisory deny) but below the install-script and revocation denies. |
-| `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist), a common arbitrary-code-execution vector. Yields no decision otherwise, and overrides any allow at its higher default precedence. |
-| `DenyByIdentity identity` | Pure | A hard deny for a specific package or `package@version`, at the top precedence: the post-mirror revocation mechanism. |
-| `DenyIfCve params` | Effectful | Opt-in. Denies a version a synced advisory records as affected at or above a CVSS `minSeverity`. An unscored advisory (the npm malware feed carries no score) counts as above every threshold, so it blocks malware too. Ranks below `AllowByIdentity`. Its `onUnavailable` fails closed by default. See the [deny direction](#denyifcve-the-deny-direction). |
+The rule catalogue, each rule's type and parameters, lives in
+[`config/default.yaml`](../../config/default.yaml) and the operator manual's
+[rule policy](../../USAGE.md#rule-policy).
 
 The **default precedence ladder** climbs from most-passive to most-decisive:
 

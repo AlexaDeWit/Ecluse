@@ -95,7 +95,7 @@ section records the current layout and one project-specific pattern.
   running proxy: config, the `Env` composition root, logging, the WAI app, and telemetry.
   `app/Main.hs` is the executable. The build enforces the boundary: the core's unit suite cannot
   depend on the app library. See
-  [architecture → Codebase decomposition](architecture.md#codebase-decomposition).
+  [README → Project structure](../README.md#project-structure).
 - **Handles are records of functions, selected at one composition root.** A swappable backend
   (registry protocol, mirror queue, credential provider) is a record whose fields are functions: the
   *Handle pattern*. A per-backend smart constructor builds it (e.g.
