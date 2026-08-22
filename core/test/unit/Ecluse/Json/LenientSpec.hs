@@ -13,10 +13,10 @@ import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 
 {- | Direct tests for the shared lenient-decode primitives hoisted out of the npm wire
 module. 'lenientOptional' must read a well-formed value, distinguish absence, and degrade
-a present-but-undecodable value to 'Nothing' rather than failing the whole decode;
-'typeMismatchOneOf' must render a descriptive message naming the accepted shapes and the
-JSON kind actually found, over every 'Value' kind. The npm consumers are exercised
-end-to-end by "Ecluse.Registry.Npm.WireSpec"; these pin the primitives in isolation.
+a present-but-undecodable value to 'Nothing' rather than fail the whole decode.
+'typeMismatchOneOf' must render a message naming the accepted shapes and the JSON kind
+found, over every 'Value' kind. "Ecluse.Registry.Npm.WireSpec" covers the npm consumers
+end to end. These cases pin the primitives in isolation.
 -}
 spec :: Spec
 spec = do
@@ -53,8 +53,8 @@ typeMismatchOneOfSpec = describe "typeMismatchOneOf" $ do
     it "names null" $ messageFor Null `shouldBe` expected "null"
 
 {- | Run 'lenientOptional' for an 'Int' field @n@ over an object, exposing the two-layer
-'Maybe': the outer is the parser (which always succeeds, since 'lenientOptional' never
-fails), the inner the field's lenient presence.
+'Maybe'. The outer layer is the parser, which always succeeds because 'lenientOptional'
+never fails. The inner layer is the field's lenient presence.
 -}
 readLenientInt :: Object -> Maybe (Maybe Int)
 readLenientInt = parseMaybe (`lenientOptional` "n")
@@ -63,8 +63,8 @@ readLenientInt = parseMaybe (`lenientOptional` "n")
 objOf :: Value -> Object
 objOf v = KeyMap.fromList [("n", v)]
 
-{- | The failure message 'typeMismatchOneOf' renders for a value, observed by running the
-always-failing parser and reading back its decode error (the path is discarded).
+{- | The failure message 'typeMismatchOneOf' renders for a value. Run the always-failing
+parser and read back its decode error, discarding the path.
 -}
 messageFor :: Value -> String
 messageFor v = case parse (const parser) () of

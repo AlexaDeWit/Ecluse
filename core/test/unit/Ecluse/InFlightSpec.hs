@@ -47,8 +47,8 @@ spec = do
                     ) ::
                     IO (Either SomeException ())
             -- Order matters: a consumer fills its result promise (orphan) before the
-            -- slot is freed (release), so a follower never sees the slot gone without
-            -- the result delivered.
+            -- guard frees the slot (release). A follower never sees the slot gone
+            -- without the result delivered.
             readIORef steps `shouldReturn` ["orphan", "release"]
 
         it "unblocks a waiting follower and releases the slot when the leader is cancelled mid-body (no orphan window)" $ do
@@ -68,11 +68,11 @@ spec = do
                         forever (threadDelay 1_000_000)
                 leader <- async (mask $ \restore -> guardInFlight restore onOrphan (bump released) body)
                 takeMVar running
-                -- A follower blocks on the promise; it must unblock when the leader is
+                -- A follower blocks on the promise. It must unblock when the leader is
                 -- cancelled, never park forever.
                 follower <- async (atomically (readTMVar promise) :: IO (Either SomeException ()))
                 threadDelay 30000
-                cancel leader -- async-cancel inside the body; 'cancel' waits for the leader to die
+                cancel leader -- async-cancel inside the body: 'cancel' waits for the leader to die
                 followed <- wait follower
                 rel <- readIORef released
                 pure (isLeft followed, rel)

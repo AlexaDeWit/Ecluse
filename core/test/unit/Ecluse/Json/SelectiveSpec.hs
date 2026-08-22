@@ -18,11 +18,16 @@ import Ecluse.Core.Json.Selective (
     withRecord,
  )
 
-{- | Direct tests for the generic bounded token-walk engine, weighted to the unhappy and edge
-paths a consumer inherits: malformed-token refusal on each primitive, the depth-budget boundary on
-both the materialise and the skip path, non-record and empty-container handling, and error
-propagation from a duplicate key whose later occurrence breaches. One happy anchor per primitive
-fixes the baseline; the engine's happy paths are already exercised through the npm consumer.
+{- | Direct tests for the generic bounded token-walk engine, weighted to the unhappy and
+edge paths a consumer inherits.
+
+* Malformed-token refusal on each primitive.
+* The depth-budget boundary on the materialise path and the skip path.
+* Non-record and empty-container handling.
+* Error propagation from a duplicate key whose later occurrence breaches.
+
+One happy anchor per primitive fixes the baseline. The npm consumer already covers the
+engine's happy paths.
 -}
 spec :: Spec
 spec = do

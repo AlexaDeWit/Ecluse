@@ -38,7 +38,7 @@ import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 {- | Run a fetch wrapper in @KatipContextT IO@, which already satisfies
 @withOsvRetry@'s @MonadMask@ + @KatipContext@ constraints. The log environment
-has no scribes, so the retry log lines are discarded and never clutter output.
+has no scribes, so the retry log lines never reach the output.
 -}
 runTest :: KatipContextT IO a -> IO a
 runTest action = do
@@ -55,7 +55,7 @@ permanentFailure = InvalidUrlException "http://osv.example/npm/all.zip" "unusabl
 
 {- | A stand-in low-level cause wrapped by a 'ConnectionFailure'. The classifier
 inspects only the constructor, not the wrapped cause, so a small typed exception
-serves (and keeps us clear of a stringly @userError@, per STYLE section 11).
+serves. It also keeps us clear of a stringly @userError@ (STYLE section 11).
 -}
 data StubCause = StubCause
     deriving stock (Show)
@@ -94,8 +94,8 @@ spec = do
             drop 4 delays `shouldSatisfy` all isNothing
 
         it "is truncated: no single backoff exceeds the cap" $ do
-            -- A base that doubles past the cap within the budget: every delay must
-            -- still be clamped to the cap.
+            -- A base that doubles past the cap within the budget: the policy must
+            -- still clamp every delay to the cap.
             let cap = 2_000_000
                 policy = limitRetries 8 <> capDelay cap (fullJitterBackoff 1_000_000)
             delays <- mapMaybe snd <$> simulatePolicy 8 policy

@@ -41,8 +41,9 @@ spec = do
 
         it "drops the newest hand-off at the cap, reporting every drop's running total" $ do
             -- The drain loop is deliberately not running, so the buffer stays full
-            -- once its depth is reached and every further hand-off is a drop. The
-            -- callback fires per drop (metric-grade); rate-limiting is the caller's.
+            -- once it reaches its depth and every further hand-off is a drop. The
+            -- callback fires on every drop (metric-grade). Rate-limiting is the
+            -- caller's job.
             delivered <- newIORef []
             drops <- newIORef []
             (q, _drainLoop) <- newEnqueueBuffer 2 (\n -> modifyIORef' drops (<> [n])) (\_ _ -> pass) (recordingBackend delivered)
@@ -80,8 +81,8 @@ spec = do
                 `shouldBe` [True, True, True]
 
         it "still grants a first delivery under any budget, however small" $
-            -- A budget of one (or zero, or below) would otherwise retire a job that has
-            -- never run; no message is retired before it has been tried at least once.
+            -- A budget of one (or zero, or below) would otherwise retire a job that never
+            -- ran. The worker retires no message before it tries that message at least once.
             map (\budget -> deliveryBudgetSpent budget (deliveredTimes 1)) [DeliveryBudget 1, DeliveryBudget 0, DeliveryBudget (-3)]
                 `shouldBe` [False, False, False]
 
@@ -91,8 +92,8 @@ spec = do
 
     describe "effectiveDeliveryBudget -- the dead-letter queue captures first" $ do
         it "raises the configured floor one delivery past an attached terminus's capture count" $
-            -- The operator's redrive policy takes the message at 10, so Écluse must not
-            -- retire it at the configured 5 and rob the dead-letter queue of the capture.
+            -- Écluse must not retire the message at the configured 5 and rob the
+            -- dead-letter queue: the operator's redrive policy captures it at 10.
             effectiveDeliveryBudget (DeliveryBudget 5) (TerminusAttached (Just (DeliveryBudget 10)))
                 `shouldBe` DeliveryBudget 11
 
@@ -105,17 +106,17 @@ spec = do
                 `shouldBe` DeliveryBudget 5
 
         it "keeps the configured floor when nothing captures poison messages" $
-            -- The no-terminus case the budget exists for: it is the only terminus there is.
+            -- The no-terminus case the budget exists for: the budget is the only terminus.
             effectiveDeliveryBudget (DeliveryBudget 5) TerminusAbsent `shouldBe` DeliveryBudget 5
   where
-    -- A delivery of the sample job on its n-th receive: the count is all these
-    -- verdicts read, so the rest of the message is fixed.
+    -- A delivery of the sample job on its n-th receive. These verdicts read only the
+    -- count, so the rest of the message stays fixed.
     deliveredTimes :: Int -> QueueMessage
     deliveredTimes n =
         QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n}
 
-    -- A backend stub whose 'enqueue' appends to the given ref, so a test can
-    -- observe exactly what the buffer's drain loop delivered and in what order.
+    -- A backend stub whose 'enqueue' appends to the given ref, so a test sees what
+    -- the buffer's drain loop delivered, and in what order.
     -- The consumer fields are inert (the buffer passes them through untouched).
     recordingBackend :: IORef [MirrorJob] -> MirrorQueue
     recordingBackend delivered =

@@ -30,12 +30,12 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Test.Metrics (allLabelKeys, allMetricNames, highCardinalityKeys)
 
-{- | Tests for the @ecluse.*@ catalogue and the __bounded-label discipline__. The
-crux is the cardinality guard: high-cardinality identifiers (package\/version\/scope\/
-message) must never become metric labels. These assert the catalogue's wire names, the
-closed label-key set, that every label value is drawn from a small fixed domain, and --
-the guard -- that no high-cardinality identifier is a label key (and, structurally, that
-no 'Label' constructor produces one). Pure.
+{- | Tests for the @ecluse.*@ catalogue and the bounded-label discipline. The crux is
+the cardinality guard: high-cardinality identifiers (package\/version\/scope\/message)
+must never become metric labels. These cases assert the catalogue's wire names, the
+closed label-key set, and that every label value comes from a small fixed domain. The
+guard itself: no high-cardinality identifier is a label key, and structurally no 'Label'
+constructor produces one. Pure.
 -}
 spec :: Spec
 spec = do
@@ -106,9 +106,9 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
                               ]
 
     it "REJECTS high-cardinality identifiers as labels (the crux)" $
-        -- package / version / scope / message are never label keys. There is, by
-        -- construction, no Label that produces one; this asserts the closed key set
-        -- contains none of them either, so an unbounded label cannot be attached.
+        -- package / version / scope / message are never label keys. No Label
+        -- constructor produces one, and this case asserts the closed key set holds
+        -- none of them either, so nothing can attach an unbounded label.
         filter (`elem` highCardinalityKeys) (map labelKeyName allLabelKeys) `shouldBe` []
 
     it "files every bounded label under a key in the closed set" $
@@ -117,10 +117,10 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
 boundedDomainSpec :: Spec
 boundedDomainSpec = describe "bounded label value domains" $ do
     it "draws the whole bounded-label series space from a small, fixed product" $
-        -- Excluding the operator-bounded `rule` (a deployment's small fixed rule set),
-        -- the entire space of metric label values is this handful -- never the unbounded
-        -- space of package identifiers. A label whose domain was not finite could not
-        -- appear in this enumeration (it has no Universe instance to enumerate).
+        -- The operator-bounded `rule` aside (a deployment's small fixed rule set), the
+        -- whole space of metric label values is this handful. It is never the unbounded
+        -- space of package identifiers. A label with an infinite domain could not appear
+        -- in this enumeration: it has no Universe instance to enumerate.
         length allBoundedLabels `shouldSatisfy` (< 64)
 
     it "renders every bounded label to a non-empty value under a closed key" $
@@ -164,7 +164,7 @@ renderSpec = describe "renderLabel" $ do
 
 -- The bounded-label universe: every label constructible from a finite value domain
 -- (the operator-bounded `rule` excepted, since its domain is configuration, not an
--- enum). If a label's domain were unbounded it could not be enumerated here.
+-- enum). If a label's domain were unbounded, this list could not enumerate it.
 allBoundedLabels :: [Label]
 allBoundedLabels =
     concat

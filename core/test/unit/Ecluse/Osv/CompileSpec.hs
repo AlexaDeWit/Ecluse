@@ -54,7 +54,6 @@ spec = describe "SQLite OSV Compilation" $ do
                     )
                     le
 
-        -- Verify the sqlite db
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double)]
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
@@ -69,17 +68,17 @@ spec = describe "SQLite OSV Compilation" $ do
         -- contract, the forms a reader depends on, not the constants that
         -- produced them.
         takeFileName dbFile `shouldBe` "npm-osv-schema3.db"
-        -- The sample carries a CVSS 3.1 vector (5.9); the computed base score is
-        -- stored, in preference to the "MODERATE" label.
+        -- The sample carries a CVSS 3.1 vector (5.9). The writer stores the computed
+        -- base score in preference to the "MODERATE" label.
         rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9)]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
         -- The reader's lookups ride these: by-package fetch and the exact
         -- (name, fixed) remediation probe.
         map fromOnly indexes `shouldBe` ["idx_package_fixed", "idx_package_name"]
-        -- The reader accepts an artifact only if both tables are STRICT; a
-        -- freshly compiled artifact must satisfy its own contract.
+        -- The reader accepts an artifact only if both tables are STRICT. A freshly
+        -- compiled artifact must satisfy its own contract.
         map fromOnly strictTables `shouldBe` ["meta", "package_vulnerability_ranges"]
-        -- The dedup guard behind INSERT OR IGNORE (the former composite PK).
+        -- The dedup guard behind INSERT OR IGNORE.
         map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
 
         let meta = Map.fromList metaRows
@@ -93,8 +92,8 @@ spec = describe "SQLite OSV Compilation" $ do
     it "aborts the compile without publishing when the drop rate is systemic" $ do
         le <- initLogEnv "test" (Environment "test")
         -- A feed that is almost entirely unusable: 20 malformed entries to one good
-        -- one trips the systemic-drop breaker, which must abandon the run rather than
-        -- finalise a fresh-looking artifact that silently omits most advisories.
+        -- one trips the systemic-drop breaker. The breaker must abandon the run rather
+        -- than finalise a fresh-looking artifact that silently omits most advisories.
         zipData <-
             osvZipOf
                 ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]

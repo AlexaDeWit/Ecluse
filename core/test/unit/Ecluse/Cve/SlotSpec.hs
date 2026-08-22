@@ -13,8 +13,8 @@ import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Test.Cve (fakeCveLookup)
 
-{- | A fake owning resource over the in-memory lookup, recording every close so
-the tests can pin exactly when a displaced generation is retired.
+{- | A fake owning resource over the in-memory lookup, recording every close so the
+tests pin exactly when the slot retires a displaced generation.
 -}
 fakeDb :: Text -> IORef [Text] -> CveDb
 fakeDb tag closeLog =
@@ -53,8 +53,8 @@ spec = describe "CveSlot" $ do
         pinned <- async $ withSlotLookup slot $ \mLookup -> do
             putMVar insideReader ()
             takeMVar releaseReader
-            -- The old generation must still answer, even though the swap below
-            -- has already landed: the bracket pinned it.
+            -- The old generation still answers even though the swap below already
+            -- landed: the bracket pinned it.
             generationSeen mLookup
 
         takeMVar insideReader
@@ -103,7 +103,7 @@ spec = describe "CveSlot" $ do
         results <- traverse wait readers
         wait swapper
         readIORef closeLog `shouldReturn` ["gen-a"]
-        -- Every pinned reader answered from gen-a; none observed gen-b.
+        -- Every pinned reader answered from gen-a. None observed gen-b.
         results `shouldBe` replicate 8 (Just False)
 
     it "reports the active generation's ETag for the audit trail, Nothing before the first swap" $ do

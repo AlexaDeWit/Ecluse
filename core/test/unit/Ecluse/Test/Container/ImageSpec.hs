@@ -10,9 +10,9 @@ import Test.Hspec
 import Ecluse.Test.Container.Image (mkPinnedImageRef, renderPinnedImageRef)
 
 {- | The validator behind 'PinnedImageRef'. It is the only way to build one, so a pull
-site (which accepts only a 'PinnedImageRef') can never be handed a tag. A harness resolves
-its raw image literals through this validator at startup and fails loudly on a 'Left', so
-an unpinned literal aborts the suite (in CI) before it pulls anything.
+site, which accepts only a 'PinnedImageRef', never receives a tag. A harness resolves its
+raw image literals through this validator at startup and fails loudly on a 'Left'. An
+unpinned literal then aborts the suite (in CI) before it pulls anything.
 -}
 spec :: Spec
 spec =

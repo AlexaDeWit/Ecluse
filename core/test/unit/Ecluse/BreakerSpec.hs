@@ -19,7 +19,7 @@ import Ecluse.Core.Breaker
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 23) 0
 
--- | The trip threshold and cooldown the example tests drive the machine with.
+-- | The trip threshold and cooldown for the example tests.
 threshold :: Int
 threshold = 3
 
@@ -38,28 +38,24 @@ spec = do
 
     describe "Eq / Show instances" $ do
         it "compares equal only for the same constructor and payload" $ do
-            -- Same constructor, same payload: equal.
             Closed 1 `shouldBe` Closed 1
             HalfOpen `shouldBe` HalfOpen
             Open now `shouldBe` Open now
-            -- Same constructor, differing payload: unequal.
             Closed 1 `shouldNotBe` Closed 2
             Open now `shouldNotBe` Open (addUTCTime 1 now)
-            -- Across constructors: unequal in every pairing.
             Closed 0 `shouldNotBe` HalfOpen
             Closed 0 `shouldNotBe` Open now
             HalfOpen `shouldNotBe` Open now
 
         it "renders each constructor distinctly" $ do
-            -- Exercise the derived Show on every constructor at the top level
-            -- (precedence 0, no surrounding parentheses).
+            -- At the top level (precedence 0) the derived Show adds no parentheses.
             show (Closed 3) `shouldBe` ("Closed 3" :: String)
             show HalfOpen `shouldBe` ("HalfOpen" :: String)
             show (Open now) `shouldContain` "Open "
 
         it "parenthesises an argument-bearing constructor in a nested position" $ do
-            -- Showing a breaker as an argument (precedence 11) drives the derived
-            -- Show's parenthesising branch, which a top-level show alone leaves out.
+            -- As an argument (precedence 11) the derived Show takes its parenthesising
+            -- branch, which a top-level show never reaches.
             show (Just (Closed 3)) `shouldBe` ("Just (Closed 3)" :: String)
             show [Open now] `shouldContain` "[Open "
 
@@ -78,8 +74,8 @@ spec = do
             admit now (Open until') `shouldBe` (False, Open until')
 
         it "half-opens and admits one probe once the cooldown instant is reached" $ do
-            -- At exactly the trip instant the breaker is no longer in the future, so
-            -- the probe is admitted and the state advances to half-open.
+            -- At exactly the cooldown instant the deadline is no longer in the future,
+            -- so the probe passes and the state advances to half-open.
             admit now (Open now) `shouldBe` (True, HalfOpen)
 
         it "half-opens and admits once the cooldown instant is past" $ do
@@ -101,7 +97,7 @@ spec = do
             failAt now (Closed 0) `shouldBe` Closed 1
 
         it "trips open for the cooldown once the count reaches the threshold" $
-            -- Two failures already counted (Closed 2); the third reaches threshold 3.
+            -- Two failures already counted (Closed 2). The third reaches threshold 3.
             failAt now (Closed (threshold - 1)) `shouldBe` Open (addUTCTime cooldown now)
 
         it "re-opens for a fresh cooldown when a half-open probe fails" $
@@ -116,7 +112,6 @@ spec = do
             -- initialBreaker, then `threshold` failures: the last one trips it open.
             let stepN k = foldl' (\br _ -> failAt now br) initialBreaker [1 .. k]
             stepN threshold `shouldBe` Open (addUTCTime cooldown now)
-            -- One fewer failure leaves it closed, just shy of the threshold.
             stepN (threshold - 1) `shouldBe` Closed (threshold - 1)
 
     describe "properties" $ do

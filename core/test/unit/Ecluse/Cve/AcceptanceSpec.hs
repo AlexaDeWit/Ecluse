@@ -20,11 +20,11 @@ import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
--- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
--- pins in Ecluse.Test.OsvSpec: the conformance cases below run against both
--- this fake and the real artifact compiled from the same corpus.
--- Severities are the CVSS band ceilings the writer maps the fixtures' GHSA labels
--- to (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0); these fixtures carry no
+-- CorpusV1's rows, in the fake's vocabulary. Keep them in lockstep with the corpus
+-- pins in Ecluse.Test.OsvSpec. The conformance cases below run against both this fake
+-- and the real artifact compiled from the same corpus.
+-- Each severity is the CVSS band ceiling the writer maps a fixture's GHSA label to
+-- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0). These fixtures carry no
 -- last_affected bound, so it is Nothing throughout.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
@@ -37,8 +37,7 @@ corpusRows =
     ]
 
 -- The behavioural contract, written once and run against every 'CveLookup'
--- implementation, so the fake the core suite trusts cannot drift from the
--- real handle.
+-- implementation, so the fake the core suite trusts cannot drift from the real handle.
 lookupContract :: ((CveLookup -> IO ()) -> IO ()) -> Spec
 lookupContract withLookup = do
     it "probes True for a version an advisory names as its fixed bound" $
@@ -67,7 +66,7 @@ lookupContract withLookup = do
 withFakeLookup :: (CveLookup -> IO ()) -> IO ()
 withFakeLookup use = use (fakeCveLookup corpusRows)
 
--- Hand the body the fixture artifact's path and its accepted owning handle; a
+-- Hand the body the fixture artifact's path and its accepted owning handle. A
 -- rejection of the fixture is a loud test failure. The body owns the close.
 withAcceptedDb :: (FilePath -> CveDb -> IO ()) -> IO ()
 withAcceptedDb body =
@@ -118,10 +117,10 @@ spec = do
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-meta.db"
                 -- A structurally-sound artifact with the canonical ranges table and
-                -- the right epoch stamp but no @meta@ table: schema conformance must
-                -- refuse the missing relation as a rejection value rather than an
-                -- uncaught throw that would re-download the artifact every poll and
-                -- leak the just-opened connection.
+                -- the right epoch stamp, but no @meta@ table. Schema conformance must
+                -- refuse the missing relation as a rejection value. An uncaught throw
+                -- would re-download the artifact every poll and leak the just-opened
+                -- connection.
                 bracket (open path) close $ \conn -> do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
                     execute_ conn (Query rangesTableDdl)
@@ -133,8 +132,8 @@ spec = do
         it "rejects an artifact whose meta lacks the ecosystem row" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-ecosystem-row.db"
-                -- Conformant tables, but @meta@ never names an ecosystem: the
-                -- ecosystem cannot be confirmed, and the refusal is a value.
+                -- Conformant tables, but @meta@ never names an ecosystem: acceptance
+                -- cannot confirm the ecosystem, and the refusal is a value.
                 bracket (open path) close $ \conn -> do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
                     execute_ conn (Query rangesTableDdl)
@@ -144,10 +143,10 @@ spec = do
         it "rejects an artifact whose stored meta values violate the strict declaration, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "malformed-meta.db"
-                -- A BLOB smuggled under a forged STRICT declaration: the integrity
-                -- walk verifies stored values against the declared column types and
-                -- must refuse the artifact as a rejection value (so the sync task
-                -- remembers its ETag), never a thrown decode error.
+                -- A BLOB smuggled under a forged STRICT declaration. The integrity
+                -- walk verifies stored values against the declared column types. It
+                -- must refuse the artifact as a rejection value, never a thrown decode
+                -- error, so the sync task remembers its ETag.
                 mkDbWithMalformedProvenance path
                 openCveDb Npm path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
@@ -187,9 +186,9 @@ spec = do
                 -- Arbitrary non-SQLite bytes: the header magic is absent, so the
                 -- first file-touching statement (the epoch-stamp PRAGMA) makes
                 -- SQLite raise SQLITE_NOTADB. That must surface as a rejection
-                -- value -- so the sync task remembers the ETag rather than
-                -- re-downloading the same hostile object every poll -- never an
-                -- uncaught exception that leaks the just-opened connection.
+                -- value, never an uncaught exception that leaks the just-opened
+                -- connection. The sync task then remembers the ETag rather than
+                -- re-downloading the same hostile object every poll.
                 writeFileBS path "this is not an SQLite database, not even close"
                 openCveDb Npm path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
@@ -205,11 +204,10 @@ spec = do
     describe "the confined query-fault channel" $ do
         it "re-raises a mid-query SQLite fault as CveQueryFault, tagged with the field asked" $
             withAcceptedDb $ \dbFile db -> do
-                -- Break the accepted schema out from under the open handle
-                -- through a second (unhardened) connection: the next query
-                -- through the view is the infrastructural fault the confined
-                -- channel carries -- unreachable from artifact content, which
-                -- acceptance made total.
+                -- Break the accepted schema out from under the open handle through a
+                -- second (unhardened) connection. The next query through the view is
+                -- the infrastructural fault the confined channel carries. Artifact
+                -- content cannot reach it: acceptance made that path total.
                 saboteur <- open dbFile
                 execute_ saboteur "DROP TABLE package_vulnerability_ranges"
                 close saboteur
@@ -222,8 +220,8 @@ spec = do
         it "cveDbClose never throws, a second close of the same handle included" $
             withAcceptedDb $ \_dbFile db -> do
                 cveDbClose db
-                -- The close fault (the connection is already released) is
-                -- absorbed inside the handle: total by construction.
+                -- The handle absorbs the close fault (the connection is already
+                -- released): total by construction.
                 cveDbClose db
 
     describe "the hardened connection" $ do
@@ -249,8 +247,8 @@ spec = do
                         map fromOnly mmap `shouldBe` [0]
                         close conn
 
--- Every path this process holds an open descriptor to (Linux's /proc table;
--- empty elsewhere, degrading the leak assertion to the throw alone).
+-- Every path this process holds an open descriptor to, read from Linux's /proc
+-- table. It is empty elsewhere, which degrades the leak assertion to the throw alone.
 openFdTargets :: IO [FilePath]
 openFdTargets =
     ( do

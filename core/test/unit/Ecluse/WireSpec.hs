@@ -38,8 +38,8 @@ spec = describe "parseWire" $ do
         parseWire "west" `shouldBe` Right West
 
     it "rejects an unknown name, naming the accepted set in table order" $
-        -- The accepted set is listed in table order (east, west, north, south),
-        -- which is neither constructor order (north, south, east, west) nor
+        -- The message lists the accepted set in table order (east, west, north,
+        -- south). That is neither constructor order (north, south, east, west) nor
         -- alphabetical: the message follows the table.
         (parseWire "up" :: Either Text Direction)
             `shouldBe` Left "unknown direction \"up\" (expected one of: east, west, north, south)"
