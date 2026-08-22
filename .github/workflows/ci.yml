@@ -55,7 +55,7 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
-      id-token: write # OIDC: tokenless Codecov upload + FlakeHub Cache
+      id-token: write # OIDC for tokenless Codecov upload (no stored token)
     env:
       # Pin the cabal store to a deterministic, cacheable location.
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -153,9 +153,6 @@ jobs:
     # dependency closure from source before it reaches a single registry
     # call, which is what the bound has to cover.
     timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Hits public npm/PyPI to catch protocol drift when those registries change
     # their wire behaviour — a correctness signal we want visible on EVERY PR. NOT a
     # `gate` dependency and continue-on-error, so a transient live-registry blip
@@ -195,7 +192,6 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
     # docker network and drives it with the real npm CLI (S53). Catches composition-root
     # and cross-component regressions nothing else does. It is heavy (a Nix image build,
@@ -268,7 +264,6 @@ jobs:
     # or orphaned page fails the PR here instead of the Pages deploy after merge.
     permissions:
       contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the Semgrep SARIF to code scanning
     steps:
       - name: Checkout
@@ -308,9 +303,6 @@ jobs:
     # cache is written on main only, so the first PR run pays it all). Warm runs
     # finish in a fraction of this.
     timeout-minutes: 100
-    permissions:
-      contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Builds the library Haddock so broken doc comments / missing modules are caught
     # on the PR, not after merge when the Pages deploy fails. Builds it as the
     # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
@@ -371,9 +363,6 @@ jobs:
     runs-on: ubuntu-latest
     # Observed 7 min mean, 19 min worst; sized so a cold-cache run still fits.
     timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Fails on any finding (a red signal) and IS a `gate` dependency, so a finding
     # blocks the merge. weeder reports library code not reachable from the application
     # entry point. Runs on EVERY PR so a newly-introduced unreachable definition is
@@ -436,9 +425,6 @@ jobs:
     name: Haskell static analysis (stan)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
     # Fails on any finding above the floor (a red signal) and IS a `gate` dependency,
     # so a finding blocks the merge. Stan analyses GHC HIE files for partial functions +
     # potential bugs that Semgrep (no Haskell) and hlint (no type info) can't see, scoped

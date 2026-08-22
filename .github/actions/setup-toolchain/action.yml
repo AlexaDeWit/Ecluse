@@ -127,19 +127,15 @@ runs:
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       with:
+        # Upstream Nix, the same flavour the dev shell pins. The default
+        # (Determinate Nix) logs the runner in to FlakeHub, which adds two
+        # substituters every run is unauthorised for and writes a root-only
+        # /nix/var/determinate/auth_state.json that makes the store save's tar
+        # exit 2, so the nix-* entries below never refresh.
+        determinate: false
         extra-conf: |
           connect-timeout = 10
           download-attempts = 5
-
-    # FlakeHub Cache: the store-path-granular binary cache in front of the
-    # Actions-cache entries below. Authenticates via the job's OIDC token
-    # (`id-token: write`; no stored secrets), substitutes on every run, and
-    # pushes newly built paths from trusted runs, so a closure change is built
-    # once and substituted everywhere after, including PR runs the Actions
-    # cache cannot yet serve. A run without an OIDC token (a fork PR) degrades
-    # to the Actions cache + cache.nixos.org path below.
-    - name: FlakeHub Cache
-      uses: DeterminateSystems/flakehub-cache-action@e62e272c914d4ad8e4d1587a864e9c3ad2cba9de # v3.21.9
 
     # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
     # warm runs are fast and immune to cache.nixos.org flakiness. Most gate jobs

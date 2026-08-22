@@ -39,7 +39,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the grype SARIF to code scanning
     steps:
       - name: Checkout
@@ -74,7 +73,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # authenticate to FlakeHub Cache (OIDC)
       security-events: write # upload the osv-scanner SARIF to code scanning
     steps:
       - name: Checkout
