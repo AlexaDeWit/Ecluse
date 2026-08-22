@@ -78,8 +78,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extEcosystem = "npm"
                                     , extCveId = "GHSA-2234-fmw7-43wr"
                                     , extIntroduced = Just "0"
-                                    , extFixed = Just "4.6.5"
-                                    , extLastAffected = Nothing
+                                    , extUpperBound = FixedBefore "4.6.5"
                                     , -- The fixture carries both a CVSS 3.1 vector and the
                                       -- "MODERATE" label. The computed base score wins.
                                       extSeverity = Just 5.9
@@ -123,13 +122,13 @@ spec = describe "Osv parsing and streaming" $ do
             -- no ranges.
             let adv = OsvAdvisory "MAL-test" (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing
             extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") Nothing (Just "1.0.0") Nothing]
+                `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") (LastAffected "1.0.0") Nothing]
 
         it "carries an inclusive last_affected bound distinct from a fix" $ do
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing Nothing (Just "3.8.8")]
                 adv = OsvAdvisory "GHSA-la" (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
             extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") Nothing (Just "3.8.8") Nothing]
+                `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") (LastAffected "3.8.8") Nothing]
 
         it "ignores a GIT range whose commit-SHA bounds are not versions" $ do
             -- Carving a GIT range into segments would store a commit SHA as a version bound, which
@@ -138,6 +137,16 @@ spec = describe "Osv parsing and streaming" $ do
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0") Nothing]
                 adv = OsvAdvisory "GHSA-git" (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing
             extractFromAdvisory adv `shouldBe` []
+
+        it "leaves a segment unbounded above when no event closes it" $ do
+            -- A second introduced closes the open segment, and the last one runs to the
+            -- end of the event list. Neither carries an upper bound.
+            let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent (Just "2.0.0") Nothing Nothing]
+                adv = OsvAdvisory "GHSA-open" (Just [OsvAffected (OsvPackage "open-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory adv
+                `shouldBe` [ ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "0") Unbounded Nothing
+                           , ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "2.0.0") Unbounded Nothing
+                           ]
 
         it "extracts the version range and drops a co-published GIT range" $ do
             -- OSV advisories often carry a GIT range alongside the ECOSYSTEM/SEMVER
@@ -151,7 +160,7 @@ spec = describe "Osv parsing and streaming" $ do
                         Nothing
                         Nothing
             extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" (Just "0") (Just "2.0.0") Nothing Nothing]
+                `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" (Just "0") (FixedBefore "2.0.0") Nothing]
 
     it "extracts multiple packages and ranges from a complex OSV advisory" $ do
         fileBytes <- BS.readFile "test/unit/fixtures/osv/complex.json"
@@ -169,8 +178,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extEcosystem = "npm"
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
-                                    , extFixed = Just "1.0.0"
-                                    , extLastAffected = Nothing
+                                    , extUpperBound = FixedBefore "1.0.0"
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -178,8 +186,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extEcosystem = "npm"
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "1.1.0"
-                                    , extFixed = Just "1.2.0"
-                                    , extLastAffected = Nothing
+                                    , extUpperBound = FixedBefore "1.2.0"
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -187,8 +194,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extEcosystem = "npm"
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "2.0.0"
-                                    , extFixed = Just "2.1.0"
-                                    , extLastAffected = Nothing
+                                    , extUpperBound = FixedBefore "2.1.0"
                                     , extSeverity = Nothing
                                     }
                                , ExtractedOsv
@@ -196,8 +202,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extEcosystem = "npm"
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
-                                    , extFixed = Just "3.0.0"
-                                    , extLastAffected = Nothing
+                                    , extUpperBound = FixedBefore "3.0.0"
                                     , extSeverity = Nothing
                                     }
                                ]
@@ -222,7 +227,7 @@ spec = describe "Osv parsing and streaming" $ do
                 extPackage ext `shouldBe` "hono"
                 extEcosystem ext `shouldBe` "npm"
                 extCveId ext `shouldBe` "GHSA-2234-fmw7-43wr"
-                extFixed ext `shouldBe` Just "4.6.5"
+                extUpperBound ext `shouldBe` FixedBefore "4.6.5"
             _ -> fail "Expected exactly 1 result"
 
     it "handles an empty zip archive gracefully without emitting anything" $ do
@@ -289,7 +294,7 @@ spec = describe "Osv parsing and streaming" $ do
                 extPackage ext `shouldBe` "hono"
                 extEcosystem ext `shouldBe` "npm"
                 extCveId ext `shouldBe` "GHSA-2234-fmw7-43wr"
-                extFixed ext `shouldBe` Just "4.6.5"
+                extUpperBound ext `shouldBe` FixedBefore "4.6.5"
             _ -> fail "Expected exactly 1 result"
 
     it "throws an exception if the URL is invalid" $ do

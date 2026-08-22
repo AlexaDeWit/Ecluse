@@ -21,7 +21,8 @@ import System.FilePath (takeFileName)
 import System.IO.Error (catchIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
-import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
+import Ecluse.Core.Osv.Advisory (ExtractedOsv (..), UpperBound (..))
+import Ecluse.Core.Osv.Compile (compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Telemetry.Metrics (
@@ -123,3 +124,15 @@ spec = describe "SQLite OSV Compilation" $ do
         -- operator alarms on a feed that keeps failing to compile.
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
+
+    describe "osvToRow" $ do
+        let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9))
+
+        it "writes an exclusive bound to fixed_version and leaves last_affected_version null" $
+            rowFor (FixedBefore "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9)
+
+        it "writes an inclusive bound to last_affected_version and leaves fixed_version null" $
+            rowFor (LastAffected "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Just "2.0.0", Just 5.9)
+
+        it "leaves both bound columns null for a segment with no upper bound" $
+            rowFor Unbounded `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Nothing, Just 5.9)

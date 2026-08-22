@@ -12,8 +12,8 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (bracket, catchAny, finally, try)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (cqfQuery), openCveDb)
-import Ecluse.Core.Cve.Internal (openHardenedConnection)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (cqfQuery), UpperBound (..), openCveDb)
+import Ecluse.Core.Cve.Internal (openHardenedConnection, toRange)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Test.Cve (fakeCveLookup)
@@ -25,12 +25,12 @@ import Ecluse.Test.OsvDb (withFixtureOsvDb)
 -- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0), and no fixture carries a last_affected bound.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
-    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (Just "3.0.0") Nothing)
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (Just "1.0.0") Nothing)
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (Just "2.0.0") Nothing)
-    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just 10.0) (Just "1.0.0") Nothing Nothing)
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (Just "1.2.0") Nothing)
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (Just "2.5.0") Nothing)
+    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (FixedBefore "3.0.0"))
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (FixedBefore "1.0.0"))
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (FixedBefore "2.0.0"))
+    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just 10.0) (Just "1.0.0") Unbounded)
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0"))
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0"))
     ]
 
 -- The behavioural contract, written once and run against every 'CveLookup'
@@ -53,8 +53,8 @@ lookupContract withLookup = do
         withLookup $ \l -> do
             ranges <- cveAdvisoriesFor l "corpus-vuln"
             sortOn arCveId ranges
-                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (Just "1.2.0") Nothing
-                           , AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (Just "2.5.0") Nothing
+                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0")
+                           , AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0")
                            ]
 
     it "returns nothing for a package with no advisories" $
@@ -234,6 +234,27 @@ spec = do
                         map fromOnly cellCheck `shouldBe` [1]
                         map fromOnly mmap `shouldBe` [0]
                         close conn
+
+    describe "the artifact row decode" $ do
+        let boundOf fixed lastAffected = arUpperBound (toRange ("GHSA-decode", Just "1.0.0", fixed, lastAffected, Just 5.9))
+
+        it "reads a fixed_version column as an exclusive bound" $
+            boundOf (Just "2.0.0") Nothing `shouldBe` FixedBefore "2.0.0"
+
+        it "reads a last_affected_version column as an inclusive bound" $
+            boundOf Nothing (Just "2.0.0") `shouldBe` LastAffected "2.0.0"
+
+        it "reads a row with neither bound column as unbounded" $
+            boundOf Nothing Nothing `shouldBe` Unbounded
+
+        it "resolves a row that carries both bound columns as the fix" $
+            -- The writer fills at most one column, so only a hand-built artifact reaches
+            -- this. The decode must still yield exactly one bound.
+            boundOf (Just "2.0.0") (Just "3.0.0") `shouldBe` FixedBefore "2.0.0"
+
+        it "carries the row's identity, lower bound, and severity through unchanged" $
+            toRange ("GHSA-decode", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9)
+                `shouldBe` AdvisoryRange "GHSA-decode" (Just 5.9) (Just "1.0.0") (FixedBefore "2.0.0")
 
 -- Every path this process holds an open descriptor to, read from Linux's /proc
 -- table. It is empty elsewhere, which degrades the leak assertion to the throw alone.

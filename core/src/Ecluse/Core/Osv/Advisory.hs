@@ -11,6 +11,7 @@ module Ecluse.Core.Osv.Advisory (
     OsvEvent (..),
     OsvDatabaseSpecific (..),
     OsvSeverityEntry (..),
+    UpperBound (..),
     ExtractedOsv (..),
     advisorySeverity,
     extractFromAdvisory,
@@ -136,17 +137,28 @@ instance FromJSON OsvEvent where
             <*> v .:? "fixed"
             <*> v .:? "last_affected"
 
+{- | Where an affected interval closes. An advisory states one upper bound or none, so
+no segment can carry two.
+-}
+data UpperBound
+    = -- | Exclusive: affected below this version, which is itself the fix.
+      FixedBefore Text
+    | -- | Inclusive: affected up to and including this version.
+      LastAffected Text
+    | -- | The interval never closes.
+      Unbounded
+    deriving stock (Show, Eq)
+
 {- | One affected segment of one package, one row of the artifact's ranges table.
-'extIntroduced' is the inclusive lower bound and 'Nothing' means from the beginning. The
-upper bound is 'extFixed' (exclusive), 'extLastAffected' (inclusive), or neither (open-ended).
+'extIntroduced' is the inclusive lower bound and 'Nothing' means from the beginning.
+'extUpperBound' closes the interval.
 -}
 data ExtractedOsv = ExtractedOsv
     { extPackage :: Text
     , extEcosystem :: Text
     , extCveId :: Text
     , extIntroduced :: Maybe Text
-    , extFixed :: Maybe Text
-    , extLastAffected :: Maybe Text
+    , extUpperBound :: UpperBound
     , extSeverity :: Maybe Double
     {- ^ The advisory's CVSS base score (0 to 10), carried onto each of its segments.
     'Nothing' when the advisory is unscored, as much of the npm malware feed is.
@@ -197,15 +209,14 @@ extractFromAdvisory :: OsvAdvisory -> [ExtractedOsv]
 extractFromAdvisory adv = do
     aff <- fromMaybe [] (osvAffected adv)
     let pkg = affectedPackage aff
-    Segment intro fixed lastAffected <- affectedSegments aff
+    Segment intro upper <- affectedSegments aff
     pure $
         ExtractedOsv
             { extPackage = packageName pkg
             , extEcosystem = packageEcosystem pkg
             , extCveId = osvId adv
             , extIntroduced = intro
-            , extFixed = fixed
-            , extLastAffected = lastAffected
+            , extUpperBound = upper
             , extSeverity = severity
             }
   where
@@ -213,15 +224,15 @@ extractFromAdvisory adv = do
     -- the advisory, not of a segment.
     severity = advisorySeverity adv
 
--- | One affected interval: an inclusive lower bound and at most one upper bound.
-data Segment = Segment (Maybe Text) (Maybe Text) (Maybe Text)
+-- One affected interval: an inclusive lower bound and where it closes.
+data Segment = Segment (Maybe Text) UpperBound
 
 affectedSegments :: OsvAffected -> [Segment]
 affectedSegments aff =
     maybe [] (concatMap (extractRange . rangeEvents) . filter versionTyped) (affectedRanges aff)
         <> maybe [] (map exactVersion) (affectedVersions aff)
   where
-    exactVersion v = Segment (Just v) Nothing (Just v)
+    exactVersion v = Segment (Just v) (LastAffected v)
 
     -- Only @SEMVER@ and @ECOSYSTEM@ ranges carry version bounds. A @GIT@ range's events are
     -- commit identifiers, and 'insideAffectedRange' fails an unparseable bound closed to
@@ -237,12 +248,12 @@ extractRange :: [OsvEvent] -> [Segment]
 extractRange = go Nothing
   where
     go Nothing [] = []
-    go (Just i) [] = [Segment (Just i) Nothing Nothing]
+    go (Just i) [] = [Segment (Just i) Unbounded]
     go current (e : es)
         | Just i <- eventIntroduced e =
             case current of
-                Just prev -> Segment (Just prev) Nothing Nothing : go (Just i) es
+                Just prev -> Segment (Just prev) Unbounded : go (Just i) es
                 Nothing -> go (Just i) es
-        | Just f <- eventFixed e = Segment current (Just f) Nothing : go Nothing es
-        | Just la <- eventLastAffected e = Segment current Nothing (Just la) : go Nothing es
+        | Just f <- eventFixed e = Segment current (FixedBefore f) : go Nothing es
+        | Just la <- eventLastAffected e = Segment current (LastAffected la) : go Nothing es
         | otherwise = go current es

@@ -89,7 +89,7 @@ import Ecluse.Core.Breaker (
     BreakerReporter (..),
     noBreakerReporter,
  )
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, UpperBound (FixedBefore), insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
@@ -261,7 +261,7 @@ classifyRanges eco version ranges =
             NoDecision "no advisory names this version as its fix"
         (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
   where
-    remediated = ordNub [arCveId ar | ar <- ranges, arFixed ar == Just version]
+    remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
     stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
 
 -- The one identity test the by-identity twins share: the exact rendered package
