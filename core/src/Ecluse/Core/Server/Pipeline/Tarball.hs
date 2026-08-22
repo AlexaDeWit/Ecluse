@@ -134,12 +134,15 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Server.Conditional (forwardValidators)
 import Ecluse.Core.Server.Context (
     Handler,
-    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
+    pdMirror,
+    pdPrivateBaseUrl,
+    pdPublicBaseUrl,
+    pdTarballHostGate,
     tarballHostHonoured,
  )
 import Ecluse.Core.Server.Path (Filename (Filename))
@@ -176,6 +179,7 @@ import Ecluse.Core.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)

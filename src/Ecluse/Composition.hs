@@ -84,11 +84,12 @@ import Ecluse.Core.Registry.Adapter (
     publishRelay,
  )
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
-import Ecluse.Core.Security (Limits, tarballHostGate)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), MountBinding, PackumentDeps (..), PublishDeps (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -217,24 +218,20 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
         let regs = mountRegistries mount
         pure
             PackumentDeps
-                { pdPrivateBaseUrl = registryUrlText <$> regPrivateUpstream regs
-                , pdPublicBaseUrl = registryUrlText (regPublicUpstream regs)
+                { -- The leading argument is the adapter's declared artifact hosts: the
+                  -- ecosystem's own same-host equivalence for the tarball gate.
+                  pdUpstreams =
+                    mountUpstreams
+                        (artifactHosts (adapterArtifact adapter))
+                        (registryUrlText <$> regPrivateUpstream regs)
+                        (registryUrlText (regPublicUpstream regs))
+                        (maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs))
                 , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
-                , pdMirror = maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs)
                 , pdRules = prepared
                 , -- The operator-configured ranges extending the fixed internal-range block on
                   -- the dist.tarball host gate; the same list applies to every mount, since which
                   -- internal ranges exist on an operator's network is a deployment-wide fact.
                   pdAdditionalBlockedRanges = egrAdditionalBlockedRanges (cfgEgress app)
-                , -- The tarball-host gate's mount-constant inputs (allowlist + private and
-                  -- public hosts), extracted once here so the hot artifact path parses no
-                  -- URL and rebuilds no host set per request.
-                  pdTarballHostGate =
-                    tarballHostGate
-                        (artifactHosts (adapterArtifact adapter))
-                        (registryUrlText <$> regPrivateUpstream regs)
-                        (registryUrlText (regPublicUpstream regs))
-                        (registryUrlText . mtUrl <$> regMirrorTarget regs)
                 , pdLimits = limits
                 , pdInboundToken = srvAuthToken (cfgServer app)
                 , pdNow = clock

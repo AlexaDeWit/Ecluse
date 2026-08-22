@@ -58,6 +58,8 @@ import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
     ServeRuntime (..),
+    pdPrivateBaseUrl,
+    pdPublicBaseUrl,
  )
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)

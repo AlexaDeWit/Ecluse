@@ -26,15 +26,20 @@ A spec that /does/ drive the data plane builds its own deps through 'npmServeDep
 live stub upstream; this fixture is for the specs that only care about routing, the
 meta-routes, the edge gate, or the publish path.
 
-'consistentGate' / 'consistentGateWith' re-derive the cached tarball-host gate after a test
-record-updates one of the URL fields it projects from, so the gate never goes stale.
+'withPrivateBaseUrl', 'overPrivateBaseUrl', 'withMirrorPlan', and 'withEcosystemHosts'
+are how a fixture varies an upstream: each rebinds the deps' whole upstream cluster
+through 'mountUpstreams', so the tarball-host gate re-derives with the URL rather than
+being left behind. A fixture cannot express a stale gate, because the cluster's
+constructor is private and its selectors are not exported (see
+"Ecluse.Core.Server.Upstream").
 -}
 module Ecluse.Test.Server.Mount (
     npmServeDeps,
     inertPackumentDeps,
-    mirrorUrlOf,
-    consistentGate,
-    consistentGateWith,
+    withPrivateBaseUrl,
+    overPrivateBaseUrl,
+    withMirrorPlan,
+    withEcosystemHosts,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -45,15 +50,17 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedD
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (defaultLimits, tarballHostGate)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), PackumentDeps (..))
+import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
 {- | An npm mount's serve dependencies with the standard production wiring filled once,
 parameterised only on the per-site axes: the private upstream base URL ('Nothing' for a
 pure public gate), the public upstream base URL, the mirror plan, the prepared rule set,
-and the clock. The tarball-host gate is derived from those URLs, so it never goes stale.
+and the clock. The upstream cluster is bound from those URLs, so the tarball-host gate is
+derived from them and cannot disagree with them.
 
 The remaining varying fields carry sensible defaults (the mount base URL, no inbound
 token, and the production https-only egress former); a site record-updates just the ones
@@ -67,13 +74,10 @@ former ignores it (the authoritative @dist.tarball@ URL is what it fetches).
 npmServeDeps :: Maybe Text -> Text -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
-        { pdPrivateBaseUrl = privateBaseUrl
-        , pdPublicBaseUrl = publicBaseUrl
+        { pdUpstreams = mountUpstreams [] privateBaseUrl publicBaseUrl mirror
         , pdMountBaseUrl = "https://proxy.test"
-        , pdMirror = mirror
         , pdRules = rules
         , pdAdditionalBlockedRanges = []
-        , pdTarballHostGate = tarballHostGate [] privateBaseUrl publicBaseUrl (mirrorUrlOf mirror)
         , pdLimits = defaultLimits
         , pdInboundToken = Nothing
         , pdNow = clock
@@ -113,24 +117,37 @@ inertPackumentDeps =
     fixedNow :: UTCTime
     fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
--- | The mirror-target URL a serve plan carries, or 'Nothing' for a serve-only mount.
-mirrorUrlOf :: MirrorServePlan -> Maybe Text
-mirrorUrlOf = \case
-    MirrorOnAdmit url -> Just url
-    NoMirrorWrite -> Nothing
-
-{- | Re-derive the precomputed tarball-host gate from a deps value's (possibly
-overridden) upstream URLs, so a test that record-updates @pdPrivateBaseUrl@,
-@pdPublicBaseUrl@, or @pdMirror@ keeps @pdTarballHostGate@ consistent. The gate is
-a cached projection of those three fields (the composition root builds it once), so a
-bare record update would leave it stale; the override harness applies this after any tweak.
+{- | Rebind a fixture's upstreams with the private base URL replaced. The tarball-host
+gate re-derives, since the cluster is rebuilt through its one builder. Rebinds with no
+ecosystem artifact hosts, so a fixture wanting both applies 'withEcosystemHosts' last.
 -}
-consistentGate :: PackumentDeps -> PackumentDeps
-consistentGate = consistentGateWith []
+withPrivateBaseUrl :: Maybe Text -> PackumentDeps -> PackumentDeps
+withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
-{- | 'consistentGate' with adapter-declared ecosystem artifact hosts, for a test that
-exercises the ecosystem-host equivalence (the PyPI files-host shape).
+{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the
+old one (rewriting a host, say); a mount with no private upstream stays without one.
+Drops any declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
 -}
-consistentGateWith :: [Text] -> PackumentDeps -> PackumentDeps
-consistentGateWith ecosystemHosts d =
-    d{pdTarballHostGate = tarballHostGate ecosystemHosts (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (mirrorUrlOf (pdMirror d))}
+overPrivateBaseUrl :: (Text -> Text) -> PackumentDeps -> PackumentDeps
+overPrivateBaseUrl f = rebind [] (fmap f) id
+
+{- | Rebind a fixture's upstreams with the mirror serve plan replaced. Drops any
+declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
+-}
+withMirrorPlan :: MirrorServePlan -> PackumentDeps -> PackumentDeps
+withMirrorPlan mirror = rebind [] id (const mirror)
+
+{- | Rebind a fixture's upstreams declaring the given ecosystem artifact hosts, for a
+test that exercises the ecosystem-host equivalence (the PyPI files-host shape). The
+upstream URLs are carried over unchanged; the hosts join the gate's allowlist.
+-}
+withEcosystemHosts :: [Text] -> PackumentDeps -> PackumentDeps
+withEcosystemHosts ecosystemHosts = rebind ecosystemHosts id id
+
+-- The one rebinding point every fixture tweak routes through: rebuild the cluster from
+-- the given ecosystem hosts and the URL axes read back off the deps, so the gate is
+-- derived from what the result actually carries. The hosts are an argument, not a value
+-- the cluster carries, so each rebind states them or drops them.
+rebind :: [Text] -> (Maybe Text -> Maybe Text) -> (MirrorServePlan -> MirrorServePlan) -> PackumentDeps -> PackumentDeps
+rebind ecosystemHosts onPrivate onMirror d =
+    d{pdUpstreams = mountUpstreams ecosystemHosts (onPrivate (pdPrivateBaseUrl d)) (pdPublicBaseUrl d) (onMirror (pdMirror d))}

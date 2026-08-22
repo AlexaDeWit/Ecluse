@@ -127,7 +127,8 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
