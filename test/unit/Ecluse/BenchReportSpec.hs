@@ -132,7 +132,7 @@ spec = do
 gcHeader :: Text
 gcHeader = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory"
 
--- Two groups, three benches; webpack is the slowest of its group.
+-- Two groups and three benches, with webpack the slowest of its group.
 sampleCsv :: Text
 sampleCsv =
     T.unlines

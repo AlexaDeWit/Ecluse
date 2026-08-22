@@ -14,18 +14,17 @@ module Ecluse.Core.Worker.Liveness (
 
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 
-{- | The mirror worker's consume-loop heartbeat: the wall-clock time of the
-worker's __last recorded progress__ -- a successful poll of the queue, or a
-completed job.
+{- | The mirror worker's consume-loop heartbeat: the wall-clock time of the worker's
+__last recorded progress__, a successful poll of the queue or a completed job.
 
-It is the worker's own liveness signal, kept apart from the server's HTTP
-readiness so single-process health reflects a stalled worker today and a future
-standalone worker binary keeps the same probe. The worker advances it (via
-'Ecluse.Core.Worker.Types.recordWorkerProgress') after each successful @receive@
-(whether or not the batch was empty -- an empty long-poll is a healthy idle, not a
-stall) and after each completed job, so a long batch of large artifacts cannot
-starve it; a liveness probe reads 'lastPoll' and compares it against the wall clock
-to decide whether the loop has gone quiet for too long.
+It is the worker's own liveness signal, kept apart from the server's HTTP readiness.
+Single-process health therefore reflects a stalled worker today, and a standalone
+worker binary would keep the same probe. The worker advances it through
+'Ecluse.Core.Worker.Types.recordWorkerProgress' after each successful @receive@ and
+after each completed job, so a long batch of large artifacts cannot starve it. It
+advances on an empty batch too: an empty long-poll is a healthy idle, not a stall. A
+liveness probe reads 'lastPoll' and compares it against the wall clock to decide
+whether the loop has gone quiet for too long.
 -}
 newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
 
@@ -35,10 +34,10 @@ newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
 newWorkerHeartbeat :: IO WorkerHeartbeat
 newWorkerHeartbeat = WorkerHeartbeat <$> newTVarIO Nothing
 
-{- | Stamp the heartbeat with the given instant, recording a unit of worker
-progress. The worker advances it (via 'Ecluse.Core.Worker.Types.recordWorkerProgress')
-after each successful @receive@ -- the loop is alive even on an empty batch -- and
-after each completed job, so a long batch of large artifacts cannot starve the signal.
+{- | Stamp the heartbeat with the given instant, recording a unit of worker progress.
+The worker advances it through 'Ecluse.Core.Worker.Types.recordWorkerProgress' after
+each successful @receive@, an empty batch included, and after each completed job. A
+long batch of large artifacts therefore cannot starve the signal.
 -}
 recordPoll :: WorkerHeartbeat -> UTCTime -> IO ()
 recordPoll (WorkerHeartbeat var) now = atomically (writeTVar var (Just now))
@@ -50,28 +49,30 @@ compares it against the wall clock.
 lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
 lastPoll (WorkerHeartbeat var) = readTVarIO var
 
-{- | How long the worker's last recorded progress may be stale before the loop is
-considered stalled -- the staleness threshold the liveness probe applies.
+{- | How long the worker's last recorded progress may be stale before the loop counts
+as stalled: the staleness threshold the liveness probe applies.
 
 The worker records progress on two events (see
 'Ecluse.Core.Worker.Types.recordWorkerProgress'): each successful poll and each
-__completed job__. The threshold must clear the larger of the two gaps. The idle
-gap is small -- a healthy idle worker completes a poll at least every SQS long-poll
-window (@sqsWaitSeconds@, ≤ 20s by default). The busy gap is the binding one: a
-single job can legitimately run a fetch and then a publish of the largest artifact the
-memory plan's fetch cap admits (the mirror-artifact tenant, at most 512 MiB at its
-ceiling), and each transfer is budgeted at the publish-visibility floor
+__completed job__. The threshold must clear the larger of the two gaps. The idle gap
+is small, because a healthy idle worker completes a poll at least every SQS long-poll
+window (@sqsWaitSeconds@, ≤ 20s by default). The busy gap is the binding one. A single
+job can legitimately run a fetch and then a publish of the largest artifact the memory
+plan's fetch cap admits. That is the mirror-artifact tenant, at most 512 MiB at its
+ceiling. Each transfer gets the publish-visibility floor as its budget
 ('Ecluse.Core.Worker.Job.workerPublishVisibilityBudget', ~300s for 512 MiB over a
 conservative ~2 MiB/s link). One healthy job therefore runs for up to about two such
 budgets before its heartbeat next advances.
 
-Set above that two-budget sum (with headroom for the bounded probe, metadata
-re-fetch, and integrity hashing between the legs) so a healthy worker mid-large-publish
-is never mistaken for a stalled one. Advancing the heartbeat only once per batch under
-a 120s bound previously flagged such a worker dead, so an orchestrator liveness probe
-killed the pod mid-publish and the un-acked jobs redelivered into the identical stall:
-a self-inflicted restart loop. @Ecluse.Worker.LivenessSpec@ pins the relationship to
-'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget' so the two budgets cannot drift.
+Set the threshold above that two-budget sum, with headroom for the bounded probe, the
+metadata re-fetch, and integrity hashing between the legs. Nothing then mistakes a
+healthy worker mid-large-publish for a stalled one. A heartbeat that advanced only
+once per batch under a 120s bound would flag such a worker dead. An orchestrator
+liveness probe would kill the pod mid-publish, and the un-acked jobs would redeliver
+into the identical stall: a self-inflicted restart loop. The
+@Ecluse.Worker.LivenessSpec@ module pins the relationship to
+'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget', so the two budgets cannot
+drift.
 -}
 workerHeartbeatStaleAfter :: NominalDiffTime
 workerHeartbeatStaleAfter = 660
@@ -101,9 +102,9 @@ heartbeatHealthy :: UTCTime -> Maybe UTCTime -> Bool
 heartbeatHealthy _ Nothing = True
 heartbeatHealthy now (Just polledAt) = diffUTCTime now polledAt <= workerHeartbeatStaleAfter
 
-{- | Read the worker heartbeat and decide liveness against the current wall clock --
-the @IO@ wrapper the liveness probe calls. 'True' while the consume loop is alive
-(or still starting); 'False' once the last successful poll is staler than
+{- | Read the worker heartbeat and decide liveness against the current wall clock: the
+@IO@ wrapper the liveness probe calls. 'True' while the consume loop is alive or still
+starting. 'False' once the last successful poll is staler than
 'workerHeartbeatStaleAfter'.
 -}
 heartbeatHealthyNow :: WorkerHeartbeat -> IO Bool

@@ -4,13 +4,13 @@
 
 {- | The private construction boundary for 'RegistryUrl'.
 
-This module is __not exposed__ from @ecluse-core@ (it is an @other-module@), so the
-raw 'RegistryUrl' constructor is reachable only from inside the library. The public
+@ecluse-core@ does not expose this module (it is an @other-module@), so the raw
+'RegistryUrl' constructor is reachable only from inside the library. The public
 "Ecluse.Core.Security.Egress" re-exports the type /abstractly/, with the https-only
-'mkRegistryUrl' as the sole production builder; the test- and dev-only loopback
-builder in "Ecluse.Core.Security.Egress.DevHttp" is compiled only under the
-@dev-http-egress@ Cabal flag. A release build therefore carries no way to construct a
-non-https registry target, in code or in configuration.
+'mkRegistryUrl' as the sole production builder. The test- and dev-only loopback builder
+in "Ecluse.Core.Security.Egress.DevHttp" compiles only under the @dev-http-egress@
+Cabal flag. A release build therefore carries no way to construct a non-https registry
+target, in code or in configuration.
 -}
 module Ecluse.Core.Security.Egress.Internal (
     RegistryUrl (..),
@@ -20,19 +20,19 @@ module Ecluse.Core.Security.Egress.Internal (
 
 import Data.Text qualified as T
 
-{- | An outbound registry-egress URL that is __https by construction__. The only
-production constructor, 'mkRegistryUrl', rejects any non-https scheme, so a
-plain-HTTP registry target cannot be represented in a running system: every
-configured upstream, mirror, and publication endpoint, and every @dist.tarball@
-target, is one of these. Stored normalised (surrounding whitespace trimmed).
+{- | An outbound registry-egress URL that is https by construction. The only
+production constructor, 'mkRegistryUrl', rejects any non-https scheme, so a plain-HTTP
+registry target cannot be represented in a running system. Every configured upstream,
+mirror, and publication endpoint, and every @dist.tarball@ target, is one of these.
+Stored normalised (surrounding whitespace trimmed).
 -}
 newtype RegistryUrl = RegistryUrl Text
     deriving stock (Eq, Ord, Show)
 
 {- | Build a 'RegistryUrl', accepting only an @https:\/\/@ URL (the scheme matched
-case-insensitively, since URI schemes are). A non-https or empty value is rejected
-with a reason that names the requirement, so the aggregating configuration layer can
-fail closed at boot and report the offending value.
+case-insensitively, since URI schemes are). It rejects a non-https or empty value with
+a reason that names the requirement. The aggregating configuration layer can then fail
+closed at boot and report the offending value.
 
 >>> mkRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")

@@ -3,16 +3,16 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Work-per-request benches for the rules engine ("Ecluse.Core.Rules"): evaluating a
-rule set against every version of a packument, the sweep that decides which versions
-survive a metadata response.
+rule set against every version of a packument. That sweep decides which versions survive
+a metadata response.
 
-The realistic benches run over the curated real-world corpus (each package's real
-version set and per-version signals); a synthetic bench scales the version count and
+The realistic benches run over the curated real-world corpus, with each package's real
+version set and per-version signals. A synthetic bench scales the version count and
 asserts the sweep stays linear, guarding the accidentally quadratic regression a
-per-version rule fold can hide. Evaluation is effectful -- the engine 'prepare's
-rules, then evaluates each version in 'IO' -- so the per-version sweep is the measured
-'IO' work. The synthetic generator is retained __only__ for this complexity-scaling
-assertion, not as the realistic case.
+per-version rule fold can hide. Evaluation is effectful: the engine 'prepare's rules,
+then evaluates each version in 'IO'. The per-version sweep is therefore the measured 'IO'
+work. The synthetic generator serves __only__ this complexity-scaling assertion, never
+the realistic case.
 -}
 module Ecluse.Core.RulesBench (
     benchmarks,
@@ -51,9 +51,9 @@ benchmarks loaded =
                ]
 
 {- | Evaluate the rule set against every version, forcing each decision. The engine
-'prepare's the rules -- a cheap, once-at-boot step for pure rules, a constant in the
-version count -- and then sweeps every version in 'IO', the per-request work a packument
-response performs.
+'prepare's the rules, then sweeps every version in 'IO', the per-request work a packument
+response performs. For pure rules the prepare step is cheap and runs once at boot, a
+constant in the version count.
 -}
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do

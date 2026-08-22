@@ -64,7 +64,7 @@ spec = do
             Map.lookup Npm names `shouldSatisfy` maybe False (not . null)
             Map.lookup PyPI names `shouldSatisfy` maybe False (not . null)
             Map.lookup RubyGems names `shouldSatisfy` maybe False (not . null)
-            -- Anchors so a careless catalogue edit is caught.
+            -- Anchors that catch a careless catalogue edit.
             (elem "typescript" <$> Map.lookup Npm names) `shouldBe` Just True
             Map.member "lodash" (catBenchPins cat) `shouldBe` True
 

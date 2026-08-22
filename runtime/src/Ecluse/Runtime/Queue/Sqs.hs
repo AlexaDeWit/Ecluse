@@ -6,54 +6,54 @@
 
 Maps the handle's receive → process → ack shape onto SQS:
 
-* 'enqueue' → @SendMessage@ (the 'MirrorJob' encoded as the message body),
-* 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll),
-* 'ack' → @DeleteMessage@ (the message is gone, never redelivered),
-* 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish),
+* 'enqueue' → @SendMessage@ (the 'MirrorJob' encoded as the message body).
+* 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll).
+* 'ack' → @DeleteMessage@ (the message is gone, never redelivered).
+* 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish).
 * 'deadLetter' → @ChangeMessageVisibility@ with the 'sqsTerminalBackoff' window and
-  __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the DLQ).
+  __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the
+  dead-letter queue).
 
-'newSqsQueue' also __probes the queue's redrive configuration once__
-(@GetQueueAttributes@ for @RedrivePolicy@, which SQS never delivers with a message),
-so the composition root can warn when nothing captures a poison message, and holds the
-handle's redelivery budget one delivery above an attached policy's own
-@maxReceiveCount@ -- the dead-letter queue always captures first. @ReceiveMessage@
-likewise asks for @ApproximateReceiveCount@ explicitly, since SQS omits it by default;
-it is the delivery count every 'Ecluse.Core.Queue.QueueMessage' carries.
+'newSqsQueue' __probes the queue's redrive configuration once__ (@GetQueueAttributes@
+for @RedrivePolicy@, which SQS never delivers with a message). The composition root can
+then warn when nothing captures a poison message. 'newSqsQueue' also holds the handle's
+redelivery budget one delivery above an attached policy's own @maxReceiveCount@. The
+dead-letter queue therefore always captures first. @ReceiveMessage@ likewise asks for
+@ApproximateReceiveCount@ explicitly, since SQS omits it by default. That is the
+delivery count every 'Ecluse.Core.Queue.QueueMessage' carries.
 
-The provider differences SQS embodies -- the visibility timeout, the long-poll
-window, the batch limit -- are 'SqsConfig' knobs with sane defaults, and the SQS
-receipt handle is carried opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'),
-so none of it leaks past the handle. __Retry is "don't ack"__: a job whose
-processing fails transiently is simply not 'ack'ed, and SQS redelivers it once the
-visibility timeout lapses; persistent failures fall to the queue's native dead-letter
-(max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__
-fault ('deadLetter') is returned with a backoff window and never deleted, so it too
-falls to the operator's dead-letter queue rather than being discarded. A deployment
-with no dead-letter queue has nothing to fall to, so the worker's redelivery budget
-retires such a message instead ("Ecluse.Core.Queue"), rather than letting it cycle
-until the retention window discards it unseen. Every
-operation reports its AWS failure as the handle's typed
-'Ecluse.Core.Queue.QueueFault' value, classified into the core transport
-vocabulary at this edge ("Ecluse.Runtime.Aws.Fault"), so a queue outage never
-rides the exception channel through a caller.
+The provider differences SQS embodies are 'SqsConfig' knobs with sane defaults: the
+visibility timeout, the long-poll window, and the batch limit. The SQS receipt handle
+rides opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'), so none of it leaks past
+the handle. Retry is __"don't ack"__: a job whose processing fails transiently is
+simply not 'ack'ed, and SQS redelivers it once the visibility timeout lapses.
+Persistent failures fall to the queue's native dead-letter (max-receive-count), so
+there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__ fault ('deadLetter')
+returns with a backoff window and is never deleted. It too falls to the operator's
+dead-letter queue rather than being discarded. A deployment with no dead-letter queue
+has nothing to fall to. The worker's redelivery budget retires such a message instead
+(see "Ecluse.Core.Queue"), rather than letting it cycle until the retention window
+discards it unseen. Every operation reports its AWS failure as the handle's typed
+'Ecluse.Core.Queue.QueueFault' value, classified into the core transport vocabulary at
+this edge ("Ecluse.Runtime.Aws.Fault"). A queue outage never rides the exception channel
+through a caller.
 
-The @amazonka@ 'AWS.Env' is built once at 'newSqsQueue' and captured by the
-handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
-(see @docs\/architecture\/technology-stack.md@ → "Key Decisions"). The
-'MirrorJob' wire mapping is a plain JSON object, decoded on 'receive'; a body that
-fails to parse is dropped rather than yielded as a partial, so -- like any message
-left unprocessed -- it is not 'ack'ed and SQS redelivers it, ultimately to the
-dead-letter queue. Each drop (a missing body or receipt, or an undecodable body) is
-logged at 'DebugS' with its reason and the SQS message id when present, so a poison
-message is visible rather than cycling silently; the untrusted body is never logged.
+'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture
+it. The backend's state therefore never reaches the proxy's @Env@\/@App@ (see
+@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The 'MirrorJob' wire
+mapping is a plain JSON object, decoded on 'receive'. A body that fails to parse is
+dropped rather than yielded as a partial. Like any message left unprocessed, it is not
+'ack'ed, so SQS redelivers it and it eventually reaches the dead-letter queue. Each
+drop is logged at 'DebugS' with its reason and the SQS message id when present: a
+missing body or receipt, or an undecodable body. A poison message is then visible
+rather than cycling silently. The untrusted body is never logged.
 
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
-URL, or an endpoint override): like the OTLP telemetry endpoint (see
-"Ecluse.Runtime.Telemetry.Resolve"), it is reached through @amazonka@'s own client and is
-__not__ subject to the data-plane egress controls (the host allowlist and the https-only
-egress posture of "Ecluse.Core.Security.Egress"), which guard only untrusted package
-downloads, never a destination the operator configured.
+URL, or an endpoint override). Like the OTLP telemetry endpoint (see
+"Ecluse.Runtime.Telemetry.Resolve"), @amazonka@'s own client reaches it. It is __not__
+subject to the data-plane egress controls: the host allowlist and the https-only
+egress posture of "Ecluse.Core.Security.Egress". Those controls guard only untrusted
+package downloads, never a destination the operator configured.
 -}
 module Ecluse.Runtime.Queue.Sqs (
     -- * Configuration
@@ -130,7 +130,6 @@ import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Log (moduleField)
 
 {- | Where an SQS-compatible endpoint lives, for pointing the backend at a
-non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint. A
 non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
 -}
 data SqsEndpoint = SqsEndpoint
@@ -153,7 +152,7 @@ data SqsConfig = SqsConfig
     , sqsRegion :: Text
     -- ^ The AWS region the queue lives in (e.g. @"us-east-1"@).
     , sqsEndpoint :: Maybe SqsEndpoint
-    {- ^ An endpoint override for an emulator or VPC endpoint; 'Nothing' uses
+    {- ^ An endpoint override for an emulator or VPC endpoint. 'Nothing' uses
     @amazonka@'s default resolution and the ambient credential chain.
     -}
     , sqsBatchSize :: Int
@@ -161,23 +160,23 @@ data SqsConfig = SqsConfig
     batch amortises the round-trip when the queue is busy.
     -}
     , sqsWaitSeconds :: Int
-    {- ^ The long-poll window in seconds (SQS caps this at 20): how long a
-    'receive' waits for a message before returning @[]@, so an idle worker does
-    not hot-loop on empty polls.
+    {- ^ The long-poll window in seconds (SQS caps this at 20). It is how long a
+    'receive' waits for a message before returning @[]@, so an idle worker does not
+    hot-loop on empty polls.
     -}
     , sqsVisibilityTimeout :: Seconds
     {- ^ How long a received message stays hidden from other 'receive's before SQS
-    redelivers it -- the budget for processing-then-'ack', extendable per message
-    via 'extendVisibility'.
+    redelivers it: the budget for processing-then-'ack', extendable per message via
+    'extendVisibility'.
     -}
     , sqsTerminalBackoff :: Seconds
     {- ^ The visibility timeout 'deadLetter' returns a __terminal__ message with
-    (@ChangeMessageVisibility@, never @DeleteMessage@): larger than the normal
-    processing window so a permanently-unmirrorable artifact is not re-fetched in a
-    hot loop, while it rides the operator's redrive policy to the dead-letter queue.
-    A fixed backoff rather than a per-attempt one: the delivery count each message
-    carries bounds the cycling instead, by retiring the message outright once
-    'sqsMaxReceiveCount' is spent.
+    (@ChangeMessageVisibility@, never @DeleteMessage@). Larger than the normal
+    processing window. The worker then does not re-fetch a permanently-unmirrorable
+    artifact in a hot loop while it rides the operator's redrive policy to the
+    dead-letter queue. The backoff stays fixed rather than per-attempt, because the
+    delivery count each message carries bounds the cycling instead. The worker retires
+    the message outright once 'sqsMaxReceiveCount' is spent.
     -}
     , sqsMaxReceiveCount :: DeliveryBudget
     {- ^ The configured __floor__ on how many deliveries one message gets before the
@@ -188,10 +187,10 @@ data SqsConfig = SqsConfig
     }
     deriving stock (Eq, Show)
 
-{- | A 'SqsConfig' for a queue URL and region with the provider knobs at sane
-defaults: a full batch of 10, the maximum 20-second long poll, and a 30-second
-visibility timeout. Override the record fields to tune them, or set 'sqsEndpoint'
-to target an emulator.
+{- | A 'SqsConfig' for a queue URL and region, with the provider knobs at sane
+defaults. Those are a full batch of 10, the maximum 20-second long poll, and a
+30-second visibility timeout. Override the record fields to tune them, or set
+'sqsEndpoint' to target an emulator.
 -}
 defaultSqsConfig :: Text -> Text -> SqsConfig
 defaultSqsConfig queueUrl region =
@@ -206,15 +205,15 @@ defaultSqsConfig queueUrl region =
         , sqsMaxReceiveCount = defaultDeliveryBudget
         }
 
-{- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is constructed
-once here -- region-scoped, and pointed at 'sqsEndpoint' with its throwaway
-credentials when one is given, otherwise discovering the ambient AWS credential
-chain -- and captured by the returned handle's closures.
+{- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is built once here,
+region-scoped, and the returned handle's closures capture it. Given a 'sqsEndpoint' it
+points there with that endpoint's throwaway credentials, otherwise it discovers the
+ambient AWS credential chain.
 -}
 newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
 newSqsQueue logEnv egressUrl cfg = do
     env <- mkEnv cfg
-    -- Every operation reports its AWS failure as the handle's 'QueueFault' value:
+    -- Every operation reports its AWS failure as the handle's 'QueueFault' value.
     -- 'AWS.sendEither' keeps the error sum out of the exception channel, and the
     -- shared classifier folds it into the core transport vocabulary at this edge.
     let run :: (AWS.AWSRequest a) => a -> IO (Either QueueFault (AWS.AWSResponse a))
@@ -222,8 +221,8 @@ newSqsQueue logEnv egressUrl cfg = do
         queueUrl = sqsQueueUrl cfg
         Seconds terminalBackoffSecs = sqsTerminalBackoff cfg
     -- One boot-time round trip: SQS carries the redrive configuration on the queue,
-    -- never on a message. A probe that faults leaves the configured floor standing,
-    -- so an inaccessible attribute degrades the budget rather than blocking boot.
+    -- never on a message. A probe that faults leaves the configured floor standing, so
+    -- an unreachable attribute degrades the budget instead of blocking boot.
     terminus <- fmap terminusOfResponse <$> run (terminusRequest queueUrl)
     let budget = either (const (sqsMaxReceiveCount cfg)) (effectiveDeliveryBudget (sqsMaxReceiveCount cfg)) terminus
     pure
@@ -239,7 +238,7 @@ newSqsQueue logEnv egressUrl cfg = do
             , -- A terminal fault: return the message with the backoff visibility timeout
               -- (@ChangeMessageVisibility@), __never__ @DeleteMessage@, so it is not
               -- silently discarded but rides the operator's redrive policy to the
-              -- dead-letter queue -- the well-monitored terminus with forensic retention.
+              -- dead-letter queue, the well-monitored terminus with forensic retention.
               deadLetter = \receipt ->
                 fmap void . run $
                     SQS.newChangeMessageVisibility queueUrl (unReceiptHandle receipt) terminalBackoffSecs
@@ -270,9 +269,9 @@ mkEnv cfg = case sqsEndpoint cfg of
 
 -- One long-poll ReceiveMessage with the configured batch / wait / visibility.
 -- SQS caps the long-poll ('sqsWaitSeconds') at 20s, which stays within amazonka's
--- default per-service request timeout, so the client never cuts a long-poll short
--- and no explicit response-timeout override is needed; a configured wait above the
--- SQS cap is clamped by SQS, so the relationship cannot be broken from config.
+-- default per-service request timeout. The client therefore never cuts a long-poll
+-- short and needs no explicit response-timeout override. SQS clamps a configured wait above its
+-- own cap, so config cannot break the relationship.
 receiveRequest :: SqsConfig -> SQS.ReceiveMessage
 receiveRequest cfg =
     SQS.newReceiveMessage (sqsQueueUrl cfg)
@@ -283,8 +282,8 @@ receiveRequest cfg =
             & SQS.receiveMessage_visibilityTimeout
         ?~ visibilitySeconds
             & SQS.receiveMessage_attributeNames
-        -- Asked for explicitly: SQS omits the delivery count unless it is named, and
-        -- it is what the redelivery budget judges a delivery by.
+        -- Asked for explicitly: SQS omits the delivery count unless a request names
+        -- it. The redelivery budget judges a delivery by that count.
         ?~ [SQS.MessageAttribute_ApproximateReceiveCount]
   where
     Seconds visibilitySeconds = sqsVisibilityTimeout cfg
@@ -301,27 +300,27 @@ terminusOfResponse response =
     deadLetterTerminusOf (soleValue =<< (response ^. SQS.getQueueAttributesResponse_attributes))
 
 -- The one value in an attribute map. Every request here names exactly one attribute,
--- and SQS returns only what was named and only what is set, so an empty map is that
--- attribute being unset rather than an ambiguous pick.
+-- and SQS returns only the named attributes that are set. An empty map therefore means
+-- the attribute is unset, not an ambiguous pick.
 soleValue :: (Foldable t) => t Text -> Maybe Text
 soleValue = listToMaybe . toList
 
 {- | Classify a queue's raw @RedrivePolicy@ attribute into the dead-letter terminus it
-describes: 'TerminusAbsent' when no policy is set (or the attribute is blank), and
-'TerminusAttached' otherwise, carrying the policy's @maxReceiveCount@ -- the delivery
-at which the dead-letter queue takes the message -- when it is readable.
+describes. No policy set, or a blank attribute, gives 'TerminusAbsent'. Anything else
+gives 'TerminusAttached', carrying the policy's @maxReceiveCount@ when that is readable:
+the delivery at which the dead-letter queue takes the message.
 
-A policy whose JSON does not yield a count is still __attached__ (an operator with a
-dead-letter queue is not warned that they have none), but it contributes no capture
+A policy whose JSON yields no count is still __attached__, so the boot warning never
+fires for an operator who has a dead-letter queue. Such a policy contributes no capture
 count, so the configured floor stands alone.
 -}
 deadLetterTerminusOf :: Maybe Text -> DeadLetterTerminus
 deadLetterTerminusOf raw =
     maybe TerminusAbsent (TerminusAttached . captureCountOf) (nonBlank =<< raw)
 
--- The @maxReceiveCount@ an attached redrive policy declares. AWS renders the policy
--- as embedded JSON and the count as either a string or a number depending on the
--- path, so both are read; anything else yields no count.
+-- The @maxReceiveCount@ an attached redrive policy declares. AWS renders the policy as
+-- embedded JSON, and the count as either a string or a number depending on the path.
+-- A quoted count and an unquoted count both parse. Anything else yields no count.
 captureCountOf :: Text -> Maybe DeliveryBudget
 captureCountOf policy = do
     value <- rightToMaybe (eitherDecodeStrict' (encodeUtf8 policy))
@@ -335,10 +334,9 @@ countOf = \case
         Aeson.Success count -> Just count
         Aeson.Error _ -> Nothing
 
-{- | The fields of a received SQS message the backend reads. Lifting them out of
-the @amazonka@ 'SQS.Message' keeps the 'QueueMessage' mapping (and its drop
-decision) free of the AWS type, so the receive path's drop behaviour is exercised
-directly in tests.
+{- | The fields of a received SQS message the backend reads. Lifting them out of the
+@amazonka@ 'SQS.Message' keeps the 'QueueMessage' mapping (and its drop decision) free
+of the AWS type. A test then drives the receive path's drop behaviour directly.
 -}
 data ReceivedMessage = ReceivedMessage
     { rmBody :: Maybe Text
@@ -346,10 +344,10 @@ data ReceivedMessage = ReceivedMessage
     , rmReceipt :: Maybe Text
     -- ^ The receipt handle a later 'ack' deletes the message by (SQS always supplies one).
     , rmMessageId :: Maybe Text
-    -- ^ The SQS-assigned message id, for the drop log; not part of the untrusted body.
+    -- ^ The SQS-assigned message id, for the drop log. Not part of the untrusted body.
     , rmReceiveCount :: Maybe Text
-    {- ^ The raw @ApproximateReceiveCount@ system attribute, requested explicitly on
-    the poll. 'Nothing' when SQS did not supply one, which reads as a first delivery.
+    {- ^ The raw @ApproximateReceiveCount@ system attribute, which the poll asks for
+    explicitly. 'Nothing' when SQS supplied none, which reads as a first delivery.
     -}
     }
     deriving stock (Eq, Show)
@@ -376,8 +374,8 @@ data SqsDropReason = MissingBody | MissingReceipt | UndecodableBody
 
 {- Lift one received message into a QueueMessage, or report why it cannot be. A
 message missing its body or receipt (which SQS always supplies), or one whose body
-does not decode, is dropped rather than crashing the poll: it is left un-acked, so
-the visibility timeout redelivers it and a persistently bad message falls to the
+does not decode, is dropped rather than crashing the poll. It is left un-acked, so the
+visibility timeout redelivers it, and a persistently bad message falls to the
 dead-letter queue. -}
 toQueueMessage :: (Text -> Either Text RegistryUrl) -> ReceivedMessage -> Either SqsDropReason QueueMessage
 toQueueMessage egressUrl received = do
@@ -391,17 +389,17 @@ toQueueMessage egressUrl received = do
             , msgReceiveCount = receiveCountOf (rmReceiveCount received)
             }
 
--- The delivery count SQS reported, or a first delivery when it reported none (or an
--- unreadable one): a message is only ever judged past its budget on evidence. A count
--- below one is likewise read as a first delivery, since SQS counts this delivery in.
+-- The delivery count SQS reported, or a first delivery when it reported none or an
+-- unreadable one. Only evidence ever puts a message past its budget. A count below one
+-- likewise reads as a first delivery, since SQS counts this delivery in.
 receiveCountOf :: Maybe Text -> Int
 receiveCountOf raw = max 1 (fromMaybe 1 (readMaybe . toString =<< raw))
 
 {- | Lift a received batch into deliverable 'QueueMessage's, logging each dropped
-message (a missing body or receipt, or an undecodable body) at 'DebugS' so a poison
-message is visible rather than cycling silently until the queue's max-receive count.
-A dropped message is omitted from the result and left un-'ack'ed, so redelivery and
-dead-letter behaviour are unchanged.
+message at 'DebugS': a missing body or receipt, or an undecodable body. A poison
+message is then visible rather than cycling silently until the queue's max-receive
+count. A dropped message is omitted from the result and left un-'ack'ed, so redelivery
+and dead-letter behaviour are unchanged.
 -}
 liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> [ReceivedMessage] -> IO [QueueMessage]
 liftReceivedMessages logEnv egressUrl =
@@ -433,13 +431,13 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
-{- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
-'decodeJob': the package identity is split into its ecosystem, optional scope, and
-bare name so it round-trips through 'mkPackageName', and the version keeps its raw
-string. The serve-time-admitted artifact's filename rides as a plain field: it is
-the selection key the worker's ingest re-evaluation gates by, and the only thing
-of the artifact the wire carries -- the digests and size the worker verifies and
-publishes with are derived from current metadata, never the payload.
+{- | Encode a 'MirrorJob' as the JSON text of an SQS message body, the inverse of
+'decodeJob'. The package identity splits into its ecosystem, optional scope, and bare
+name so it round-trips through 'mkPackageName'. The version keeps its raw string.
+The serve-time-admitted artifact's filename rides as a plain field. It is the selection
+key the worker's ingest re-evaluation gates by, and the only part of the artifact the
+wire carries. The digests and size the worker verifies and publishes with come from
+current metadata, never the payload.
 -}
 encodeJob :: MirrorJob -> Text
 encodeJob job =
@@ -467,17 +465,18 @@ encodeTraceContext rsc =
         , "tracestate" .= rscTracestate rsc
         ]
 
-{- | Decode an SQS message body back into a 'MirrorJob', or a human-readable error
-if the body is not the JSON object 'encodeJob' produces (a missing field, an
-unknown ecosystem, an artifact URL the egress former refuses, malformed JSON).
+{- | Decode an SQS message body back into a 'MirrorJob'. Any body other than the JSON
+object 'encodeJob' produces yields a human-readable error. That covers a missing
+field, an unknown ecosystem, an artifact URL the egress former refuses, and malformed
+JSON.
 
-The queue payload is a __trust boundary__, so the artifact URL is re-formed into
-its 'RegistryUrl' egress witness on decode through the given former -- the
-composition root passes the https-only 'Ecluse.Core.Security.Egress.mkRegistryUrl';
-the loopback test harnesses pass their flag-gated dev former. A URL the former
-refuses fails the decode, so a tampered or misproduced message can never hand the
-worker's fetch an unwitnessed URL (it redelivers and falls to the dead-letter
-queue, like any undecodable body).
+The queue payload is a __trust boundary__, so the decode re-forms the artifact URL
+into its 'RegistryUrl' egress witness through the given former. The composition root
+passes the https-only 'Ecluse.Core.Security.Egress.mkRegistryUrl', and the loopback
+test harnesses pass their flag-gated dev former. A URL the former refuses fails the
+decode, so a tampered or misproduced message can never hand the worker's fetch an
+unwitnessed URL. It redelivers and falls to the dead-letter queue, like any
+undecodable body.
 -}
 decodeJob :: (Text -> Either Text RegistryUrl) -> Text -> Either Text MirrorJob
 decodeJob egressUrl body =
@@ -498,9 +497,9 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     -- requires cannot be fabricated from an unvalidated payload string.
     artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
     filename <- o .: "filename"
-    -- The trace-context carrier is optional: a job from an older producer (or one
-    -- enqueued with tracing off) carries no "traceContext", which decodes to
-    -- 'Nothing' and simply yields no span link in the worker.
+    -- The trace-context carrier is optional. A job from an older producer, or one
+    -- enqueued with tracing off, carries no "traceContext". That decodes to 'Nothing'
+    -- and simply yields no span link in the worker.
     traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
     pure
         MirrorJob
@@ -515,7 +514,7 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
 
 -- Parse the optional trace-context carrier back into a 'RemoteSpanContext': the W3C
 -- traceparent and tracestate verbatim. The carrier is untrusted opaque transport, so
--- both fields are taken as-is -- an unparseable W3C value is the tracing port's concern
+-- both fields are taken as-is. An unparseable W3C value is the tracing port's concern
 -- (it yields no link), never a decode failure that would strand a serviceable job.
 parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
 parseTraceContext = withObject "RemoteSpanContext" $ \t ->

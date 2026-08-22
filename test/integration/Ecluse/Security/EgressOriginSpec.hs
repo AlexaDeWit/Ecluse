@@ -27,19 +27,19 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 
-{- | The data-plane egress posture exercised through the real npm fetch path against an
+{- | The data-plane egress posture, driven through the real npm fetch path against an
 in-process upstream on loopback.
 
-The egress is __https-only by construction__, and in production the data-plane manager
-is the standard validating TLS manager; the per-origin split is now in credential
-handling, not in the manager (both origins share it). These tests reach an in-process
+Egress is __https-only by construction__. In production the data-plane manager is the
+standard validating TLS manager. The per-origin split lives in credential handling,
+not in the manager: both origins share it. These tests reach an in-process
 @http:\/\/127.0.0.1@ upstream through the test-only http opt-in ('loopbackRegistryUrl'),
-compiled only under the @dev-http-egress@ Cabal flag, so the suite needs no TLS while the
-production posture stays https-only.
+compiled only under the @dev-http-egress@ Cabal flag. The suite therefore needs no TLS,
+and the production posture stays https-only.
 
-No-redirect (the credential-redirect invariant, @redirectCount = 0@) is exercised here
-too: an upstream @302@ is __not__ followed, so an upstream cannot bounce a fetch off the
-build-time host allowlist or downgrade the scheme.
+These cases also cover the credential-redirect invariant, @redirectCount = 0@. The
+client does __not__ follow an upstream @302@, so an upstream cannot bounce a fetch off
+the build-time host allowlist or downgrade the scheme.
 -}
 spec :: Spec
 spec = do
@@ -61,23 +61,22 @@ spec = do
     describe "no upstream redirect is followed (redirectCount = 0)" $
         it "does not chase a 302 to an off-allowlist location" $
             -- The upstream answers 302 to an off-allowlist host. With redirect-following
-            -- disabled the fetch never reaches that host; it surfaces the 3xx (no body of
-            -- the redirect target), so there is no hop to escape the allowlist or downgrade.
+            -- disabled the fetch never reaches that host. It surfaces the 3xx and no body
+            -- from the redirect target, so no hop escapes the allowlist or downgrades.
             withRedirector $ \port -> do
                 manager <- newManager defaultManagerSettings
                 result <- fetchMetadata manager port Nothing
                 case result of
                     Right response -> responseBody response `shouldNotBe` toStrict (encode packument)
-                    -- A fetch fault is equally safe: the redirect target was never reached.
+                    -- A fetch fault is equally safe: the fetch never reached the redirect target.
                     Left _ -> pass
 
--- Fetch the package's metadata through the npm client over the given manager and token.
 fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
 fetchMetadata manager port token =
     fetchMetadataFormBounded (clientConfig manager port token) Abbreviated noValidators thing
 
--- An npm client config pointed at the loopback upstream on @port@, its base URL built
--- through the test-only plain-HTTP opt-in (a release build has no such constructor).
+-- An npm client config pointed at the loopback upstream on @port@. Its base URL comes
+-- from the test-only plain-HTTP opt-in, a constructor a release build does not have.
 clientConfig :: Manager -> Port -> Maybe Text -> NpmClientConfig
 clientConfig manager port token =
     NpmClientConfig
@@ -100,7 +99,7 @@ withRedirector = testWithApplication (pure app)
     app _request respond =
         respond (responseLBS status302 [("Location", "https://evil.example.test/elsewhere")] "")
 
--- A minimal packument body the upstream serves; the test asserts on the bytes, not
+-- A minimal packument body the upstream serves. The test asserts on the bytes, not
 -- their structure, so an opaque object is enough.
 packument :: Value
 packument = object ["name" .= ("thing" :: Text), "versions" .= object []]

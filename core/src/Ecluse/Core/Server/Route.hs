@@ -6,26 +6,27 @@
 {- | A route: one record saying everything there is to say about one URL the proxy
 serves.
 
-A 'Route' carries its method condition, its path template (literal segments and named
-captures that parse themselves), what to /do/ when it matches, and its documentation.
-An ecosystem's routing table is then simply __a list of these values__
-("Ecluse.Core.Registry.Npm.Route" is npm's), and 'routerOf' folds that list into the
-mount's router: first match wins, no match is the deny-by-default @404@.
+A 'Route' carries its method condition, its path template, what to /do/ when it matches,
+and its documentation. The template is literal segments and named captures that parse
+themselves. An ecosystem's routing table is then __a list of these values__
+("Ecluse.Core.Registry.Npm.Route" is npm's). 'routerOf' folds that list into the mount's
+router: first match wins, and no match is the deny-by-default @404@.
 
-There is no route /sum/. A classified-route type would have to be matched again to decide
-what to do about it, and again to document it, and each of those matches is somewhere the
-three can fall out of step. Here the pattern, the action, and the documentation are the
-same value, so they cannot disagree, and the manifest renders 'Ecluse.Core.Server.RouteSpec'
-projections of the very records the router runs.
+There is no route /sum/. A classified-route type must be matched again to decide what to
+do about it, and again to document it. Each of those matches is a place the three can
+fall out of step. Here the pattern, the action, and the documentation are the same value,
+so they cannot disagree. The manifest renders 'Ecluse.Core.Server.RouteSpec' projections
+of the same records the router runs.
 
 == What stays a named function
 
 The engine owns the __structure__: literal matching, capture arity, ordering, exact
 consumption. It does not infer an ecosystem's __semantics__. A 'Capture' carries its own
-segment parser and a 'Route' its own builder, so the security-critical leaf logic (the
-component-safety gate, an ecosystem's scoped-name decoding, a version parse, the
-cross-capture path-confusion check) stays in named, reviewed, separately-tested functions
-that the record references, rather than being regenerated from a generic template.
+segment parser and a 'Route' its own builder. The security-critical leaf logic therefore
+stays in named, reviewed, separately-tested functions that the record references, rather
+than being regenerated from a generic template. That leaf logic is the component-safety
+gate, an ecosystem's scoped-name decoding, a version parse, and the cross-capture
+path-confusion check.
 -}
 module Ecluse.Core.Server.Route (
     -- * A route
@@ -48,16 +49,16 @@ import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContr
 {- | One route, whole: how it matches, what it does, and what it means.
 
 Generic over the ecosystem's capture-value type @v@, which is the only thing about a
-route that is not shared (npm's captures yield a parsed package or an artifact name;
-another registry's would yield its own).
+route that is not shared. An npm capture yields a parsed package or an artifact name,
+and another registry's captures would yield its own values.
 -}
 data Route v = forall response. Route
     { routeName :: RouteName
     {- ^ This route's name, unique within its ecosystem (@"packument"@). It is the handle
-    a test asserts on when it checks /which/ route a request took, and the manifest
-    qualifies it by ecosystem to form OpenAPI's @operationId@ (which must be unique across
-    the whole document, so only the manifest, which sees every mount at once, can
-    guarantee it).
+    a test asserts on when it checks /which/ route a request took. The manifest qualifies
+    it by ecosystem to form OpenAPI's @operationId@, which must be unique across the whole
+    document. Only the manifest sees every mount at once, so only the manifest can
+    guarantee that.
     -}
     , routeMethod :: MethodMatch
     -- ^ The method condition a request must satisfy to match.
@@ -67,49 +68,49 @@ data Route v = forall response. Route
     {- ^ What serving this route amounts to, given the request method and the captured
     values (one per 'SegCap', in template order).
 
-    'Nothing' __denies__: the route does not claim this request after all, and matching
-    falls through to the next route (and, failing all of them, to the @404@). That is
-    where a __cross-capture__ check lives, e.g. an artifact file name that must parse for
-    the package captured earlier: a name addressing some other package's artifact is
-    refused rather than fabricated into a coordinate.
+    'Nothing' __denies__: the route does not claim this request after all. Matching falls
+    through to the next route, and to the @404@ when every route declines. That is where
+    a __cross-capture__ check lives. An artifact file name, for example, must parse for
+    the package captured earlier. The builder refuses a name that addresses some other
+    package's artifact, rather than fabricating it into a coordinate.
 
-    The 'Method' is passed because a @HEAD@ is a __bodiless variation__ of its @GET@
-    rather than a distinct route: it matches the same pattern, and the builder selects the
-    head-mode handler.
+    The builder receives the 'Method' because a @HEAD@ is a __bodiless variation__ of its
+    @GET@ rather than a distinct route. A @HEAD@ matches the same pattern, and the builder
+    selects the head-mode handler.
     -}
     , routeSummary :: Text
     -- ^ A one-line summary (the OpenAPI operation summary).
     , routeDescription :: Text
     -- ^ The fuller prose description of what the route does.
     , routeRequest :: Maybe RequestSpec
-    -- ^ The request body a write route accepts; 'Nothing' for a read.
+    -- ^ The request body a write route accepts. 'Nothing' for a read.
     , routeContract :: ResponseContract response
     {- ^ The response contract whose indexed value the builder's action can produce.
-    Runtime dispatch renders that value to WAI while the manifest renders the same
-    contract's response documents, so the action and documentation cannot be paired with
+    Runtime dispatch renders that value to WAI, and the manifest renders the same
+    contract's response documents. The action and the documentation therefore cannot name
     different response sets.
     -}
     }
 
-{- | A route's name within its ecosystem (@"packument"@, @"tarball"@). Not qualified: the
-route already lives in its ecosystem's table, and the manifest adds the namespace when it
-needs a globally unique identifier.
+{- | A route's name within its ecosystem (@"packument"@, @"tarball"@). Not qualified,
+because the route already lives in its ecosystem's table. The manifest adds the namespace
+when it needs a globally unique identifier.
 -}
 newtype RouteName = RouteName {unRouteName :: Text}
     deriving stock (Eq, Ord, Show)
 
-{- | One segment of a path template: a fixed segment matched verbatim, or a named capture
-that consumes one or more leading segments and yields a value.
+{- | One segment of a path template: a fixed segment matched verbatim, or a named
+capture. A capture consumes one or more leading segments and yields a value.
 -}
 data PatternSeg v
     = SegLit Text
     | SegCap (Capture v)
 
 {- | A named path capture: how it parses (the security-critical leaf) and how it
-documents. 'capConsume' may consume __more than one__ segment (an ecosystem whose
-identifier spans a decoded @\'\/\'@ needs this) and returns the unconsumed tail, so
-captures thread left to right; 'Nothing' fails the match, and the request falls through to
-the next route or to the deny-by-default catch-all.
+documents. 'capConsume' may consume __more than one__ segment, which an ecosystem whose
+identifier spans a decoded @\'\/\'@ needs. It returns the unconsumed tail, so captures
+thread left to right. 'Nothing' fails the match, and the request falls through to the
+next route or to the deny-by-default catch-all.
 -}
 data Capture v = Capture
     { capName :: Text
@@ -123,14 +124,14 @@ data Capture v = Capture
 {- | The method condition on a route: the __read__ methods (@GET@ and @HEAD@), or the one
 client __write__ (@PUT@).
 
-Any other method matches no route and therefore denies (deny by default): the front door
-answers only the methods it was taught, so a @DELETE@ or @POST@ over a package path is a
-@404@ rather than being read as a package request. This also keeps the documented method
-honest: the manifest says @GET@ for a read, and only a @GET@ (or its bodiless @HEAD@) is
-served.
+Any other method matches no route and therefore denies (deny by default). The front door
+answers only the methods it was taught. It answers a @DELETE@ or @POST@ over a package
+path with a @404@, rather than reading it as a package request. This also keeps the
+documented method honest: the manifest says @GET@ for a read, and the proxy serves only a
+@GET@ or its bodiless @HEAD@.
 
-Kept as a small closed vocabulary rather than a bare predicate so the manifest can still
-name the documented method.
+A small closed vocabulary rather than a bare predicate, so the manifest can still name the
+documented method.
 -}
 data MethodMatch
     = -- | The write method (@PUT@).
@@ -144,13 +145,13 @@ methodMatches :: MethodMatch -> Method -> Bool
 methodMatches MethodPut m = m == methodPut
 methodMatches MethodRead m = m == methodGet || m == methodHead
 
-{- | Fold an ecosystem's route table into its mount's router: the first route that claims
-the request decides what is done with it, and a request no route claims is the
-deny-by-default @404@ in the mount's own error surface.
+{- | Fold an ecosystem's route table into its mount's router. The first route that claims
+the request decides what happens to it. A request no route claims is the deny-by-default
+@404@ in the mount's own error surface.
 
 Deny-by-default is __structural__ here: 'routerOf' has no other way to answer. There is no
-catch-all branch to forget. The @404@ 'Answer' a mount supplies for a path no route
-claims is its deny-by-default surface (npm's @{"error": "not found"}@).
+catch-all branch to forget. The @404@ 'Answer' a mount supplies for a path no route claims
+is its deny-by-default surface (npm's @{"error": "not found"}@).
 -}
 routerOf :: RouteAction -> [Route v] -> MountRouter
 routerOf notFound routes method segments =
@@ -160,13 +161,13 @@ routerOf notFound routes method segments =
         | requested == methodHead = RouteAction (bodilessContract contract) action
         | otherwise = RouteAction contract action
 
-{- | The route that claims a request, and the action it names: the first whose method
-condition holds, whose segments are consumed __exactly__, and whose builder accepts the
-captures. 'Nothing' when none does.
+{- | The route that claims a request, and the action it names. That is the first route
+whose method condition holds, whose segments are consumed __exactly__, and whose builder
+accepts the captures. 'Nothing' when none does.
 
-Exported beside 'routerOf' because it is what makes a routing table testable with no
-server: feed it a method and segments and assert /which/ route won (by its 'routeName'), or
-that none did. The action itself is a closure and is exercised through the serve path.
+Exported beside 'routerOf' because it makes a routing table testable with no server. Feed
+it a method and segments, then assert /which/ route won (by its 'routeName'), or that none
+did. The action itself is a closure, and the serve path exercises it.
 -}
 matchRoute :: [Route v] -> Method -> [Text] -> Maybe (Route v, RouteAction)
 matchRoute routes method segments =

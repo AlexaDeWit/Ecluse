@@ -49,17 +49,17 @@ resolveMirrorCredentialSpec = describe "resolveMirrorCredential (the target dict
             other -> expectationFailure ("expected MirrorCredentialTokenMissing Npm, got " <> show other)
 
     it "rejects a CodeArtifact target that also carries a static token (the two must not contend)" $ do
-        -- The #808 regression: a CodeArtifact-scoped mint identity can never be paired
-        -- with an operator-supplied bearer, and a CodeArtifact endpoint's token is
-        -- always minted -- so supplying both is a loud conflict, not a silent choice.
+        -- A CodeArtifact-scoped mint identity can never be paired with an
+        -- operator-supplied bearer, and a CodeArtifact endpoint's token is always
+        -- minted. Supplying both is a loud conflict, not a silent choice.
         case resolveMirrorCredential Npm (unsafeRegistryUrl codeArtifactTarget) (Just (mkSecret "stray")) (Just 1800) of
             Left err@(MirrorCredentialConflict Npm) ->
                 renderConfigError err `shouldSatisfy` T.isInfixOf "MIRROR_TARGET_TOKEN"
             other -> expectationFailure ("expected MirrorCredentialConflict Npm, got " <> show other)
 
     it "never mints a CodeArtifact token for a non-CodeArtifact endpoint (#808)" $ do
-        -- The core invariant, stated directly: no input can produce a MirrorCodeArtifact
-        -- whose identity was not parsed from the very target host it will be sent to.
+        -- The core invariant: no input produces a MirrorCodeArtifact whose identity
+        -- was not parsed from the target host that receives it.
         let nonCodeArtifact = unsafeRegistryUrl "https://mirror.example.test/"
         resolveMirrorCredential Npm nonCodeArtifact (Just (mkSecret "t")) (Just 1800)
             `shouldSatisfy` \case
@@ -84,9 +84,9 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.foo.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if there is no hyphen separating domain and owner" $ do
-        -- The parsing logic relies on finding the last hyphen in domainOwner.
-        -- If there's no hyphen, T.breakOnEnd returns ("", "mydomain111122223333"),
-        -- then T.dropEnd 1 "" is "", which fails the `nonBlank` check.
+        -- The parse finds the last hyphen in domainOwner. With no hyphen,
+        -- T.breakOnEnd returns ("", "mydomain111122223333"), so T.dropEnd 1 "" is ""
+        -- and the `nonBlank` check fails.
         parseCodeArtifactHost "mydomain111122223333.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if the host is missing the .amazonaws.com suffix" $ do

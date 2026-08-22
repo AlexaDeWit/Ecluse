@@ -335,9 +335,9 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             status resp `shouldBe` 503
 
     it "denies with 403 (never 503) when no version survives and the mount has no private upstream (serve-only pure gate)" $ do
-        -- The absent private leg is structural, not an outage: nothing was needed,
-        -- so nothing is unavailable, and the young-versions denial renders as the
-        -- policy 403. Contrast with the failed-private 503 above.
+        -- The absent private leg is structural, not an outage. The mount needs no
+        -- private fetch, so nothing is unavailable, and the young-versions denial
+        -- renders as the policy 403, not the failed-private 503 above.
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -352,8 +352,8 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withPrivateBaseUrl Nothing) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
-            -- The stubbed private upstream exists only to satisfy the harness; the
-            -- absent leg must never have fetched from it.
+            -- The stubbed private upstream exists only to satisfy the harness. The
+            -- absent leg must never fetch from it.
             seenAuth privateUp `shouldReturn` []
 
     it "serves the filtered public document with no private upstream configured (serve-only pure gate)" $ do
@@ -474,15 +474,16 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
             secondResp <- getThingWith [("If-None-Match", etag), ("Authorization", "Bearer client-token")] app
             status secondResp `shouldBe` 304
             -- Both requests reached the private origin carrying the client's own
-            -- credential: the 304 is an answer about content, never a skipped
-            -- authorisation -- the derived validator is evaluated only after the
-            -- per-request private fetch resolved.
+            -- credential. The 304 answers about content, never about a skipped
+            -- authorisation: the pipeline evaluates the derived validator only after
+            -- the per-request private fetch resolves.
             seenAuth privateUp `shouldReturn` [Just "Bearer client-token", Just "Bearer client-token"]
 
     it "re-serves 200 when the private document changes under a matching validator (per-client freshness)" $ do
-        -- The public origin stays cached across both requests; only the private
-        -- leg (re-fetched every request) changes. The validator must track it:
-        -- a changed merged view is never answered 304 off the warm public entry.
+        -- The public origin stays cached across both requests. Only the private leg
+        -- changes, because the pipeline re-fetches it every request. The validator
+        -- must track that change: a changed merged view never answers 304 off the
+        -- warm public entry.
         privateUp <-
             mutatingUpstream
                 ( encodePackument (privatePackument [("9.0.0", plainVersion "9.0.0")] "9.0.0")

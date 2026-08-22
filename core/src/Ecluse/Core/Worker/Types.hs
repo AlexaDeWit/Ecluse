@@ -31,22 +31,22 @@ import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker.Liveness (WorkerHeartbeat, recordPoll)
 
-{- | The runtime backends the mirror worker is closed over: exactly the effectful
+{- | The runtime backends the mirror worker closes over: exactly the effectful
 capabilities the consume loop needs to poll, fetch, verify, publish, and record. A
-record of concrete handles and abstract ports (the Handle pattern), assembled by the
-composition root ('Ecluse.Env.workerRuntimeOf') and read by the loop through the
+record of concrete handles and abstract ports (the Handle pattern). The composition
+root assembles it ('Ecluse.Env.workerRuntimeOf') and the loop reads it through the
 'WorkerM' reader.
 
-The mirror queue is the demand-driven hand-off the loop consumes; the untrusted
-data-plane manager fetches the artifact bytes (the validating TLS manager, over an
-https-only @dist.tarball@); the heartbeat is the loop's liveness surface. The
-mirror write is not a runtime slot: it rides each ecosystem's bundle
-('wpPublish'), so every job publishes through its own ecosystem's married
-capability. The metric and
-tracing ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
-"Ecluse.Core.Telemetry.Span"); the application supplies their OpenTelemetry-backed
-implementations, so the loop records without naming a telemetry backend. There is no log
-field: the loop logs through the ambient @katip@ context the entry point establishes.
+The mirror queue is the demand-driven hand-off the loop consumes. The untrusted
+data-plane manager fetches the artifact bytes: the validating TLS manager, over an
+https-only @dist.tarball@. The heartbeat is the loop's liveness surface. The mirror
+write is not a runtime slot. It rides each ecosystem's bundle ('wpPublish'), so every
+job publishes through its own ecosystem's married capability. The metric and tracing
+ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
+"Ecluse.Core.Telemetry.Span"). The application supplies their OpenTelemetry-backed
+implementations, so the loop records without naming a telemetry backend. There is no
+log field: the loop logs through the ambient @katip@ context the entry point
+establishes.
 -}
 data WorkerRuntime = WorkerRuntime
     { wrQueue :: MirrorQueue
@@ -68,35 +68,36 @@ data WorkerRuntime = WorkerRuntime
     @katip@ context for the inner action.
     -}
     , wrPolicies :: WorkerPolicies
-    {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The worker
-    re-runs current policy against a job's version before it mirrors it, so a policy that
-    has tightened toward deny since the job was enqueued drops the job rather than freezing
-    a now-disallowed version into the trusted mirror store.
+    {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The
+    worker re-runs current policy against a job's version before it mirrors it. A
+    policy that tightened toward deny since the enqueue therefore drops the job rather
+    than freezing a now-disallowed version into the trusted mirror store.
     -}
     }
 
-{- | The per-ecosystem bundle the worker dispatches every job through: a resolver
-that fetches and projects the single version's metadata, the prepared rule set,
-the integrity floor, the tarball-host gate, the artifact request formation, the
-married mirror-write capability, and the wall-clock the age rules read.
+{- | The per-ecosystem bundle the worker dispatches every job through. It holds a
+resolver that fetches and projects the single version's metadata, the prepared rule
+set, the integrity floor, and the tarball-host gate. It also holds the artifact request
+formation, the married mirror-write capability, and the wall clock the age rules
+read.
 
-The resolver is the __shared__ single-version fetch-and-project
-('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
-wired by the composition root); the rules are the __same__ prepared rules the serve
-path gates with; the floor and host gate are the mount's __own__ configured policy
-values; and the request formation is the mount ecosystem's own
-('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl') -- so the worker's ingest
-decision and the serve-time decision run one codepath
-('Ecluse.Core.Package.Admission.admitArtifact') over one policy, and any per-source
-breaker state is shared, never forked. The publish capability is likewise the mount's
-own, so the presence probe and the mirror write speak the job ecosystem's protocol
-at that ecosystem's declared mirror target, never a neighbour's.
+The resolver is the __shared__ single-version fetch-and-project, wired by the
+composition root ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded
+public origin). The rules are the __same__ prepared rules the serve path gates with.
+The floor and the host gate are the mount's __own__ configured policy values. The
+request formation is the mount ecosystem's own
+('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). The worker's ingest
+decision and the serve-time decision therefore run one codepath
+('Ecluse.Core.Package.Admission.admitArtifact') over one policy. They share any
+per-source breaker state rather than forking it. The publish capability is likewise
+the mount's own. The presence probe and the mirror write therefore speak the job
+ecosystem's protocol at that ecosystem's declared mirror target, never a neighbour's.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
     {- ^ Resolve and project one version's metadata through the guarded public origin,
-    classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails'). Total
-    by type: the fetch reports every failure -- transport included -- in its typed
+    classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails').
+    Total by type: the fetch reports every failure, transport included, in its typed
     channel, and each classifies as a 'VersionMetadataUnavailable' value.
     -}
     , wpRules :: [PreparedRule]
@@ -112,15 +113,15 @@ data WorkerPolicy = WorkerPolicy
     {- ^ The mount's own tarball-host gate
     ('Ecluse.Core.Server.Context.tarballHostHonoured', closed against the public
     upstream authority), re-checked on the extracted @host:port@ of the job's fetch
-    URL ('Nothing', an unextractable authority, is refused): the queue payload is a
-    trust boundary.
+    URL. The gate refuses an unextractable authority ('Nothing'), because the queue
+    payload is a trust boundary.
     -}
     , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL: the
-    mount ecosystem's own request formation
-    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'), so a job's bytes are
-    fetched with the same request formation the serve path streams with. Riding this
-    bundle means a job whose ecosystem has none never reaches a fetch: it is
+    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL,
+    through the mount ecosystem's own request formation
+    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). A job's bytes therefore
+    come back through the same request formation the serve path streams with. Riding this
+    bundle means a job whose ecosystem has none never reaches a fetch. It is
     fail-closed with the rest of the bundle.
     -}
     , wpPublish :: MirrorPublish
@@ -128,38 +129,40 @@ data WorkerPolicy = WorkerPolicy
     ('Ecluse.Core.Registry.Publish.newMirrorPublish': the adapter's protocol codec
     over the shared publish transport, bound to the mount's declared mirror
     target). The presence probe and the verified-bytes publish both ride it, so a
-    job can only ever consult the capability keyed by its own ecosystem; a job
-    whose ecosystem carries no bundle is fail-closed before any of this runs.
+    job can only ever consult the capability keyed by its own ecosystem. A job whose
+    ecosystem carries no bundle is fail-closed before any of this runs.
     -}
     , wpArtifactLimits :: Limits
     {- ^ The bounded-fetch budget for the artifact download
-    ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'): the composition root sets its
+    ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'). The composition root sets its
     @maxBodyBytes@ from the memory plan's mirror-artifact tenant (in
-    @Ecluse.Composition.MemoryPlan@), so the worker never buffers a tarball whose
-    transient publish envelope would breach the heap ceiling the plan partitions.
+    @Ecluse.Composition.MemoryPlan@). The worker therefore never buffers a tarball
+    whose transient publish envelope would breach the heap ceiling the plan
+    partitions.
     -}
     , wpNow :: IO UTCTime
-    {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive
-    age gate is deterministic under test.
+    {- ^ The wall-clock "now" for the rules' 'EvalContext', injected so the
+    time-sensitive age gate is deterministic under test.
     -}
     }
 
 {- | The worker's per-ecosystem re-evaluation bundles, keyed by the ecosystem a job's
 package belongs to ('Ecluse.Core.Package.pkgEcosystem'). Built once at boot and shared
-with the serve mounts; a job whose ecosystem is absent here is fail-closed (dropped), never
-mirrored unvetted.
+with the serve mounts. A job whose ecosystem is absent here is fail-closed, dropped and
+never mirrored unvetted.
 -}
 type WorkerPolicies = Map Ecosystem WorkerPolicy
 
 {- | The mirror worker's monad: a reader over the 'WorkerRuntime' layered on @katip@'s
 logging context.
 
-A @newtype@ over @'ReaderT' 'WorkerRuntime' ('KatipContextT' 'IO')@ so its instances are
-this module's to control and call sites name one concrete monad. The derived instances
-give reader access to the runtime ('MonadReader' 'WorkerRuntime'), arbitrary effects
-('MonadIO'), the unlift capability ('MonadUnliftIO') the loop's @tryAny@ and the per-job
-span bracket need, and the @katip@ classes ('Katip', 'KatipContext') so a structured log
-call composes through the ambient context the entry point establishes.
+A @newtype@ over @'ReaderT' 'WorkerRuntime' ('KatipContextT' 'IO')@, so its instances
+are this module's to control and call sites name one concrete monad. The derived
+instances give reader access to the runtime ('MonadReader' 'WorkerRuntime') and
+arbitrary effects ('MonadIO'). They also give the unlift capability ('MonadUnliftIO')
+the loop's @tryAny@ and the per-job span bracket need. They give the @katip@ classes
+('Katip', 'KatipContext') too, so a structured log call composes through the ambient
+context the entry point establishes.
 
 The @katip@ base is a reader, never a 'StateT', so the logging context behaves correctly
 across the loop (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
@@ -180,25 +183,25 @@ newtype WorkerM a = WorkerM
 
 {- | Run a 'WorkerM' against the 'WorkerRuntime' and the @katip@ logging environment and
 initial context the entry point supplies, yielding the underlying 'IO' action. This is
-the boundary where the worker's 'WorkerM' code is discharged to 'IO'.
+the boundary where the worker's 'WorkerM' code becomes 'IO'.
 
-The 'LogEnv' (the structured-log scribes) and the initial context payload are passed in
-rather than read from the runtime, so the application owns the log stream and the
-trace-correlation @dd@ enrichment: it resolves the @dd@ identity and hands it here as the
-initial context, so every line the loop emits carries @dd@. The loop narrows the
-namespace with @katip@'s combinators on top as it logs.
+The caller passes in the 'LogEnv' (the structured-log scribes) and the initial context
+payload, rather than the runtime carrying them. The application therefore owns the log
+stream and the trace-correlation @dd@ enrichment. The application resolves the @dd@ identity
+and hands it here as the initial context, so every line the loop emits carries @dd@.
+The loop narrows the namespace with @katip@'s combinators on top as it logs.
 -}
 runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
 runWorkerM logEnv initialContext runtime action =
     runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
 
 {- | Advance the worker heartbeat to the current instant, recording a unit of
-demonstrated progress. The consume loop ('Ecluse.Core.Worker.Loop.workerLoop')
-calls it after every successful poll (an empty long-poll is a healthy idle) and
-'Ecluse.Core.Worker.Job.processBatch' calls it after every completed job, so the
+demonstrated progress. The consume loop ('Ecluse.Core.Worker.Loop.workerLoop') calls
+it after every successful poll, since an empty long-poll is a healthy idle.
+'Ecluse.Core.Worker.Job.processBatch' calls it after every completed job. The
 @\/livez@ staleness bound ('Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter')
-covers a single job's worst case rather than a whole sequential batch of them. This
-is the one place the beat is taken, so the two call sites cannot drift.
+therefore covers a single job's worst case rather than a whole sequential batch of
+them. This is the one place the beat is taken, so the two call sites cannot drift.
 -}
 recordWorkerProgress :: WorkerM ()
 recordWorkerProgress = do

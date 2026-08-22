@@ -23,13 +23,14 @@ import Ecluse.Core.Registry.WireSupport (
     partitionLenient,
  )
 
-{- | Direct tests for the cross-ecosystem wire-projection scaffolding hoisted out of the
-npm projection. 'partitionLenient' must keep the entries that decode, drop the ones that
-do not (recording each with its kind, key, and raw offending value), and order the dropped
-list deterministically by ascending key. 'checkNameAgreement' must agree only when the
-reported name matches the request under ecosystem-aware equality (scope included), carrying
-the reported name verbatim on a disagreement. The npm projection is exercised end-to-end by
-"Ecluse.Registry.Npm.ProjectSpec"; these pin the scaffolding in isolation.
+{- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection
+builds on. 'partitionLenient' keeps the entries that decode and drops the ones that do
+not, recording each with its kind, key, and raw offending value. It orders the dropped
+list by ascending key, so the result is deterministic. 'checkNameAgreement' agrees only
+when the reported name matches the request under ecosystem-aware equality, scope
+included. On a disagreement it carries the reported name verbatim.
+"Ecluse.Registry.Npm.ProjectSpec" covers the npm projection end to end. These examples
+pin the helpers in isolation.
 -}
 spec :: Spec
 spec = do
@@ -49,7 +50,7 @@ partitionLenientSpec = describe "partitionLenient" $ do
         map invalidValue dropped `shouldBe` [String "nope"]
 
     it "lists dropped entries in ascending key order, deterministically" $
-        -- "bravo" decodes; "alpha"/"charlie" do not and must surface alpha-then-charlie.
+        -- "bravo" decodes. "alpha" and "charlie" do not, and must surface in that order.
         map invalidKey (snd (partitionLenient InvalidDistTag decodeInt manyBad))
             `shouldBe` ["alpha", "charlie"]
 
@@ -63,12 +64,12 @@ checkNameAgreementSpec = describe "checkNameAgreement" $ do
             `shouldBe` NameDisagrees "evil-pad"
 
     it "disagrees on a differing scope even when the bare name matches" $
-        -- Ecosystem-aware equality compares the whole name, not just the bare part, so a
-        -- same-bare-name in a different scope is the anti-shadowing disagreement.
+        -- Ecosystem-aware equality compares the whole name, scope included, so the same
+        -- bare name under a different scope is the anti-shadowing disagreement.
         checkNameAgreement (scoped "one" "x") (scoped "two" "x")
             `shouldBe` NameDisagrees "@two/x"
 
--- | Decode a JSON value as an 'Int', the throwaway per-entry decode the partition drives.
+-- | Decode a JSON value as an 'Int', the per-entry decode the partition drives.
 decodeInt :: Value -> Either String Int
 decodeInt = parseEither parseJSON
 

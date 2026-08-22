@@ -3,21 +3,22 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The bridge from the telemetry-agnostic reporters the pre-telemetry providers carry
-to the live @ecluse.*@ instruments -- and the deferral that lets a provider built before
-the meter exists record once it does.
+to the live @ecluse.*@ instruments. It also holds the deferral that lets a provider
+built before the meter exists record once it does.
 
-The circuit breaker ("Ecluse.Core.Breaker") and the refreshing credential provider
-("Ecluse.Core.Credential.Refresh") are constructed at boot __before__ the telemetry substrate
-(the meter provider) exists, so they cannot be handed a 'Metrics' at construction. Each
-instead carries a small, telemetry-agnostic reporter callback. This module supplies those
-callbacks, backed by a 'DeferredMetrics' cell: __inert__ (recording nothing) until the
-composition root has built the instruments and called 'installMetrics', __live__
-thereafter. That mirrors the no-op-meter discipline of "Ecluse.Runtime.Telemetry.Instruments":
-once installed, an inert handle (built on the SDK's no-op meter when telemetry is off)
-still discards every measurement, so the providers record unconditionally either way.
+Boot builds the circuit breaker ("Ecluse.Core.Breaker") and the refreshing credential
+provider ("Ecluse.Core.Credential.Refresh") __before__ the telemetry substrate exists,
+the meter provider included. Neither can take a 'Metrics' at construction. Each instead
+carries a small, telemetry-agnostic reporter callback. This module supplies those
+callbacks, backed by a 'DeferredMetrics' cell. The cell is __inert__ and records
+nothing until the composition root has built the instruments and called
+'installMetrics', and __live__ thereafter. That mirrors the no-op-meter discipline of
+"Ecluse.Runtime.Telemetry.Instruments". Once installed, an inert handle still discards
+every measurement, because telemetry off means the SDK's no-op meter. The providers
+therefore record unconditionally either way.
 
-The catalogue and the cardinality rule are described in
-@docs\/architecture\/observability.md@.
+@docs\/architecture\/observability.md@ describes the catalogue and the cardinality
+rule.
 -}
 module Ecluse.Runtime.Telemetry.Reporters (
     -- * Deferred metric handle
@@ -53,8 +54,8 @@ import Ecluse.Runtime.Telemetry.Instruments (
 
 {- | A 'Metrics' handle that may not exist yet: empty until the telemetry substrate has
 built the instruments, then live. The pre-telemetry boot phase builds providers that
-record through reporters closed over this, so they can be wired before the meter exists
-and become live once it does. A record through it while empty is a no-op.
+record through reporters closed over this. They can therefore be wired before the meter
+exists, and become live once it does. A record through it while empty is a no-op.
 -}
 newtype DeferredMetrics = DeferredMetrics (IORef (Maybe Metrics))
 
@@ -69,7 +70,7 @@ instruments (which are themselves inert when telemetry is off).
 installMetrics :: DeferredMetrics -> Metrics -> IO ()
 installMetrics (DeferredMetrics ref) = writeIORef ref . Just
 
--- Run an action with the live instruments if installed; a no-op while still empty.
+-- Run an action with the live instruments if installed. A no-op while still empty.
 withDeferredMetrics :: DeferredMetrics -> (Metrics -> IO ()) -> IO ()
 withDeferredMetrics (DeferredMetrics ref) record = readIORef ref >>= maybe pass record
 
@@ -84,7 +85,8 @@ deferredBreakerReporter deferred source =
 
 {- | A 'RefreshReporter' that records each refresh outcome to @ecluse.credential.refresh@
 (by result) and the reported remaining lifetime to @ecluse.credential.token.ttl.seconds@,
-both under the given provider, through the deferred handle (inert until it is installed).
+both under the given provider. It records through the deferred handle, inert until it
+is installed.
 -}
 deferredRefreshReporter :: DeferredMetrics -> Provider -> RefreshReporter
 deferredRefreshReporter deferred provider =
@@ -102,8 +104,8 @@ deferredRefreshReporter deferred provider =
 {- | An action recording one mirror enqueue failure to @ecluse.mirror.enqueue.failures@,
 through the deferred handle (inert until it is installed). The composition root hangs
 it on the enqueue buffer's drop and delivery-failure callbacks
-('Ecluse.Core.Queue.newEnqueueBuffer'), which are wired before the instruments exist
-but cannot fire until the server is serving -- well after 'installMetrics'.
+('Ecluse.Core.Queue.newEnqueueBuffer'). Those are wired before the instruments exist
+but cannot fire until the server is serving, well after 'installMetrics'.
 -}
 deferredMirrorEnqueueFailure :: DeferredMetrics -> IO ()
 deferredMirrorEnqueueFailure deferred =

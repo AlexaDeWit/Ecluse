@@ -5,12 +5,12 @@
 {- | The @http-client@ edge of the transport-fault vocabulary: fold the library's
 exception type into "Ecluse.Core.Fault" at an adapter boundary.
 
-Every HTTP-speaking adapter faces the same 'Network.HTTP.Client.HttpException' --
-the npm registry client directly, and the AWS adapters through @amazonka@'s
-transport-error channel -- so the classification lives once, here, rather than
-per adapter. The module sits beside "Ecluse.Core.Fault" as a leaf: it imports
-the client library, never any capability module, so the queue, the registry, and
-the advisory sync can all reach it without crossing one another.
+Every HTTP-speaking adapter faces the same 'Network.HTTP.Client.HttpException': the
+npm registry client directly, and the AWS adapters through @amazonka@'s
+transport-error channel. The classification therefore lives once, here, rather than
+per adapter. The module sits beside "Ecluse.Core.Fault" as a leaf. It imports the
+client library, never any capability module. The queue, the registry, and the
+advisory sync can all reach it without crossing one another.
 -}
 module Ecluse.Core.Fault.Http (
     classifyTransport,
@@ -37,10 +37,10 @@ import Ecluse.Core.Text (displayExceptionT)
 
 {- | Classify an @http-client@ exception into the core transport vocabulary
 ("Ecluse.Core.Fault"), at the one edge where the library's exception type is in
-scope. Coarse by design: the 'TransportCause' is what a consumer or an operator
-branches on, and the rendered exception rides along as the bounded detail. A TLS
-refusal is recognised by the typed @tls@ exception @http-client@ wraps in its
-internal-exception channel, never by matching rendered text.
+scope. Coarse by design: a consumer or an operator branches on the 'TransportCause',
+and the rendered exception rides along as the bounded detail. It recognises a TLS
+refusal by the typed @tls@ exception @http-client@ wraps in its internal-exception
+channel, never by matching rendered text.
 -}
 classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (displayExceptionT err)

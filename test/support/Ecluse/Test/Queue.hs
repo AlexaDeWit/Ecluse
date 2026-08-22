@@ -6,14 +6,14 @@
 
 Suites that need a 'MirrorQueue' assemble the same bounded backend the
 composition root rolls over to when no @ECLUSE_QUEUE__URL@ is set
-('Ecluse.Core.Queue.Memory.newBoundedInMemoryQueue'), with test-sized knobs
-rather than the production ones:
+('Ecluse.Core.Queue.Memory.newBoundedInMemoryQueue'). The knobs are test-sized,
+not the production ones:
 
 * a depth cap far above what any spec enqueues, so the bounded backend's
-  drop-newest overflow shed can never fire under a test's job volume;
+  drop-newest overflow shed can never fire under a test's job volume.
 * a short idle-poll window, so a 'Ecluse.Core.Queue.receive' on an empty queue
   returns its healthy @[]@ promptly instead of waiting out the production
-  long-poll cadence;
+  long-poll cadence.
 * a drop callback that throws, so a drop (a broken test premise: some spec
   outgrew the cap) fails the test loudly instead of silently losing a job the
   spec meant to observe.
@@ -33,8 +33,8 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig (..), newBoundedInMemoryQueue)
 
 {- | A cap-overflow drop from the test queue, carrying the backend's running drop
-total: a broken test premise (some spec outgrew the cap), surfaced typed so it
-fails the test loudly instead of silently losing a job the spec meant to observe.
+total. It is a broken test premise: some spec outgrew the cap. The typed value
+fails the test loudly, instead of silently losing a job the spec meant to observe.
 -}
 newtype UnexpectedTestQueueDrop = UnexpectedTestQueueDrop Int
     deriving stock (Show)

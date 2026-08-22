@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
 #
-# Pre-pull one or more pinned container images into the local Docker cache,
-# retrying a transient registry failure with bounded exponential backoff, so a
-# momentary Docker Hub blip does not fail a whole gating CI job on the first
-# attempt. The unauthenticated GitHub-hosted runners share a heavily throttled
-# Docker Hub IP pool whose auth-token endpoint intermittently times out ("context
-# deadline exceeded"); the integration and end-to-end suites pull their pinned
-# data-plane images (ministack, the OTLP collector, nginx, Verdaccio) at run time,
-# so a single throttled pull inside a suite's setup hook can take the whole gate
-# red. Warming the images here first, with retries, means the suite's own
-# `docker run` / `docker build FROM` then finds them already cached.
+# Pre-pull one or more pinned container images into the local Docker cache. It
+# retries a transient registry failure with bounded exponential backoff. A
+# momentary Docker Hub blip then does not fail a whole gating CI job on its
+# first attempt.
 #
-# The image references are passed in by the caller (the CI e2e / build-test jobs)
-# and MUST stay in sync with the pins in the test harness, which is the source of
-# truth:
+# The unauthenticated GitHub-hosted runners share a heavily throttled Docker Hub
+# IP pool whose auth-token endpoint intermittently times out ("context deadline
+# exceeded"). The integration and end-to-end suites pull their pinned data-plane
+# images (ministack, the OTLP collector, nginx, Verdaccio) at run time. One
+# throttled pull inside a suite's setup hook can then take the whole gate red.
+# Warming the images here first, with retries, means the suite's own `docker run`
+# and `docker build FROM` find them already cached.
+#
+# The caller passes the image references in (the CI e2e and build-test jobs).
+# They MUST stay in sync with the pins in the test harness, which is the source
+# of truth:
 #   - test/e2e/Ecluse/E2E/Harness/Docker.hs
 #   - test/integration/Ecluse/Integration/Ministack.hs (and the telemetry specs)
-# Digest pins are copied verbatim; this helper never rewrites a digest to a
-# floating tag, so it adds no new trust surface.
+# Copy a digest pin verbatim. This helper never rewrites a digest to a floating
+# tag, so it adds no new trust surface.
 #
-# This is best-effort cache-warming, not a gate: if an image still cannot be
-# pulled after the whole backoff budget, the helper logs a clear warning and
-# exits 0, leaving the suite's own pull to try once more (and to fail loudly with
-# its own diagnostic if the outage has not cleared). It therefore only ever adds
-# resilience; it never introduces a new way for the job to go red.
+# This is best-effort cache-warming, not a gate. When an image still fails after
+# the whole backoff budget, the helper logs a clear warning, then exits with a
+# zero status. The suite's own pull tries once more, and fails loudly with its own
+# diagnostic if the outage has not cleared. So this helper can never make the job
+# go red.
 #
 # Usage:
 #   scripts/docker-prepull.sh IMAGE_REF [IMAGE_REF ...]
@@ -39,9 +41,9 @@ readonly ATTEMPTS="${PREPULL_ATTEMPTS:-5}"
 readonly BACKOFF_SECONDS="${PREPULL_BACKOFF_SECONDS:-5}"
 readonly BACKOFF_MAX_SECONDS="${PREPULL_BACKOFF_MAX_SECONDS:-60}"
 
-# True when a Docker daemon is reachable. With none, cache-warming is moot: the
-# suite's own docker calls will surface the missing daemon, so we skip cleanly
-# (exit 0) rather than burn the backoff budget on pulls that cannot succeed.
+# True when a Docker daemon is reachable. With no daemon, cache-warming is moot.
+# The suite's own docker calls surface the missing daemon. So we exit 0 cleanly
+# rather than burn the backoff budget on pulls that cannot succeed.
 docker_ready() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }

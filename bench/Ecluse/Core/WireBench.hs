@@ -6,15 +6,15 @@
 through the live wire decoder ("Ecluse.Core.Registry.Npm.Project") and projecting it
 into the agnostic 'PackageInfo' through the live serve projection
 'Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest' (decode, nesting-bound,
-project-and-validate, version-count-bound) -- the sequence the serve path runs per
+project-and-validate, version-count-bound). That is the sequence the serve path runs per
 request.
 
-These run over the curated real-world corpus (small @is-odd@ through heavy
-@\@types\/node@), so the decode and projection cost is reported across the real
-distribution of package sizes and shapes rather than one anchor -- the heterogeneous
-per-version manifests are where a decode regression on a heavy packument shows up.
-Each result is summarised to a forced 'Int' spanning every version, so the whole
-decoded\/projected structure is evaluated, not just its outermost constructor.
+These run over the curated real-world corpus, from small @is-odd@ to heavy
+@\@types\/node@. They therefore report the decode and projection cost across the real
+distribution of package sizes and shapes rather than one anchor. The heterogeneous
+per-version manifests are where a decode regression on a heavy packument shows. Each
+result summarises to a forced 'Int' spanning every version, so the bench evaluates the
+whole decoded\/projected structure rather than its outermost constructor alone.
 -}
 module Ecluse.Core.WireBench (
     benchmarks,
@@ -46,7 +46,7 @@ benchmarks loaded =
         ]
 
 {- | Decode bytes through the live wire decoder ('parseVersionList'), forcing every
-version. The version-list result forces the element-wise packument decode -- the
+version. The version-list result forces the element-wise packument decode, the
 per-version manifest decode that is the read path's GC-dominant cost.
 -}
 decodeDepth :: ByteString -> Int

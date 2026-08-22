@@ -4,9 +4,9 @@
 
 {- | Shared test-support library for Écluse's runtime-dependent suites.
 
-This internal library hosts test environment helpers that depend on the runtime tier
-(specifically 'Env' and its fields), which cannot live in the pure core 'ecluse-test-support'
-due to the tier partition.
+This internal library holds the test environment helpers that depend on the runtime
+tier (specifically 'Env' and its fields). The tier partition keeps them out of the
+pure core 'ecluse-test-support'.
 -}
 module Ecluse.Runtime.Test.Support (
     newTestEnv,
@@ -24,8 +24,8 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Support (newTestLogEnv, testServeAdmission)
 
-{- | Default test environment using standard memory queue, standard http manager,
-and disabled telemetry.
+{- | The default test environment: the memory queue, a standard HTTP manager, and
+telemetry disabled.
 -}
 newTestEnv :: IO Env
 newTestEnv = do
@@ -33,8 +33,9 @@ newTestEnv = do
     manager <- newManager defaultManagerSettings
     newTestEnvWith queue (manager, manager) telemetryDisabled
 
-{- | Parameterized test environment constructor. Default values are used for
-the log environment, heartbeat, serve admission, and metadata cache.
+{- | Build a test environment over the given queue, managers, and telemetry handle.
+The log environment, heartbeat, serve admission, and metadata cache take their
+defaults.
 -}
 newTestEnvWith :: MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
 newTestEnvWith queue (manager, privateManager) telemetry = do

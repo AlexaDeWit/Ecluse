@@ -6,12 +6,12 @@
 stands in for a hash of the served bytes.
 
 The correctness direction a validator must hold is __never call a changed document
-unchanged__, so these cases pin that the tag moves whenever any input the served
-document is a function of moves -- an origin body, a survivor set, the source's
-provenance, the source order, the mount base URL, the package -- and that it is
-bit-stable when nothing does. The tag is allowed to change spuriously; it is not
-allowed to stand still. Framing cases guard the hash-input encoding: adjacent
-variable-length fields must not be collapsible into a colliding split.
+unchanged__. These cases pin that the tag moves whenever an input of the served
+document moves. The inputs are an origin body, a survivor set, the source's
+provenance, the source order, the mount base URL, and the package. They also pin that
+the tag is bit-stable when nothing moves. The tag may change spuriously. It may not
+stand still. Framing cases guard the hash-input encoding: adjacent variable-length
+fields must not collapse into a colliding split.
 -}
 module Ecluse.Server.Pipeline.PackumentSpec (spec) where
 
@@ -56,14 +56,14 @@ spec = describe "packumentETag -- the input-derived validator" $ do
         packumentETag mountBase thing (reverse (piecesOf base)) `shouldNotBe` tagWith base
 
     it "does not collide survivor lists on concatenation framing" $ do
-        -- ["1.0", "0.2.0"] vs ["1.0.0", "2.0"] concatenate to the same characters;
-        -- the per-field terminator must keep them distinct.
+        -- ["1.0", "0.2.0"] vs ["1.0.0", "2.0"] concatenate to the same characters.
+        -- The per-field terminator must keep them distinct.
         tagWith base{publicSurvivors = ["1.0", "0.2.0"]}
             `shouldNotBe` tagWith base{publicSurvivors = ["1.0.0", "2.0"]}
 
     it "does not collide a survivor moved across the source boundary" $
         -- The same flat multiset of survivors, split differently between the two
-        -- sources, must not collide; the source-block terminator keeps them apart.
+        -- sources, must not collide. The source-block terminator keeps them apart.
         tagWith base{privateSurvivors = ["9.0.0", "1.0.0"], publicSurvivors = ["2.0.0"]}
             `shouldNotBe` tagWith base{privateSurvivors = ["9.0.0"], publicSurvivors = ["1.0.0", "2.0.0"]}
 

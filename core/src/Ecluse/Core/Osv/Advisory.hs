@@ -24,8 +24,8 @@ import Security.CVSS (cvssScore, parseCVSS)
 {- | An ecosystem's advisory export under an OSV-layout base URL
 (@\<base\>\/\<ecosystem\>\/all.zip@): a zip archive of every advisory currently
 published for the ecosystem. The base comes from configuration
-(@osvExportBaseUrl@), so a moved or mirrored upstream never needs a new
-binary; a trailing slash on the base is tolerated.
+(@osvExportBaseUrl@), so a moved or mirrored upstream never needs a new binary. The
+function drops a trailing slash on the base.
 
 >>> osvExportUrl "https://osv-vulnerabilities.storage.googleapis.com/" "npm"
 "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"
@@ -51,10 +51,9 @@ instance FromJSON OsvAdvisory where
             <*> v .:? "severity"
             <*> v .:? "database_specific"
 
-{- | One entry of an advisory's @severity@ array: a scoring-system tag (for
-example @CVSS_V3@) and its value. For the CVSS systems the value is the
-/vector string/, not a number; the numeric base score is computed from it
-('advisorySeverity').
+{- | One entry of an advisory's @severity@ array: a scoring-system tag (for example
+@CVSS_V3@) and its value. For the CVSS systems the value is the /vector string/, not
+a number. 'advisorySeverity' computes the numeric base score from it.
 -}
 data OsvSeverityEntry = OsvSeverityEntry
     { sevType :: Text
@@ -87,8 +86,8 @@ data OsvAffected = OsvAffected
     , affectedRanges :: Maybe [OsvRange]
     , affectedVersions :: Maybe [Text]
     {- ^ Exact affected versions enumerated outside any range. A real and common
-    OSV shape (much of the npm malware feed names the single bad version here
-    with no @ranges@ at all); each is an affected point in its own right.
+    OSV shape: much of the npm malware feed names the single bad version here with
+    no @ranges@ at all. Each is an affected point in its own right.
     -}
     }
     deriving stock (Show, Eq)
@@ -124,11 +123,11 @@ instance FromJSON OsvRange where
             <$> v .: "type"
             <*> v .: "events"
 
-{- | One event in a range's ordered event list. An event carries exactly one
-bound: @introduced@ opens the affected interval (inclusive), @fixed@ closes it
+{- | One event in a range's ordered event list. An event carries exactly one bound.
+The @introduced@ event opens the affected interval (inclusive), @fixed@ closes it
 below the fix (exclusive), and @last_affected@ closes it at an inclusive upper
-bound. The two upper bounds are genuinely different -- @fixed 2.0@ excludes
-@2.0@, @last_affected 2.0@ includes it -- so they are decoded and carried
+bound. The two upper bounds are genuinely different, because @fixed 2.0@ excludes
+@2.0@ and @last_affected 2.0@ includes it, so this model decodes and carries them
 separately.
 -}
 data OsvEvent = OsvEvent
@@ -149,10 +148,10 @@ instance FromJSON OsvEvent where
 identity and severity carried alongside the interval bounds. Each 'ExtractedOsv'
 becomes a row of the artifact's ranges table.
 
-The bounds mirror OSV's own model: 'extIntroduced' is the inclusive lower bound
-('Nothing' == from the beginning); the upper bound is @'extFixed'@ (exclusive) or
-@'extLastAffected'@ (inclusive) or neither (open-ended). An exact enumerated
-version becomes a point segment (@introduced == last_affected == v@).
+The bounds mirror OSV's own model. 'extIntroduced' is the inclusive lower bound
+('Nothing' == from the beginning). The upper bound is @'extFixed'@ (exclusive), or
+@'extLastAffected'@ (inclusive), or neither (open-ended). An exact enumerated version
+becomes a point segment (@introduced == last_affected == v@).
 -}
 data ExtractedOsv = ExtractedOsv
     { extPackage :: Text
@@ -163,20 +162,20 @@ data ExtractedOsv = ExtractedOsv
     , extLastAffected :: Maybe Text
     , extSeverity :: Maybe Double
     {- ^ The advisory's CVSS base score (0 to 10), carried onto each of its
-    segments; 'Nothing' when the advisory is unscored (much of the npm malware
-    feed). See 'advisorySeverity'.
+    segments. 'Nothing' when the advisory is unscored, which covers much of the
+    npm malware feed. See 'advisorySeverity'.
     -}
     }
     deriving stock (Show, Eq)
 
-{- | The advisory's CVSS base score, normalised to a number at ingest so the
-stored artifact holds a single comparable form and the reader needs no parsing.
+{- | The advisory's CVSS base score, normalised to a number at ingest. The stored
+artifact then holds a single comparable form, and the reader needs no parsing.
 
-OSV carries severity as a CVSS /vector string/, not a number, so the score is
-computed from it with the "Security.CVSS" library (the highest, when several
-vectors parse). When no vector parses, the source database's qualitative label
-('dbsSeverity') is mapped to its band ceiling (@ghsaSeverityCeiling@). 'Nothing'
-when the advisory offers neither.
+OSV carries severity as a CVSS /vector string/, not a number. The "Security.CVSS"
+library computes the score from it, and takes the highest when several vectors parse.
+When no vector parses, @ghsaSeverityCeiling@ maps the source database's qualitative
+label ('dbsSeverity') to its band ceiling. 'Nothing' when the advisory offers
+neither.
 -}
 advisorySeverity :: OsvAdvisory -> Maybe Double
 advisorySeverity adv = vectorScore <|> labelScore
@@ -191,17 +190,19 @@ advisorySeverity adv = vectorScore <|> labelScore
 parseVectorScore :: Text -> Maybe Double
 parseVectorScore = either (const Nothing) (Just . oneDecimal . snd . cvssScore) . parseCVSS
 
--- CVSS base scores are defined to one decimal place; round the library's 'Float' to
--- that precision in 'Double' space, so the stored value is the canonical one-decimal
--- 'Double' (exact to compare) rather than a Float-to-Double widening artefact.
+-- The CVSS specification defines base scores to one decimal place. Round the
+-- library's 'Float' to that precision in 'Double' space. The stored value is then the
+-- canonical one-decimal 'Double' (exact to compare), not a Float-to-Double widening
+-- artefact.
 oneDecimal :: Float -> Double
 oneDecimal f = fromIntegral (round (realToFrac f * 10 :: Double) :: Integer) / 10
 
--- GitHub's qualitative severity label mapped to the ceiling of its CVSS v3 band --
--- the highest score it could denote, so a coarse label is never under-counted past
--- a downstream deny threshold. GHSA labels are GitHub's own taxonomy (note
--- @MODERATE@, where CVSS says @Medium@), which the CVSS library does not parse, so
--- this small bridge is the irreducible remainder. 'Nothing' for an unknown label.
+-- GitHub's qualitative severity label mapped to the ceiling of its CVSS v3 band. The
+-- ceiling is the highest score the label could denote, so a coarse label is never
+-- under-counted past a downstream deny threshold. GHSA labels are GitHub's own
+-- taxonomy, with @MODERATE@ where CVSS says @Medium@. The CVSS library does not parse
+-- them, so this small bridge is the irreducible remainder. 'Nothing' for an unknown
+-- label.
 ghsaSeverityCeiling :: Text -> Maybe Double
 ghsaSeverityCeiling label = case T.toUpper (T.strip label) of
     "NONE" -> Just 0.0
@@ -249,25 +250,25 @@ affectedSegments aff =
   where
     exactVersion v = Segment (Just v) Nothing (Just v)
 
-    -- OSV defines three range types (@SEMVER@, @ECOSYSTEM@, @GIT@); only the first
+    -- OSV defines three range types (@SEMVER@, @ECOSYSTEM@, @GIT@). Only the first
     -- two carry version-string bounds this model can order with
     -- 'Ecluse.Core.Version.compareVersions'. A @GIT@ range's events are __commit
     -- identifiers__, not versions, so carving them into segments would store a
-    -- commit hash as a version bound; the downstream matcher ('insideAffectedRange')
-    -- then fails that unparseable bound __closed to affected__, so a single @GIT@
-    -- range (@introduced: "0"@, @fixed: \<sha\>@) would flag /every/ version of a
-    -- healthy package as CVE-affected and quarantine it wholesale. Such a range
-    -- expresses no npm-version constraint at all, so it must contribute nothing; a
+    -- commit hash as a version bound. The downstream matcher ('insideAffectedRange')
+    -- then fails that unparseable bound __closed to affected__. A single @GIT@ range
+    -- (@introduced: "0"@, @fixed: \<sha\>@) would flag /every/ version of a healthy
+    -- package as CVE-affected and quarantine it wholesale. Such a range
+    -- expresses no npm-version constraint at all, so it must contribute nothing. A
     -- genuinely version-affecting npm advisory always carries an @ECOSYSTEM@ (or
-    -- @SEMVER@) range. The type match is case-folded so a mixed-case producer's
+    -- @SEMVER@) range. The type match is case-folded, so a mixed-case producer's
     -- version range is still honoured rather than silently dropped.
     versionTyped :: OsvRange -> Bool
     versionTyped r = T.toUpper (T.strip (rangeType r)) `elem` ["SEMVER", "ECOSYSTEM"]
 
-{- | Carve a range's ordered events into affected segments. An @introduced@ opens
-a segment; a @fixed@ or @last_affected@ closes it; an @introduced@ that arrives
-with one already open closes the open one as unbounded first. A segment still open
-at the end is unbounded above.
+{- | Carve a range's ordered events into affected segments. An @introduced@ opens a
+segment, and a @fixed@ or @last_affected@ closes it. An @introduced@ that arrives with
+one already open closes the open one as unbounded first. A segment still open at the
+end is unbounded above.
 -}
 extractRange :: [OsvEvent] -> [Segment]
 extractRange = go Nothing

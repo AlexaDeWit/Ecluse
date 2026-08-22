@@ -5,11 +5,11 @@
 {- | The S3 edge of the @amazonka@ adapters: build an S3-configured @amazonka@ env,
 honouring an optional custom endpoint override.
 
-Ecosystem-agnostic and free of the composition shell: the caller (Pilot's export
+Ecosystem-agnostic and free of the composition shell. The caller (Pilot's export
 loop or the proxy's advisory sync) resolves the @(secure, host, port)@ override from
 configuration and passes the pre-parsed tuple in. The env is the private state a
-cloud capability's smart constructor captures (the boundary
-@docs\/architecture\/cloud-backends.md@ describes), so it is built here and sealed by
+cloud capability's smart constructor captures, the boundary
+@docs\/architecture\/cloud-backends.md@ describes. It is built here and sealed by
 the capability that owns it: 'Ecluse.Runtime.Cve.Sync.newS3CveSource' for the sync
 consumer, 'Ecluse.Runtime.Pilot.Export.exportToS3' for the producer.
 -}

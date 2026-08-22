@@ -137,7 +137,7 @@ spec = do
                 `shouldBe` False
 
     -- Guards the committed criteria file: a malformed or empty-budget edit fails here,
-    -- in the gating tier, before the live harness ever runs.
+    -- in the gating tier, before the live harness runs.
     describe "the committed criteria" $
         it "loads with positive default budgets and per-package overrides for the heaviest package" $ do
             crit0 <- loadCriteria
@@ -168,8 +168,8 @@ overSingle = Sample "express" 480 40 60 80
 heavy :: Sample
 heavy = Sample "@types/node" 2339 400 480 40
 
--- Within budget on both legs, but the full leg has consumed 85% of its 100 ms budget:
--- past the watch fraction, still short of a breach.
+-- Within budget on both legs, but the full leg uses 85% of its 100 ms budget:
+-- past the watch fraction, short of a breach.
 nearFull :: Sample
 nearFull = Sample "vue" 300 25 85 10
 

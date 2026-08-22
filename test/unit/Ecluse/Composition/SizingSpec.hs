@@ -25,7 +25,7 @@ connectionPoolSpec = do
             fst (resolveServeAdmission Nothing 4) `shouldBe` 40
             fst (resolveServeAdmission Nothing 16) `shouldBe` 160
             -- At 10 per capability even a single-capability pod computes above
-            -- the floor of 8; the floor is a backstop should the multiplier drop.
+            -- the floor of 8. The floor is a backstop should the multiplier drop.
             fst (resolveServeAdmission Nothing 1) `shouldBe` 10
             fst (resolveServeAdmission Nothing 2) `shouldBe` 20
 

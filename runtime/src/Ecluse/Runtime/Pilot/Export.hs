@@ -10,7 +10,7 @@ The amazonka-facing half of Pilot's export: @PutObject@ a compiled @osv.db@ into
 configured bucket over an S3 env built for an optional custom endpoint
 ('Ecluse.Runtime.Aws.S3.buildS3Env'). It takes a __pre-parsed__ endpoint tuple rather
 than the application config, so it is an ecosystem-agnostic cloud adapter with no
-dependency on the composition shell; the Pilot export loop resolves the endpoint from
+dependency on the composition shell. The Pilot export loop resolves the endpoint from
 config and passes it down.
 -}
 module Ecluse.Runtime.Pilot.Export (
@@ -38,7 +38,7 @@ custom endpoint (the pre-parsed @(secure, host, port)@ resolved from configurati
 The @PutObject@ runs inside an @ecluse.pilot.osv.upload@ client span (inert when
 telemetry is off) carrying the bucket, object key, and byte count. A failed upload is
 logged at the call site and marks the span errored before it propagates to the export
-loop's supervisor, which otherwise sees only an opaque restart.
+loop's supervisor. That supervisor otherwise sees only an opaque restart.
 -}
 exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe (Bool, Text, Int) -> Text -> FilePath -> m ()
 exportToS3 mTracerProvider mEndpoint bucketName dbPath = do

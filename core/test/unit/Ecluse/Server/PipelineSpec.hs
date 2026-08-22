@@ -3,18 +3,18 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Unit cover for the core serve handlers ("Ecluse.Core.Server.Pipeline") driven
-__directly__ over a 'ServeRuntime' of test doubles -- no application 'Env', no
+__directly__ over a 'ServeRuntime' of test doubles, with no application 'Env' and no
 OpenTelemetry SDK.
 
-This is the partition's proof that the request pipeline is genuinely core: it constructs
-the request runtime from a recording metrics port, a pass-through tracing port, an
-in-memory queue, and a real cache and HTTP manager, then runs the handlers through the
-core 'runHandler' against a scribe-less @katip@ environment. The handlers serve a merged
+This is the partition's proof that the request pipeline is genuinely core. It builds the
+request runtime from a recording metrics port, a pass-through tracing port, an in-memory
+queue, and a real cache and HTTP manager. It then runs the handlers through the core
+'runHandler' against a scribe-less @katip@ environment. The handlers serve a merged
 packument and a gated tarball, degrade to an unavailability when no upstream resolves,
-and stub an unwired mount -- and the recording port confirms the serve decision each path
-recorded through the interface. The exhaustive serve-path behaviour (every status, the
-credential split, the merge) is covered through the real stack in the integration
-suite's @Ecluse.Server.PipelineSpec@; this pins that the handlers run over the ports.
+and stub an unwired mount. The recording port confirms the serve decision each path
+recorded through the interface. The integration suite's @Ecluse.Server.PipelineSpec@
+covers the exhaustive serve-path behaviour (every status, the credential split, the
+merge) through the real stack. These cases pin that the handlers run over the ports.
 -}
 module Ecluse.Server.PipelineSpec (spec) where
 
@@ -88,7 +88,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "logs and meters a cross-upstream integrity divergence, still serving the trusted copy (warn)" $
         -- Both origins resolve leftpad 1.0.0 but contradict on the shared SHA-512 digest,
         -- so the merge records a divergence (threat #11). Under the default warn policy the
-        -- trusted copy is served (200) and the divergence counter fires once.
+        -- pipeline serves the trusted copy (200) and the divergence counter fires once.
         testWithApplication (pure upstreamApp) $ \publicPort ->
             testWithApplication (pure divergentPrivateApp) $ \privatePort -> do
                 (metricsPort, divergences) <- recordingDivergenceMetricsPort
@@ -102,7 +102,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "records an unavailability and renders 503 when no upstream resolves" $ do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
-        -- 'depsFor 1' points both origins at a closed port, so each fetch is refused.
+        -- 'depsFor 1' points both origins at a closed port, which refuses each fetch.
         deps <- depsFor 1
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
@@ -112,8 +112,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         (metricsPort, _decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         -- Both origins point at a closed port, so a request the edge admits degrades to
-        -- 503; the 401 is the edge gate's own refusal. The two mounts differ only in the
-        -- presentation their ecosystem declares, so the pipeline is shown to hold none.
+        -- 503. The 401 is the edge gate's own refusal. The two mounts differ only in the
+        -- presentation their ecosystem declares, so the pair shows the pipeline holds no
+        -- presentation of its own.
         gated <- gatedDeps
         let serveUnder mapping headers =
                 statusCode . responseStatus
@@ -143,9 +144,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        -- A tuned handle with no waiting room, so the saturated attempt is refused
-        -- outright: these pipeline tests own the rendering of a refusal (503 +
-        -- Retry-After), not the wait semantics (AdmissionSpec owns those).
+        -- A tuned handle with no waiting room, so admission refuses the saturated
+        -- attempt outright. These pipeline tests own the rendering of a refusal (503 plus
+        -- Retry-After), and AdmissionSpec owns the wait semantics.
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
@@ -199,8 +200,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
 {- | Run a serve handler over a request runtime and mount, capturing the 'Response' it
 hands its continuation. The handler runs through the core 'runHandler' against a
-scribe-less @katip@ environment (its warnings have nowhere to go, which is what these
-tests want) and an empty initial context (no active span, so no @dd@).
+scribe-less @katip@ environment. Its warnings have nowhere to go, which is what these
+tests want. The initial context is empty: no active span, so no @dd@.
 -}
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
@@ -210,14 +211,15 @@ captureServe contract rt binding mkHandler = do
     _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)
     maybe (throwString "the handler produced no response") pure =<< readIORef captured
 
-{- | A request runtime over the recording metrics port, the pass-through tracing port,
-a real (no-TLS) manager shared by both legs, a fresh cache, and an in-memory queue.
+{- | A request runtime over the recording metrics port and the pass-through tracing port.
+It also carries a real (no-TLS) manager shared by both legs, a fresh cache, and an
+in-memory queue.
 -}
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
-    -- A generously-bounded admission the runtime carries but these tests never gate on
-    -- (the admission-specific cases wrap 'withServeAdmission' with their own tuned handle);
-    -- the high capacity keeps it from ever interfering.
+    -- A generously-bounded admission the runtime carries but these tests never gate on.
+    -- The admission-specific cases wrap 'withServeAdmission' with their own tuned handle,
+    -- and the high capacity keeps this one from ever interfering.
     admission <- newServeAdmission 1_000_000
     mkRuntimeWith admission metricsPort
 
@@ -235,7 +237,7 @@ leftpad = mkPackageName Npm Nothing "leftpad"
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential
 
-{- | An npm mount whose credential presentation is the given one, so a serve can be driven
+{- | An npm mount carrying the given credential presentation. A test can drive a serve
 under an ecosystem that presents its credential differently from npm's.
 -}
 mountUnder :: CredentialMapping -> PackumentDeps -> MountBinding
@@ -248,8 +250,9 @@ mountUnder mapping deps =
         , bindingPublishDeps = Nothing
         }
 
-{- | A presentation carrying a raw token on @X-Api-Key@: a form npm does not present, so
-a mount declaring it accepts what an npm mount refuses and refuses what it accepts.
+{- | A presentation that carries a raw token on @X-Api-Key@, a form npm does not present.
+A mount that declares it accepts what an npm mount refuses, and refuses what an npm
+mount accepts.
 -}
 apiKeyCredential :: CredentialMapping
 apiKeyCredential = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecret)
@@ -273,10 +276,10 @@ requestWith :: RequestHeaders -> Request
 requestWith headers = defaultRequest{requestHeaders = headers}
 
 {- | Serve dependencies pointing the public origin at the in-process upstream on
-@publicPort@ and the private origin at a closed port (so the trusted leg always degrades
-and the merge serves the public contribution). The loopback stubs are addressed by the
-@localhost@ DNS name rather than a bare IP literal, so the internal-range block (which
-only recognises a literal) never fires on the artifact leg -- no opt-in is needed.
+@publicPort@, and the private origin at a closed port. The trusted leg therefore always
+degrades, and the merge serves the public contribution. The loopback stubs use the
+@localhost@ DNS name rather than a bare IP literal. The internal-range block only
+recognises a literal, so it never fires on the artifact leg. No opt-in is needed.
 -}
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
@@ -299,10 +302,11 @@ allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
-{- | A minimal npm upstream: it answers @GET \/leftpad@ with a one-version packument
-whose @dist.tarball@ self-hosts on this upstream (the host taken from the request, so
-the ephemeral test port is woven in) and carries a real SHA-512 @integrity@ over the
-served artifact bytes, and answers that tarball path with the bytes themselves.
+{- | A minimal npm upstream. It answers @GET \/leftpad@ with a one-version packument whose
+@dist.tarball@ self-hosts on this upstream. It takes the host from the request, so the
+tarball URL carries the ephemeral test port. That packument carries a real SHA-512
+@integrity@ over the served artifact bytes. The upstream answers the tarball path with
+those bytes.
 -}
 upstreamApp :: Application
 upstreamApp req respond =
@@ -348,9 +352,9 @@ sha512Integrity :: ByteString -> Text
 sha512Integrity = sriSha512Of
 
 {- | A private (trusted) upstream serving @leftpad@ 1.0.0 with an integrity that
-contradicts the public copy on the shared SHA-512 algorithm (a digest over different
-bytes): the private side of a cross-upstream divergence. Only the packument route is
-served, since the divergence is decided on metadata and no tarball is fetched.
+contradicts the public copy on the shared SHA-512 algorithm, over different bytes. This is
+the private side of a cross-upstream divergence. It serves only the packument route,
+because the merge decides the divergence on metadata and never fetches a tarball.
 -}
 divergentPrivateApp :: Application
 divergentPrivateApp req respond =

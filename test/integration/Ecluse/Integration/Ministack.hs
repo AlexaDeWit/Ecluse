@@ -4,16 +4,16 @@
 
 {- | Shared @ministack@ bootstrapping for the integration suite.
 
-The mirror-queue and mirror-worker specs both exercise the real AWS SQS
-'Ecluse.Core.Queue.MirrorQueue' backend against a @ministack@ container (launched via
-@testcontainers@), pointed at the emulator with throwaway credentials -- hermetic
-and gating, but requiring a Docker daemon and no real AWS. This module stands the
-bootstrapping up __once__ (the container, its ASCII-relabelled image, the
-endpoint-overridden @amazonka@ environment, and creating a fresh per-test queue) so
-both specs share it rather than each re-deriving it.
+The mirror-queue and mirror-worker specs both drive the real AWS SQS
+'Ecluse.Core.Queue.MirrorQueue' backend against a @ministack@ container, launched via
+@testcontainers@. They point at the emulator with throwaway credentials. Both are
+hermetic and gating, but require a Docker daemon and no real AWS. This module stands
+the bootstrapping up __once__: the container, its ASCII-relabelled image, the
+endpoint-overridden @amazonka@ environment, and a fresh per-test queue. Both specs
+share it rather than each re-deriving it.
 
-This is test support, not a spec -- it carries no @hspec@ 'Test.Hspec.Spec' of its
-own and is named off the @Spec@ suffix so @hspec-discover@ does not collect it.
+This is test support, not a spec. It carries no @hspec@ 'Test.Hspec.Spec' of its own,
+and its name avoids the @Spec@ suffix so @hspec-discover@ does not collect it.
 -}
 module Ecluse.Integration.Ministack (
     -- * Container lifecycle
@@ -64,18 +64,17 @@ import Ecluse.Test.Containers (testContainerLabels)
 ministackPort :: TC.Port
 ministackPort = 4566
 
-{- | An @hspec@ resource hook that starts a @ministack@ container exposing the SQS
-gateway port, waits until that port accepts connections, and tears it down after
-the action. Used with @aroundAll@ so a whole spec shares __one__ container while each
-case still isolates on its own queue ('freshQueue' \/ 'freshQueueUrl'); it never needs
-a fresh container per case.
+{- | An @hspec@ resource hook for a @ministack@ container. It starts the container
+exposing the SQS gateway port, waits until that port accepts connections, and tears it
+down after the action. Used with @aroundAll@, so a whole spec shares __one__ container
+while each case still isolates on its own queue ('freshQueue' \/ 'freshQueueUrl'). No
+case needs a fresh container.
 
-The image is wrapped in a trivial derived build that re-labels it with ASCII: the
-upstream @ministackorg/ministack@ carries a non-ASCII @description@ label (an em
-dash), and testcontainers 0.5.3.0 corrupts multi-byte bytes when it parses
-@docker inspect@ output (@ByteString.Char8.pack@ over a 'String'), so inspecting the
-raw image fails. The override keeps the test on the real emulator while sidestepping
-that parser bug.
+A trivial derived build wraps the image and re-labels it with ASCII. The upstream
+@ministackorg/ministack@ carries a non-ASCII @description@ label (an em dash).
+Inspecting the raw image fails, because testcontainers 0.5.3.0 corrupts multi-byte
+bytes when it parses @docker inspect@ output (@ByteString.Char8.pack@ over a 'String').
+The override keeps the test on the real emulator and sidesteps that parser bug.
 -}
 withMinistack :: (Container -> IO ()) -> IO ()
 withMinistack body = do
@@ -83,15 +82,15 @@ withMinistack body = do
     setEnv "AWS_SECRET_ACCESS_KEY" "test"
     labels <- testContainerLabels "integration"
     -- Resolve the pinned base image at startup, failing the suite loudly (the harness's
-    -- IO idiom, 'fail') if the literal is not digest-pinned; the @FROM@ line is then built
+    -- IO idiom, 'fail') if the literal is not digest-pinned. The @FROM@ line then comes
     -- only from a validated 'PinnedImageRef', so a mutable tag can never reach it.
     image <- either (fail . toString) pure (mkPinnedImageRef ministackImage)
     withContainers (ministack labels image) body
 
--- The reaping labels ('testContainerLabels') are threaded in rather than baked into
--- the image so the container carries this worktree's scope; 'withContainers' already
--- tears the container down on a normal exit, but the label lets `task test-clean` reap
--- it after a hard kill. See "Ecluse.Test.Containers".
+-- 'withMinistack' threads the reaping labels ('testContainerLabels') in rather than
+-- baking them into the image, so the container carries this worktree's scope.
+-- 'withContainers' already tears the container down on a normal exit, but the label
+-- lets `task test-clean` reap it after a hard kill. See "Ecluse.Test.Containers".
 ministack :: [(Text, Text)] -> PinnedImageRef -> TC.TestContainer Container
 ministack labels image =
     TC.run $
@@ -101,15 +100,15 @@ ministack labels image =
             & TC.setRm True
             & withLabels labels
 
--- ministack, tag 1.3-full, pinned by digest. Resolved to a 'PinnedImageRef' at startup
--- (see 'withMinistack'); the @FROM@ line is built from the validated reference, so a
--- mutable tag can never reach it.
+-- ministack, tag 1.3-full, pinned by digest. 'withMinistack' resolves it to a
+-- 'PinnedImageRef' at startup. The @FROM@ line comes from that validated reference, so
+-- a mutable tag can never reach it.
 ministackImage :: Text
 ministackImage = "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
 
 -- The derived build 'FROM' the pinned base, with an ASCII description label (see
--- 'withMinistack' for why) and the coarse test marker so a stale build image is prunable
--- by `task test-clean-all`.
+-- 'withMinistack' for why). It also carries the coarse test marker, so
+-- `task test-clean-all` can prune a stale build image.
 ministackDockerfile :: PinnedImageRef -> Text
 ministackDockerfile image =
     "FROM "
@@ -131,9 +130,9 @@ endpointFor container =
             , endpointPort = mappedPort
             }
 
-{- | The tunables a spec may want to vary per case: the visibility timeout (short,
-to observe redelivery within the test's patience) and the long-poll window (short,
-so a @receive@ does not stall the test).
+{- | The tunables a spec may want to vary per case. The visibility timeout is short, to
+observe redelivery within the test's patience. The long-poll window is short, so a
+@receive@ does not stall the test.
 -}
 data QueueOptions = QueueOptions
     { qoVisibilityTimeout :: Seconds
@@ -146,15 +145,15 @@ data QueueOptions = QueueOptions
     -}
     , qoDeadLetterAfter :: Maybe Int
     {- ^ Attach a redrive policy to a fresh dead-letter queue, capturing at this
-    @maxReceiveCount@. 'Nothing' leaves the queue with no dead-letter terminus, the
-    default a plain @CreateQueue@ gives.
+    @maxReceiveCount@. 'Nothing' leaves the queue with no dead-letter terminus. That is
+    what a plain @CreateQueue@ gives.
     -}
     }
     deriving stock (Eq, Show)
 
 {- | A 30-second visibility timeout and a 2-second long poll: the queue-roundtrip
 default that does not stall a test on an empty poll. The terminal backoff matches the
-production default; a test that observes dead-letter redelivery shortens it.
+production default. A test that observes dead-letter redelivery shortens it.
 -}
 defaultQueueOptions :: QueueOptions
 defaultQueueOptions =
@@ -165,23 +164,23 @@ defaultQueueOptions =
         , qoDeadLetterAfter = Nothing
         }
 
-{- | A scribe-free 'LogEnv' for the integration suite: layers that need a logger (an
-SQS backend's poison-message drop line, a booted proxy) take this where the spec does
-not assert on the log, so a no-output environment satisfies the dependency without
-cluttering the run.
+{- | A scribe-free 'LogEnv' for the integration suite. A layer that needs a logger takes
+this where the spec does not assert on the log. An SQS backend's poison-message drop
+line and a booted proxy both do. A no-output environment satisfies the dependency
+without cluttering the run.
 -}
 quietLogEnv :: IO LogEnv
 quietLogEnv = newTestLogEnv
 
-{- | Create a fresh SQS queue in the @ministack@ container and bind a
-'MirrorQueue' to it with the given options. ministack may not have the SQS service
-up the instant the port opens, so the @CreateQueue@ call is retried.
+{- | Create a fresh SQS queue in the @ministack@ container and bind a 'MirrorQueue' to
+it with the given options. The @ministack@ SQS service may not be up the instant the
+port opens, so this retries the @CreateQueue@ call.
 -}
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
     queueUrl <- freshQueueUrl container queueName
-    -- Before the backend is built, since it probes the redrive policy once at
-    -- construction and holds what it found.
+    -- The backend probes the redrive policy once at construction and holds what it
+    -- found, so attach the policy first.
     whenJust (qoDeadLetterAfter options) (attachDeadLetterQueue container queueName queueUrl)
     logEnv <- quietLogEnv
     -- The wire decode's egress former: the loopback dev former, since these
@@ -196,9 +195,10 @@ freshQueue container queueName options = do
             , sqsTerminalBackoff = qoTerminalBackoff options
             }
 
-{- | Attach a redrive policy to an existing queue, pointing at a fresh dead-letter
-queue of its own, capturing at the given @maxReceiveCount@. The dead-letter target is
-named by ARN, so the sibling queue is created and read back first.
+{- | Attach a redrive policy to an existing queue. The policy points at a fresh
+dead-letter queue of its own and captures at the given @maxReceiveCount@. A redrive
+policy names its dead-letter target by ARN, so this creates the sibling queue and
+reads its ARN back first.
 -}
 attachDeadLetterQueue :: Container -> Text -> Text -> Int -> IO ()
 attachDeadLetterQueue container queueName queueUrl captureAt = do
@@ -213,8 +213,8 @@ attachDeadLetterQueue container queueName queueUrl captureAt = do
     redrivePolicy arn =
         "{\"deadLetterTargetArn\":\"" <> arn <> "\",\"maxReceiveCount\":\"" <> show captureAt <> "\"}"
 
--- Read one queue attribute back. Only the named attribute is requested, so the
--- response carries that one value.
+-- Read one queue attribute back. The request names only that attribute, so the
+-- response carries the one value.
 queueAttribute :: AWS.Env -> Text -> SQS.QueueAttributeName -> IO Text
 queueAttribute env queueUrl attribute = do
     response <-
@@ -224,11 +224,11 @@ queueAttribute env queueUrl attribute = do
         Just value -> pure value
         Nothing -> fail ("ministack GetQueueAttributes returned no " <> show attribute)
 
-{- | Create a fresh SQS queue in the @ministack@ container and return its queue URL
-(without binding a 'MirrorQueue' to it), so a test can drive the queue through the
+{- | Create a fresh SQS queue in the @ministack@ container and return its queue URL,
+without binding a 'MirrorQueue' to it. A test can then drive the queue through the
 config-driven composition root ('Ecluse.Composition.planMirrorQueue') and the
-endpoint-override key rather than the direct backend constructor. ministack may not
-have the SQS service up the instant the port opens, so @CreateQueue@ is retried.
+endpoint-override key rather than the direct backend constructor. The @ministack@ SQS
+service may not be up the instant the port opens, so this retries @CreateQueue@.
 -}
 freshQueueUrl :: Container -> Text -> IO Text
 freshQueueUrl container queueName = do
@@ -266,16 +266,16 @@ createQueueWithRetry env queueName attemptsLeft = do
         Right _ ->
             fail "ministack CreateQueue returned no queue URL"
 
-{- | Poll a queue until a non-empty batch arrives, so a test does not flake on an
-empty long-poll while a message becomes (or becomes again) visible. Bounded (~10s)
-so a genuinely-empty queue fails the test rather than hanging.
+{- | Poll a queue until a non-empty batch arrives. A test then does not flake on an
+empty long-poll while a message becomes (or becomes again) visible. Bounded (~10s) so a
+genuinely-empty queue fails the test rather than hanging.
 -}
 receiveUntil :: MirrorQueue -> IO [QueueMessage]
 receiveUntil = receiveUntilWithin 20
 
-{- | 'receiveUntil' with an explicit attempt budget (each attempt waits up to the
-queue's long-poll window, plus a ~500ms pause), for a case that must wait out a
-longer visibility \/ extension window before a message reappears.
+{- | 'receiveUntil' with an explicit attempt budget, for a case that must wait out a
+longer visibility \/ extension window before a message reappears. Each attempt waits up
+to the queue's long-poll window, plus a ~500ms pause.
 -}
 receiveUntilWithin :: Int -> MirrorQueue -> IO [QueueMessage]
 receiveUntilWithin = go
@@ -283,9 +283,9 @@ receiveUntilWithin = go
     go 0 _ = fail "receiveUntilWithin: no message arrived within the retry budget"
     go n queue =
         receive queue >>= \case
-            -- A transient transport fault against the emulator retries like an
-            -- empty poll (production backs off and re-polls the same way); the
-            -- last attempt's fault fails loudly with its classified detail.
+            -- A transient transport fault against the emulator retries like an empty
+            -- poll, the way production backs off and re-polls. The last attempt's
+            -- fault fails loudly with its classified detail.
             Left fault
                 | n > 1 -> threadDelay 500_000 >> go (n - 1) queue
                 | otherwise -> fail ("receive faulted against ministack: " <> show fault)

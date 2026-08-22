@@ -11,8 +11,8 @@ spec :: Spec
 spec = do
     showInstancesSpec
 
-{- | The error\/config types derive 'Show' for diagnostics and test output; assert
-each renders so the contract is exercised (and not silently dropped).
+{- | The error and config types derive 'Show' for diagnostics and test output. Each
+case asserts a rendering, so a silently dropped instance fails the suite.
 -}
 showInstancesSpec :: Spec
 showInstancesSpec = describe "Show instances" $ do

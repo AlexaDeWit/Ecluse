@@ -63,18 +63,18 @@ import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
-{- | The integration tier for tracing: drive a request through an in-process Écluse
-into a real OTLP __Collector__ container (no Datadog SaaS) and assert the spans are
-accepted. The Collector runs an OTLP\/HTTP receiver into a @debug@ exporter at
-detailed verbosity, so every received span is written to its logs; the test stamps a
-unique marker into the request path (which the WAI server span records as an
-attribute) and then watches the Collector's logs for that marker.
+{- | The integration tier for tracing. Drive a request through an in-process Écluse into
+a real OTLP __Collector__ container (no Datadog SaaS), then assert the Collector accepts
+the spans. The Collector runs an OTLP\/HTTP receiver into a @debug@ exporter at
+detailed verbosity, so it writes every received span to its logs. The test stamps a
+unique marker into the request path, which the WAI server span records as an attribute.
+It then watches the Collector's logs for that marker.
 
-Two cases prove the wire and its gate: with telemetry __on__ the marker reaches the
-Collector (the span was exported and accepted); with telemetry __off__ a fresh marker
-never appears, so the instrumentation is genuinely inert. Gating and Dockerised, the
-same tier as the mirror-queue tests; it needs a Docker daemon and no external network
-beyond pulling the Collector image.
+Two cases prove the wire and its gate. With telemetry __on__ the marker reaches the
+Collector, so the SDK exported the span and the Collector accepted it. With telemetry
+__off__ a fresh marker never appears, so the instrumentation is genuinely inert. Gating
+and Dockerised, the same tier as the mirror-queue tests. It needs a Docker daemon and no
+external network beyond pulling the Collector image.
 -}
 spec :: Spec
 spec =
@@ -92,12 +92,12 @@ spec =
                 accepted <- awaitMarker collector marker 8
                 accepted `shouldBe` False
 
-            -- The AC4 stitch end to end on a real span: with the SDK live, a span is
-            -- opened (as the WAI middleware does per request), the dd context is built
-            -- within it exactly as runHandler does, and a JSONL log line is rendered from
-            -- it. The line must carry a non-zero dd.trace_id / dd.span_id -- proving the
-            -- active-span -> low-64 -> log-line correlation, the slice's "verify against
-            -- the Agent" crux. (The id format itself is pinned in Ecluse.LogSpec.)
+            -- The AC4 stitch end to end on a real span. With the SDK live, this opens
+            -- a span, as the WAI middleware does per request. It builds the dd context
+            -- within it exactly as runHandler does, and renders a JSONL log line from
+            -- it. The line must carry a non-zero dd.trace_id / dd.span_id, which proves
+            -- the active-span -> low-64 -> log-line correlation, the "verify against the
+            -- Agent" crux. (Ecluse.LogSpec pins the id format itself.)
             it "stamps a non-zero dd.trace_id on a log line emitted within a span" $ \collector -> do
                 ctx <- ddContextWithinSpan collector
                 case ddSpan ctx of
@@ -109,11 +109,12 @@ spec =
                         decodeUtf8 (encode (itemJson V2 (ddLogItem ctx)))
                             `shouldSatisfy` T.isInfixOf ("\"trace_id\":\"" <> tid <> "\"")
 
-{- Drive one request through the in-process traced Écluse application, pointing the
-SDK at the collector. With telemetry on, the WAI middleware opens a server span that
-records the request path (carrying the unique marker) and the OTLP exporter ships it;
-the tracer provider is force-flushed so the export does not wait on the batch window.
-With telemetry off, 'tracedApplication' adds no middleware, so nothing is emitted. -}
+{- Drive one request through the in-process traced Écluse application, pointing the SDK
+at the collector. With telemetry on, the WAI middleware opens a server span that records
+the request path, carrying the unique marker, and the OTLP exporter ships it. This
+force-flushes the tracer provider, so the export does not wait on the batch window. With
+telemetry off, 'tracedApplication' adds no middleware, so the application emits
+nothing. -}
 driveRequest :: Collector -> TelemetrySwitch -> Text -> IO ()
 driveRequest collector switch marker = do
     pointSdkAt (collectorEndpoint collector)
@@ -129,13 +130,14 @@ driveRequest collector switch marker = do
         whenJust (telemetryTracerProvider telemetry) $ \tracerProvider ->
             void (forceFlushTracerProvider tracerProvider Nothing)
 
--- Point the SDK's OTLP exporter at the collector via the standard environment, with
--- traces export ON and metrics and logs export off (the collector here carries only a
--- traces pipeline). Every signal's exporter is pinned explicitly -- including
--- @OTEL_TRACES_EXPORTER@ -- because @setEnv@ is process-global and the integration suite
--- runs every spec in one process: a sibling spec exporting a different signal (e.g. the
--- metrics spec, which sets @OTEL_TRACES_EXPORTER=none@) would otherwise leave traces
--- disabled here. Pinning all three makes this spec independent of run order.
+-- Point the SDK's OTLP exporter at the collector via the standard environment. Traces
+-- export is ON, and metrics and logs export off, because the collector here carries
+-- only a traces pipeline. This pins every signal's exporter explicitly,
+-- @OTEL_TRACES_EXPORTER@ included, because @setEnv@ is process-global and the
+-- integration suite runs every spec in one process. A sibling spec exporting a
+-- different signal (e.g. the metrics spec, which sets @OTEL_TRACES_EXPORTER=none@)
+-- would otherwise leave traces disabled here. Pinning all three makes this spec
+-- independent of run order.
 pointSdkAt :: Text -> IO ()
 pointSdkAt endpoint = do
     setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
@@ -146,15 +148,15 @@ pointSdkAt endpoint = do
     setEnv "OTEL_LOGS_EXPORTER" "none"
     setEnv "OTEL_BSP_SCHEDULE_DELAY" "200"
 
-{- The npm front door the traced application mounts: a bare npm mount (no serve or
-publish dependencies) assembled through the public binding resolver, the same shape
-the composition root derives from configuration. -}
+{- The npm front door the traced application mounts: a bare npm mount, with no serve or
+publish dependencies, assembled through the public binding resolver. It is the same
+shape the composition root derives from configuration. -}
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
-{- A minimal composition root for the traced front door: the route under test
-(@\/{marker}@) matches no mount and is the neutral @404@, so the registry, credential,
-and cache handles are never exercised and the unconfigured placeholders suffice. The
+{- A minimal composition root for the traced front door. The route under test
+(@\/{marker}@) matches no mount and is the neutral @404@. Nothing exercises the
+registry, credential, and cache handles, so the unconfigured placeholders suffice. The
 telemetry handle is the one wired here. -}
 buildEnv :: Telemetry -> IO Env
 buildEnv telemetry = do
@@ -170,10 +172,10 @@ freshMarker = do
     now <- getPOSIXTime
     pure ("ecltrace" <> show (round (now * 1_000_000) :: Integer))
 
-{- Open a real SDK span -- as the WAI middleware does per request -- and build the @dd@
-context within it through the same "Ecluse.Telemetry.Correlation" path 'runHandler'
-uses, returning that context. The collector backs the SDK's exporter (init needs a valid
-endpoint; export is async), but this asserts the in-process active-span stitch, not
+{- Open a real SDK span, as the WAI middleware does per request. Build the @dd@ context
+within it through the same "Ecluse.Telemetry.Correlation" path 'runHandler' uses, and
+return that context. The collector backs the SDK's exporter, because init needs a valid
+endpoint and export is async. This asserts the in-process active-span stitch, never
 delivery. -}
 ddContextWithinSpan :: Collector -> IO DdContext
 ddContextWithinSpan collector = do
@@ -187,14 +189,14 @@ ddContextWithinSpan collector = do
                 inSpan' tracer "itest-correlation-span" defaultSpanArguments $ \_span ->
                     ddContextNow (ddIdentity (resolveTelemetry []))
 
--- A rendered Datadog id is an unsigned decimal; a real span's id is non-empty and
+-- A rendered Datadog id is an unsigned decimal. A real span's id is non-empty and
 -- non-zero (the low-64 render of a random id is overwhelmingly non-zero).
 isNonZeroDecimal :: Text -> Bool
 isNonZeroDecimal t = not (T.null t) && T.all isDigit t && t /= "0"
 
-{- A katip log 'Item' carrying the @dd@ object as its structured payload, so a JSONL line
-can be rendered off a 'DdContext' with no stdout dependency (the same technique the
-unit tier uses); every non-payload field is held fixed. -}
+{- A katip log 'Item' carrying the @dd@ object as its structured payload. A test can
+then render a JSONL line off a 'DdContext' with no stdout dependency. The unit tier uses
+the same technique. This fixture holds every non-payload field fixed. -}
 ddLogItem :: DdContext -> Item SimpleLogPayload
 ddLogItem ctx =
     Item
@@ -225,18 +227,19 @@ data Collector = Collector
 collectorPort :: TC.Port
 collectorPort = 4318
 
--- The OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest. It is
--- resolved to a 'PinnedImageRef' at startup (see 'withCollector'), so a mutable tag (which
--- could be re-pointed at a poisoned image) aborts the suite rather than reaching the @FROM@
--- line. This digest matches the e2e harness's collector pin. The core distribution carries
--- the OTLP receiver and the @debug@ exporter the assertion reads.
+-- The OTLP Collector image (version 0.119.0), pinned by its multi-arch index digest.
+-- 'withCollector' resolves it to a 'PinnedImageRef' at startup. A mutable tag, which
+-- could be re-pointed at a poisoned image, therefore aborts the suite rather than
+-- reaching the @FROM@ line. This digest matches the e2e harness's collector pin. The
+-- core distribution carries the OTLP receiver and the @debug@ exporter the assertion
+-- reads.
 collectorImage :: Text
 collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
 {- A derived image that bakes the @--config env:OTELCOL_CONFIG@ command into the
-collector. testcontainers 0.5.3 appends @setCmd@ to @docker start@ (which rejects it),
-so the command is set in the image rather than at run time; the config itself still
-arrives through the (correctly applied) @--env@ on @docker create@. -}
+collector. Version 0.5.3 of testcontainers appends @setCmd@ to @docker start@, which
+rejects it, so the command belongs in the image rather than at run time. The config
+itself still arrives through the (correctly applied) @--env@ on @docker create@. -}
 collectorDockerfile :: PinnedImageRef -> Text
 collectorDockerfile image =
     "FROM "
@@ -244,10 +247,10 @@ collectorDockerfile image =
         <> "\nCMD [\"--config\", \"env:OTELCOL_CONFIG\"]\n"
         <> "LABEL com.ecluse.test=integration\n"
 
-{- The whole collector configuration as a single-line (flow-style) YAML document,
-passed through the @env:@ config provider so no shell, file, or bind mount is needed
-on the distroless image: an OTLP\/HTTP receiver feeding a @debug@ exporter at detailed
-verbosity, so every received span is written to the container logs. -}
+{- The whole collector configuration as a single-line (flow-style) YAML document. It
+passes through the @env:@ config provider, so the distroless image needs no shell, file,
+or bind mount. It declares an OTLP\/HTTP receiver feeding a @debug@ exporter at detailed
+verbosity. The collector therefore writes every received span to the container logs. -}
 collectorConfig :: Text
 collectorConfig =
     "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
@@ -289,8 +292,9 @@ accumulateLogs :: IORef [ByteString] -> TC.LogConsumer
 accumulateLogs logsRef _pipe line = atomicModifyIORef' logsRef (\acc -> (line : acc, ()))
 
 {- Poll the collector's accumulated logs for the marker, up to @attempts@ times at
-~250ms each. 'True' once a log line carries the marker -- the @debug@ exporter prints
-the server span's path attribute, so the marker surfaces once the span is accepted. -}
+~250ms each. 'True' once a log line carries the marker. The @debug@ exporter prints the
+server span's path attribute, so the marker surfaces once the Collector accepts the
+span. -}
 awaitMarker :: Collector -> Text -> Int -> IO Bool
 awaitMarker collectorHandle marker = go
   where

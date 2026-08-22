@@ -1,17 +1,20 @@
 name: Security
 
-# Vulnerability scanning, **report-only**: it never gates a PR, because findings
-# arrive with disclosure time, not with in-PR changes. Two scanners cover the two
-# halves of the shipped closure: grype scans the image's C closure via the
-# sbomnix SBOM (statically linked Haskell libraries are invisible to it), and
-# osv-scanner matches every exact pin in cabal.project.freeze, the committed
-# projection of the Nix package set, against OSV.dev, home of the HSEC
-# advisories the GitHub Advisory Database lacks. Both upload SARIF to GitHub
-# code scanning, so every finding is triaged in the Security tab and the issue
-# tracker holds only human-filed work. On a PR they run only when the dependency
-# plan changes; on the daily schedule they scan main, so advisories disclosed
-# after a release still surface. Remediation is always flake-side; Renovate's
-# weekly flake.lock refresh carries it. See
+# Vulnerability scanning, report-only: it never gates a PR, because findings
+# arrive with disclosure time, not with in-PR changes.
+#
+# Two scanners cover the two halves of the shipped closure. The first, grype,
+# scans the image's C closure via the sbomnix SBOM. Statically linked Haskell
+# libraries are invisible to it. The second, osv-scanner, matches every exact pin
+# in cabal.project.freeze against OSV.dev. That freeze is the committed projection
+# of the Nix package set, and OSV.dev is home to the HSEC advisories the GitHub
+# Advisory Database lacks.
+#
+# Both upload SARIF to GitHub code scanning, so a human triages every finding in
+# the Security tab and the issue tracker holds only human-filed work. On a PR they
+# run only when the dependency plan changes. On the daily schedule they scan main,
+# so advisories disclosed after a release still surface. Remediation is always
+# flake-side, carried by Renovate's weekly flake.lock refresh. See
 # docs/architecture/release-supply-chain.md → "Vulnerability scanning and
 # dependency freshness".
 on:
@@ -32,10 +35,10 @@ jobs:
   scan:
     name: Vulnerability scan (grype)
     runs-on: ubuntu-latest
-    # Sized for a cold run after a dependency-overlay change in flake.nix:
-    # sbomnix builds .#ecluse-bin, so the job pays the full source rebuild of
-    # the overridden closure that the main-written cache does not yet hold.
-    # Warm runs finish in a fraction of this.
+    # Sized for a cold run after a dependency-overlay change in flake.nix. The
+    # sbomnix build of .#ecluse-bin makes the job pay the full source rebuild of
+    # the overridden closure that the main-written cache does not yet hold. A warm
+    # run finishes in a fraction of this.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -53,14 +56,14 @@ jobs:
           # writer.
           save-nix-store: "false"
 
-      # grype scans the sbomnix SBOM of .#ecluse-bin → grype.sarif (+ a table
-      # in the log).
+      # grype scans the sbomnix SBOM of .#ecluse-bin into grype.sarif, and prints a
+      # table in the log.
       - name: Scan image closure (grype)
         run: nix develop .#ci --command task scan
 
       - name: Upload grype SARIF to code scanning
         # Surface the closure CVEs in the Security tab (code scanning), alongside
-        # Semgrep + Scorecard, via sarif upload
+        # Semgrep and Scorecard, via the SARIF upload.
         if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:
@@ -88,13 +91,13 @@ jobs:
           save-nix-store: "false"
 
       # osv-scanner (from the pinned nixpkgs, like grype) reads the freeze
-      # natively; findings are report-only, so only a scanner error fails here.
+      # natively. Findings are report-only, so only a scanner error fails here.
       - name: Scan cabal.project.freeze (osv-scanner)
         run: nix develop .#ci --command task scan-osv
 
       - name: Upload osv-scanner SARIF to code scanning
-        # Surface the HSEC advisories in the Security tab (code scanning),
-        # alongside grype + Semgrep + Scorecard.
+        # Surface the HSEC advisories in the Security tab (code scanning), alongside
+        # grype, Semgrep, and Scorecard.
         if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:

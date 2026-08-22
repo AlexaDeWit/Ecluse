@@ -48,13 +48,12 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
         mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
 
-    -- Ensure clean state
     liftIO $ createDirectoryIfMissing True outDir
     liftIO $ catchIOError (removeFile dbFile) (const $ pure ())
 
     -- The whole compile pass is one span: ecosystem and source stamped up front, the
-    -- row count and drop tally once the stream settles, and a systemic-drop abort marks
-    -- the span errored so an abandoned run is legible from the trace alone.
+    -- row count and drop tally once the stream settles. A systemic-drop abort marks
+    -- the span errored, so an abandoned run is legible from the trace alone.
     bracket
         (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.compile" defaultSpanArguments{kind = Internal}) mTracer)
         (mapM_ (`endSpan` Nothing))
@@ -68,15 +67,15 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
                 ingest <- newOsvIngest defaultIngestLimits
 
                 -- The fetch runs under a truncated exponential backoff (see
-                -- 'Ecluse.Core.Osv.Retry'): a transient osv.dev failure is retried with
+                -- 'Ecluse.Core.Osv.Retry'). A transient osv.dev failure retries with
                 -- jittered, capped, and count-bounded backoff rather than tight-looping, so
-                -- an outage cannot get our egress IP rate-limited or banned. Batches commit
-                -- incrementally, so a mid-stream drop can leave a partial table behind; each
-                -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
+                -- an outage cannot get the egress IP rate-limited or banned. Batches commit
+                -- incrementally, so a mid-stream drop can leave a partial table behind. Each
+                -- attempt therefore wipes it first and re-streams from a clean slate. INSERT
                 -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
-                -- under the dedup index's uniqueness, so a re-run would duplicate those ranges.)
-                -- The ingest tally is reset alongside the table so it reflects only the final
-                -- attempt.
+                -- under the dedup index's uniqueness, so a re-run would duplicate those ranges.
+                -- The tally reset rides alongside the table wipe, so the tally reflects only
+                -- the final attempt.
                 withOsvRetry defaultOsvRetryPolicy $ do
                     resetIngestStats ingest
                     liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
@@ -88,7 +87,7 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
 
                 -- The stream drops an over-large or malformed advisory rather than halting, so a
                 -- few poisoned records never freeze the feed. But a systemically corrupt payload
-                -- must not become a fresh-looking artifact that silently omits advisories: on a
+                -- must not become a fresh-looking artifact that silently omits advisories. On a
                 -- systemic drop rate, abandon the run before 'writeMeta' finalises it, so a
                 -- consumer keeps its last-good db instead.
                 stats <- readIngestStats ingest
@@ -120,8 +119,9 @@ renderDrops s =
         <> show (statDroppedMalformed s)
         <> " malformed"
 
--- The drop tally as structured log fields, shared by the completion and abort lines
--- so both carry the same ecosystem/accepted/dropped shape an operator can filter on.
+-- The drop tally as structured log fields. The completion line and the abort line
+-- share it, so both carry the same ecosystem/accepted/dropped shape an operator can
+-- filter on.
 dropFields :: Text -> IngestStats -> SimpleLogPayload
 dropFields ecosystem s =
     sl "ecosystem" ecosystem
@@ -135,18 +135,18 @@ initSchema conn = do
     -- The dedup guard over a segment's five identity columns. A unique index
     -- rather than a composite PRIMARY KEY because @STRICT@ makes primary-key
     -- columns implicitly NOT NULL and the three bound columns are legitimately
-    -- NULL; uniqueness behaviour is identical (INSERT OR IGNORE honours it, and
-    -- NULL bounds are distinct under both forms).
+    -- NULL. Uniqueness behaviour is identical: INSERT OR IGNORE honours it, and
+    -- NULL bounds are distinct under both forms.
     execute_ conn "CREATE UNIQUE INDEX uq_ranges_segment ON package_vulnerability_ranges(package_name, cve_id, introduced_version, fixed_version, last_affected_version)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
-    -- The reader's remediation probe is an exact (name, fixed) equality; this
+    -- The reader's remediation probe is an exact (name, fixed) equality, and this
     -- index makes it one B-tree traversal. Additive, so epoch-neutral.
     execute_ conn "CREATE INDEX idx_package_fixed ON package_vulnerability_ranges(package_name, fixed_version)"
     execute_ conn (Query metaTableDdl)
     execute_ conn (fromString ("PRAGMA user_version = " <> show osvSchemaEpoch))
 
--- Written once, after the stream has completed: the row count is only
--- meaningful for a complete artifact.
+-- Written once, after the stream completes: the row count is only meaningful for a
+-- complete artifact.
 writeMeta :: Connection -> Text -> String -> IO Int
 writeMeta conn ecosystem urlStr = do
     now <- getCurrentTime

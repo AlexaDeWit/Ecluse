@@ -11,17 +11,17 @@ import Ecluse.Core.Server.Path (Filename (Filename), encodeComponent, isSafeComp
 {- | The shared URL-path vocabulary: the artifact-name type, and the
 ecosystem-independent component-safety gate.
 
-No ecosystem's routes live here -- each declares its own table (npm's is
+No ecosystem's routes live here. Each declares its own table (npm's is
 "Ecluse.Core.Registry.Npm.Route"). What every registry shares is the /threat/: a decoded
 path component interpolated into an upstream URL. These specs pin that boundary.
 -}
 spec :: Spec
 spec = do
     describe "Filename -- the artifact name an artifact route carries" $ do
-        -- The verbatim on-the-wire name is held as a distinct type (not a bare 'Text')
-        -- because it is authoritative for fetching the bytes; its equality is by the
-        -- wrapped name, so two routes naming the same artifact compare equal and two
-        -- different files do not.
+        -- A distinct type, not a bare 'Text', holds the verbatim on-the-wire name,
+        -- because that name is authoritative for fetching the bytes. Equality is by
+        -- the wrapped name, so two routes naming the same artifact compare equal and
+        -- two different files do not.
         it "compares equal for the same preserved file name" $
             Filename "is-odd-3.0.1.tgz" `shouldBe` Filename "is-odd-3.0.1.tgz"
         it "compares unequal for different preserved file names" $
@@ -53,17 +53,17 @@ spec = do
         it "leaves interior dots, hyphens, underscores, digits, and tildes unchanged" $
             encodeComponent "lodash.merge_2~x" `shouldBe` "lodash.merge_2~x"
         it "percent-encodes a literal percent sign (closing the once-decoded re-encode gap)" $
-            -- The crux of the defect: a once-decoded segment carrying '%2e%2e%2f'
-            -- must have its '%' re-encoded so the upstream never sees a live escape.
+            -- A once-decoded segment carrying '%2e%2e%2f' must have its '%' re-encoded,
+            -- so the upstream never sees a live escape.
             encodeComponent "foo%2e%2e%2fbar" `shouldBe` "foo%252e%252e%252fbar"
         it "percent-encodes a literal slash" $
             encodeComponent "a/b" `shouldBe` "a%2Fb"
         it "percent-encodes the URL-reserved query, fragment, and sub-delimiter characters" $
             encodeComponent "a?b#c;d" `shouldBe` "a%3Fb%23c%3Bd"
         it "percent-encodes the RFC 3986 sub-delimiters !'()* (guarding against any widening of the query-safe set)" $
-            -- These bytes are the ones an upstream widening of http-types' unreserved
-            -- set could silently start passing through; pinning them keeps the module's
-            -- "percent-encodes every other byte" contract honest.
+            -- A widening of http-types' unreserved set could silently start passing
+            -- these bytes through. Pinning them keeps the module's "percent-encodes
+            -- every other byte" contract honest.
             encodeComponent "a!b'c(d)e*f" `shouldBe` "a%21b%27c%28d%29e%2Af"
         it "percent-encodes a space" $
             encodeComponent "a b" `shouldBe` "a%20b"

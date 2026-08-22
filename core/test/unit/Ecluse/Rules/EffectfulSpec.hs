@@ -37,8 +37,8 @@ import Ecluse.Core.Rules.Effectful (
  )
 import Ecluse.Test.Rules (inertRuleDeps, noFaultReporter)
 
--- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
--- 'prepName' -- to exercise the resilience harness and the parallel engine without any
+-- This spec builds 'PreparedRule's directly, with a fake 'prepEval' and a chosen
+-- 'prepName'. That exercises the resilience harness and the parallel engine without an
 -- evaluation closure on the closed 'Rule' data.
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (mkVersion)
@@ -50,7 +50,7 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 {- | An 'EvalContext' at a given instant: the request snapshot the age rules read. The
-breaker no longer reads it -- its clock is injected separately (see 'newClock' and
+breaker does not read it. Its clock is injected separately (see 'newClock' and
 'mkRuleClock'), so a cooldown test advances that clock rather than this context.
 -}
 ctxAt :: UTCTime -> EvalContext
@@ -65,16 +65,16 @@ newtype DirectRuleEscape = DirectRuleEscape Text
 
 instance Exception DirectRuleEscape
 
-{- | An IORef-backed clock a breaker test advances by hand: the read action and a setter,
-sharing one ref, so a test can simulate wall-clock time elapsing (during a retry run,
-or across a cooldown) without sleeping. Mirrors the credential refresh spec's clock.
+{- | An IORef-backed clock a breaker test advances by hand: a read action and a setter
+over one ref. A test then simulates elapsing wall-clock time, during a retry run or
+across a cooldown, without sleeping. Mirrors the credential refresh spec's clock.
 -}
 newClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
 newClock start = do
     ref <- newIORef start
     pure (readIORef ref, writeIORef ref)
 
--- | A single inert artifact; the rules under test do not inspect artifacts.
+-- | A single inert artifact. The rules under test do not inspect artifacts.
 sampleArtifact :: Artifact
 sampleArtifact =
     Artifact
@@ -90,7 +90,7 @@ sampleArtifact =
 
 {- | A package version under an optional npm scope, published @ageDays@ days before
 'now'. The pure-rule signals (scope, age, install-code) are the axes evaluation gates
-on; everything else is fixed.
+on. Everything else is fixed.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
@@ -118,7 +118,7 @@ fastConfig =
 {- | Build a resilient (effectful) prepared rule with a fresh breaker, the given
 precedence, config, failure alignment, and (fake) evaluator, observed through the given
 breaker reporter. The evaluator ignores the evaluation context (the rules under test
-read only the package). This is the engine's injection point -- an arbitrary 'prepEval'
+read only the package). This is the engine's injection point: an arbitrary 'prepEval'
 and a chosen 'prepName', without widening the closed 'Rule' vocabulary.
 -}
 mkRuleR ::
@@ -126,10 +126,9 @@ mkRuleR ::
 mkRuleR = mkRuleClocked (pure now)
 
 {- | As 'mkRuleR', but with an injected breaker clock: a rule whose 'resClock' is the
-given action, so a cooldown test drives the breaker's timing directly (through
-'newClock') rather than through the request context. The plain builders default the
-clock to @'pure' 'now'@, so their breaker trips at 'now' and existing trip assertions
-hold.
+given action. A cooldown test then drives the breaker's timing through 'newClock', not
+through the request context. The plain builders default the clock to @'pure' 'now'@, so
+their breaker trips at 'now' and the trip assertions hold.
 -}
 mkRuleClocked ::
     IO UTCTime -> BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
@@ -201,8 +200,8 @@ isUnavailable = \case
     _ -> False
 
 {- | An outcome for the equal-precedence tie tests: an allow, a deny, or a
-deterministic fail-closed 'CannotVet' -- the three decisive positions that compete in
-the boot order.
+deterministic fail-closed 'CannotVet'. Those are the three decisive positions that
+compete in the boot order.
 -}
 genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
@@ -216,9 +215,9 @@ spec :: Spec
 spec = do
     describe "defaultEffectfulConfig -- the shipped resilience knobs" $
         it "pins the documented defaults (timeout, backoff schedule, breaker, no Retry-After)" $ do
-            -- The shipped policy a caller inherits when it overrides only the eval:
-            -- a 2s per-attempt timeout, two backoffs (100ms, 250ms), a breaker
-            -- tripping after 5 failures and cooling for 30s, and no suggested delay.
+            -- The shipped policy a caller inherits when it overrides only the eval: a
+            -- 2s per-attempt timeout and two backoffs (100ms, 250ms). The breaker trips
+            -- after 5 failures and cools for 30s. The policy suggests no delay.
             ecTimeout defaultEffectfulConfig `shouldBe` 2_000_000
             ecBackoff defaultEffectfulConfig `shouldBe` [100_000, 250_000]
             ecBreakerThreshold defaultEffectfulConfig `shouldBe` 5
@@ -226,10 +225,10 @@ spec = do
             ecRetryAfter defaultEffectfulConfig `shouldBe` Nothing
 
     describe "backoffPolicy -- the compiled retry schedule" $ do
-        -- 'simulatePolicy' walks the policy without sleeping, so the schedule the
-        -- harness drives the retry loop with is asserted directly: the n-th retry
-        -- waits the n-th 'ecBackoff' delay, and the policy stops (yields 'Nothing')
-        -- once the list is exhausted -- its length being the retry budget.
+        -- 'simulatePolicy' walks the policy without sleeping, so these assert the
+        -- schedule the harness drives the retry loop with. The n-th retry waits the
+        -- n-th 'ecBackoff' delay, and the policy stops (yields 'Nothing') once the
+        -- list runs out. The list length is the retry budget.
         it "the default schedule retries twice, at 100ms then 250ms, then stops" $ do
             delays <- simulatePolicy 2 (backoffPolicy [100_000, 250_000])
             map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
@@ -240,9 +239,9 @@ spec = do
 
     describe "evalRules -- one engine over pure and effectful rules" $ do
         it "an effectful rule below a pure decisive prefix is never launched (short-circuit)" $ do
-            -- A pure deny at precedence 300 decides first; an effectful rule ranked
-            -- below it is mooted, so its IO must never run -- the counter (and its
-            -- throw) prove it.
+            -- A pure deny at precedence 300 decides first. That moots an effectful
+            -- rule ranked below it, so its IO must never run: the counter and its throw
+            -- prove it.
             ran <- newIORef (0 :: Int)
             effLater <- mkRule "EffAfter" 200 fastConfig FailDeny $ \_ -> do
                 modifyIORef' ran (+ 1)
@@ -273,9 +272,9 @@ spec = do
     describe "evalRules -- deny-by-default with reasons in boot order" $
         it "collects every non-decisive reason, highest precedence first" $ do
             -- A losing fail-open unavailability (its source down), a NoDecision, and a
-            -- pure NoDecision: none is decisive, so the package is BlockedByDefault
-            -- carrying each reason in boot order (300, 200, 100) -- including the
-            -- fail-open Unavailable's, so a fail-open loss is still surfaced.
+            -- pure NoDecision. None is decisive, so the package is BlockedByDefault,
+            -- carrying each reason in boot order (300, 200, 100). That includes the
+            -- fail-open Unavailable's reason, so a fail-open loss still surfaces.
             high <- failingRule "EffHigh" 300 fastConfig FailNoDecision
             mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision "mid no opinion")
             decision <- evalRules ctx [mid, pureAt 100 (AllowScope (mkScope "myorg")), high] (pkg Nothing 0)
@@ -320,11 +319,11 @@ spec = do
 
     describe "evalRules -- the direct-rule never-throws absorption" $ do
         it "a throwing direct rule resolves fail-closed as Undecidable naming the rule" $ do
-            -- A direct rule declares no effects, so a throw is an invariant break;
-            -- the engine must absorb it (fail-closed, symmetric with the effectful
-            -- harness's fail-deny Unavailable) rather than let one request's
-            -- evaluation escape the serve path. The lower-precedence allow proves
-            -- the absorption is decisive: it is never consulted.
+            -- A direct rule declares no effects, so a throw is an invariant break. The
+            -- engine must absorb it (fail-closed, symmetric with the effectful
+            -- harness's fail-deny Unavailable) rather than let one request's evaluation
+            -- escape the serve path. The lower-precedence allow proves the absorption
+            -- is decisive: nothing consults it.
             let bomb =
                     PreparedRule
                         { prepName = "DirectBomb"
@@ -341,16 +340,16 @@ spec = do
 
     describe "evalRules -- deterministic speculative parallelism" $ do
         it "credits the earliest-in-boot-order decisive rule, not the first to return" $ do
-            -- The higher-precedence deny is slow; the lower-precedence allow returns
-            -- first in wall-clock time. The decision must still be the deny (earliest
-            -- in boot order), so the result never depends on evaluation timing.
+            -- The higher-precedence deny is slow, and the lower-precedence allow
+            -- returns first in wall-clock time. The decision must still be the deny
+            -- (earliest in boot order), so the result never depends on timing.
             slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (\_ -> threadDelay 40_000 >> pure (Deny "slow deny"))
             fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow "fast allow")
             decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
         it "cancels a strictly-later evaluation once the winner is known" $ do
-            -- The winner (precedence 300) decides immediately; a strictly-later rule
+            -- The winner (precedence 300) decides immediately. A strictly-later rule
             -- (200) would take seconds and only then set its 'done' flag. The engine
             -- must cancel it the moment the winner is known, so 'done' stays False.
             done <- newIORef False
@@ -365,10 +364,10 @@ spec = do
 
     describe "evalRules -- order-independent boot order (carried from #377/#378)" $ do
         it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
-            -- The sharpest case from the original bug: an effectful Deny (a permanent
-            -- 403) and an effectful fail-closed Unavailable (a retryable 503) tie on
-            -- precedence. The boot order settles it by name, so reversing the
-            -- configured list cannot flip the decision.
+            -- The sharpest case: an effectful Deny (a permanent 403) and an effectful
+            -- fail-closed Unavailable (a retryable 503) tie on precedence. The boot
+            -- order settles it by name, so reversing the configured list cannot flip
+            -- the decision.
             let mk =
                     sequence
                         [ constRule "EffDeny" 300 fastConfig FailDeny (Deny "known-bad version")
@@ -381,10 +380,10 @@ spec = do
 
         it "the decision is invariant under shuffling equal-precedence effectful rules" $
             hedgehog $ do
-                -- The analogue of the pure tier's shuffle property, now over effectful
-                -- rules: a list of equal-precedence rules (a mix of allow/deny/
-                -- unavailable) with a distinct name each. Shuffling the configured set
-                -- yields the same boot order, hence the same 'Decision'.
+                -- The analogue of the pure tier's shuffle property, over effectful
+                -- rules. The list holds equal-precedence rules (a mix of allow, deny,
+                -- and unavailable), each with a distinct name. Shuffling the configured
+                -- set yields the same boot order, hence the same 'Decision'.
                 outcomes <- forAll (Gen.list (Range.linear 2 6) genTieOutcome)
                 let tagged = zip [0 :: Int ..] outcomes
                 perm <- forAll (Gen.shuffle tagged)
@@ -437,11 +436,11 @@ spec = do
             readIORef attempts `shouldReturn` 2
 
         it "absorbs the advisory handle's confined CveQueryFault: Unavailable, breaker advanced" $ do
-            -- The advisory lookup's query fault is a confined typed exception whose
-            -- one absorption boundary is THIS harness ('Ecluse.Core.Cve.CveQueryFault').
-            -- It must resolve like any infrastructural fault -- the rule's aligned
-            -- Unavailable -- and count towards the breaker, so a broken advisory
-            -- database degrades to fast-fail rather than throwing through evalRules.
+            -- The advisory lookup's query fault is a confined typed exception whose one
+            -- absorption boundary is this harness ('Ecluse.Core.Cve.CveQueryFault'). It
+            -- must resolve like any infrastructural fault, as the rule's aligned
+            -- Unavailable, and count towards the breaker. A broken advisory database
+            -- then degrades to fast-fail instead of throwing through evalRules.
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "DenyCve" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
@@ -456,9 +455,8 @@ spec = do
             readIORef attempts `shouldReturn` 2
 
         it "reports an exhausted evaluation's fault detail to the fault reporter" $ do
-            -- The confined 'CveQueryFault' detail (the rendered 'SQLError') was
-            -- discarded, leaving an operator only a bare 'Unavailable'. It now reaches
-            -- the fault reporter, so a live-database query fault is diagnosable; the
+            -- The confined 'CveQueryFault' detail (the rendered 'SQLError') reaches the
+            -- fault reporter, so a live-database query fault is diagnosable. The
             -- client-facing decision message stays generic.
             captured <- newIORef []
             breaker <- newBreaker
@@ -478,17 +476,17 @@ spec = do
 
         it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do
             -- The no-advisory-database verdict is deterministic and in-process, so the
-            -- harness must take it at face value: no in-process retry could change it,
+            -- harness must take it at face value. No in-process retry could change it,
             -- and it must not count towards the breaker. A genuine fault (an exception,
-            -- a timeout) still would; a returned verdict never does. Regressing this is
-            -- a self-inflicted 503 outage before the first advisory sync lands.
+            -- a timeout) still counts. A returned verdict never does. Regressing this
+            -- is a self-inflicted 503 outage before the first advisory sync lands.
             evals <- newIORef (0 :: Int)
             rule <- mkRule "DenyCve" 1 fastConfig{ecBackoff = [0, 0], ecBreakerThreshold = 2} FailDeny $ \_ -> do
                 modifyIORef' evals (+ 1)
                 pure (CannotVet FailDeny "no advisory database loaded")
-            -- Run well past the breaker threshold. Were the verdict retried, each call
-            -- would evaluate three times; were it counted as a failure, the breaker
-            -- would open and later calls would fast-fail without evaluating.
+            -- Run well past the breaker threshold. A retried verdict would evaluate
+            -- three times per call. A verdict counted as a failure would open the
+            -- breaker, and later calls would fast-fail without evaluating.
             outcomes <- replicateM 4 (runEffectfulRule ctx rule (pkg Nothing 0))
             outcomes `shouldBe` replicate 4 (Decided (CannotVet FailDeny "no advisory database loaded"))
             readIORef evals `shouldReturn` 4 -- one evaluation per call: no retry, no fast-fail
@@ -524,14 +522,16 @@ spec = do
             setClock (addUTCTime 31 now)
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef attempts `shouldReturn` 3 -- two trips plus the half-open probe
-            -- The failed probe re-opened until now + 61; still inside that, so no attempt.
+            -- The failed probe re-opened until now + 61. This call is still inside that
+            -- window, so no attempt.
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef attempts `shouldReturn` 3 -- re-opened: no further attempt
         it "opens the cooldown from the failure-commit instant, not the attempt start (#705)" $ do
-            -- The retry run consumes wall-clock time, so the injected clock advances during
-            -- the attempt. A tripped breaker must open for its cooldown measured from when
-            -- the failure commits; were the pre-retry instant reused, the elapsed retry time
-            -- would be subtracted from the effective cooldown and half-open the breaker early.
+            -- The retry run consumes wall-clock time, so the injected clock advances
+            -- during the attempt. A tripped breaker must open for its cooldown measured
+            -- from the instant the failure commits. Reusing the pre-retry instant would
+            -- subtract the elapsed retry time from the effective cooldown and half-open
+            -- the breaker early.
             (clock, setClock) <- newClock now
             attempts <- newIORef (0 :: Int)
             rule <- mkRuleClock clock "Slow" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 5} FailDeny $ \_ -> do
@@ -540,8 +540,8 @@ spec = do
                 throwString "down"
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef attempts `shouldReturn` 1 -- tripped: opens until (now + 10) + 5 = now + 15
-            -- now + 12 is past the buggy window (now + 5) but inside the real one (now + 15):
-            -- the breaker must still fast-fail rather than admit a half-open probe.
+            -- now + 12 is past the pre-retry window (now + 5) but inside the real one
+            -- (now + 15). The breaker must still fast-fail, never admit a half-open probe.
             setClock (addUTCTime 12 now)
             fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
             fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Slow: the rule source circuit breaker is open"

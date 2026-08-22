@@ -25,28 +25,27 @@ import Data.Char (isUpper)
 import Data.Text qualified as T
 
 {- | Right-biased deep merge of two Aeson Values.
-Objects are merged recursively. Other types (Arrays, Strings, etc.) are
-overwritten by the right side (the higher precedence value).
+Objects merge recursively. The right side (the higher precedence value) overwrites
+any other type, Arrays and Strings included.
 -}
 deepMerge :: Value -> Value -> Value
 deepMerge (Object l) (Object r) = Object $ KeyMap.unionWith deepMerge l r
 deepMerge _ r = r
 
 {- | Convert a list of environment variables into a nested JSON Object.
-Filters for keys starting with @ECLUSE_@ and strips the prefix.
+It keeps only keys starting with @ECLUSE_@ and strips the prefix.
 Double underscores (@__@) represent nested object paths.
-Single underscores (@_@) are converted to camelCase for Aeson key matching.
+Single underscores (@_@) become camelCase for Aeson key matching.
 For example, @ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM@ becomes
 @{"mounts": {"npm": {"privateUpstream": ...}}}@.
-Values that parse as valid JSON (like numbers or booleans) are decoded;
-otherwise they remain as Strings.
+It decodes a value that parses as valid JSON, a number or a boolean say.
+Anything else stays a String.
 
-Two kinds of variable never enter the AST: anything outside the @ECLUSE_@
-prefix (the ambient SDK environment, @AWS_*@ included, is read directly at the
-composition root; see "Ecluse.Config.Ambient"), and the reserved process-level
-@ECLUSE_CONFIG@ (the config-document path override, consumed by
-"Ecluse.Boot" before the document is even read, so it must not double as a
-document key).
+Two kinds of variable never enter the AST. The first is anything outside the
+@ECLUSE_@ prefix: the composition root reads the ambient SDK environment, @AWS_*@
+included, directly (see "Ecluse.Config.Ambient"). The second is the reserved
+process-level @ECLUSE_CONFIG@, the config-document path override. "Ecluse.Boot"
+consumes it before it reads the document, so it must not double as a document key.
 -}
 buildEnvAst :: [(String, String)] -> Value
 buildEnvAst env =
@@ -60,16 +59,17 @@ configEnvKey name
     | otherwise = T.stripPrefix "ECLUSE_" name
 
 {- | @ECLUSE_@-prefixed variables that address the boot process, not the config
-document; they are consumed before resolution and never become document keys.
+document. The boot consumes them before resolution, and they never become document
+keys.
 -}
 reservedProcessKeys :: [Text]
 reservedProcessKeys = ["ECLUSE_CONFIG"]
 
 {- | The secret-typed leaf keys of the config schema, in their document spelling.
-The one source for every site that treats a secret specially: the environment
-layer ('buildEnvAst' takes their values verbatim), the provenance dump (these
-leaves render redacted; "Ecluse.Config"), and the @*_FILE@ indirection (their env
-spellings are the only file-shaped side door; "Ecluse.Boot").
+The one source for every site that treats a secret specially. The environment layer
+takes their values verbatim ('buildEnvAst'). The provenance dump renders these leaves
+redacted (see "Ecluse.Config"). Their env spellings are the only file-shaped side
+door for the @*_FILE@ indirection (see "Ecluse.Boot").
 -}
 secretLeafKeys :: [Text]
 secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
@@ -79,8 +79,8 @@ secretEnvSpellings :: [Text]
 secretEnvSpellings = map envSpellingOf secretLeafKeys
 
 {- | The environment spelling of a camelCase document key (@authToken@ ->
-@AUTH_TOKEN@): the inverse of the camelCase reconstruction 'buildEnvAst' applies, so
-the key a boot error tells an operator to set is exactly the key the resolver reads.
+@AUTH_TOKEN@). It inverts the camelCase reconstruction 'buildEnvAst' applies, so the
+key a boot error tells an operator to set is exactly the key the resolver reads.
 -}
 envSpellingOf :: Text -> Text
 envSpellingOf = T.toUpper . T.concatMap underscoreUpper

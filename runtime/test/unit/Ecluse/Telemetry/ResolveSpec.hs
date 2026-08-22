@@ -29,12 +29,12 @@ import Ecluse.Runtime.Telemetry.Resolve (
  )
 
 {- | Tests for the telemetry config resolver and the export-failure throttle. They
-exercise the promises a downstream operator and the @dd@ log object depend on: the
-four-field precedence is __Datadog-value-wins → vanilla OpenTelemetry → default__; the
+exercise the promises a downstream operator and the @dd@ log object depend on. The
+four-field precedence is __Datadog-value-wins → vanilla OpenTelemetry → default__. The
 resolved identity projects to the canonical @OTEL_*@ the SDK reads while preserving
-operator-set resource attributes; and SDK export errors are coalesced rather than
-flooded. The 'prepareTelemetry' cases drive the boot normalisation and restore the
-environment they set; everything else is pure and offline.
+operator-set resource attributes. SDK export errors coalesce rather than flood. The
+'prepareTelemetry' cases drive the boot normalisation and restore the environment they
+set. Everything else is pure and offline.
 -}
 spec :: Spec
 spec = do
@@ -71,9 +71,9 @@ resolveSpec = describe "resolveTelemetry" $ do
         rtVersion attrs `shouldBe` Just "9"
 
     it "leaves the environment unset but falls the version back to the build version" $ do
-        -- The deployment environment cannot be known from inside the process, so it
-        -- stays optional; the version is a fact about the running binary, so every
-        -- trace and every log line carries one even when the operator names none.
+        -- The process cannot know its own deployment environment, so that field stays
+        -- optional. The version is a fact about the running binary, so every trace and
+        -- every log line carries one even when the operator names none.
         let none = resolveTelemetry []
         rtEnvironment none `shouldBe` Nothing
         rtVersion none `shouldBe` Just buildVersion
@@ -130,8 +130,9 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
             `shouldBe` Just "deployment.environment=prod,service.name=api,service.version=1.2.3,team=core"
 
     it "lets a resolved attribute win over a same-key inherited OTEL_RESOURCE_ATTRIBUTES value" $
-        -- The merge is a left-biased union with the resolved map on the left, so a
-        -- stale operator-set value of the same key never overrides the resolution.
+        -- The merge is a left-biased union with the resolved map on the left. A
+        -- stale operator-set value of the same key therefore never overrides the
+        -- resolution.
         lookup
             "OTEL_RESOURCE_ATTRIBUTES"
             ( otelEnvironmentOverrides
@@ -171,7 +172,7 @@ prepareSpec = describe "prepareTelemetry" $ do
         ]
 
 -- The build version the resolver falls back to, read from the same generated module
--- the resolver reads, so a version bump does not red these expectations.
+-- the resolver reads. A version bump therefore does not red these expectations.
 buildVersion :: Text
 buildVersion = toText (showVersion version)
 

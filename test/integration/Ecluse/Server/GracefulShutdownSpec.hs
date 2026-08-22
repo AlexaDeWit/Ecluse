@@ -32,24 +32,22 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 import UnliftIO.Timeout (timeout)
 
-{- | The graceful-shutdown drain, exercised against a real Warp listener on
-loopback. These assert the lifecycle guarantee the going-away design rests on: when
-the listen socket is closed (what the @SIGTERM@\/@SIGINT@ handler does in
-'Ecluse.Server.runServer'), Warp stops accepting new connections yet __waits for an
-in-flight request to finish__ before the server returns -- so a request mid-flight
-during a rollover is never cut off.
+{- | The graceful-shutdown drain, driven against a real Warp listener on loopback.
+These cases assert the lifecycle guarantee the going-away design rests on. When the
+@SIGTERM@\/@SIGINT@ handler in 'Ecluse.Server.runServer' closes the listen socket,
+Warp stops accepting new connections. It still __waits for an in-flight request to
+finish__ before the server returns, so a rollover never cuts off a request mid-flight.
 
-The drain is driven by closing the socket directly rather than by delivering an OS
-signal: signal delivery is process-global and would race the test runner. The signal
-handler's body -- raise the drain flag, then run Warp's @closeSocket@ -- is what these
-tests stand in for; the flag-raising and readiness\/header effects are asserted
-socket-free in "Ecluse.ServerSpec".
+These tests close the socket directly rather than deliver an OS signal, because signal
+delivery is process-global and would race the test runner. They stand in for the signal
+handler's body: raise the drain flag, then run Warp's @closeSocket@.
+"Ecluse.ServerSpec" asserts the flag-raising and readiness\/header effects socket-free.
 -}
 spec :: Spec
 spec = describe "graceful shutdown -- drain in-flight work" $ do
     it "completes an in-flight request after the socket is closed, then the server stops" $ do
-        -- A handler that blocks on a release barrier, so we can hold a request
-        -- in-flight across the socket close -- the rollover window the drain guards.
+        -- A handler that blocks on a release barrier. The test can then hold a request
+        -- in-flight across the socket close, the rollover window the drain guards.
         arrived <- newEmptyMVar
         release <- newEmptyMVar
         let app :: Application
@@ -60,19 +58,19 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
 
         withListener app 30 $ \port closeSocket serverThread -> do
             manager <- newManager defaultManagerSettings
-            -- Fire the slow request; it reaches the handler and blocks there.
+            -- Fire the slow request. It reaches the handler and blocks there.
             inflight <- async (getStatusBody manager port)
             takeMVar arrived
 
             -- Begin the drain: close the listen socket (the signal handler's act).
             closeSocket
 
-            -- The server must NOT have returned yet -- it is waiting on the
-            -- in-flight request, which is still parked on the barrier.
+            -- The server must NOT have returned yet: it waits on the in-flight
+            -- request, which is still parked on the barrier.
             stillServing <- poll serverThread
             stillServing `shouldSatisfy` isNothing
 
-            -- Release the handler; the in-flight request completes with its body
+            -- Release the handler. The in-flight request completes with its body
             -- intact (no mid-request cut-off), and only then does the server stop.
             putMVar release ()
             result <- timeout 5_000_000 (wait inflight)
@@ -91,9 +89,9 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             beforeClose <- getStatusBody manager port
             beforeClose `shouldBe` (200, "served")
 
-            -- Close the socket: with nothing in flight, the drain has nothing to
-            -- wait for, so the server stops well inside the 30s graceful window --
-            -- it does not block out the whole timeout.
+            -- Close the socket. With nothing in flight the drain has nothing to wait
+            -- for. The server stops well inside the 30s graceful window rather than
+            -- blocking out the whole timeout.
             closeSocket
             stopped <- timeout 5_000_000 (wait serverThread)
             stopped `shouldBe` Just ()
@@ -103,11 +101,11 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             afterStop `shouldSatisfy` isLeft
 
 {- Run an 'Application' on a free loopback port with the same graceful-shutdown
-settings 'Ecluse.Server.runServer' uses -- a bounded 'setGracefulShutdownTimeout' and
-a 'setInstallShutdownHandler' -- and hand the test the port, a @closeSocket@ action
-that begins the drain, and the server's 'Async' so it can observe when the server
-returns. The shutdown handler captures Warp's @closeSocket@ into an MVar rather than
-installing an OS signal handler, so the drain is triggered deterministically.
+settings 'Ecluse.Server.runServer' uses: a bounded 'setGracefulShutdownTimeout' and a
+'setInstallShutdownHandler'. Hand the test the port, a @closeSocket@ action that begins
+the drain, and the server's 'Async' so it can observe when the server returns. The
+shutdown handler captures Warp's @closeSocket@ into an MVar rather than installing an
+OS signal handler, so the test triggers the drain deterministically.
 -}
 withListener ::
     Application ->
@@ -116,8 +114,8 @@ withListener ::
     IO a
 withListener app drainTimeoutSeconds k = do
     -- Discover a free port, then release it so Warp can open and own its own listen
-    -- socket -- so the @closeSocket@ the install handler captures closes the very
-    -- socket Warp's accept loop holds, the way 'Ecluse.Server.runServer' is wired.
+    -- socket. The @closeSocket@ the install handler captures then closes the same
+    -- socket Warp's accept loop holds, the way 'Ecluse.Server.runServer' wires it.
     port <- freePort
     closeSocketVar <- newEmptyMVar
     let settings =
@@ -126,15 +124,15 @@ withListener app drainTimeoutSeconds k = do
                 . setInstallShutdownHandler (putMVar closeSocketVar)
                 $ defaultSettings
     serverThread <- async (runSettings settings app)
-    -- The install handler runs as Warp starts; await the captured close action,
-    -- then give the listener a beat to begin accepting before the test connects.
+    -- The install handler runs as Warp starts. Await the captured close action, then
+    -- give the listener a beat to begin accepting before the test connects.
     closeSocket <- takeMVar closeSocketVar
     threadDelay 200_000
     k port closeSocket serverThread
 
--- A port no listener is currently bound to: open a free one and immediately
--- release it, leaving the number for Warp to bind. (A brief race with another
--- process is tolerable for a loopback test.)
+-- A port no listener is currently bound to: open a free one and immediately release
+-- it, leaving the number for Warp to bind. A brief race with another process is
+-- tolerable for a loopback test.
 freePort :: IO Port
 freePort = do
     (port, sock) <- openFreePort
@@ -142,10 +140,10 @@ freePort = do
     pure port
 
 {- Issue a GET to the loopback listener and return its status code and body. The
-request carries @Connection: close@ -- as a response from a draining instance does
-in production -- so the connection is not held open in a keep-alive pool past the
-response; the graceful drain then completes once the in-flight request returns
-rather than waiting on an idle socket.
+request carries @Connection: close@, as a response from a draining instance does in
+production, so no keep-alive pool holds it open past the response. The graceful drain
+then completes once the in-flight request returns rather than waiting on an idle
+socket.
 -}
 getStatusBody :: Manager -> Port -> IO (Int, LByteString)
 getStatusBody manager port = do

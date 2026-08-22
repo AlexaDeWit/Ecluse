@@ -16,15 +16,15 @@ import Ecluse.Runtime.Credential.CodeArtifact (
 import Ecluse.Test.Credential (noCredentialReporters)
 
 {- | Smoke test for the one outbound-credential surface no emulator covers:
-CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so -- like the
-live-registry oracles -- it is __allowed to fail by design__ and never gates a
+CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so, like the
+live-registry oracles, it is __allowed to fail by design__ and never gates a
 merge.
 
-It is __secret-gated__: it runs only when a sandbox CodeArtifact domain is
-configured through the environment, and otherwise __pends__. A bare checkout, CI,
-or any environment without AWS credentials therefore sees a skipped test, not a
-red one. To exercise it, point it at a sandbox domain with credentials on the
-ambient AWS chain (env vars, instance\/container role, SSO, STS):
+It is __secret-gated__: it runs only when the environment configures a sandbox
+CodeArtifact domain, and otherwise __pends__. A bare checkout, CI, or any
+environment without AWS credentials therefore sees a skipped test, not a red one.
+To exercise it, point it at a sandbox domain with credentials on the ambient AWS
+chain (env vars, instance\/container role, SSO, STS):
 
 > ECLUSE_SMOKE_CODEARTIFACT_REGION=us-east-1 \
 > ECLUSE_SMOKE_CODEARTIFACT_DOMAIN=my-sandbox-domain \
@@ -54,8 +54,8 @@ spec = describe "live CodeArtifact GetAuthorizationToken" $
                         expectationFailure ("CodeArtifact mint failed: " <> show e)
                     Right token -> do
                         -- The mint reached CodeArtifact and returned a usable
-                        -- bearer: a non-empty secret carrying its own expiry, so
-                        -- the refresh policy can schedule off the real lifetime.
+                        -- bearer: a non-empty secret carrying its own expiry. The
+                        -- refresh policy can schedule off that real lifetime.
                         T.null (unSecret (authSecret token)) `shouldBe` False
                         authExpiresAt token `shouldSatisfy` isJust
             _ ->

@@ -3,20 +3,20 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Work-per-request bench for the __single-version__ metadata read: the cold tarball
-gate's cost to consult one version of a packument, the whole-document decode against the
-selective decode.
+gate's cost to consult one version of a packument. It puts the whole-document decode
+against the selective decode.
 
 The serve path's tarball gate needs exactly one version's
 'Ecluse.Core.Package.PackageDetails'. The status-quo cold path decodes the /whole/
-packument and selects one entry ("full decode + select"); the optimised path parses only
-the requested version's object and @time@ entry, skipping the others
-("selective decode") -- "Ecluse.Core.Registry.Npm.Metadata.projectNpmVersion". Both run
-over each corpus entry's @latest@ version, so the saving is reported across the real
-distribution of package sizes (the heavy packuments -- thousands of versions -- are where a
-whole-document decode dominates and the selective decode pays off).
+packument and selects one entry ("full decode + select"). The optimised path parses only
+the requested version's object and @time@ entry, skipping the others ("selective
+decode"): "Ecluse.Core.Registry.Npm.Metadata.projectNpmVersion". Both run over each
+corpus entry's @latest@ version, so the bench reports the saving across the real
+distribution of package sizes. A heavy packument of thousands of versions is where a
+whole-document decode dominates and the selective decode pays off.
 
-Each result is forced to an 'Int' over a deep field of the selected version, so the
-projected snapshot is evaluated rather than left a thunk.
+Each result forces an 'Int' over a deep field of the selected version, so the bench
+evaluates the projected snapshot instead of leaving a thunk.
 -}
 module Ecluse.Core.SelectiveBench (
     benchmarks,
@@ -47,9 +47,9 @@ benchmarks loaded =
         , version <- maybeToList (targetVersion value)
         ]
 
-{- The version each entry is read at: the last key in its @versions@ object (the most
-recently published, the realistic install target). 'Nothing' for a value with no
-versions -- never the case for the curated corpus, which 'loadCorpus' guarantees projects
+{- The version each entry is read at: the last key in its @versions@ object, the most
+recently published and the realistic install target. 'Nothing' for a value with no
+versions, which never happens for the curated corpus: 'loadCorpus' guarantees it projects
 to a non-empty version set. -}
 targetVersion :: Value -> Maybe Version
 targetVersion value = mkVersion Npm . NE.last <$> nonEmpty (versionKeysOf value)
@@ -68,9 +68,8 @@ selectiveDepth ce (raw, version) =
         Left _ -> -1
         Right mDetails -> detailsDepth mDetails
 
-{- | Force a selected snapshot by a deep field (the artifact digests -- the
-decision surface no longer models dependencies); @-2@ marks an unexpectedly
-absent version.
+{- | Force a selected snapshot by a deep field, the artifact digests (the decision
+surface models no dependencies). @-2@ marks an unexpectedly absent version.
 -}
 detailsDepth :: Maybe PackageDetails -> Int
 detailsDepth = maybe (-2) (length . artHashes . NE.head . pkgArtifacts)

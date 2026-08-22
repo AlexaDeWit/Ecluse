@@ -61,10 +61,10 @@ spec = do
                     v <- forAll genGem
                     assert (isRight (parseVersionKey RubyGems v))
 
-    -- Strictness regressions: inputs the hand-rolled PEP 440 / Gem parsers used
-    -- to over-accept must now be rejected (Left). The ordering fixture can only
-    -- express *ranking*, so rejection is asserted explicitly here. The valid
-    -- spellings each fix must keep parsing are pinned alongside as Right.
+    -- Strictness: the PEP 440 and Gem parsers must reject these inputs (Left). The
+    -- ordering fixture can only express ranking, so these cases assert rejection
+    -- explicitly. They pin the valid spellings that must keep parsing alongside, as
+    -- Right.
     describe "parser strictness (#279, #280)" $ do
         let mustReject eco raw =
                 it (show eco <> " rejects " <> show raw) $
@@ -74,23 +74,23 @@ spec = do
                     parseVersionKey eco raw `shouldSatisfy` isRight
 
         describe "PEP 440 empty release segments (#279)" $ do
-            -- An interior or leading empty segment is rejected (only the single
-            -- trailing release/suffix separator dot is allowed to be empty).
+            -- The parser rejects an interior or leading empty segment. Only the
+            -- single trailing release/suffix separator dot may be empty.
             mustReject PyPI "1..0"
             mustReject PyPI ".1.0"
             mustReject PyPI "1.0..dev1"
-            -- The regression the fix must protect: the dev separator's dot lands
-            -- in the release text as a legitimate single trailing empty.
+            -- The dev separator's dot lands in the release text as a legitimate
+            -- single trailing empty.
             mustParse PyPI "1.0.dev1"
-            -- And the existing normalisation of a bare trailing dot is preserved.
+            -- A bare trailing dot still normalises.
             mustParse PyPI "1.0."
 
         describe "PEP 440 'r' post-release spelling" $ do
             -- PEP 440 spells the post-release label post | rev | r, and its
             -- reference implementation (packaging) normalises all three to post.
-            -- The 'r' spelling must parse and rank as a post-release rather than
-            -- be rejected (which would abstain from ordering and let selectLatest
-            -- repoint dist-tags.latest past it).
+            -- The 'r' spelling must parse and rank as a post-release. A rejection
+            -- would abstain from ordering and let selectLatest repoint
+            -- dist-tags.latest past it.
             mustParse PyPI "1.0.r1"
             mustParse PyPI "1.0r1"
             mustParse PyPI "1.0-r1"
@@ -98,9 +98,9 @@ spec = do
             mustParse PyPI "1.0.r"
 
         describe "non-ASCII alphanumerics (#280)" $ do
-            -- Python's packaging / Ruby's Gem::Version are ASCII-only; a
-            -- Unicode-aware gate both over-accepts and (for "digits" outside
-            -- ASCII) mis-classifies as text, corrupting the order.
+            -- Python's packaging and Ruby's Gem::Version are ASCII-only. A
+            -- Unicode-aware gate over-accepts, and for "digits" outside ASCII it
+            -- mis-classifies them as text, corrupting the order.
             mustReject PyPI "1.0+café" -- Latin-1 letter in a local segment
             mustReject PyPI "１.２.３" -- fullwidth digits
             mustReject PyPI "١.٢.٣" -- Arabic-Indic digits
@@ -108,20 +108,20 @@ spec = do
             mustReject RubyGems "１.２.３" -- fullwidth digits
             mustReject RubyGems "١.٢.٣" -- Arabic-Indic digits
         describe "numeric run length bound (DoS)" $ do
-            -- A numeric segment is read into an 'Integer' with 'readMaybe', which is
-            -- quadratic in the digit count, so an unbounded run in hostile registry
-            -- metadata would be an algorithmic-complexity DoS. An over-long version is
-            -- rejected (and so served raw, without an ordering key) rather than parsed;
-            -- a long-but-sane numeric segment still parses.
+            -- 'readMaybe' reads a numeric segment into an 'Integer', which is quadratic
+            -- in the digit count. An unbounded run in hostile registry metadata would
+            -- then be an algorithmic-complexity DoS. The parser refuses an over-long
+            -- version, so it is served raw, without an ordering key. A long-but-sane
+            -- numeric segment still parses.
             mustReject PyPI ("1." <> T.replicate 5000 "9")
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
             mustParse RubyGems ("1." <> T.replicate 100 "9")
-            -- Npm/semver is parsed by the @versions@ library, whose numeric
-            -- components are fixed-width words, not unbounded 'Integer'. Beyond
-            -- the shared length bound, an over-long numeric run is refused so a
-            -- silent word overflow cannot key a huge version as a small one and
-            -- corrupt ordering (e.g. a 25-digit major wrapping mod 2^64).
+            -- The @versions@ library parses npm/semver, and its numeric components
+            -- are fixed-width words, not unbounded 'Integer'. Beyond the shared length
+            -- bound the parser refuses an over-long numeric run. A silent word overflow
+            -- (say a 25-digit major wrapping mod 2^64) then cannot key a huge version as
+            -- a small one and corrupt ordering.
             mustReject Npm ("1.0." <> T.replicate 5000 "9")
             mustReject Npm (T.replicate 25 "9" <> ".0.0")
             mustParse Npm "1.2.3"
@@ -166,8 +166,8 @@ spec = do
         it "RubyGems strips a release trailing zero (2.0 == 2)" $
             cmp RubyGems "2.0" "2" `shouldBe` Just EQ
         -- Gem::Version canonicalises hyphens to a prerelease marker (a global
-        -- gsub("-", ".pre.")), so "1.0.0-1" parses as "1.0.0.pre.1": it ranks
-        -- below "1.0.0" and equates with the explicit .pre. spelling.
+        -- gsub("-", ".pre.")), so "1.0.0-1" parses as "1.0.0.pre.1". It ranks below
+        -- "1.0.0" and equates with the explicit .pre. spelling.
         it "RubyGems accepts a hyphenated version (1.0.0-1 parses)" $
             parseVersionKey RubyGems "1.0.0-1" `shouldSatisfy` isRight
         it "RubyGems ranks a hyphenated version below its release (1.0.0-1 < 1.0.0)" $
@@ -189,13 +189,11 @@ spec = do
                 compareVersions x x === (EQ <$ versionKey x)
 
     -- The total-order laws on 'compareVersions', proved generatively over
-    -- structurally valid version strings (so each side parses to a key).
-    -- Reflexivity is covered above and deliberately not repeated here. The pair
-    -- and triple draws inject equal cases explicitly ('versionPair' /
-    -- 'versionTriple' reuse one raw across positions, which compares EQ), so the
-    -- EQ class stays covered independent of how often two independent draws
-    -- collide -- robust to the generator's width rather than relying on a narrow,
-    -- collision-dense space.
+    -- structurally valid version strings (so each side parses to a key). The
+    -- reflexivity case above is not repeated here. The pair and triple draws inject
+    -- equal cases explicitly: 'versionPair' and 'versionTriple' reuse one raw across
+    -- positions, which compares EQ. The EQ class then stays covered whatever the
+    -- generator's width, rather than through a narrow, collision-dense space.
     describe "compareVersions total-order laws" $
         modifyMaxSuccess (const 400) $
             for_ ecosystemGens $ \(eco, gen) -> describe (show eco) $ do
@@ -203,8 +201,8 @@ spec = do
                     hedgehog $ do
                         (a, b) <- forAll (versionPair gen)
                         let (x, y) = (mkVersion eco a, mkVersion eco b)
-                        -- The generators are meant to stay structurally valid;
-                        -- guard so a generator gap surfaces as totality, not noise.
+                        -- The generators stay structurally valid. Guard so a
+                        -- generator gap surfaces as totality, not noise.
                         H.assert (isJust (versionKey x))
                         H.assert (isJust (versionKey y))
                         -- Non-vacuity: 'versionPair' guarantees a healthy fraction
@@ -225,8 +223,8 @@ spec = do
                         let x = mkVersion eco a
                             y = mkVersion eco b
                             z = mkVersion eco c
-                        -- All three parse (generators stay valid); guard so a
-                        -- generator gap can't make ≤ vacuously true via Nothing.
+                        -- All three parse, since the generators stay valid. Guard
+                        -- so a generator gap can't make ≤ vacuously true via Nothing.
                         H.assert (all (isJust . versionKey) [x, y, z])
                         let le p q = compareVersions p q == Just LT || compareVersions p q == Just EQ
                         H.cover 1 "x ≤ y" (le x y)
@@ -234,9 +232,9 @@ spec = do
                         when (le x y && le y z) (H.assert (le x z))
 
     describe "isStable" $ do
-        -- isStable is defined on the parsed key; stableOf parses a known-good
-        -- version then applies the predicate (Just True / Just False, never
-        -- Nothing for these fixtures, which all parse).
+        -- isStable takes the parsed key. The helper stableOf parses a
+        -- known-good version, then applies the predicate. It answers Just True or Just
+        -- False, never Nothing, because these fixtures all parse.
         let stableOf eco raw = fmap isStable (rightToMaybe (parseVersionKey eco raw))
 
         describe "semver (npm)" $ do
@@ -274,9 +272,10 @@ spec = do
                 stableOf RubyGems "1.2.0.rc1" `shouldBe` Just False
 
     describe "selectLatest" $ do
-        -- All survivors here are npm versions; selectLatest is ecosystem-agnostic
-        -- and just calls compareVersions / isStable on the keys. selRaw resolves
-        -- and reports the chosen tag's raw text, the value the caller uses.
+        -- All survivors here are npm versions. The selectLatest function is
+        -- ecosystem-agnostic: it calls compareVersions and isStable on the keys. The
+        -- helper selRaw resolves and reports the chosen tag's raw text, the value the
+        -- caller uses.
         let v = mkVersion Npm
             raws = map unVersion
             selRaw :: Maybe Text -> [Text] -> Maybe Text
@@ -315,7 +314,7 @@ spec = do
                 `shouldBe` Just "2.0.0-rc.2"
 
         it "never lets an unparseable version beat a parseable one" $
-            -- "garbage" has no key; the parseable 1.0.0 must win.
+            -- "garbage" has no key, so the parseable 1.0.0 must win.
             selRaw (Just "9.9.9") ["garbage", "1.0.0"] `shouldBe` Just "1.0.0"
 
         it "falls back to the lexicographically-smallest survivor when none parse" $
@@ -338,11 +337,10 @@ invertOrdering = \case
     EQ -> EQ
     GT -> LT
 
-{- | Draw a pair of raw version strings, deterministically injecting equal pairs
-(the same raw on both sides, which compares 'EQ') a healthy fraction of the time.
-This keeps the @EQ@ class of an ordering law populated independent of how often
-two independent draws happen to collide, so the 'H.cover' floor is robust to the
-generator's width rather than relying on a narrow, collision-dense space.
+{- | Draw a pair of raw version strings, with a deterministic share of equal pairs: the
+same raw on both sides, which compares 'EQ'. That keeps the @EQ@ class of an ordering
+law populated however often two independent draws happen to collide. The 'H.cover' floor then holds at any generator width,
+rather than through a narrow, collision-dense space.
 -}
 versionPair :: Gen Text -> Gen (Text, Text)
 versionPair gen =
@@ -352,8 +350,8 @@ versionPair gen =
         ]
 
 {- | Draw a triple of raw version strings, sometimes reusing one draw across two
-positions so an adjacent pair compares 'EQ'. The transitivity antecedent
-(@x ≤ y@ and @y ≤ z@) is then exercised across equal as well as strict steps.
+positions so an adjacent pair compares 'EQ'. The draw then exercises the transitivity
+antecedent (@x ≤ y@ and @y ≤ z@) across equal as well as strict steps.
 -}
 versionTriple :: Gen Text -> Gen (Text, Text, Text)
 versionTriple gen =
@@ -375,7 +373,7 @@ ecosystemGens =
     ]
 
 {- | A short raw version string, mixing parseable and unparseable shapes so
-'selectLatest' is exercised on both keyed and key-less survivors.
+'selectLatest' runs on both keyed and key-less survivors.
 -}
 genRaw :: Gen Text
 genRaw =

@@ -2,18 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The advisory fast lane, proven end to end in two phases against one
-booted proxy (the ratified acceptance criterion on the sync slice):
+{- | The advisory fast lane, proven end to end in two phases against one booted proxy:
 
-1. __Control__: the bucket is empty, so the young security fix is denied
-   (@403@), and the audit body carries both the fast lane's abstain reason
-   (no advisory database is loaded) and the quarantine's: proof the CVE rule
-   ran, abstained for the stated cause, and the ordinary policy governed.
+1. __Control__: the bucket is empty, so the gate denies the young security fix (@403@).
+   The audit body carries both the fast lane's abstain reason (no advisory database
+   is loaded) and the quarantine's. That proves the CVE rule ran, abstained for the
+   stated cause, and left the ordinary policy to govern.
 2. Pilot's real one-shot pipeline (@runPilotCompile@ with @--upload@) compiles the
-   shared advisory corpus into an @osv.db@ and uploads it to the ministack S3 bucket
-   through @exportToS3@; the running sync task's next poll detects, verifies, and
-   shadow-swaps it, with no restart and no configuration change.
-3. The identical request now returns @200@ with the version served: the fast
+   shared advisory corpus into an @osv.db@. It then uploads the database to the
+   ministack S3 bucket through @exportToS3@. The running sync task's next poll
+   detects, verifies, and shadow-swaps it, with no restart and no configuration
+   change.
+3. The identical request then returns @200@ with the version served: the fast
    lane opened because a synced advisory names it as the exact fix.
 
 Hermetic and gating, but requires a Docker daemon (for @ministack@'s S3).
@@ -110,8 +110,8 @@ spec =
                             app <- proxyApp ruleDeps privateUrl publicUrl
                             withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule pass)) $ \_ -> do
                                 -- Phase 1 (control): same configuration, no database.
-                                -- The fix is too young for the quarantine and the fast
-                                -- lane can only abstain, so the packument has no
+                                -- The fix is too young for the quarantine, and the fast
+                                -- lane can only abstain. The packument therefore has no
                                 -- survivors: a 403 whose audit body names both causes.
                                 denied <- getPath "/npm/corpus-vuln" app
                                 status denied `shouldBe` 403
@@ -120,19 +120,19 @@ spec =
                                 deniedBody `shouldSatisfy` T.isInfixOf "minimum age"
 
                                 -- Publish through Pilot's real one-shot pipeline
-                                -- (compile the corpus, then upload via exportToS3); the
+                                -- (compile the corpus, then upload via exportToS3). The
                                 -- running task's next poll verifies and swaps it in. No
                                 -- restart, no new config.
                                 publishViaPilot ambient appCfg CorpusV1
 
-                                -- Phase 2: the identical request is admitted, and the
-                                -- served document carries the fixed version.
+                                -- Phase 2: the proxy admits the identical request, and
+                                -- the served document carries the fixed version.
                                 served <- awaitAdmitted app "/npm/corpus-vuln"
                                 (decodeUtf8 (simpleBody served) :: Text) `shouldSatisfy` T.isInfixOf "\"1.2.0\""
 
-                                -- The byte cap against the real S3 leg: a fetch whose
-                                -- cap the published artifact's declared length
-                                -- oversteps fails fast, before any bytes sink, as
+                                -- The byte cap against the real S3 leg. When the
+                                -- published artifact's declared length oversteps the
+                                -- cap, the fetch fails fast, before any bytes sink, as
                                 -- the typed value on the 'CveFetch' channel.
                                 let cappedFetch = s3CveFetchFor cveSource bucket "npm-osv-schema3.db" 16
                                 fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
@@ -165,12 +165,13 @@ createBucketWithRetry awsEnv bucket attempts =
             | attempts <= 1 -> fail ("CveSyncSpec: bucket never became creatable: " <> show err)
             | otherwise -> threadDelay 500_000 >> createBucketWithRetry awsEnv bucket (attempts - 1)
 
--- Publish the advisory artifact through Pilot's real one-shot pipeline: fetch the
+-- Publish the advisory artifact through Pilot's real one-shot pipeline. Fetch the
 -- corpus zip from a local stub, compile it, and upload it to the bucket via
--- 'exportToS3' -- the same compile-then-upload cycle the Pilot worker runs, not a
--- direct PutObject. The compile output lands in its own temp dir, distinct from the
--- proxy's sync data dir, mirroring the separate-disk Pilot and proxy roles. The
--- upload target (bucket and endpoint) is read from the same 'AppConfig' the proxy booted.
+-- 'exportToS3'. That is the same compile-then-upload cycle the Pilot worker runs,
+-- never a direct PutObject. The compile output lands in its own temp dir, distinct
+-- from the proxy's sync data dir, mirroring the separate-disk Pilot and proxy roles.
+-- The upload target (bucket and endpoint) comes from the same 'AppConfig' the proxy
+-- booted.
 publishViaPilot :: AmbientAws -> AppConfig -> CorpusVersion -> IO ()
 publishViaPilot ambient appCfg v = do
     zipBytes <- osvCorpusZip v
@@ -190,9 +191,9 @@ publishViaPilot ambient appCfg v = do
                         , pcoUpload = True
                         }
 
--- The in-process proxy: the real serve application over the fast-lane policy
--- (the quarantine plus AllowIfRemediatesCve, both at their shipped defaults),
--- a 404 private upstream, and the packument stub as the public origin.
+-- The in-process proxy: the real serve application over the fast-lane policy (the
+-- quarantine plus AllowIfRemediatesCve, both at their shipped defaults). It runs over a
+-- 404 private upstream and the packument stub as the public origin.
 proxyApp :: RuleDeps -> Text -> Text -> IO Application
 proxyApp ruleDeps privateUrl publicUrl = do
     prepared <- prepare ruleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
@@ -206,10 +207,10 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 }
     pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing))) env)
 
-{- The public upstream: a single-version packument for @corpus-vuln\@1.2.0@,
-the exact fixed version the corpus's GHSA-corpus-0001 names, published one day
-before the fixed clock, so the quarantine alone always denies it and only the
-fast lane can admit it.
+{- The public upstream: a single-version packument for @corpus-vuln\@1.2.0@, the exact
+fixed version the corpus's GHSA-corpus-0001 names. Its publish time is one day before
+the fixed clock, so the quarantine alone always denies it and only the fast lane can
+admit it.
 -}
 withPublicUpstream :: (Text -> IO a) -> IO a
 withPublicUpstream k = testWithApplication (pure app) (k . localhost)
@@ -217,12 +218,11 @@ withPublicUpstream k = testWithApplication (pure app) (k . localhost)
     app :: Application
     app _req respond = respond (responseLBS status200 [] (encode packument))
 
-{- The private upstream: it resolves (the pull-through store knows the package)
-but holds no versions yet, so the public leg, and therefore the rules, decide
-every version. A private 404 would instead classify as needed-but-unavailable
-and turn a total public denial into a retryable 503; resolving keeps the
-no-survivors outcome on the policy arm (403), which is the phase-1 control this
-test pins.
+{- The private upstream. It resolves, because the pull-through store knows the
+package, but it holds no versions yet. The public leg, and therefore the rules, decide
+every version. A private 404 would instead classify as needed-but-unavailable and turn
+a total public denial into a retryable 503 response. Resolving keeps the no-survivors
+outcome on the policy arm (403), the phase-1 control this test pins.
 -}
 withPrivateUpstream :: (Text -> IO a) -> IO a
 withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
@@ -270,8 +270,8 @@ sha512Integrity = sriSha512Of (toStrict artifactBytes)
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 20) 0
 
--- Poll the same request until the packument is served (the swap landed), bounded
--- so a broken sync fails the test rather than hanging it.
+-- Poll the same request until the proxy serves the packument (the swap landed),
+-- bounded so a broken sync fails the test rather than hanging it.
 awaitAdmitted :: Application -> ByteString -> IO SResponse
 awaitAdmitted app path = go (150 :: Int)
   where

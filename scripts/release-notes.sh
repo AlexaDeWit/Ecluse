@@ -2,7 +2,7 @@
 #
 # Build the GitHub Release body for a published image: the digest pin, the
 # `gh attestation verify` recipe, and the auto-generated changelog (merged PRs
-# since the previous tag). Run by release.yml; needs `gh`. See CONTRIBUTING.md →
+# since the previous tag). Run by release.yml. Needs `gh`. See CONTRIBUTING.md →
 # "Releases & container image".
 #
 # Usage: scripts/release-notes.sh <git-tag> <image> <digest>
@@ -13,7 +13,7 @@ image="$2"
 digest="$3"
 repo="${GITHUB_REPOSITORY:-AlexaDeWit/Ecluse}"
 
-# Auto changelog (merged PRs since the previous tag); empty on the first release.
+# Auto changelog (merged PRs since the previous tag). Empty on the first release.
 changelog=$(gh api "repos/$repo/releases/generate-notes" -f tag_name="$tag" --jq '.body' 2>/dev/null || true)
 
 cat <<EOF
@@ -27,7 +27,7 @@ ${image}@${digest}
 
 ## Verify
 
-This image carries keyless **provenance** and **SBOM** attestations — immutable
+This image carries keyless **provenance** and **SBOM** attestations: immutable
 OCI referrers plus the public Rekor transparency log. Verify them by digest:
 
 \`\`\`bash

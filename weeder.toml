@@ -1,34 +1,33 @@
-# weeder — reports library code that is not reachable from the application entry
-# point (app/Main.hs → Ecluse.run). `make weeder` builds only the library +
-# executable (not the test suites) with .hie info, so "reachable" means "wired
-# into the running proxy" — NOT merely "covered by a test".
+# weeder reports library code that no path from the application entry point
+# (app/Main.hs → Ecluse.run) reaches. `make weeder` builds only the library and the
+# executable, not the test suites, with .hie info. So "reachable" means "wired into
+# the running proxy", never "covered by a test".
 #
-# That deliberately surfaces any library code not yet wired into the composition
-# root (config loading, policy resolution, the queue/credential backends, …) as it
-# is built and tested ahead of the slice that connects it. The tree is wired through
-# to zero app-unreachable definitions today, and the `weeder` CI job GATES on that: a
-# newly-introduced unreachable definition fails the job and blocks the merge (see
-# ci.yml → weeder), so a slice lands its scaffolding and the wiring that reaches it
+# That surfaces any library code the composition root does not yet wire in: config
+# loading, policy resolution, the queue and credential backends, and the rest. We
+# build and test such code ahead of the change that connects it. The tree carries
+# zero app-unreachable definitions today, and the `weeder` CI job GATES on that. A
+# new unreachable definition fails the job and blocks the merge (see ci.yml →
+# weeder). So a change lands its scaffolding and the wiring that reaches it
 # together, or roots the definition below.
 
-# Reachability roots: the executable entry point and Cabal's generated Paths_,
-# plus one documented structural exception.
+# Reachability roots: the executable entry point, Cabal's generated Paths_, and
+# one documented structural exception.
 #
-# Ecluse.Core.Security.Egress.DevHttp.loopbackRegistryUrl is rooted deliberately
-# rather than relocated out of ecluse-core: the plain-http RegistryUrl former is
-# locked inside the egress boundary on purpose (the raw constructor lives in the
-# unexposed Ecluse.Core.Security.Egress.Internal, and the https-only egress
-# design keeps that constructor unreachable from any exposed surface), so moving
-# the former to a test or bench library would widen that boundary. Its consumers
-# are the hermetic test tiers and the load harness, none of which weeder roots,
-# and the module only exists under the dev-http-egress flag (absent from a
-# release build).
+# Ecluse.Core.Security.Egress.DevHttp.loopbackRegistryUrl stays rooted here rather
+# than moving out of ecluse-core. The plain-http RegistryUrl former stays locked
+# inside the egress boundary on purpose. The raw constructor lives in the unexposed
+# Ecluse.Core.Security.Egress.Internal, and the https-only egress design keeps it
+# unreachable from any exposed surface. Moving the former to a test or bench library
+# would widen that boundary. Its only consumers are the hermetic test tiers and the
+# load harness, and weeder roots neither. The module exists only under the
+# dev-http-egress flag, so a release build carries no copy.
 roots = [
   "^Main\\.main$",
   "^Paths_",
   "^Ecluse\\.Core\\.Security\\.Egress\\.DevHttp\\.loopbackRegistryUrl$",
 ]
 
-# Treat instance methods as roots, so lawful type-class instances aren't reported
-# just because the app has no direct call site for them.
+# Treat instance methods as roots, so weeder does not report a lawful type-class
+# instance just because the app has no direct call site for it.
 type-class-roots = true

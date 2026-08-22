@@ -6,13 +6,13 @@
 which queue this binary builds and the boot warnings the choice warrants.
 
 'planMirrorQueue' is the single place that knows which backends this binary can
-build; the composition root pattern-matches its 'MirrorQueuePlan' to make the one
+build. The composition root pattern-matches its 'MirrorQueuePlan' to make the one
 constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is
-due. Once the queue exists, 'deadLetterTerminusWarning' turns what its dead-letter
-probe found into the second boot warning, so the decision stays here and only the
-call sits at the effectful build. Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run
-reports every missing input. The SQS endpoint override is parsed by the shared
-'Ecluse.Config.Ambient.parseEndpointUrl'.
+due. Once the queue exists, 'deadLetterTerminusWarning' turns the dead-letter probe
+result into the second boot warning. The decision stays here, and only the call sits
+at the effectful build. Failures aggregate as
+'Ecluse.Composition.BootError.BootError's, so one run reports every missing input.
+The shared 'Ecluse.Config.Ambient.parseEndpointUrl' parses the SQS endpoint override.
 -}
 module Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (..),
@@ -47,11 +47,11 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount), SqsEndpoint (..), defaultSqsConfig)
 
-{- | Whether this deployment runs a mirror runtime at all: with zero mirroring
-mounts there is no queue to build and no worker to start ('NoMirroring'), and the
-queue configuration is not even consulted, so a serve-only deployment boots with no
-queue variables under the shipped @sqs@ default. With at least one mirroring mount,
-exactly today's queue selection applies ('MirrorWith').
+{- | Whether this deployment runs a mirror runtime at all. With zero mirroring mounts
+there is no queue to build and no worker to start ('NoMirroring'). Nothing then
+consults the queue configuration, so a serve-only deployment boots with no queue
+variables under the shipped @sqs@ default. With at least one mirroring mount, the
+queue selection applies ('MirrorWith').
 -}
 data MirrorRuntimePlan
     = -- | No mount mirrors: no queue, no enqueue buffer, no worker.
@@ -60,10 +60,10 @@ data MirrorRuntimePlan
       MirrorWith MirrorQueuePlan
     deriving stock (Eq, Show)
 
-{- | The one decision the composition root branches the mirror runtime on: derive
-whether anything mirrors from the resolved mounts, and only then consult the queue
-configuration ('planMirrorQueue'), so a serve-only deployment can never fail boot
-over queue variables it does not need.
+{- | The one decision the composition root branches the mirror runtime on. It derives
+whether anything mirrors from the resolved mounts, and only then consults the queue
+configuration ('planMirrorQueue'). A serve-only deployment can therefore never fail
+boot over queue variables it does not need.
 -}
 planMirrorRuntime :: AmbientAws -> Config -> Either [BootError] MirrorRuntimePlan
 planMirrorRuntime ambient config
@@ -72,63 +72,68 @@ planMirrorRuntime ambient config
   where
     noneMirror = all (isNothing . regMirrorTarget . mountRegistries) (configMounts config)
 
-{- | Which mirror-queue backend the composition root will build, resolved from
-config: the durable AWS @sqs@ backend (with its 'SqsConfig'), or the bounded
-best-effort in-memory backend. The pure decision 'planMirrorQueue' yields; the
+{- | Which mirror-queue backend the composition root builds, resolved from config:
+the durable AWS @sqs@ backend (with its 'SqsConfig'), or the bounded best-effort
+in-memory backend. This is the pure decision 'planMirrorQueue' yields. The
 composition root pattern-matches it to make the one constructor call, and
-'mirrorQueuePlanWarning' tells it whether a boot warning is due. Selection needs
-no sizes: the in-memory backend's depth cap is a memory-plan tenant allocated
-__after__ this choice (only the memory backend spends heap on queued jobs), so it
-parametrises the build ('Ecluse.Boot.buildMirrorQueue'), never the plan.
+'mirrorQueuePlanWarning' tells it whether a boot warning is due.
+
+Selection needs no sizes. The in-memory backend's depth cap is a memory-plan tenant
+allocated __after__ this choice, because only the memory backend spends heap on
+queued jobs. The cap therefore parametrises the build
+('Ecluse.Boot.buildMirrorQueue'), never the plan.
 -}
 data MirrorQueuePlan
     = -- | The durable AWS SQS backend, built by @Ecluse.Runtime.Queue.Sqs.newSqsQueue@.
       SqsBackend SqsConfig
     | {- | The bounded in-memory backend, built by
-      'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort -- boot warns.
+      'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort, so boot warns.
       -}
       MemoryBackend
     deriving stock (Eq, Show)
 
 {- | Select the mirror-queue backend from the queue URL's shape and the ambient SDK
-environment, yielding the 'MirrorQueuePlan' the composition root builds the queue
+environment. It yields the 'MirrorQueuePlan' the composition root builds the queue
 from, or the aggregated boot errors that block it.
 
-This is the pure half of the queue's backend choice -- the single place that knows
-which backends this binary can build. There is no backend selector: the operator
-points @ECLUSE_QUEUE__URL@ at a destination and the backend is derived from its
-shape ("Ecluse.Config.QueueTarget", the queue's counterpart of the mirror-credential
-derivation), so a backend\/URL disagreement is unrepresentable. A real SQS queue
-URL resolves to a 'SqsBackend' carrying its 'SqsConfig', with the region parsed
-from the URL's own host (@AWS_REGION@ is not consulted for it); the composition
-root passes that to @Ecluse.Runtime.Queue.Sqs.newSqsQueue@. A Pub\/Sub topic
-resource names the GCP backend, which is recognised but not built, so it is a
-fail-loud 'QueueProviderUnavailable' rather than a silent fall-through, and any
-other shape is a fail-loud 'QueueUrlUnrecognised' naming the accepted forms. An
-__absent__ @ECLUSE_QUEUE__URL@ rolls over to the bounded in-memory 'MemoryBackend'
-(its depth cap is allocated by the memory plan after this selection, and
-parametrises only the build): mirroring is demand-driven and self-healing (a job lost to
-a restart re-enqueues on the next demand), so the rollover degrades durability,
-never safety, and the composition root emits the 'memoryQueueBootWarning' so it is
-never a silent surprise.
+This is the pure half of the queue's backend choice, the single place that knows
+which backends this binary can build. There is no backend selector. The operator
+points @ECLUSE_QUEUE__URL@ at a destination, and the backend follows from its shape
+("Ecluse.Config.QueueTarget", the queue's counterpart of the mirror-credential
+derivation). A backend\/URL disagreement is therefore unrepresentable.
 
-When an endpoint override is set (@AWS_ENDPOINT_URL_SQS@, the AWS-SDK-standard
-service-specific variable), it __forces__ the SQS interpretation of the queue URL
-regardless of shape -- an emulator (@ministack@) or VPC endpoint URL matches no
-public shape by design -- and the ambient @AWS_REGION@ must scope it (a missing one
-is the 'QueueRegionMissing' boot error, this override being the only path that
-still raises it). The override is parsed into the backend's 'SqsEndpoint'; a
-malformed one is a fail-loud 'QueueEndpointMalformed', aggregated with the region
-failure so one boot reports both. The generic @AWS_ENDPOINT_URL@ is deliberately
-__not__ consulted here: it is the S3 advisory client's override, and honouring it
-for the queue would let an S3-only override silently redirect the queue's traffic.
-With no override, the SQS backend uses AWS's default endpoint and credential
-resolution.
+A real SQS queue URL resolves to a 'SqsBackend' carrying its 'SqsConfig'. That
+'SqsConfig' takes its region from the URL's own host, never from @AWS_REGION@. The
+composition root passes it to @Ecluse.Runtime.Queue.Sqs.newSqsQueue@. A Pub\/Sub
+topic resource names the GCP backend, which this binary recognises but does not
+build. That is a fail-loud 'QueueProviderUnavailable', never a silent fall-through.
+Any other shape is a fail-loud 'QueueUrlUnrecognised' naming the accepted forms.
+
+An __absent__ @ECLUSE_QUEUE__URL@ rolls over to the bounded in-memory
+'MemoryBackend'. The memory plan allocates its depth cap after this selection, and
+that cap parametrises only the build. Mirroring is demand-driven and self-healing: a
+job lost to a restart re-enqueues on the next demand. The rollover therefore degrades
+durability, never safety, and the composition root emits the
+'memoryQueueBootWarning' so it is never a silent surprise.
+
+An endpoint override (@AWS_ENDPOINT_URL_SQS@, the AWS-SDK-standard service-specific
+variable) __forces__ the SQS interpretation of the queue URL whatever its shape. An
+emulator (@ministack@) or VPC endpoint URL matches no public shape by design. The
+ambient @AWS_REGION@ must then scope it, and a missing one is the
+'QueueRegionMissing' boot error. This override is the only path that still raises it.
+The override parses into the backend's 'SqsEndpoint', and a malformed one is a
+fail-loud 'QueueEndpointMalformed', aggregated with the region failure so one boot
+reports both.
+
+The generic @AWS_ENDPOINT_URL@ is deliberately __not__ consulted here. It is the S3
+advisory client's override, and honouring it for the queue would let an S3-only
+override silently redirect the queue's traffic. With no override, the SQS backend
+uses AWS's default endpoint and credential resolution.
 -}
 planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
     -- No queue URL: the bounded in-memory queue, a graceful rollover (loudly
-    -- warned), never a boot failure -- there is nothing to misconfigure. Its
+    -- warned), never a boot failure, because there is nothing to misconfigure. Its
     -- depth cap is the memory plan's to allocate, after this selection.
     Nothing -> Right MemoryBackend
     Just queueUrl ->
@@ -143,16 +148,16 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
                     Just (PubSubTarget _project _topic) -> Left [QueueProviderUnavailable "pubsub"]
                     Nothing -> Left [QueueUrlUnrecognised url]
   where
-    -- The provider knobs at their defaults, with the operator's redelivery budget
-    -- carried in as the floor the built backend raises past any attached terminus.
+    -- The provider knobs stay at their defaults. The operator's redelivery budget comes
+    -- in as the floor, and the built backend raises it past any attached terminus.
     sqsConfigFor :: Text -> Text -> SqsConfig
     sqsConfigFor url region =
         (defaultSqsConfig url region)
             { sqsMaxReceiveCount = DeliveryBudget (qsMaxReceiveCount (cfgQueue env))
             }
 
-    -- AWS_REGION, required only under the endpoint override (a real SQS URL carries
-    -- its region in its host); a blank value is treated as absent.
+    -- AWS_REGION, required only under the endpoint override, because a real SQS URL
+    -- carries its region in its host. A blank value counts as absent.
     regionE :: Either BootError Text
     regionE = case T.strip <$> ambientAwsRegion ambient of
         Just region | not (T.null region) -> Right region
@@ -166,19 +171,19 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
 
 {- | The loud boot warning a 'MirrorQueuePlan' warrants before its queue is built, or
 'Nothing' for a durable backend that needs none. The composition root logs the
-'Just' at @WarningS@ on selection, so an operator who chose the in-memory backend is
-told plainly that the mirror is non-durable -- never a silent surprise.
+'Just' at @WarningS@ on selection. An operator who chose the in-memory backend then
+learns plainly that the mirror is non-durable, never a silent surprise.
 -}
 mirrorQueuePlanWarning :: MirrorQueuePlan -> Maybe Text
 mirrorQueuePlanWarning = \case
     SqsBackend _ -> Nothing
     MemoryBackend -> Just memoryQueueBootWarning
 
-{- | The boot warning emitted when mirroring rolls over to the in-memory queue (no
-@ECLUSE_QUEUE__URL@): it states plainly that the mirror is in-memory, non-durable,
-and best-effort, and that a lost job is re-mirrored on the next demand (so there is
-no data loss, only deferred mirroring), so the rollover is never mistaken for a
-durable cloud backend.
+{- | The boot warning for a rollover to the in-memory queue (no @ECLUSE_QUEUE__URL@).
+It states plainly that the mirror is in-memory, non-durable, and best-effort. It also
+states that a lost job is re-mirrored on the next demand, so there is no data loss,
+only deferred mirroring. Nobody then mistakes the rollover for a durable cloud
+backend.
 -}
 memoryQueueBootWarning :: Text
 memoryQueueBootWarning =
@@ -189,16 +194,15 @@ memoryQueueBootWarning =
 
 {- | The boot warning a built queue's dead-letter probe warrants, or 'Nothing' when
 none is due. The composition root logs the 'Just' at @WarningS@ once, right after the
-queue is built, passing the __built handle's__ budget rather than the plan's
-configured floor, so the warning states what the worker will actually do.
+queue is built. It passes the __built handle's__ budget, not the plan's configured
+floor, so the warning states what the worker will do.
 
-A durable queue with no redrive policy attached is the case worth shouting about: a
-mirror job it can never publish is captured nowhere, so the worker's own delivery
-budget is the only terminus it has. A probe that could not be made is warned about
-too, since the budget may then retire a job a dead-letter queue would have captured.
-The in-memory backend is silent here: 'memoryQueueBootWarning' has already said that
-mirror is non-durable and sheds jobs, and a second line on the same fact would only
-dilute it.
+A durable queue with no redrive policy attached is the case worth warning about.
+Nothing captures a mirror job the queue can never publish. The worker's own delivery
+budget then becomes the only terminus. A failed probe warrants a warning too, because
+the budget may then retire a job a dead-letter queue would capture. The in-memory
+backend stays silent here. 'memoryQueueBootWarning' already says that mirror is
+non-durable and sheds jobs, and a second line on the same fact would dilute it.
 -}
 deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either QueueFault DeadLetterTerminus -> Maybe Text
 deadLetterTerminusWarning plan budget probed = case plan of
@@ -208,8 +212,8 @@ deadLetterTerminusWarning plan budget probed = case plan of
         Right TerminusAbsent -> Just (noDeadLetterTerminusWarning budget)
         Left fault -> Just (terminusUnprobedWarning (qfDetail fault))
 
--- The no-terminus warning, naming the budget that now stands in for the missing
--- dead-letter queue so an operator can see what will happen to a poison message.
+-- The no-terminus warning. It names the budget that stands in for the missing
+-- dead-letter queue, so an operator sees what happens to a poison message.
 noDeadLetterTerminusWarning :: DeliveryBudget -> Text
 noDeadLetterTerminusWarning budget =
     "the mirror queue has NO DEAD-LETTER TERMINUS: no redrive policy is attached, so nothing captures a "
@@ -220,8 +224,8 @@ noDeadLetterTerminusWarning budget =
         <> "retention window discards it unseen. Attach a redrive policy with a dead-letter queue to keep "
         <> "poison messages for inspection."
 
--- The unreadable-policy warning: boot continues on the configured budget, but that
--- budget is no longer known to sit above an attached terminus's capture count.
+-- The unreadable-policy warning. Boot continues on the configured budget, but Écluse
+-- can no longer confirm that the budget sits above an attached terminus's capture count.
 terminusUnprobedWarning :: Text -> Text
 terminusUnprobedWarning detail =
     "could not read the mirror queue's redrive policy, so whether poison messages have a dead-letter "
@@ -231,9 +235,8 @@ terminusUnprobedWarning detail =
         <> detail
 
 {- | The cap-overflow drop warning for the in-memory backend, carrying the running
-total of dropped jobs (this report is rate-limited at the queue, so it does not fire
-per dropped job). A note on a one-line follow-up: a drop __metric__
-(@ecluse.mirror.*@, S26 PR2) hooks in alongside this log once that catalogue lands.
+total of dropped jobs. The queue rate-limits this report, so it does not fire per
+dropped job.
 -}
 memoryQueueDropWarning :: Int -> Text
 memoryQueueDropWarning dropped =

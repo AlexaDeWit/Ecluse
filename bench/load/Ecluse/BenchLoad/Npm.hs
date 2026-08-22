@@ -2,80 +2,82 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm 'UpstreamFixture' -- the first and (today) only concrete instance of the
+{- | The npm 'UpstreamFixture': the first and (today) only concrete instance of the
 ecosystem interface the load benchmarks harness drives ("Ecluse.BenchLoad.Harness").
 
-It implements npm's traffic scenarios over stub upstreams and the real composed
+It runs npm's traffic scenarios over stub upstreams and the real composed
 'Ecluse.Server.application':
 
-  1. __merge (cold)__ -- a packument @GET@ that fans to both upstreams, merges, gates,
+  1. __merge (cold)__: a packument @GET@ that fans to both upstreams, merges, gates,
      rewrites, and re-serialises, with the public metadata cache disabled (a zero TTL).
      Every request pays the live private fetch, the merge, the rule sweep, and the
-     re-serialise; the public leg's fetch and ~40 ms decode are __single-flight-amortised__
-     under concurrency (see below), not paid per request;
-  2. __cached-public hit__ -- the same @GET@ with the public origin served from the warm
-     metadata cache (no public fetch or decode), the cheap high-throughput path;
-  3. __cache-fits-large__ / __cache-evicts-large__ -- a uniform working set of large
+     re-serialise. The public leg's fetch and ~40 ms decode are
+     __single-flight-amortised__ under concurrency (see below), not paid per request.
+  2. __cached-public hit__: the same @GET@ with the public origin served from the warm
+     metadata cache (no public fetch or decode), the cheap high-throughput path.
+  3. __cache-fits-large__ / __cache-evicts-large__: a uniform working set of large
      packuments served at a positive TTL, with the cache bound holding the whole set
-     (fits, the baseline) versus held below it (evicts, continual eviction and
-     re-derivation): the cache-eviction-under-large-datasets comparison;
-  4. __worker mirroring__ -- the @fetch → verify → publish → ack@ loop, driven in-process
+     (fits, the baseline) against the bound held below it (evicts, continual eviction
+     and re-derivation). That is the cache-eviction-under-large-datasets comparison.
+  4. __worker mirroring__: the @fetch → verify → publish → ack@ loop, driven in-process
      (it has no HTTP surface) over a stub artifact upstream.
 
 == The serve mix: a real-world corpus, large-emphasis
 
 The packument scenarios serve the __curated real-world corpus__ of substantial,
-many-version packages, not one synthetic payload (trivial few-version packages stress
-nothing): the public upstream serves each package's real captured packument by the
-requested name (the full work-per-request corpus, scoped packages included -- 'requestedPackage'
-recovers @\@scope\/name@ from the request path; captured under @bench\/corpus\/npm\/@; see
-"Ecluse.Bench.Corpus" and @docs\/architecture\/performance.md@). The @merge-cold@ and
-@cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix') with the heavy
-many-version packuments as the __primary drivers__ -- a deliberate stress emphasis, not a
-traffic-realism model. The two @cache-*-large@ scenarios drive a __uniform__ working set
-('uniformMix') so a too-small bound thrashes. The private upstream serves a small disjoint
-overlay per package so every request still merges a genuine cross-upstream union. The
-worker scenario keeps its synthetic, payload-sized artifact (it mirrors a tarball, not a
-packument).
+many-version packages rather than one synthetic payload, because a trivial few-version
+package stresses nothing. The public upstream serves each package's real captured
+packument by the requested name: the full work-per-request corpus, scoped packages
+included. 'requestedPackage' recovers @\@scope\/name@ from the request path, and the
+captures live under @bench\/corpus\/npm\/@ (see "Ecluse.Bench.Corpus" and
+@docs\/architecture\/performance.md@).
+
+The @merge-cold@ and @cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix')
+with the heavy many-version packuments as the __primary drivers__. That is a deliberate
+stress emphasis rather than a traffic-realism model. The two @cache-*-large@ scenarios drive a
+__uniform__ working set ('uniformMix') so a too-small bound thrashes. The private upstream
+serves a small disjoint overlay per package, so every request still merges a genuine
+cross-upstream union. The worker scenario keeps its synthetic, payload-sized artifact,
+since it mirrors a tarball rather than a packument.
 
 Everything here is npm-specific setup and teardown: the corpus serve mix, the stub
 upstreams, the worker's artifact payload, and the proxy wiring (the npm classifier,
-renderer, and mount prefix). The harness structure -- the @oha@ driver, the
-runtime-statistics capture, and the reporting -- is reused unchanged; a second ecosystem
-(PyPI, RubyGems) is a second 'UpstreamFixture' beside this one, not a change to the
-harness.
+renderer, and mount prefix). Every ecosystem reuses the harness structure unchanged: the
+@oha@ driver, the runtime-statistics capture, and the reporting. A second ecosystem (PyPI,
+RubyGems) is a second 'UpstreamFixture' beside this one, never a change to the harness.
 
 == Cache strategy and the scenarios
 
-The proxy's default @passthrough@ posture caches only the __anonymous public__ origin;
-the trusted private origin is the per-client authority and is fetched per request, never
-cached (see "Ecluse.Core.Server.Pipeline"). So the packument scenarios differ in the cache
-TTL and entry bound: the cold merge uses a zero TTL (cache off); the cached-public hit a
-long TTL with a bound holding the whole set; and the two @cache-*-large@ scenarios a long
-TTL with the bound at or below the working set, so entries are removed by __eviction__
-(not expiry) and re-derived on the next request.
+The proxy's default @passthrough@ posture caches only the __anonymous public__ origin. The
+trusted private origin is the per-client authority, so the proxy fetches it per request
+and never caches it (see "Ecluse.Core.Server.Pipeline"). The packument scenarios therefore
+differ in the cache TTL and entry bound. The cold merge uses a zero TTL, so the cache is
+off. The cached-public hit uses a long TTL with a bound that holds the whole set. The two
+@cache-*-large@ scenarios use a long TTL with the bound at or below the working set.
+Entries then leave by __eviction__ rather than by expiry, and the next request re-derives
+them.
 
-A zero TTL does __not__ mean the public fetch+decode is paid once per request, though.
-The public leg resolves through the metadata cache's __single-flight__ path
-('Ecluse.Core.Server.Cache.resolveMetadata'): even at a zero TTL, concurrent misses
-coalesce onto one in-flight fetch and share the leader's parsed packument, so followers
-skip both the fetch and the ~40 ms decode. At the default concurrency the public
-fetch+decode is therefore __amortised across followers__, not paid per request -- which
-narrows the contrast with the cached-public hit (both amortise the public fetch: one via
-the cache, one via single-flight). The cold merge's per-request cost is the live private
-leg, the merge, the rule sweep, and the re-serialise. This is real production behaviour;
-the scenario does not defeat coalescing.
+A zero TTL does __not__ mean every request pays the public fetch and decode. The public
+leg resolves through the metadata cache's __single-flight__ path
+('Ecluse.Core.Server.Cache.resolveMetadata'). Even at a zero TTL, concurrent misses
+coalesce onto one in-flight fetch and share the leader's parsed packument. Followers
+therefore skip both the fetch and the ~40 ms decode. At the default concurrency the public fetch and
+decode are therefore __amortised across followers__, which narrows the contrast with the
+cached-public hit. Both amortise the public fetch, one through the cache and one through
+single-flight.
 
-A literal "private-only cache hit" is not a shape the passthrough model has; the
-cached-public hit is its faithful realisation of the issue's cheap, no-public-fetch path.
+The cold merge's per-request cost is the live private leg, the merge, the rule sweep, and
+the re-serialise. This is real production behaviour, and the scenario does not defeat
+coalescing. A literal "private-only cache hit" is not a shape the passthrough model has.
+The cached-public hit is its faithful realisation of the cheap, no-public-fetch path.
 
 == Hermeticity
 
 All upstreams are in-process @warp@ stubs on loopback, addressed by the @localhost@ DNS
-name rather than a bare IP literal (the internal-range block only recognises a literal,
-never a name, so no opt-in is needed to let the fetch land); the proxy and the worker
-fetch them over plain (no-TLS) managers, exactly as the integration suite does -- so the
-harness opens no external socket and needs no Docker.
+name rather than a bare IP literal. The internal-range block only recognises a literal,
+never a name, so the fetch lands with no opt-in. The proxy and the worker fetch the stubs
+over plain (no-TLS) managers, exactly as the integration suite does. The harness therefore
+opens no external socket and needs no Docker.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
@@ -175,11 +177,11 @@ npmFixture =
         }
 
 {- | The expensive headline path: a packument @GET@ that fans to both upstreams and
-merges, gated, rewritten, and re-serialised. The public metadata cache is disabled (a zero
+merges, gated, rewritten, and re-serialised. The public metadata cache is off (a zero
 TTL). Each request pays the live private fetch, the merge, the rule sweep, and the
-re-serialise; the public leg's fetch and decode are single-flight-amortised under
-concurrency (concurrent misses coalesce onto one in-flight fetch), not paid per request --
-so this narrows the contrast with the cached-public hit rather than being a strict
+re-serialise. The public leg's fetch and decode are single-flight-amortised under
+concurrency, since concurrent misses coalesce onto one in-flight fetch. This scenario
+therefore narrows the contrast with the cached-public hit rather than standing as a strict
 per-request worst case.
 -}
 mergeScenario :: Scenario
@@ -192,10 +194,10 @@ mergeScenario =
         , scenarioBoot = \knobs k -> withNpmProxy knobs 0 defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
-{- | The cheap, common high-throughput path: the same packument @GET@, but with the
-public origin served from a warm metadata cache (a long TTL plus the harness warm-up) and
-a bound large enough to hold the whole working set, so the public fetch and decode are
-elided and only the live private leg and the cache-served merge run.
+{- | The cheap, common high-throughput path: the same packument @GET@ with the public
+origin served from a warm metadata cache. A long TTL plus the harness warm-up keeps it
+warm, and the bound is large enough to hold the whole working set. The public fetch and
+decode are then elided, so only the live private leg and the cache-served merge run.
 -}
 cacheHitScenario :: Scenario
 cacheHitScenario =
@@ -207,14 +209,14 @@ cacheHitScenario =
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
-{- | The conditional-revalidation path: every request echoes a freshly primed @ETag@
-as @If-None-Match@, so the proxy answers @304@s -- the dominant metadata pattern for
-CI fleets that restore npm's local cache between runs. With the derived validator the
-@304@ costs the per-request private fetch and the plan, never the document assembly,
-encode, or an output hash, so this scenario prices exactly that short-circuit (and
-would catch a regression that re-attaches heavy work to the conditional path). The
-priming @GET@ warms the public cache and captures the tag the drive echoes; success
-counts @304@s (the harness treats 2xx\/3xx alike).
+{- | The conditional-revalidation path: every request echoes a freshly primed @ETag@ as
+@If-None-Match@, so the proxy answers @304@s. That is the dominant metadata pattern for CI
+fleets that restore npm's local cache between runs. With the derived validator a @304@
+costs the per-request private fetch and the plan, never the document assembly, the encode,
+or an output hash. This scenario prices exactly that short-circuit, and catches a
+regression that re-attaches heavy work to the conditional path. The priming @GET@ warms
+the public cache and captures the tag the drive echoes. Success counts @304@s, because the
+harness treats 2xx\/3xx alike.
 -}
 revalidateScenario :: Scenario
 revalidateScenario =
@@ -232,8 +234,8 @@ revalidateScenario =
                     [] -> benchFail "revalidate-not-modified: no URL to drive"
         }
 
-{- Prime the revalidation scenario: one plain @GET@ against the proxy (warming the
-public cache entry) whose response @ETag@ the drive then echoes. -}
+{- Prime the revalidation scenario: one plain @GET@ against the proxy. It warms the
+public cache entry, and the drive echoes its response @ETag@. -}
 primeETag :: Text -> IO Text
 primeETag url = do
     manager <- newManager defaultManagerSettings
@@ -245,10 +247,10 @@ primeETag url = do
 
 {- | The cache-eviction baseline: a working set of several large packuments cycled
 __uniformly__ against a cache whose bound __holds the whole set__ (TTL > 0). After warm-up
-every entry stays resident, so the public leg is cache-served with no re-derivation -- the
-@fits-in-cache@ half of the eviction comparison. Its residency (≈ the whole working set
-held at once) and its low alloc-per-request are the baseline the eviction scenario is read
-against.
+every entry stays resident, so the cache serves the public leg with no re-derivation. That
+is the @fits-in-cache@ half of the eviction comparison. Its residency (≈ the whole working
+set held at once) and its low alloc-per-request are the baseline for reading the eviction
+scenario.
 -}
 cacheFitsScenario :: Scenario
 cacheFitsScenario =
@@ -263,13 +265,14 @@ cacheFitsScenario =
         }
 
 {- | The cache-eviction stress: the __same__ uniform working set of large packuments
-(TTL > 0), but a cache bound __smaller than the working set__, so the cache cannot hold it
-all and continually evicts least-room entries and re-derives them on the next request. It
-isolates eviction cost -- throughput and latency under churn, the alloc-per-request of
-re-deriving (re-fetch + decode + project) each evicted large packument on its miss, and a
-peak residency bounded by the store's entry bound of large entries plus the transient re-derivation
--- against the @cache-fits-large@ baseline. The bound and working-set size are the
-@BENCH_LOAD_CACHE_MAX_ENTRIES@ and @BENCH_LOAD_WORKING_SET@ knobs.
+(TTL > 0), but a cache bound __smaller than the working set__. The cache cannot hold the
+whole set, so it continually evicts least-room entries and re-derives them on the next
+request. It isolates the eviction cost against the @cache-fits-large@ baseline: throughput
+and latency under churn, the alloc-per-request of re-deriving (re-fetch + decode +
+project) each evicted large packument on its miss, and a peak residency bounded by the
+store's entry bound of large entries plus the transient re-derivation. The bound and the
+working-set size are the @BENCH_LOAD_CACHE_MAX_ENTRIES@ and @BENCH_LOAD_WORKING_SET@
+knobs.
 -}
 cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
@@ -294,12 +297,12 @@ tarballScenario =
         }
 
 {- | The onboarding (fail-over) regime: every tarball request misses the private
-pull-through (nothing mirrored yet) and takes the public leg -- probe miss, gate the
-one version, stream the public bytes, enqueue the mirror job. This is the shape a
-__new project__ drives before the mirror warms; at steady state the pull-through
-serves these reads instead ('tarballScenario'). Its figures price the onboarding
-experience -- the regime the fleet transits once per project, per new package, and per
-new version -- not the steady state.
+pull-through, because nothing is mirrored yet, and takes the public leg. The steps are a
+probe miss, the gate on the one version, the public byte stream, and the mirror-job
+enqueue. This is the shape a __new project__ drives before the mirror warms. At steady
+state the pull-through serves these reads instead ('tarballScenario'). Its figures price
+the onboarding experience, not the steady state. The fleet transits that regime once per
+project, per new package, and per new version.
 -}
 tarballOnboardingScenario :: Scenario
 tarballOnboardingScenario =
@@ -321,16 +324,17 @@ tarballOnboardingScenario =
                     (k . DriveHttpUrls)
         }
 
-{- | The streaming-ceiling probe: the same private-hit relay as 'tarballScenario', but
-driven at __four times the shared concurrency__ against a __2 ms__ stub latency, so
-the binding constraint is the proxy's own relay (scheduler, pump, pool, syscalls)
-rather than the load generator's connections x RTT. The ordinary tarball scenario is
-client-bound by construction (its throughput ~ concurrency / RTT says nothing about
-the proxy's limit); this one exists to chase the knee. At the default base
-concurrency the scale lands on ~400 concurrent streams, the relay's measured
-saturation sweet spot: past it, added concurrency measured as pure backlog and
-eroding success, not throughput. Read it with its own operating point in mind -- the
-shared operating-point line prints the unscaled base.
+{- | The streaming-ceiling probe: the same private-hit relay as 'tarballScenario', driven
+at __four times the shared concurrency__ against a __2 ms__ stub latency. The binding
+constraint is then the proxy's own relay (scheduler, pump, pool, syscalls) rather than the
+load generator's connections x RTT. The ordinary tarball scenario is client-bound by
+construction, and its throughput of about concurrency / RTT says nothing about the proxy's
+limit. This one exists to chase the knee.
+
+At the default base concurrency the scale lands on ~400 concurrent streams, the relay's
+measured saturation sweet spot. Past that point, added concurrency measured as pure
+backlog and eroding success, never throughput. Read this scenario with its own operating
+point in mind: the shared operating-point line prints the unscaled base.
 -}
 tarballCeilingScenario :: Scenario
 tarballCeilingScenario =
@@ -344,8 +348,8 @@ tarballCeilingScenario =
         }
 
 -- A cache TTL comfortably longer than any single scenario's warm-up plus measured
--- window, so a warmed public entry is evicted (when the bound is exceeded) rather than
--- expiring, and the cache-fits baseline stays resident for the whole run.
+-- window. A warmed public entry then leaves by eviction, when the working set exceeds the
+-- bound, rather than by expiry. The cache-fits baseline stays resident for the whole run.
 longCacheTtl :: NominalDiffTime
 longCacheTtl = 3600
 
@@ -366,10 +370,10 @@ benchCacheConfig ttl maxEntries =
   where
     capEntries budget = budget{sbMaxEntries = maxEntries}
 
-{- | Boot the two packument upstreams over the real-world corpus -- a path-aware public
-upstream serving each package's real captured packument by the requested name, and a
-path-aware trusted-private upstream serving a small disjoint overlay per package -- and
-the real composed proxy over them, with the given metadata-cache TTL and entry bound.
+{- | Boot the two packument upstreams over the real-world corpus, then the real composed
+proxy over them, with the given metadata-cache TTL and entry bound. The public upstream is
+path-aware and serves each package's real captured packument by the requested name. The
+trusted-private upstream is path-aware too and serves a small disjoint overlay per package.
 Yields the serve mix the caller builds (a weighted distribution, or a uniform working set)
 to the body. All sockets are loopback @warp@ stubs torn down on exit.
 -}
@@ -388,10 +392,10 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
             mkMix
             body
 
-{- | Boot the composed proxy over the __given__ private and public upstream stubs --
-the shared shell of every HTTP scenario. The standard fixture ('withNpmProxy') passes
-the private overlay and corpus stubs; the onboarding scenario passes a missing-private
-stub and a self-hosted public stub. Admission and the private pool resolve through the
+{- | Boot the composed proxy over the __given__ private and public upstream stubs, the
+shared shell of every HTTP scenario. The standard fixture ('withNpmProxy') passes the
+private overlay and corpus stubs. The onboarding scenario passes a missing-private stub
+and a self-hosted public stub. Admission and the private pool resolve through the
 composition root's own functions, so an unknobbed run measures the shipped defaults.
 -}
 withProxyOverStubs :: LoadKnobs -> NominalDiffTime -> Int -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
@@ -404,8 +408,8 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
             publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
-            -- The private pool is sized independently of the admission capacity,
-            -- through the same function the composition root uses, since a trusted
+            -- The private pool does not follow the admission capacity. It resolves
+            -- through the same function the composition root uses, because a trusted
             -- tarball hit streams outside admission (see resolvePrivateConnections).
             privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
             admission <- newServeAdmission admissionCapacity
@@ -415,15 +419,15 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             -- The production memory backend at the shipped default depth cap (50000,
             -- config/default.yaml's queueMemoryMaxDepth). No worker consumes this queue,
             -- so a public-leg tarball scenario (one enqueue per request, ~100 connections
-            -- x 30s) can outgrow any fixed cap; past the cap the backend sheds
-            -- drop-newest exactly as production would, and the callback reports the
-            -- running total (rate-limited by the backend to the first drop and every
-            -- 1000th) so a shed is loud in the run log, never silent.
+            -- x 30s) can outgrow any fixed cap. Past the cap the backend sheds
+            -- drop-newest exactly as production does, and the callback reports the running
+            -- total. The backend rate-limits that callback to the first drop and every
+            -- 1000th, so a shed is loud in the run log, never silent.
             queue <-
                 newBoundedInMemoryQueue
                     (defaultMemoryQueueConfig 50_000)
                     (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap; running dropped-job total: " <> show n))
-            -- The same plain manager serves the private and public legs; the serve path
+            -- The same plain manager serves the private and public legs. The serve path
             -- never touches the publish-side registry handle, so it is the refusing
             -- placeholder.
             env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
@@ -436,16 +440,16 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
 packageUrl :: Int -> Text -> Text
 packageUrl proxyPort name = localhost proxyPort <> "/npm/" <> name
 
--- The weighted serve mix: each corpus package's proxy URL repeated by its serve weight,
--- so oha (driven via --urls-from-file) spreads requests across the corpus in the
+-- The weighted serve mix: each corpus package's proxy URL repeated by its serve weight.
+-- Driven via --urls-from-file, oha then spreads requests across the corpus in the
 -- large-emphasis proportion 'serveCorpus' encodes (the heavy packuments dominate).
 serveMix :: Int -> [Text]
 serveMix proxyPort =
     concatMap (\cp -> replicate (cpWeight cp) (packageUrl proxyPort (cpName cp))) serveCorpus
 
--- A uniform mix over the working set: each package once, so oha cycles them evenly -- the
--- access pattern that thrashes a too-small cache (every package is reused, so an evicted
--- one is requested again and re-derived).
+-- A uniform mix over the working set: each package once, so oha cycles them evenly. That
+-- access pattern thrashes a too-small cache: the drive reuses every package, so it
+-- requests an evicted one again and the proxy re-derives it.
 uniformMix :: [CorpusPackage] -> Int -> [Text]
 uniformMix pkgs proxyPort = map (packageUrl proxyPort . cpName) pkgs
 
@@ -460,10 +464,10 @@ tarballMix proxyPort =
 workingSet :: LoadKnobs -> [CorpusPackage]
 workingSet knobs = take (max 1 (lkWorkingSet knobs)) serveCorpus
 
--- The packument-serve dependencies for the npm mount, addressing the two stub ports by
--- the @localhost@ DNS name rather than a bare IP literal, so the public leg's honoured
--- tarball gate never trips the internal-range block (which only recognises a literal) --
--- exactly as the integration suite does.
+-- The packument-serve dependencies for the npm mount. They address the two stub ports by
+-- the @localhost@ DNS name rather than a bare IP literal, exactly as the integration suite
+-- does. The public leg's honoured tarball gate then never trips the internal-range block,
+-- which only recognises a literal.
 npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
     prepared <- prepare inertRuleDeps benchPolicy
@@ -473,21 +477,21 @@ npmDeps privatePort publicPort = do
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
-{- | A permissive rule set: every version old enough to clear a one-day quarantine is
-admitted, so the merge and rewrite run over the whole packument rather than
-short-circuiting to a denial -- the full serve-path cost the scenario means to measure.
+{- | A permissive rule set: the gate admits every version old enough to clear a one-day
+quarantine. The merge and rewrite then run over the whole packument rather than
+short-circuiting to a denial, the full serve-path cost the scenario means to measure.
 -}
 benchPolicy :: [PrecededRule]
 benchPolicy = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 
 {- | The mirror worker's hot loop: @fetch → verify → publish → ack@, driven in-process
-against a stub artifact upstream for the configured duration. The artifact is fetched
-over loopback and verified against its real digest each iteration (the per-job work);
-the publish goes to a succeeding in-memory client (the publish target is not part of the
-hot path being characterised), and the mirror-presence probe answers absent through the
-same client, so every job measures the full pipeline rather than the dedup
-short-circuit. It has no HTTP surface, so the harness times the loop directly rather
-than driving it with @oha@.
+against a stub artifact upstream for the configured duration. Each iteration fetches the
+artifact over loopback and verifies it against its real digest, the per-job work. The
+publish goes to a succeeding in-memory client, since the publish target is not part of the
+hot path this scenario characterises. The mirror-presence probe answers absent through the
+same client, so every job measures the full pipeline rather than the dedup short-circuit.
+The loop has no HTTP surface, so the harness times it directly rather than driving it with
+@oha@.
 -}
 workerScenario :: Scenario
 workerScenario =
@@ -502,10 +506,10 @@ workerScenario =
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
                 -- The production memory backend. The drive loop enqueues one job then
-                -- receives it, so at most one job is ever outstanding; a cap of 16 is
-                -- comfortably above that maximum, and a drop (impossible unless the
-                -- cadence breaks) fails the run loudly rather than quietly publishing
-                -- fewer jobs than were enqueued.
+                -- receives it, so at most one job is ever outstanding. A cap of 16 is
+                -- comfortably above that maximum. A drop, impossible unless the cadence
+                -- breaks, fails the run loudly rather than quietly publishing fewer jobs
+                -- than were enqueued.
                 queue <-
                     newBoundedInMemoryQueue
                         (defaultMemoryQueueConfig 16)
@@ -520,10 +524,10 @@ workerScenario =
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
                             , wrInjectTraceContext = id
-                            , -- The verification digests are the re-admitted artifact's
-                              -- (the injected resolver's), so they must be the true
-                              -- digests of the stub's bytes for every job to publish;
-                              -- the bundle publishes through the recording double.
+                            , -- The verification digests are the re-admitted artifact's,
+                              -- from the injected resolver, so they must be the true
+                              -- digests of the stub's bytes for every job to publish. The
+                              -- bundle publishes through the recording double.
                               wrPolicies = admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes)
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
@@ -533,7 +537,7 @@ workerScenario =
 
 {- | Run the worker loop for the configured duration, timing each job's
 fetch → verify → publish → ack, and return the per-job latencies in seconds. After the
-loop, every processed job must have published exactly once -- a shortfall means the
+loop, every processed job must show exactly one publish. A shortfall means the
 fetch\/verify\/publish wiring broke, a literal harness failure rather than a result.
 -}
 runWorkerLoop :: LoadKnobs -> LogEnv -> WorkerRuntime -> MirrorQueue -> MirrorJob -> IORef Int -> IO [Double]
@@ -564,9 +568,9 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
                 t1 <- getMonotonicTime
                 go deadline ((t1 - t0) : acc)
 
--- A mirror job for the canned artifact at the given upstream URL. The payload names
--- the artifact by filename only; the digests the worker's verify gate passes on live
--- on the injected policies ('admitAllPolicies').
+-- A mirror job for the canned artifact at the given upstream URL. The payload names the
+-- artifact by filename only. The digests the worker's verify gate passes on live on the
+-- injected policies ('admitAllPolicies').
 mirrorJob :: Text -> MirrorJob
 mirrorJob url =
     MirrorJob
@@ -580,11 +584,11 @@ mirrorJob url =
 -- A publish-capability double that records each publish and reports success, for the
 -- worker hot loop.
 --
--- The mirror-presence probe MUST answer "absent" here: the scenario re-mirrors the same
+-- The mirror-presence probe MUST answer "absent" here. The scenario re-mirrors the same
 -- version every iteration, so a probe that confirmed presence would short-circuit every
--- job after the first into a no-op and falsely inflate the loop's throughput. An
--- unparseable probe body is the absent posture (a production mirror answers a package
--- it does not hold with an error body no version list parses from), so each job drives
+-- job after the first into a no-op. That would falsely inflate the loop's throughput. An
+-- unparseable probe body is the absent posture. A production mirror answers a package it
+-- does not hold with an error body no version list parses from. Each job therefore drives
 -- the full fetch -> verify -> publish pipeline.
 succeedingPublishClient :: IORef Int -> MirrorPublish
 succeedingPublishClient counter =
@@ -606,8 +610,8 @@ artifactBytes size = LBS.replicate (fromIntegral (max 1 size)) 0x61
 jobHashes :: LByteString -> NonEmpty Hash
 jobHashes bytes = unsafeHash SRI (sriSha512OfLazy bytes) :| [unsafeHash SHA1 (hexSha1OfLazy bytes)]
 
--- A stub upstream that injects the configured latency then serves a fixed body -- used by
--- the worker scenario's artifact upstream, which answers any path the same way.
+-- A stub upstream that injects the configured latency then serves a fixed body. The
+-- worker scenario's artifact upstream uses it, and answers any path the same way.
 stubUpstream :: ByteString -> Int -> LByteString -> Application
 stubUpstream contentType latency body _request respond = do
     when (latency > 0) (threadDelay latency)
@@ -618,9 +622,10 @@ jsonContentType = "application/json"
 octetContentType = "application/octet-stream"
 
 -- The public upstream over the corpus: inject the latency, then serve the real captured
--- packument for the requested package (the path's package segment), so each request in
--- the mix decodes, merges, gates, rewrites, and re-serialises a genuinely heterogeneous
--- real document. An unrequested package 404s (the mix only ever asks for corpus ones).
+-- packument for the requested package (the path's package segment). Each request in the
+-- mix therefore decodes, merges, gates, rewrites, and re-serialises a genuinely
+-- heterogeneous real document. An unrequested package 404s, and the mix only ever asks
+-- for corpus ones.
 corpusPublicStub :: Int -> Map Text LByteString -> Application
 corpusPublicStub latency bodies request respond = do
     when (latency > 0) (threadDelay latency)
@@ -629,10 +634,10 @@ corpusPublicStub latency bodies request respond = do
         Nothing -> responseLBS status404 [(hContentType, jsonContentType)] "{}"
 
 -- The trusted-private upstream over the corpus: inject the latency, then serve a small
--- overlay of disjoint versions named for the requested package, so the merge serves a
--- genuine cross-upstream union for every package in the mix rather than the public set
--- alone. It also serves the canned artifact bytes for any tarball path under the
--- package, so the conventional private-leg read (the hot path) succeeds.
+-- overlay of disjoint versions named for the requested package. The merge then serves a
+-- genuine cross-upstream union for every package in the mix, never the public set alone.
+-- It also serves the canned artifact bytes for any tarball path under the package, so the
+-- conventional private-leg read (the hot path) succeeds.
 privateOverlayStub :: Int -> Int -> LByteString -> Application
 privateOverlayStub artPort latency bytes request respond = do
     when (latency > 0) (threadDelay latency)
@@ -649,9 +654,9 @@ privateOverlayStub artPort latency bytes request respond = do
             respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
 
 -- The package name a packument GET addresses: the request path segments rejoined with
--- @/@. An unscoped fetch is @{base}/{pkg}@ (one segment); a scoped fetch is
+-- @/@. An unscoped fetch is @{base}/{pkg}@, one segment. A scoped fetch is
 -- @{base}/@scope/name@, which the client may send as one percent-encoded segment or two
--- raw ones -- rejoining recovers @\@scope\/name@ either way. Empty path -> Nothing.
+-- raw ones, and rejoining recovers @\@scope\/name@ either way. Empty path -> Nothing.
 requestedPackage :: Request -> Maybe Text
 requestedPackage request = case pathInfo request of
     [] -> Nothing
@@ -664,26 +669,27 @@ cpUnscopedName cp = case T.breakOn "/" (cpName cp) of
         | "@" `T.isPrefixOf` scope && not (T.null name) -> T.drop 1 name
     _ -> cpName cp
 
-{- | One package in the load benchmarks serve mix: the package name (both the request path and
-the body's self-reported name, scoped or not), the capture file read at boot, and the
-serve weight (its URL's multiplicity in the large-emphasis weighted mix).
+{- | One package in the load benchmarks serve mix: the package name, the capture file read
+at boot, and the serve weight. The name is both the request path and the body's
+self-reported name, scoped or not. The weight is the URL's multiplicity in the
+large-emphasis weighted mix.
 -}
 
-{- | The onboarding (fail-over) fixture: the private upstream misses everything, the
+{- | The onboarding (fail-over) fixture: the private upstream misses everything, and the
 public upstream self-hosts a minimal admissible packument and the artifact bytes.
 
-The private stub answers @404@ to every request __after the injected latency__: during
-onboarding the pull-through private registry has nothing mirrored yet, and the probe's
-round trip is a real cost the scenario must price, not skip. The public stub serves,
-for any requested package, a one-version packument whose @dist.tarball@ points back at
-the stub's own authority (read from the request's @Host@ header, so the
-same-host-as-packument tarball policy holds without configuration) and the canned
-artifact bytes for any tarball path. The version is published long ago, so the bench
-policy admits it, and carries floor-meeting digests.
+The private stub answers @404@ to every request __after the injected latency__. During
+onboarding the pull-through private registry has nothing mirrored yet. The probe's round
+trip is a real cost the scenario must price rather than skip. For any requested package
+the public stub serves a one-version packument and the canned artifact bytes for any
+tarball path. That packument's @dist.tarball@ points back at the stub's own authority,
+read from the request's @Host@ header, so the same-host-as-packument tarball policy holds
+with no configuration. The version was published long ago, so the bench policy admits it,
+and it carries floor-meeting digests.
 
-The gate's document decode here is deliberately small: the packument-decode cost of
-the metadata paths is priced by the packument scenarios; this scenario prices the
-fail-over __shape__ -- probe miss, single-version gate, public stream, mirror enqueue.
+The gate's document decode here is deliberately small. The packument scenarios price the
+packument-decode cost of the metadata paths. This scenario prices the fail-over
+__shape__: probe miss, single-version gate, public stream, mirror enqueue.
 -}
 onboardingPrivateStub :: Int -> Application
 onboardingPrivateStub latency _request respond = do
@@ -703,16 +709,16 @@ onboardingPublicStub latency bytes request respond = do
         Nothing ->
             respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
 
--- The stub's own base URL, recovered from the request's @Host@ header, so the
--- packument's self-referencing @dist.tarball@ carries the authority the proxy
--- actually fetched from (the port is not knowable before warp binds).
+-- The stub's own base URL, recovered from the request's @Host@ header, so the packument's
+-- self-referencing @dist.tarball@ carries the authority the proxy fetched from. The port
+-- is not knowable before warp binds.
 selfAuthority :: Request -> Text
 selfAuthority request =
     "http://" <> maybe "localhost" decodeUtf8 (List.lookup hHost (requestHeaders request))
 
--- A minimal admissible packument: one old version, self-hosted conventional
--- tarball, floor-meeting digests -- enough for the single-version gate to admit and
--- the public stream to fetch, nothing more.
+-- A minimal admissible packument: one old version, a self-hosted conventional tarball,
+-- and floor-meeting digests. That is enough for the single-version gate to admit and the
+-- public stream to fetch, and nothing more.
 onboardingPackument :: Text -> Text -> Value
 onboardingPackument base name =
     packumentValue
@@ -733,8 +739,8 @@ onboardingPackument base name =
 onboardingVersion :: Text
 onboardingVersion = "1.0.0"
 
--- The onboarding drive: each corpus package's tarball once, uniformly -- a fresh
--- project pulls each dependency once, not by popularity weight.
+-- The onboarding drive: each corpus package's tarball once, uniformly. A fresh project
+-- pulls each dependency once, never by popularity weight.
 onboardingMix :: Int -> [Text]
 onboardingMix proxyPort =
     [localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpName cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- serveCorpus]
@@ -745,13 +751,14 @@ data CorpusPackage = CorpusPackage
     , cpWeight :: Int
     }
 
-{- | The curated serve mix: the work-per-request corpus of substantial, many-version packages
-(trivial few-version ones are excluded -- they stress nothing), ordered __heaviest first__
-and weighted __large-emphasis__ so the heavy many-version packuments are the primary
-drivers of the merge/cache scenarios, not a trivial path. The leading entries are also
-the cache-eviction working set ('workingSet'). The pins and captures are shared with
-work-per-request micro-benches (@bench\/corpus\/pins.json@, @bench\/corpus\/npm\/*.full.json@); @express@ is
-the reused in-place anchor. See @docs\/architecture\/performance.md@.
+{- | The curated serve mix: the work-per-request corpus of substantial, many-version
+packages, ordered __heaviest first__ and weighted __large-emphasis__. The corpus leaves
+out trivial few-version packages, since they stress nothing. The weighting makes the heavy
+many-version packuments the primary drivers of the merge/cache scenarios rather than a
+trivial path. The leading entries are also the cache-eviction working set ('workingSet').
+The work-per-request micro-benches share these pins and captures
+(@bench\/corpus\/pins.json@, @bench\/corpus\/npm\/*.full.json@), and @express@ is the
+reused in-place anchor. See @docs\/architecture\/performance.md@.
 -}
 serveCorpus :: [CorpusPackage]
 serveCorpus =
@@ -766,8 +773,8 @@ serveCorpus =
     , CorpusPackage "lodash" "bench/corpus/npm/lodash.full.json" 2
     ]
 
--- Read each corpus package's captured packument into a name-to-body map at boot, failing
--- loudly on a missing or empty capture (a literal harness failure, not a result).
+-- Read each corpus package's captured packument into a name-to-body map at boot. A
+-- missing or empty capture fails loudly, a literal harness failure rather than a result.
 loadServeBodies :: IO (Map Text LByteString)
 loadServeBodies = Map.fromList <$> traverse load serveCorpus
   where
@@ -777,8 +784,8 @@ loadServeBodies = Map.fromList <$> traverse load serveCorpus
         pure (cpName cp, packument)
 
 {- | A small trusted-private overlay for the requested package: three versions disjoint
-from any real version, named for that package and old enough to clear the quarantine, so
-the merge serves a genuine union for every package in the mix.
+from any real version, named for it and old enough to clear the quarantine. The merge then
+serves a genuine union for every package in the mix.
 -}
 privateOverlay :: Int -> Text -> Value
 privateOverlay artPort name =
@@ -793,7 +800,8 @@ privateOverlay artPort name =
     overlayVersions = ["9999.0.0", "9999.0.1", "9999.0.2"]
 
 -- One overlay version manifest, named for the package, with a rewritable dist.tarball and
--- floor-meeting integrity digests so the version is admitted and the serve-time rewrite runs.
+-- floor-meeting integrity digests. The gate therefore admits the version, and the
+-- serve-time rewrite runs.
 overlayVersionObject :: Int -> Text -> Text -> Value
 overlayVersionObject artPort name version =
     versionValue
@@ -806,7 +814,7 @@ overlayVersionObject artPort name version =
     unscoped = unscopedName name
 
 {- | The npm tarball filename stem for a package: a scoped @\@scope\/name@ drops its
-scope (the npm convention for @dist.tarball@ filenames); an unscoped name is itself.
+scope, the npm convention for @dist.tarball@ filenames. An unscoped name is itself.
 -}
 unscopedName :: Text -> Text
 unscopedName name = case T.breakOn "/" name of
@@ -827,8 +835,8 @@ localhost port = "http://localhost:" <> show port
 benchNow :: UTCTime
 benchNow = UTCTime (fromGregorian 2026 6 1) 0
 
--- An ISO-8601 instant 400 days before 'benchNow' -- comfortably past any short
--- quarantine, so every canned version is admitted.
+-- An ISO-8601 instant 400 days before 'benchNow', comfortably past any short quarantine,
+-- so the gate admits every canned version.
 publishedLongAgo :: Text
 publishedLongAgo = toText (iso8601Show (addUTCTime (negate (400 * nominalDay)) benchNow))
 

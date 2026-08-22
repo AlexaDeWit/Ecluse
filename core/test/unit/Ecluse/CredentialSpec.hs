@@ -18,9 +18,8 @@ spec :: Spec
 spec = do
     describe "Secret" $ do
         it "redacts its contents in Show" $
-            -- Load-bearing: a token must never reach a log, error, or any other
-            -- 'Show'-derived signal (see observability.md). The literal secret
-            -- text must not appear anywhere in the rendered form.
+            -- Load-bearing: a token must never reach a log, an error, or any other
+            -- 'Show'-derived signal (see observability.md).
             show (mkSecret "super-secret-token") `shouldNotContain` "super-secret-token"
 
         it "renders a fixed redaction placeholder regardless of contents" $ do
@@ -28,26 +27,24 @@ spec = do
             show (mkSecret "beta") `shouldBe` ("Secret <REDACTED>" :: String)
 
         it "still exposes the real secret via unSecret" $
-            -- Redaction is a display concern only; the value must remain usable.
+            -- Redaction is a display concern only. The value must stay usable.
             unSecret (mkSecret "the-token") `shouldBe` "the-token"
 
         it "compares equal exactly when the underlying token text is equal" $ do
             -- The redacted 'Show' is identical for every secret, so equality must
-            -- come from the wrapped text, not the rendered form: two secrets are
-            -- equal iff their tokens are, and differ when the tokens differ.
+            -- come from the wrapped text, not the rendered form.
             mkSecret "x" `shouldBe` mkSecret "x"
             mkSecret "x" `shouldNotBe` mkSecret "y"
 
         it "is unequal for equal-length tokens that differ" $
-            -- A 'Secret' equality is constant-time (no content-dependent early
-            -- out), so this same-length, differing-content case must not be
-            -- mistaken for equal -- the property timing-safe comparison exists to
-            -- protect, exercised on the shape that would otherwise leak.
+            -- 'Secret' equality is constant-time, with no content-dependent early
+            -- out. This same-length, differing-content case is the shape that would
+            -- otherwise leak under a short-circuiting compare.
             mkSecret "abcdef" `shouldNotBe` mkSecret "abcxef"
 
         it "is unequal when one token is a strict prefix of the other" $ do
-            -- A prefix match is exactly the case a short-circuiting compare would
-            -- separate by time; equality treats it as plain inequality.
+            -- A prefix match is the case a short-circuiting compare would separate
+            -- by time. Equality treats it as plain inequality.
             mkSecret "abc" `shouldNotBe` mkSecret "abcdef"
             mkSecret "abcdef" `shouldNotBe` mkSecret "abc"
 

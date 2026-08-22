@@ -10,10 +10,10 @@ import Test.Hspec
 
 import Ecluse.Core.Registry.CachedDocument (npmCached, weighCachedDoc)
 
-{- | Pin the two properties the byte-identity claim rests on: npm's boundary pair
-round-trips ('project . inject == Just'), and 'weighCachedDoc' is exactly the compact
-encoding's byte length. If either drifts, the "npm behaviour and cache memory are
-byte-identical" guarantee has been broken and this spec is the tripwire.
+{- | Pin the two properties the byte-identity claim rests on. npm's boundary pair
+round-trips ('project . inject == Just'). 'weighCachedDoc' returns exactly the compact
+encoding's byte length. If either drifts, npm behaviour and cache memory are
+no longer byte-identical, and this spec is the tripwire.
 -}
 spec :: Spec
 spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
@@ -25,9 +25,9 @@ spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
   where
     (inject, project) = npmCached
 
-    -- Representative document shapes: scalars, an empty object, a packument-shaped
-    -- nesting, and an array-bearing object, so the round-trip and the weigh identity
-    -- are pinned across the wire shapes npm actually serves.
+    -- Scalars, an empty object, a packument-shaped nesting, and an array-bearing
+    -- object, so the round-trip and the weigh identity hold across the wire shapes
+    -- npm serves.
     samples :: [Value]
     samples =
         [ Null

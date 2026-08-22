@@ -58,8 +58,8 @@ ctx = EvalContext now Nothing
 
 {- | The policy under test: a 7-day publish-age quarantine plus an install-script
 deny. A version is approved iff it is at least 7 days old and declares no install
-script -- so survival is controlled purely by the typed fixture, exercising the real
-rules engine over the domain model (no @Value@ in sight).
+script. The typed fixture alone controls survival, so the cases drive the real rules
+engine over the domain model, with no @Value@ in sight.
 -}
 policy :: [PrecededRule]
 policy =
@@ -120,7 +120,7 @@ infoOf latest vs =
 survivorSpec :: Spec
 survivorSpec = describe "fpSurvivors" $ do
     it "keeps only the approved versions, dropping a too-young one" $ do
-        -- 1.0.0 is 30 days old (approved); 2.0.0 is 1 day old (denied by the age gate).
+        -- 1.0.0 is 30 days old and approved. 2.0.0 is 1 day old, denied by the age gate.
         plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
         fpSurvivors plan `shouldBe` Set.singleton "1.0.0"
 
@@ -136,19 +136,20 @@ survivorSpec = describe "fpSurvivors" $ do
 latestSpec :: Spec
 latestSpec = describe "fpLatest" $ do
     it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
-        -- Upstream latest is 1.0.0; both survive. Keep-unless-denied: 1.0.0 stays,
-        -- never promoted to the higher 2.0.0.
+        -- Upstream latest is 1.0.0 and both survive. Keep-unless-denied: 1.0.0
+        -- stays, never promoted to the higher 2.0.0.
         plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, False)])
         latestRaw plan `shouldBe` Just "1.0.0"
 
     it "repoints latest down to a surviving version when the chosen latest is denied" $ do
-        -- Upstream latest aims at the denied 2.0.0; repoint to the surviving 1.0.0.
+        -- Upstream latest aims at the denied 2.0.0. The plan repoints it to the
+        -- surviving 1.0.0.
         plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
         latestRaw plan `shouldBe` Just "1.0.0"
 
     it "prefers the highest stable survivor when repointing over a prerelease" $ do
-        -- Upstream latest (3.0.0) is denied; survivors are a stable 1.0.0 and a
-        -- prerelease 2.0.0-rc.1. Stable-preferring repoint chooses 1.0.0.
+        -- Upstream latest (3.0.0) is denied. The survivors are a stable 1.0.0 and a
+        -- prerelease 2.0.0-rc.1, and the stable-preferring repoint chooses 1.0.0.
         plan <-
             filterPlan
                 inertRuleDeps
@@ -213,7 +214,7 @@ propertiesSpec = describe "properties" $ do
             spec' <- forAll genSpec
             plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             let survivors = fpSurvivors plan
-                -- Repoint only happens when the chosen latest did not survive.
+                -- A repoint happens only when the chosen latest did not survive.
                 chosenSurvived = maybe False (`Set.member` survivors) (specLatest spec')
                 stableSurvivors = filter isStableRaw (Set.toList survivors)
             when (not chosenSurvived && not (null stableSurvivors)) $
@@ -225,8 +226,8 @@ propertiesSpec = describe "properties" $ do
                     Nothing -> annotateShow survivors >> H.failure
 
 {- | A generated logical packument: a chosen @latest@ target plus versions, each
-with an age and an install-script flag. Survival is derived from age (≥ 7 days) and
-the absence of an install script against 'policy'.
+with an age and an install-script flag. 'policy' derives survival from the age
+(≥ 7 days) and the absence of an install script.
 -}
 data GenSpec = GenSpec
     { specLatest :: Maybe Text
@@ -276,11 +277,12 @@ isStableRaw :: Text -> Bool
 isStableRaw raw = either (const False) isStable (parseVersionKey Npm raw)
 
 {- | The https-only artifact-URL normalisation the egress-scheme fold applies as a
-projection post-step: a same-host @http@ URL is upgraded to https, an https URL is kept, a
-foreign-host @http@ URL drops its version and records an 'InvalidVersionManifest' (the #486
-drop-and-record contract), and a non-https (test\/dev loopback) upstream leaves every URL
-untouched. The input is built from typed fixtures, so the fold is exercised over the domain
-model directly, no wire format in sight.
+projection post-step. The fold keeps an https URL and upgrades a same-host @http@
+URL. It drops the version behind a foreign-host @http@ URL and records an
+'InvalidVersionManifest' (the #486 drop-and-record contract). A non-https (test\/dev
+loopback) upstream leaves every URL untouched. Typed fixtures build the input, so
+these cases drive the fold over the domain model directly, with no wire format in
+sight.
 -}
 enforceArtifactSchemeSpec :: Spec
 enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact-URL normalisation)" $ do
@@ -302,8 +304,8 @@ enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact
 
     it "records the dropped artifact's authority, never its URL (the value reaches a log line)" $ do
         -- An upstream-supplied dist.tarball can carry a credential in its userinfo or a
-        -- signed query string, and the recorded value is rendered onto the drop-tracking
-        -- WARNING line, so only the authority is kept.
+        -- signed query string. The drop-tracking WARNING line renders the recorded value,
+        -- so the filter keeps only the authority.
         let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact "http://deploy:hunter2@evil.test/x?sig=abc")
             recorded = map invalidValue (infoInvalidEntries enforced)
             rendered = decodeUtf8 (encode recorded) :: Text
@@ -315,9 +317,10 @@ enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact
         urlOf (enforceArtifactScheme "http://127.0.0.1:8080" (infoWithArtifact "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"))
             `shouldBe` Just "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"
 
-{- | The single-version 'enforceArtifactSchemeDetails' form the selective-decode path uses:
-a same-host @http@ URL is upgraded, a foreign-host @http@ URL drops the whole version
-('Nothing'), and a non-https upstream leaves the version untouched.
+{- | The single-version 'enforceArtifactSchemeDetails' form the selective-decode path
+uses. It upgrades a same-host @http@ URL, drops the whole version behind a
+foreign-host @http@ URL ('Nothing'), and leaves the version untouched under a
+non-https upstream.
 -}
 enforceArtifactSchemeDetailsSpec :: Spec
 enforceArtifactSchemeDetailsSpec = describe "enforceArtifactSchemeDetails (single-version form)" $ do

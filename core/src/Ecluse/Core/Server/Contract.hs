@@ -13,15 +13,15 @@ that renders its payload, so those two interpretations cannot be supplied separa
 
 The route layer existentially packages a contract with a handler producing that
 contract's response type. The runtime gives the handler only the corresponding typed
-responder; a handler therefore cannot reach WAI with a status or body outside its route's
+responder. A handler therefore cannot reach WAI with a status or body outside its route's
 contract. 'bodilessContract' is the same interpretation for @HEAD@: statuses and headers
 are preserved while every documented and emitted body is removed.
 
 Owned JSON bodies use the same @autodocodec@ 'JSONCodec' for encoding here and schema
-generation in the manifest tier. An intentionally transparent upstream relay is different:
-its status, media type, and bytes are not Écluse's to constrain, so
-'passthroughContract' documents an explicit OpenAPI @default@ response instead of claiming
-a false closed set.
+generation in the manifest tier. An intentionally transparent upstream relay is
+different. Its status, media type, and bytes are not Écluse's to constrain. The relay's
+contract ('passthroughContract') therefore documents an explicit OpenAPI @default@
+response, rather than claiming a false closed set.
 -}
 module Ecluse.Core.Server.Contract (
     -- * Documented body shapes
@@ -136,8 +136,8 @@ responseValue :: [Header] -> a -> ResponseValue a
 responseValue = ResponseValue
 
 {- | A binary response choice. Nesting 'ResponseChoice's forms a closed route response
-sum without type-level programming; 'chooseContract' builds its two matching
-interpretations together.
+sum without type-level programming. The 'chooseContract' combinator builds its two
+matching interpretations together.
 -}
 data ResponseChoice a b
     = FirstResponse a
@@ -191,7 +191,7 @@ variableResponse = VariableResponse
 
 {- | An OpenAPI @default@ response carrying opaque bytes under a fixed media type.
 
-The schema is intentionally binary even for @application/json@: Écluse relays the
+The schema is intentionally binary even for @application/json@. The proxy relays the
 publication target's bytes without parsing them, so it must not promise they satisfy a
 JSON schema it never checks.
 -}

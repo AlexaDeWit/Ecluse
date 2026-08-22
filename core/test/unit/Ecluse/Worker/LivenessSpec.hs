@@ -75,21 +75,20 @@ spec = do
             withRuntime (Right ()) $ \runtime _queue _logRef -> do
                 pollBefore <- lastPoll (wrHeartbeat runtime)
                 pollBefore `shouldBe` Nothing
-                -- Run the consume loop briefly against the (empty) queue, then cancel
-                -- it. Even an empty long-poll is a healthy poll, so the heartbeat must
-                -- have advanced from 'Nothing'.
+                -- Run the consume loop briefly against the (empty) queue, then cancel it.
+                -- Even an empty long-poll is a healthy poll, so the heartbeat must advance
+                -- from 'Nothing'.
                 _ <- timeout 200000 (runWM runtime (workerLoop testSupervision))
                 pollAfter <- lastPoll (wrHeartbeat runtime)
                 pollAfter `shouldSatisfy` isJust
 
         it "advances the heartbeat after each job in a batch, so a long batch cannot starve /livez" $
-            -- The starvation this closes: the loop advanced the heartbeat once, before the
-            -- whole (up to ten-job) batch, so a healthy worker grinding through large
-            -- artifacts read as stalled past the staleness window and an orchestrator
-            -- liveness probe killed the pod mid-publish. 'processBatch' now beats after each
-            -- completed job. Each job's publish snapshots the heartbeat: with the per-job
-            -- beat every job past the first sees it already advanced by its predecessor
-            -- (before the fix all three would see the same single pre-batch instant).
+            -- 'processBatch' beats the heartbeat after each completed job, not once before
+            -- the whole (up to ten-job) batch. A single pre-batch beat lets a healthy
+            -- worker grinding through large artifacts read as stalled past the staleness
+            -- window. An orchestrator liveness probe then kills the pod mid-publish. Each
+            -- publish snapshots the heartbeat, so every job past the first sees an instant
+            -- its predecessor already advanced.
             withUpstream $ \url -> do
                 heartbeat <- newWorkerHeartbeat
                 seen <- newIORef []
@@ -129,11 +128,11 @@ spec = do
                 `shouldBe` False
     describe "workerHeartbeatStaleAfter -- the staleness budget covers one job's worst case" $
         it "exceeds a fetch and a publish of the maximum artifact (each the publish-visibility budget)" $ do
-            -- The bound must clear one job's worst case -- a fetch and then a publish of the
-            -- 512 MiB cap, each no faster than the publish-visibility floor
-            -- ('workerPublishVisibilityBudget') -- not merely the idle poll cadence. Pinned
-            -- here so lowering the staleness budget below the two budgets it must cover, or
-            -- raising the publish budget past half of it, reddens rather than silently
-            -- reopening the mid-batch liveness kill.
+            -- The bound must clear one job's worst case, rather than the idle poll cadence.
+            -- That worst case is a fetch and then a publish of the 512 MiB cap, each no
+            -- faster than the publish-visibility floor ('workerPublishVisibilityBudget').
+            -- Pinning it here reddens the two changes that would silently reopen the
+            -- mid-batch liveness kill. Those are lowering the staleness budget below the
+            -- two budgets it must cover, and raising the publish budget past half of it.
             let Seconds budget = workerPublishVisibilityBudget
             workerHeartbeatStaleAfter `shouldSatisfy` (> fromIntegral (2 * budget))

@@ -157,8 +157,8 @@ parseSpec = describe "parseRequestEither maps a parse failure to UrlFormationErr
         parseRequestEither "not a url with spaces"
             `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
 
-{- | A presentation carrying a raw token on a header of its own naming, so the mapping
-vocabulary is exercised without leaning on any registered ecosystem's scheme.
+{- | A presentation that carries a raw token on a header it names itself. These cases
+therefore drive the mapping vocabulary, not any registered ecosystem's scheme.
 -}
 apiKeyMapping :: CredentialMapping
 apiKeyMapping = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecret)
@@ -166,8 +166,8 @@ apiKeyMapping = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecr
 recoverApiKey :: RequestHeaders -> Maybe Secret
 recoverApiKey headers = mkSecret . decodeUtf8 <$> lookup "X-Api-Key" headers
 
-{- | A presentation on @Authorization@ under a scheme of its own, so the rendered value
-is demonstrably the mapping's and not a shared assumption.
+{- | A presentation on @Authorization@ under a scheme of its own. The rendered value
+therefore comes from the mapping, not from a scheme the code assumes.
 -}
 schemedMapping :: CredentialMapping
 schemedMapping = credentialMapping recoverApiKey "Authorization" (\secret -> "Token " <> encodeUtf8 (unSecret secret))
@@ -178,7 +178,7 @@ parseOrFail = Client.parseRequest . toString
 addAuth :: ByteString -> Client.Request -> Client.Request
 addAuth value req = req{Client.requestHeaders = ("Authorization", value) : Client.requestHeaders req}
 
--- An attach that (wrongly) reopens redirect following; the finaliser's pin must still win.
+-- An attach that (wrongly) reopens redirect following. The finaliser's pin must still win.
 overrideRedirects :: Client.Request -> Client.Request
 overrideRedirects req = req{Client.redirectCount = 10}
 

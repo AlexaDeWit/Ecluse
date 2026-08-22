@@ -1,45 +1,51 @@
-# Stan configuration for Écluse. The `stan` job runs Stan at this floor and FAILS on any
-# finding above it, and it IS a CI-gate dependency, so a finding above the floor blocks the
-# merge. `task stan` reproduces it and prints "clean at the configured floor" when nothing
-# remains; `task stan-all` shows the full set, including the Style findings this floor drops.
+# Stan configuration for Écluse. The `stan` CI job runs Stan at this floor and fails on
+# any finding above it. That job is a CI-gate dependency, so such a finding blocks the
+# merge. `task stan` reproduces the job, and prints "clean at the configured floor" when
+# nothing remains. `task stan-all` shows the full set, including the Style findings this
+# floor drops.
 #
-# The floor drops the Style severity (cosmetic opinions we have not adopted) and, by explicit
-# whole-inspection EXCLUDE, three inspections whose findings here are correct by construction
-# (see below). Everything else stays ARMED: the Performance severity, and the safety signal of
-# partial functions (#Partial) and the anti-pattern / potential-bug findings (#AntiPattern,
-# #PotentialBug). A finding in an armed inspection is meant to fail the gate and be triaged:
-# fixed at source, or accepted only by an explicit decision recorded below.
+# The floor drops the Style severity, which is cosmetic opinion we have not adopted. It
+# also EXCLUDEs three whole inspections whose findings here are correct by construction
+# (see below). Everything else stays ARMED: the Performance severity, the partial-function
+# safety signal (#Partial), and the anti-pattern and potential-bug findings (#AntiPattern,
+# #PotentialBug). A finding in an armed inspection is meant to fail the gate. Triage it:
+# fix it at source, or accept it through an explicit decision recorded below.
 #
-# Armed and clean at source (no findings; listed so a regression is recognised, not re-triaged):
-#   * #Partial STAN-0010 / STAN-0011 / STAN-0012 (partial succ / pred / toEnum): the sum types
-#     that need a total enumeration derive Data.Universe's Generic `universe` rather than a
-#     partial Enum / Bounded pair, so no derived `toEnum` exists to crash on an out-of-range Int.
-#   * STAN-0207 (Foldable methods on (,) / Maybe / Either): written with the monomorphic
-#     eliminators (`maybe`, `either`, `maybeToList`) instead.
-#   * STAN-0208 (slow O(n) Text length): written length-free (`T.compareLength`, a fixed-count
-#     `T.drop`) instead of `T.length`.
+# Armed and clean at source: none of these reports today. The list names them, so a
+# regression stands out instead of drawing a fresh triage.
+#   STAN-0010 / STAN-0011 / STAN-0012 (#Partial: partial succ, pred, toEnum). A sum type
+#     that needs a total enumeration derives Data.Universe's Generic `universe` rather
+#     than a partial Enum / Bounded pair. No derived `toEnum` exists to crash on an
+#     out-of-range Int.
+#   STAN-0207 (Foldable methods on (,), Maybe, Either). The code uses the monomorphic
+#     eliminators `maybe`, `either`, and `maybeToList` instead.
+#   STAN-0208 (slow O(n) Text length). The code is length-free: `T.compareLength` and a
+#     fixed-count `T.drop` in place of `T.length`.
 #
-# Whole-inspection EXCLUDEs (a finding here is correct, and the flagged operation is the point):
-#   * STAN-0213: a wildcard `_` on a sum type. Ours are deliberate deny-by-default catch-alls on
-#     lists, Maybe, and aeson Value; "no `_` on sum types" is totality-maximalism we do not adopt.
-#   * STAN-0103 (`length` diverges on an infinite list) and STAN-0101 (`reverse` diverges on an
-#     infinite list): this codebase carries no infinite / codata lists, so every `length` and
-#     `reverse` here is on finite-by-construction data (a parsed IPv6 address, a bounded cache
-#     key set, an accumulator being reversed). These are whole-inspection EXCLUDEs rather than
-#     per-finding `ignore` pins because a content-hash-and-line pin ROTS when a module moves, and
-#     that rot has produced a phantom miscount before; a whole-inspection exclude has no rot
-#     vector, mirroring the STAN-0213 exclude. The cost is that the #Infinite-on-list signal goes
-#     dark, which is low value where no infinite list is held.
+# Whole-inspection EXCLUDEs. A finding here is correct, and the flagged operation is the
+# point.
+#   STAN-0213 (a wildcard `_` on a sum type). Ours are deliberate deny-by-default
+#     catch-alls on lists, Maybe, and aeson Value. "No `_` on sum types" is
+#     totality-maximalism we do not adopt.
+#   STAN-0103 (`length` diverges on an infinite list) and STAN-0101 (`reverse` diverges
+#     on an infinite list). This codebase carries no infinite or codata lists. Every
+#     `length` and `reverse` here runs on finite-by-construction data: a parsed IPv6
+#     address, a bounded cache key set, an accumulator the code reverses. These are
+#     whole-inspection EXCLUDEs rather than per-finding `ignore` pins because a
+#     content-hash-and-line pin ROTS when a module moves. A whole-inspection exclude has
+#     no rot vector, mirroring the STAN-0213 exclude. The cost is that the
+#     #Infinite-on-list signal goes dark, which matters little where the code holds no
+#     infinite list.
 #
-# STAN-0212 (unsafe functions) stays ARMED everywhere except one dedicated module, so it still
-# catches a real `unsafePerformIO` or `unsafeCoerce` anywhere it matters, including Ecluse.Config
-# itself. The only accepted finding is the compile-time `embedFile` splice of the committed
-# default config (a Template Haskell embed of an in-repo asset, safe by construction), which now
-# lives alone in Ecluse.Config.DefaultConfig. Because that module holds nothing but the embed, its
-# source lines never shift, so the exclude is scoped to the FILE (like the whole-inspection
-# excludes above) rather than pinned to a line and column. A file-scoped exclude has no rot vector,
-# where the old per-observation `OBS-STAN-0212-…:<line>:<col>` pins rotted every time Config.hs
-# moved and left the floor red until they were re-pinned.
+# STAN-0212 (unsafe functions) stays ARMED everywhere except one dedicated module, so it
+# still catches a real `unsafePerformIO` or `unsafeCoerce` anywhere it matters, including
+# Ecluse.Config itself. The one accepted finding is the compile-time `embedFile` splice of
+# the committed default config: a Template Haskell embed of an in-repo asset, safe by
+# construction. That splice lives alone in Ecluse.Config.DefaultConfig. Because the module
+# holds nothing but the embed, its source lines never shift. So the exclude names the FILE,
+# like the whole-inspection excludes above, rather than a line and column. A
+# line-and-column pin rots whenever the module moves, and leaves the floor red until
+# someone re-pins it.
 check =
   [ { type = "Exclude", severity = "Style", scope = "all" }
   , { type = "Exclude", id = "STAN-0213", scope = "all" }

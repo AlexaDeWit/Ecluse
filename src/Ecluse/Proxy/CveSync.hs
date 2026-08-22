@@ -2,11 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle'), the
-config-driven plan that builds it ('planCveSync'), and the projections the
-composition root reads off the plan (the per-ecosystem rule capabilities, the
-first-sync readiness gate, and the sync schedule). "Ecluse.Proxy"'s @runProxy@
-builds the plan at boot and runs one supervised sync task per handle.
+{- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle') and the
+config-driven plan that builds it ('planCveSync'). It also holds the projections the
+composition root reads off that plan: the per-ecosystem rule capabilities, the
+first-sync readiness gate, and the sync schedule. "Ecluse.Proxy"'s @runProxy@ builds
+the plan at boot and runs one supervised sync task per handle.
 -}
 module Ecluse.Proxy.CveSync (
     CveSyncHandle (..),
@@ -39,9 +39,9 @@ import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
 import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, s3CveFetchFor)
 import Ecluse.Runtime.Log (moduleField)
 
-{- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
-lookup borrows through that ecosystem's own slot when the sync plan carries
-one, and abstains otherwise, so a mount's rules can never read a neighbouring
+{- | The rules' boot-bound capabilities for one mount ecosystem. The CVE lookup
+borrows through that ecosystem's own slot when the sync plan carries one, and
+abstains otherwise. A mount's rules can therefore never read a neighbouring
 ecosystem's advisory database.
 -}
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> FaultReporter -> Ecosystem -> RuleDeps
@@ -53,12 +53,12 @@ cveRuleDepsFor plan reporter faultReporter eco =
         , rdFaultReporter = faultReporter
         }
 
-{- | A 'FaultReporter' that logs an exhausted effectful-rule evaluation's fault detail
-to a katip @WarningS@ line (the @rule@ and @fault@ fields), so a live advisory-database
-query fault is diagnosable rather than collapsing to a bare @Unavailable@. The rendered
-detail is bounded (the driver's @SQLError@ text or a timeout); it carries no secret (a
-'Ecluse.Core.Credential.Secret' redacts under @show@) and never reaches the client
-response.
+{- | A 'FaultReporter' that logs an exhausted effectful-rule evaluation's fault
+detail to a katip @WarningS@ line (the @rule@ and @fault@ fields). A live
+advisory-database query fault is then diagnosable, rather than collapsing to a bare
+@Unavailable@. The rendered detail is bounded: the driver's @SQLError@ text, or a
+timeout. It carries no secret (a 'Ecluse.Core.Credential.Secret' redacts under
+@show@) and never reaches the client response.
 -}
 katipFaultReporter :: LogEnv -> FaultReporter
 katipFaultReporter logEnv =
@@ -66,9 +66,9 @@ katipFaultReporter logEnv =
         runKatipContextT logEnv (moduleField "Ecluse.Core.Rules" <> sl "rule" ruleName <> sl "fault" detail) mempty $
             logFM WarningS (ls ("effectful rule evaluation faulted" :: Text))
 
-{- | The readiness gate over the sync plan: ready once every configured
-ecosystem's advisory database has first-synced. The flags flip one way, so
-readiness never flaps on this; an empty plan (no bucket) is vacuously ready.
+{- | The readiness gate over the sync plan: ready once every configured ecosystem's
+advisory database completes its first sync. The flags flip one way, so readiness
+never flaps on this. An empty plan (no bucket) is vacuously ready.
 -}
 cveSyncReady :: Map.Map Ecosystem CveSyncHandle -> IO Bool
 cveSyncReady plan = allM (readTVarIO . csReady) (Map.elems plan)
@@ -95,13 +95,15 @@ data CveSyncHandle = CveSyncHandle
     }
 
 {- | Build the advisory-sync plan from config: nothing without a configured
-vulnerability-database bucket; otherwise one 'CveSyncHandle' per configured
-mount ecosystem, each against its own stable per-ecosystem object key and
-canonical on-disk path under the OSV data dir. Prepares the data dir (created
-if missing; stray @.tmp@ downloads from an interrupted run swept) so the sync
-tasks start clean. Note the readiness consequence: an operator who mounts an
-ecosystem Pilot does not compile has declared an artifact that never arrives,
-and the pod honestly never reports ready.
+vulnerability-database bucket. Otherwise it builds one 'CveSyncHandle' per configured
+mount ecosystem. Each runs against its own stable per-ecosystem object key, and its
+canonical on-disk path under the OSV data dir. It prepares the data dir, creating it when
+missing and sweeping stray @.tmp@ downloads from an interrupted run, so the sync
+tasks start clean.
+
+The readiness consequence: an operator who mounts an ecosystem Pilot does not
+compile declares an artifact that never arrives. The pod then honestly never reports
+ready.
 -}
 planCveSync :: LogEnv -> AmbientAws -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
 planCveSync logEnv ambient appCfg = case advBucket (cfgAdvisories appCfg) of
@@ -113,10 +115,10 @@ planCveSync logEnv ambient appCfg = case advBucket (cfgAdvisories appCfg) of
         cveSource <- newS3CveSource (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
         Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource bucket) (Map.keys (cfgMounts appCfg))
 
--- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync
--- environment against the ecosystem's stable object key and canonical on-disk
--- path under the OSV data dir. The S3 env is captured once in 'cveSource', so every
--- ecosystem's transport shares one credential discovery.
+-- One ecosystem's sync wiring: a fresh slot and readiness flag, plus the sync
+-- environment. The environment runs against the ecosystem's stable object key and
+-- canonical on-disk path under the OSV data dir. 'cveSource' captures the S3 env
+-- once, so every ecosystem's transport shares one credential discovery.
 cveSyncHandleFor :: AppConfig -> S3CveSource -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
 cveSyncHandleFor appCfg cveSource bucket eco = do
     slot <- newCveSlot
@@ -133,9 +135,10 @@ cveSyncHandleFor appCfg cveSource bucket eco = do
 
 {- | Sweep stray in-progress downloads an interrupted run left beside the canonical
 artifacts (relevant to in-pod container restarts, where an @emptyDir@ survives).
-Best-effort: a filesystem fault (a read-only or mispermissioned data dir) is logged
-at 'WarningS' against the affected path and the boot proceeds on a fresh-start
-assumption, since a truly unusable dir surfaces again when the sync task downloads.
+
+Best-effort: the sweep logs a filesystem fault (a read-only or mispermissioned data
+dir) at 'WarningS' against the affected path. The boot then proceeds on a fresh-start
+assumption. A truly unusable dir surfaces again when the sync task downloads.
 -}
 sweepStaleTemps :: LogEnv -> FilePath -> IO ()
 sweepStaleTemps logEnv dataDir =
@@ -149,17 +152,17 @@ removeStaleTemp :: LogEnv -> FilePath -> FilePath -> IO ()
 removeStaleTemp logEnv dataDir entry =
     let path = dataDir </> entry in sweepStep logEnv path (removeFile path)
 
-{- | Run one best-effort step of the stale-temp sweep: an 'IOError' (a read-only or
-mispermissioned data dir) is logged at 'WarningS' against the affected path and
-swallowed so the boot proceeds, while any non-'IO' exception propagates rather than
-being hidden.
+{- | Run one best-effort step of the stale-temp sweep. It logs an 'IOError' (a
+read-only or mispermissioned data dir) at 'WarningS' against the affected path and
+swallows it, so the boot proceeds. Any non-'IO' exception propagates rather than
+staying hidden.
 -}
 sweepStep :: LogEnv -> FilePath -> IO () -> IO ()
 sweepStep logEnv path step = step `catchIOError` logSweepFailure logEnv path
 
 -- Warn that a stale-temp sweep step could not touch a path, so a read-only or
--- mispermissioned OSV data dir is visible at boot. The path rides a structured field;
--- the OS error detail is the operator's own filesystem, not untrusted input.
+-- mispermissioned OSV data dir is visible at boot. The path rides a structured field.
+-- The OS error detail is the operator's own filesystem, not untrusted input.
 logSweepFailure :: LogEnv -> FilePath -> IOError -> IO ()
 logSweepFailure logEnv path err =
     runKatipContextT logEnv payload mempty (logFM WarningS (ls message))

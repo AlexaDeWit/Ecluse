@@ -79,8 +79,8 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"mountz\":{}}") `shouldSatisfy` decodeErrorMentions "mountz"
 
     it "rejects the ambient AWS SDK variables as document keys (environment, never config)" $ do
-        -- A document-side awsSecretAccessKey used to be silently accepted-and-ignored;
-        -- rejecting it keeps "secrets never live in the structured config" structural.
+        -- A document-side awsSecretAccessKey is refused, never accepted and ignored,
+        -- so "secrets never live in the structured config" stays structural.
         loadConfig [] (Just "{\"awsSecretAccessKey\":\"hunter2\"}") `shouldSatisfy` decodeErrorMentions "awsSecretAccessKey"
         loadConfig [] (Just "{\"awsRegion\":\"us-east-1\"}") `shouldSatisfy` decodeErrorMentions "awsRegion"
 
@@ -108,9 +108,9 @@ spec = describe "decodeDocument" $ do
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "resolves a mount declared with no endpoint keys as the serve-only pure gate" $
-        -- Mirroring is derived from the declared target: no mirrorTarget means
-        -- serve-only, and with no private upstream either, the mount fronts only
-        -- the template public upstream (the pure public gate).
+        -- Mirroring is derived from the declared target, so no mirrorTarget means
+        -- serve-only. With no private upstream either, the mount fronts only the
+        -- template public upstream: the pure public gate.
         case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -122,14 +122,14 @@ spec = describe "decodeDocument" $ do
 
     it "fails loudly when a mirrored mount (mirrorTarget declared) omits its private upstream" $
         -- The mirror must be readable back through the private leg, so a mirrored
-        -- mount without one is refused; only serve-only mounts may omit it.
+        -- mount without one is refused. Only serve-only mounts may omit it.
         loadConfig
             []
             (Just "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"t\"}}}")
             `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
 
     it "loads a mount whose mirror target is declared equal to its private upstream" $
-        -- Equality with the private upstream is a valid arrangement; only the
+        -- Equality with the private upstream is a valid arrangement. Only the
         -- declaration itself is mandatory.
         case loadConfig
             pubUrlEnv
@@ -147,8 +147,8 @@ spec = describe "decodeDocument" $ do
             `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
 
     it "rejects a malformed publishAllow entry (a wrong separator folds into one dead scope), naming publishAllow" $
-        -- A stray separator used to fold into a single unmatchable scope that still
-        -- passed the non-empty boot check, refusing every publish only at request time.
+        -- A stray separator would otherwise fold into a single unmatchable scope that
+        -- passes the non-empty boot check, refusing every publish only at request time.
         loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme;@beta")] Nothing
             `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
 
@@ -179,8 +179,8 @@ spec = describe "decodeDocument" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                -- serveMaxInFlight is unset by default: the effective capacity is
-                -- computed at boot from the resolved capability count (issue #634).
+                -- serveMaxInFlight is unset by default: the boot computes the
+                -- effective capacity from the resolved capability count.
                 rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Nothing
                 -- publicConnectionsPerHost is unset by default too: the effective
                 -- pool is computed at boot from the file-descriptor limit, like
@@ -218,7 +218,7 @@ spec = describe "decodeDocument" $ do
     it "rejects a huge-exponent cache.ttl without realising the integer (no boot hang or OOM)" $
         -- The env overlay JSON-decodes this to a Scientific verbatim, reaching
         -- parseSeconds' Number branch. A raw truncate would try to materialise an
-        -- astronomically large Integer at boot; the bounded parse fails instantly.
+        -- astronomically large Integer at boot. The bounded parse fails instantly.
         loadConfig [("ECLUSE_CACHE__TTL", "1e999999999999")] Nothing
             `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
@@ -298,8 +298,8 @@ spec = describe "decodeDocument" $ do
 
     it "parses an explicit privateConnectionsPerHost override" $ do
         -- The private pool defaults to a value computed from the file-descriptor limit,
-        -- independent of the admission capacity (it streams outside admission); an
-        -- operator who knows their fan-out can still pin it.
+        -- independent of the admission capacity because it streams outside admission.
+        -- An operator who knows their fan-out can still pin it.
         case loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Just 256
@@ -397,8 +397,8 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "server.shutdownDrainTimeout must be a positive integer"
 
         it "rejects a non-positive queue.maxReceiveCount, through both layers" $ do
-            -- A budget of zero would name a delivery no message can reach, so the
-            -- parser refuses it rather than letting the runtime floor paper over it.
+            -- A budget of zero would name a delivery no message can reach. The parser
+            -- refuses it rather than letting the runtime floor mask it.
             loadConfig [] (Just "{\"queue\":{\"maxReceiveCount\":0}}")
                 `shouldSatisfy` decodeErrorMentions "queue.maxReceiveCount must be a positive integer"
             loadConfig [("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "-2")] Nothing
@@ -472,7 +472,7 @@ spec = describe "decodeDocument" $ do
                     Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
                     Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
--- server.publicUrl is required once a mount is active; supplied here so each
+-- server.publicUrl is required once a mount is active. This list supplies it, so each
 -- decode example stays about its own concern.
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
@@ -518,8 +518,8 @@ decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs
 decodeErrorMentions _ (Right _) = False
 
-{- The resolved log level, with the error side flattened to text so the assertion reads
-as a value comparison rather than a case split. -}
+{- The resolved log level. This helper flattens the error side to text, so each assertion
+compares values instead of splitting on a case. -}
 loadedLogLevel :: [(String, String)] -> Maybe ByteString -> Either Text LogLevel
 loadedLogLevel envVars doc =
     bimap

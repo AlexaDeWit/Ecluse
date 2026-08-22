@@ -68,15 +68,15 @@ import Ecluse.Test.Server.Mount (npmServeDeps, withEcosystemHosts)
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
-{- | An ISO-8601 instant @ageDays@ before 'now' (the npm @time@ string), so a
-version's survival under the quarantine is controlled purely by its fixture time.
+{- | An ISO-8601 instant @ageDays@ before 'now' (the npm @time@ string), so only a
+version's fixture time decides its survival under the quarantine.
 -}
 publishedDaysAgo :: Integer -> Text
 publishedDaysAgo = NpmFixture.publishedDaysAgo now
 
 {- | The policy under test: a 7-day publish-age quarantine plus an install-script
-deny. A public version is approved iff it is at least 7 days old and declares no
-install script; anything else is excluded.
+deny. The rules approve a public version if and only if it is at least 7 days old and
+declares no install script. The gate excludes anything else.
 -}
 policy :: [PrecededRule]
 policy =
@@ -84,12 +84,12 @@ policy =
     , atDefaultPrecedence DenyInstallTimeExecution
     ]
 
-{- | An in-process upstream double: it records the @Authorization@ header of every
-request it receives (so the credential-authority invariant is assertable), records
-the HTTP method of every artifact-slot (tarball) request it receives (so a HEAD that
-must not pump the artifact body is assertable), records the @If-None-Match@
-conditional validator of every artifact-slot request (so the pass-through
-conditional-GET relay is assertable), and serves a fixed response.
+{- | An in-process upstream double that serves a fixed response and records what each
+request carried. It records the @Authorization@ header of every request, so a test can
+assert the credential-authority invariant. It records the HTTP method of every
+artifact-slot (tarball) request, so a test can assert that a HEAD never pumps the
+artifact body. It records the @If-None-Match@ conditional validator of those requests
+too, so a test can assert the pass-through conditional-GET relay.
 -}
 data Upstream = Upstream
     { upApp :: Application
@@ -104,17 +104,17 @@ request's @Authorization@ header.
 servingUpstream :: LByteString -> IO Upstream
 servingUpstream body = upstreamRespondingWith (responseLBS status200 [] body)
 
-{- | An upstream double that always answers @500@ -- a failed/unavailable upstream, for
-the partial-upstream-availability and no-survivors paths.
+{- | An upstream double that always answers @500@: a failed or unavailable upstream,
+for the partial-upstream-availability and no-survivors paths.
 -}
 failingUpstream :: IO Upstream
 failingUpstream = upstreamRespondingWith (responseLBS status500 [] "upstream error")
 
-{- | An upstream double that serves a sequence of bodies -- its first for the first
-request, the next for the next, holding the last once the sequence is exhausted. Lets
-a test change what an upstream returns /between/ two requests within the cache TTL, to
-assert the served document tracks the latest fetch (the parse is written through, not
-read back stale) rather than a cached parse.
+{- | An upstream double that serves a sequence of bodies: its first for the first
+request, the next for the next. It holds the last body once the sequence runs out. It
+lets a test change what an upstream returns /between/ two requests within the cache
+TTL. The test then asserts the served document tracks the latest fetch rather than a
+cached parse. The pipeline writes the parse through, never reading back a stale one.
 -}
 mutatingUpstream :: NonEmpty LByteString -> IO Upstream
 mutatingUpstream bodies = do
@@ -150,16 +150,16 @@ lookupAuth headers = snd <$> find ((== hAuthorization) . fst) headers
 seenAuth :: Upstream -> IO [Maybe ByteString]
 seenAuth up = reverse <$> readIORef (upSeenAuth up)
 
--- The HTTP methods an upstream double saw on its artifact-slot (tarball) requests,
--- in arrival order -- so a test can assert a HEAD request reached upstream as a HEAD
--- (never the body-pumping GET) and that no full-artifact GET was issued.
+-- The HTTP methods an upstream double saw on its artifact-slot (tarball) requests, in
+-- arrival order. A test asserts a HEAD reached upstream as a HEAD, never as the
+-- body-pumping GET, and that the serve path issued no full-artifact GET.
 seenArtifactMethods :: Upstream -> IO [ByteString]
 seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
 
 -- The @If-None-Match@ conditional validators an upstream double saw on its
--- artifact-slot (tarball) requests, in arrival order -- so a test can assert the
--- client's validators were relayed onto the upstream artifact request (the
--- pass-through conditional-GET contract). 'Nothing' for a request that carried none.
+-- artifact-slot (tarball) requests, in arrival order. A test asserts the serve path
+-- relayed the client's validators onto the upstream artifact request, the pass-through
+-- conditional-GET contract. 'Nothing' for a request that carried none.
 seenArtifactValidators :: Upstream -> IO [Maybe ByteString]
 seenArtifactValidators up = reverse <$> readIORef (upSeenArtifactValidators up)
 
@@ -168,9 +168,9 @@ lookupIfNoneMatch :: [Header] -> Maybe ByteString
 lookupIfNoneMatch headers = snd <$> find ((== hIfNoneMatch) . fst) headers
 
 {- | Assemble an 'Upstream' over a double that already records each request's
-@Authorization@ into the given ref: allocate the artifact-method ref and wrap the
-app so a tarball-slot request additionally records its 'requestMethod'. The doubles
-keep recording auth themselves (each shapes its own response); this only layers the
+@Authorization@ into the given ref. It allocates the artifact-method ref and wraps the
+app, so a tarball-slot request also records its 'requestMethod'. The doubles keep
+recording auth themselves, because each shapes its own response. This layers the
 artifact-method recording on uniformly.
 -}
 mkUpstream :: IORef [Maybe ByteString] -> Application -> IO Upstream
@@ -191,18 +191,18 @@ mkUpstream seen app = do
             }
 
 {- | Whether a request path is a tarball slot (@\/…\/-\/….tgz@) rather than a
-packument. The artifact and packument fetches of a single upstream are distinguished
-by this, so one double can answer both.
+packument. This distinguishes a single upstream's artifact and packument fetches, so
+one double can answer both.
 -}
 isTarballPath :: ByteString -> Bool
 isTarballPath path = "/-/" `BS.isInfixOf` path && ".tgz" `BS.isSuffixOf` path
 
 {- | The base URL a request reached this in-process double at, recovered from its
-@Host@ header (@http:\/\/{host:port}@). The serve path now honours the packument's
+@Host@ header (@http:\/\/{host:port}@). The serve path honours the packument's
 @dist.tarball@ rather than reconstructing it, so a double's packument must point its
-tarball at __itself__ -- and only the @Host@ header names the ephemeral port the test
-harness assigned. An absent header (never the case under Warp) falls back to a
-loopback host so the helper stays total.
+tarball at __itself__. Only the @Host@ header names the ephemeral port the test harness
+assigned. An absent header (never the case under Warp) falls back to a loopback host,
+so the helper stays total.
 -}
 selfBaseUrl :: Request -> Text
 selfBaseUrl req =
@@ -225,18 +225,18 @@ selfHostedVersion baseUrl version =
         )
 
 {- | An admitting public packument (single old-enough version @v@) whose
-@dist.tarball@ points at @baseUrl@ -- the self-hosting form the artifact path fetches.
+@dist.tarball@ points at @baseUrl@: the self-hosting form the artifact path fetches.
 -}
 selfHostedAdmitting :: Text -> Text -> Value
 selfHostedAdmitting baseUrl v =
     packument [(v, selfHostedVersion baseUrl v)] v [(v, publishedDaysAgo 30)]
 
-{- | A path-aware upstream double: it answers a tarball-slot path with @200@ and the
-given artifact bytes, and any other path (the packument fetch) with @200@ and a
-packument whose @dist.tarball@ for version @v@ points back at this double (so the
-serve path's honour-the-URL fetch returns here). Records each request's
-@Authorization@ header. The single double thus serves both fetches the public
-artifact path consults -- the gating packument and the artifact itself.
+{- | A path-aware upstream double. It answers a tarball-slot path with @200@ and the
+given artifact bytes. It answers any other path (the packument fetch) with @200@ and a
+packument whose @dist.tarball@ for version @v@ points back at this double. The serve
+path's honour-the-URL fetch therefore returns here. It records each request's
+@Authorization@ header. The one double serves both fetches the public artifact path
+consults: the gating packument and the artifact itself.
 -}
 artifactUpstream :: Text -> LByteString -> IO Upstream
 artifactUpstream version tarballBody = do
@@ -250,10 +250,10 @@ artifactUpstream version tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
 
-{- | A path-aware upstream double whose packument admits the given version but
-whose artifact slot answers the given __arbitrary response__ -- a 404, an
-oddly-shaped 2xx -- for the public-relay verdict cases (the packument leg gates,
-the artifact leg then relays whatever this answers).
+{- | A path-aware upstream double whose packument admits the given version, but whose
+artifact slot answers the given __arbitrary response__: a 404, or an oddly-shaped 2xx.
+For the public-relay verdict cases, where the packument leg gates and the artifact leg
+then relays whatever this answers.
 -}
 artifactUpstreamAnswering :: Text -> Response -> IO Upstream
 artifactUpstreamAnswering version artifactResponse = do
@@ -267,8 +267,8 @@ artifactUpstreamAnswering version artifactResponse = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
 
-{- | A path-aware upstream double serving a __given__ packument body verbatim (its
-@dist.tarball@ already addressing this double via 'selfBaseUrl'), and the given
+{- | A path-aware upstream double serving a __given__ packument body verbatim, its
+@dist.tarball@ already addressing this double via 'selfBaseUrl'. It serves the given
 artifact bytes on a tarball-slot path. For tests that shape the gating packument
 themselves (a too-new version, a bad coordinate) while still honouring a
 self-referential tarball URL.
@@ -285,26 +285,27 @@ artifactUpstreamServing packumentFor tarballBody = do
                     else responseLBS status200 [] (packumentFor (selfBaseUrl req))
     mkUpstream seen app
 
-{- | A private upstream double that has the artifact: it answers the conventional
-tarball slot (@\/…\/-\/….tgz@) with @200@ and the given bytes (a __private hit__). The
-private tarball leg reads that conventional URL directly (no packument fetch); the
-double also serves a self-referential single-version packument on other paths, which the
-tarball leg never requests.
+{- | A private upstream double that has the artifact. It answers the conventional
+tarball slot (@\/…\/-\/….tgz@) with @200@ and the given bytes: a __private hit__. The
+private tarball leg reads that conventional URL directly, with no packument fetch. The
+double also serves a self-referential single-version packument on other paths, which
+the tarball leg never requests.
 -}
 privateArtifactHit :: Text -> LByteString -> IO Upstream
 privateArtifactHit version = privateArtifactHitWith version []
 
 {- | A private upstream double that has the artifact and tags it with an upstream
-header (a @Content-Type@): the packument fetch is a self-referential single-version
-packument, a tarball-slot path is answered @200@ with the bytes and that header. Lets
-a test assert the relay forwards the artifact's own content headers through.
+header (a @Content-Type@). The packument fetch returns a self-referential
+single-version packument. A tarball-slot path returns @200@ with the bytes and that
+header, so a test can assert the relay forwards the artifact's own content headers
+through.
 -}
 privateArtifactHitWithHeader :: ByteString -> ByteString -> Text -> LByteString -> IO Upstream
 privateArtifactHitWithHeader headerName headerValue version =
     privateArtifactHitWith version [(CI.mk headerName, headerValue)]
 
-{- | The shared private-hit double: a tarball-slot path returns @200@ with the given
-artifact bytes and extra headers (a __private hit__ on the conventional read); a
+{- | The shared private-hit double. A tarball-slot path returns @200@ with the given
+artifact bytes and extra headers, a __private hit__ on the conventional read. A
 non-tarball path returns a self-referential single-version packument the tarball leg
 never requests.
 -}
@@ -320,11 +321,11 @@ privateArtifactHitWith version extraHeaders tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
 
-{- | A private upstream double that has a __hashless__ artifact: a tarball-slot path
-returns @200@ with the given bytes, and a non-tarball path a single-version packument
-carrying neither @integrity@ nor @shasum@. The private tarball leg reads the conventional
-URL and applies no serve-time integrity floor, so a hashless private artifact streams
-through (no fall-through to public).
+{- | A private upstream double that has a __hashless__ artifact. A tarball-slot path
+returns @200@ with the given bytes. A non-tarball path returns a single-version
+packument carrying neither @integrity@ nor @shasum@. The private tarball leg reads the
+conventional URL and applies no serve-time integrity floor. A hashless private artifact
+therefore streams through, with no fall-through to public.
 -}
 privateArtifactHitHashless :: Text -> LByteString -> IO Upstream
 privateArtifactHitHashless version tarballBody = do
@@ -341,11 +342,12 @@ privateArtifactHitHashless version tarballBody = do
                                 (packument [(version, selfHostedHashless (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
     mkUpstream seen app
 
-{- | A private upstream double that has a __SHA-1-only__ artifact: a tarball-slot path
-returns @200@ with the given bytes, and a non-tarball path a single-version packument
-carrying a legacy @shasum@ but no SRI @integrity@ (a digest below the default SHA-256
-floor). The private tarball leg reads the conventional URL and applies no serve-time
-integrity floor, so this is served from the private origin regardless of the floor.
+{- | A private upstream double that has a __SHA-1-only__ artifact. A tarball-slot path
+returns @200@ with the given bytes. A non-tarball path returns a single-version
+packument carrying a legacy @shasum@ but no SRI @integrity@, a digest below the default
+SHA-256 floor. The private tarball leg reads the conventional URL and applies no
+serve-time integrity floor, so the private origin serves this artifact whatever the
+floor says.
 -}
 privateArtifactHitShasumOnly :: Text -> LByteString -> IO Upstream
 privateArtifactHitShasumOnly version tarballBody = do
@@ -362,10 +364,10 @@ privateArtifactHitShasumOnly version tarballBody = do
                                 (packument [(version, selfHostedShasumOnly (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
     mkUpstream seen app
 
-{- | A private upstream double that does __not__ hold the artifact bytes: a tarball-slot
-path is a @404@ miss, so the private tarball leg's conventional read misses and the
-request falls through to the public origin. (It also answers a non-tarball path with a
-self-referential packument, unused by the tarball leg.)
+{- | A private upstream double that does __not__ hold the artifact bytes. A
+tarball-slot path is a @404@ miss, so the private tarball leg's conventional read
+misses and the request falls through to the public origin. It also answers a
+non-tarball path with a self-referential packument, unused by the tarball leg.
 -}
 privateArtifactMiss :: IO Upstream
 privateArtifactMiss = do
@@ -380,15 +382,15 @@ privateArtifactMiss = do
     mkUpstream seen app
 
 {- | A private upstream double that begins serving the artifact then fails
-__mid-stream__: a tarball-slot path is answered (over the raw connection) with a
-@200@ that __promises far more than it delivers__ -- a large @Content-Length@ but
-only a little body -- and then returns, so Warp closes the socket and the proxy's
-read of the artifact hits EOF short of the promised length and fails at once. Any
-other path is a @404@. The handler never throws (so @testWithApplication@ does not
-surface a server-side error), and the immediate close keeps the short read from
-stalling on a read timeout. It exercises the committed-stream case -- once the @200@
-is on the wire the serve path must fail internally, not fall through to the public
-origin.
+__mid-stream__. It answers a tarball-slot path over the raw connection with a @200@
+that __promises far more than it delivers__. The @200@ declares a large
+@Content-Length@ but sends only a little body. It then returns, so Warp closes the
+socket. The proxy's read of the artifact hits
+EOF short of the promised length and fails at once. Any other path is a @404@. The
+handler never throws, so @testWithApplication@ does not surface a server-side error.
+The immediate close keeps the short read from stalling on a read timeout. This drives
+the committed-stream case: once the @200@ is on the wire the serve path must fail
+internally, never fall through to the public origin.
 -}
 privateArtifactMidStreamFailure :: IO Upstream
 privateArtifactMidStreamFailure = do
@@ -401,17 +403,17 @@ privateArtifactMidStreamFailure = do
                 else respond (responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) "1.0.0")))
     mkUpstream seen app
   where
-    -- Write a 200 declaring a 1 MiB body, send only a little, then return: Warp
+    -- Write a 200 declaring a 1 MiB body, send only a little, then return. Warp
     -- closes the raw socket, so the proxy reads EOF short of the Content-Length and
-    -- fails immediately -- no exception thrown here, no timeout waited on.
+    -- fails immediately: no exception thrown here, no timeout waited on.
     truncatedArtifact :: IO ByteString -> (ByteString -> IO ()) -> IO ()
     truncatedArtifact _recv send = do
         send "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n"
         send (BS.replicate 1024 0x7a)
 
-{- | A minimal npm packument body for @thing@ with the given version objects, a
-@dist-tags.latest@, a @time@ map (built from the same versions), and an unmodeled
-top-level key -- so a test can assert the unmodeled key is relayed unchanged.
+{- | A minimal npm packument body for @thing@. It carries the given version objects, a
+@dist-tags.latest@, a @time@ map built from the same versions, and an unmodeled
+top-level key. A test asserts the serve path relays that key unchanged.
 -}
 packument :: [(Text, Value)] -> Text -> [(Text, Text)] -> Value
 packument versions latest times =
@@ -423,9 +425,9 @@ packument versions latest times =
         ["_id" .= ("thing" :: Text)] -- an unmodeled top-level key
 
 {- | A packument like 'packument' but self-reporting a /different/ top-level @name@,
-to exercise the route-name validation. The route under test is always @\/npm\/thing@,
-so a packument named anything but @thing@ is validated out (an untrusted, misreporting
-origin) and its contribution dropped.
+to drive the route-name validation. The route under test is always @\/npm\/thing@. The
+pipeline validates out a packument named anything but @thing@, an untrusted and
+misreporting origin, and drops its contribution.
 -}
 packumentNamed :: Text -> [(Text, Value)] -> Text -> [(Text, Text)] -> Value
 packumentNamed nm versions latest times =
@@ -433,9 +435,9 @@ packumentNamed nm versions latest times =
         Object o -> Object (KeyMap.insert "name" (String nm) o)
         v -> v
 
-{- | A version object with a @dist@ carrying a tarball URL and an @integrity@, plus
-an unmodeled per-version key. @scripts@ flags an install script when asked, so the
-install-script deny can be exercised.
+{- | A version object with a @dist@ carrying a tarball URL and an @integrity@, plus an
+unmodeled per-version key. The @scripts@ field flags an install script when asked, so a
+test can drive the install-script deny.
 -}
 versionObject :: Text -> Text -> Bool -> Value
 versionObject version integrity hasInstall =
@@ -459,9 +461,9 @@ plainVersion :: Text -> Value
 plainVersion version = versionObject version (sriFor version) False
 
 {- | A well-formed sha512 (resp. sha256) SRI derived from a label, so the projection's
-digest validation keeps it. These serve tests exercise admission, the merge, and
-dist-tag reconciliation -- not digest realism -- so a deterministic well-formed digest
-per label stands in for a real one while staying 'mkHash'-constructible.
+digest validation keeps it. These serve tests cover admission, the merge, and dist-tag
+reconciliation, never digest realism. A deterministic well-formed digest per label
+therefore stands in for a real one and stays 'mkHash'-constructible.
 -}
 sriFor, sri256For :: Text -> Text
 sriFor = sriSha512Of . encodeUtf8
@@ -471,10 +473,10 @@ sri256For = sriSha256Of . encodeUtf8
 validShasum :: Text
 validShasum = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
-{- | A version object carrying __only a legacy SHA-1 shasum__ (a @dist@ with a tarball
-and @shasum@ but no @integrity@ SRI), so it projects to an artifact whose strongest
-digest is SHA-1 -- below the default SHA-256 floor. The integrity-floor admission policy
-refuses such a version from a /public/ upstream; a /private/ one is exempt.
+{- | A version object carrying __only a legacy SHA-1 shasum__: a @dist@ with a tarball
+and @shasum@ but no @integrity@ SRI. It projects to an artifact whose strongest digest
+is SHA-1, below the default SHA-256 floor. The integrity-floor admission policy refuses
+such a version from a /public/ upstream. A /private/ one is exempt.
 -}
 shasumOnlyVersion :: Text -> Value
 shasumOnlyVersion version =
@@ -485,19 +487,19 @@ shasumOnlyVersion version =
         )
 
 {- | A version object carrying __no integrity digest at all__: a @dist@ with a
-@tarball@ but neither @integrity@ nor @shasum@ (both optional on the wire), so it
-projects to an artifact with empty @artHashes@. The integrity-presence admission
-policy refuses such a version from a public upstream.
+@tarball@ but neither @integrity@ nor @shasum@, both optional on the wire. It projects
+to an artifact with empty @artHashes@. The integrity-presence admission policy refuses
+such a version from a public upstream.
 -}
 hashlessVersion :: Text -> Value
 hashlessVersion version =
     versionValue (versionFixture version ("https://upstream.example/thing/-/thing-" <> version <> ".tgz"))
 
-{- | A version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@ (a
-present-but-content-empty digest pair). The projection normalises an empty digest to
-absent, so this projects to an artifact with empty @artHashes@ -- identical to
-'hashlessVersion' -- and the integrity-presence admission policy refuses it from a public
-upstream (classified 'NoIntegrity', not 'BelowFloor').
+{- | A version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@: a
+present-but-content-empty digest pair. The projection normalises an empty digest to
+absent, so this projects to an artifact with empty @artHashes@, identical to
+'hashlessVersion'. The integrity-presence admission policy refuses it from a public
+upstream, classified 'NoIntegrity' rather than 'BelowFloor'.
 -}
 emptyDigestVersion :: Text -> Value
 emptyDigestVersion version =
@@ -508,9 +510,9 @@ emptyDigestVersion version =
             }
         )
 
-{- | A hashless version object whose @dist.tarball@ points at @baseUrl@ -- the
+{- | A hashless version object whose @dist.tarball@ points at @baseUrl@: the
 self-hosting form the artifact path fetches, but with neither @integrity@ nor
-@shasum@. The artifact-gate refusal must fire before this URL is ever fetched.
+@shasum@. The artifact-gate refusal must fire before anything fetches this URL.
 -}
 selfHostedHashless :: Text -> Text -> Value
 selfHostedHashless baseUrl version =
@@ -518,7 +520,7 @@ selfHostedHashless baseUrl version =
 
 {- | A self-hosting version object carrying __only a legacy SHA-1 shasum__ (no SRI
 @integrity@), so its strongest digest is below the default floor. The artifact-gate
-refusal (@BelowIntegrityFloor@) must fire before its @dist.tarball@ is ever fetched.
+refusal (@BelowIntegrityFloor@) must fire before anything fetches its @dist.tarball@.
 -}
 selfHostedShasumOnly :: Text -> Text -> Value
 selfHostedShasumOnly baseUrl version =
@@ -530,7 +532,7 @@ selfHostedShasumOnly baseUrl version =
 
 {- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and
 @shasum@, so it projects to no digest at all. The artifact-gate refusal ('MissingIntegrity')
-must fire before its @dist.tarball@ is ever fetched.
+must fire before anything fetches its @dist.tarball@.
 -}
 selfHostedEmptyDigest :: Text -> Text -> Value
 selfHostedEmptyDigest baseUrl version =
@@ -542,8 +544,8 @@ selfHostedEmptyDigest baseUrl version =
         )
 
 {- | A fresh 'Env' over handle doubles and a real (no-TLS) manager for the in-process
-upstream doubles, carrying the given mirror queue (the in-memory double, or one
-rigged to fail for the best-effort-enqueue assertion).
+upstream doubles. It carries the given mirror queue: the in-memory double, or one
+rigged to fail for the best-effort-enqueue assertion.
 -}
 newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue queue manager = newTestEnvWith queue (manager, manager) telemetryDisabled
@@ -551,14 +553,14 @@ newTestEnvWithQueue queue manager = newTestEnvWith queue (manager, manager) tele
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
 
-The in-process upstream doubles bind loopback under the @localhost@ hostname (never
-the bare @127.0.0.1@ literal): the internal-range block only recognises an IP
-/literal/, never a DNS name, so a hostname-addressed loopback double never trips it
--- no per-host opt-in is needed for the __public__ leg's honoured-tarball gate. The
-__private__ leg needs no such dodge either: it gates as the trusted origin, exempt
-from the literal internal-range block on the `dist.tarball` host gate regardless of
-how its host is spelled. The default tarball-host policy is the secure
-'SameHostAsPackument'; a test overrides it where it exercises the cross-host relaxation.
+The in-process upstream doubles bind loopback under the @localhost@ hostname, never
+the bare @127.0.0.1@ literal. The internal-range block recognises only an IP /literal/,
+never a DNS name, so a hostname-addressed loopback double never trips it. The
+__public__ leg's honoured-tarball gate therefore needs no per-host opt-in. The
+__private__ leg needs no such dodge either. It gates as the trusted origin, exempt from
+the literal internal-range block on the @dist.tarball@ host gate however its host is
+spelled. The default tarball-host policy is the secure 'SameHostAsPackument'. A test
+overrides it where it drives the cross-host relaxation.
 -}
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
@@ -570,7 +572,7 @@ deps privatePort publicPort inbound = do
             }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful prepared
-rules appended to the prepared policy, so a test can drive an effectful rule end to end
+rules appended to the prepared policy. A test then drives an effectful rule end to end
 through the unified engine.
 -}
 depsWith :: [PreparedRule] -> Int -> Int -> IO PackumentDeps
@@ -583,10 +585,9 @@ localhost :: Int -> Text
 localhost port = "http://localhost:" <> show port
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
-in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
-mirror queue) and over the given mirror queue. The upstream apps are hosted on
-ephemeral ports via Warp; the proxy is driven in-process through a WAI session (no
-proxy socket).
+in-process doubles, over the given mirror queue. The assertion sees the proxy's own
+'Env', so a test can drain that queue. Warp hosts the upstream apps on ephemeral ports.
+The test drives the proxy in-process through a WAI session, with no proxy socket.
 -}
 withProxyEnvQueue ::
     MirrorQueue ->
@@ -599,9 +600,9 @@ withProxyEnvQueue ::
 withProxyEnvQueue queue privateUp publicUp inbound =
     withProxyEnvQueueDeps queue privateUp publicUp inbound id
 
-{- | Like 'withProxyEnvQueue', but with the mount's 'PackumentDeps' passed through
-the given transform first -- so a test can break one origin's base URL (an unformable
-upstream URL) without a new harness.
+{- | Like 'withProxyEnvQueue', but the mount's 'PackumentDeps' passes through the given
+transform first. A test can then break one origin's base URL (an unformable upstream
+URL) without a new harness.
 -}
 withProxyEnvQueueDeps ::
     MirrorQueue ->
@@ -613,9 +614,9 @@ withProxyEnvQueueDeps ::
 withProxyEnvQueueDeps queue privateUp publicUp inbound =
     withProxyEnvQueueDepsHosts queue privateUp publicUp inbound (const [])
 
-{- | Like 'withProxyEnvQueueDeps', but the re-derived tarball-host gate additionally
-declares ecosystem artifact hosts, computed from the tweaked deps so a host can carry
-an upstream double's ephemeral runtime port.
+{- | Like 'withProxyEnvQueueDeps', but the re-derived tarball-host gate also declares
+ecosystem artifact hosts. The tweaked deps compute them, so a host can carry an
+upstream double's ephemeral runtime port.
 -}
 withProxyEnvQueueDepsHosts ::
     MirrorQueue ->
@@ -636,8 +637,8 @@ withProxyEnvQueueDepsHosts queue privateUp publicUp inbound hostsOf tweakDeps k 
             k (application cfg env) env publicPort
 
 {- | Run an assertion against a proxy over the two upstream doubles and the proxy's
-own 'Env' (over the test-configured in-memory queue), so a test can drain the
-enqueued mirror jobs.
+own 'Env'. That 'Env' carries the test-configured in-memory queue, so a test can drain
+the enqueued mirror jobs.
 -}
 withProxyEnv ::
     Upstream ->
@@ -649,8 +650,8 @@ withProxyEnv privateUp publicUp inbound k = do
     withProxyEnvQueue queue privateUp publicUp inbound (\app env _port -> k app env)
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
-in-process doubles. The upstream apps are hosted on ephemeral ports via Warp; the
-proxy is driven in-process through a WAI session (no proxy socket).
+in-process doubles. Warp hosts the upstream apps on ephemeral ports. The test drives
+the proxy in-process through a WAI session, with no proxy socket.
 -}
 withProxy ::
     Upstream ->
@@ -661,8 +662,8 @@ withProxy privateUp publicUp inbound k =
     withProxyEnv privateUp publicUp inbound (\app _env -> k app)
 
 {- | Run an assertion against a proxy whose npm mount carries the given effectful
-rules, so a request flows through the unified engine. The two upstream doubles are
-hosted on ephemeral ports as elsewhere; the effectful rules see the public version.
+rules, so a request flows through the unified engine. Warp hosts the two upstream
+doubles on ephemeral ports as elsewhere. The effectful rules see the public version.
 -}
 withProxyEffectful ::
     [PreparedRule] ->
@@ -699,9 +700,9 @@ getThingWith :: [Header] -> Application -> IO SResponse
 getThingWith extra =
     runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"))
 
-{- | A @HEAD /npm/thing@ request carrying the given (optional) bearer credential -- the
-same packument coordinate as 'getThing', issued as a HEAD so the serve path must answer
-with the GET's status and headers but no body.
+{- | A @HEAD /npm/thing@ request carrying the given (optional) bearer credential. The
+same packument coordinate as 'getThing', issued as a HEAD, so the serve path must
+answer with the GET's status and headers but no body.
 -}
 headThing :: Maybe Text -> Application -> IO SResponse
 headThing bearer =
@@ -718,7 +719,7 @@ headThingWith extra =
     runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"){requestMethod = methodHead})
 
 {- | A @GET /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
-(optional) bearer credential -- the tarball path for @thing@ at one version.
+(optional) bearer credential: the tarball path for @thing@ at one version.
 -}
 getTarball :: Text -> Maybe Text -> Application -> IO SResponse
 getTarball version bearer =
@@ -739,8 +740,8 @@ getTarballWith version extra =
     path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
 
 {- | A @HEAD /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
-(optional) bearer credential -- the same tarball coordinate as 'getTarball', issued
-as a HEAD so the serve path must answer without pumping the full artifact body.
+(optional) bearer credential. The same tarball coordinate as 'getTarball', issued as a
+HEAD, so the serve path must answer without pumping the full artifact body.
 -}
 headTarball :: Text -> Maybe Text -> Application -> IO SResponse
 headTarball version bearer =
@@ -751,9 +752,9 @@ headTarball version bearer =
         defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
 
 {- | Drain every mirror job currently enqueued on the proxy's queue, in FIFO order.
-The bounded backend delivers batches (up to its batch cap per receive), so this
-polls until an empty batch; on the test queue's short poll window an empty poll
-returns promptly.
+The bounded backend delivers batches, up to its batch cap per receive, so this polls
+until an empty batch. On the test queue's short poll window an empty poll returns
+promptly.
 -}
 drainJobs :: Env -> IO [MirrorJob]
 drainJobs env = go []
@@ -764,8 +765,8 @@ drainJobs env = go []
             Right messages -> go (reverse (map msgJob messages) <> acc)
             Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
 
--- The decoded JSON body of a proxy response, or 'Null' if it did not decode (a
--- non-JSON body then surfaces as a plain assertion mismatch, not a crash).
+-- The decoded JSON body of a proxy response, or 'Null' if it did not decode. A
+-- non-JSON body then surfaces as a plain assertion mismatch, not a crash.
 decodedBody :: SResponse -> Value
 decodedBody resp = fromRight Null (eitherDecodeStrict (LBS.toStrict (simpleBody resp)))
 
@@ -805,9 +806,9 @@ status :: SResponse -> Int
 status = statusCode . simpleStatus
 
 {- The HTTP reason phrase of a response (e.g. @"Forbidden"@). Reading it forces the
-status' message, which the @mkStatus@-built serve statuses carry as a lazy field --
-so an assertion over it exercises the per-status reason mapping the serve path
-threads through, not just the numeric code. -}
+status' message, which the @mkStatus@-built serve statuses carry as a lazy field. An
+assertion over it therefore covers the per-status reason mapping the serve path threads
+through, beyond the numeric code alone. -}
 reason :: SResponse -> ByteString
 reason = statusMessage . simpleStatus
 
@@ -815,8 +816,8 @@ header :: ByteString -> SResponse -> Maybe ByteString
 header name resp = snd <$> find ((== CI.mk name) . fst) (simpleHeaders resp)
 
 -- A private packument: like 'packument' but the trust split is the caller's, so it
--- carries old-enough times only incidentally (private versions are trusted
--- regardless of age -- they skip the rules entirely).
+-- carries old-enough times only incidentally. The pipeline trusts a private version
+-- whatever its age, because it skips the rules entirely.
 privatePackument :: [(Text, Value)] -> Text -> Value
 privatePackument versions latest =
     packument versions latest [(v, publishedDaysAgo 1) | (v, _) <- versions]
@@ -862,21 +863,21 @@ privateTarballBytes = "PRIVATE-TGZ-BYTES"
 publicTarballBytes :: LByteString
 publicTarballBytes = "PUBLIC-TGZ-BYTES"
 
--- A public packument whose single version @v@ clears the quarantine (admitted on
--- the artifact path). Used on the PACKUMENT path, where its dist.tarball is only
--- relayed (rewritten under the mount base), never fetched.
+-- A public packument whose single version @v@ clears the quarantine (admitted on the
+-- artifact path). Used on the PACKUMENT path, where the serve path only relays its
+-- dist.tarball, rewritten under the mount base, and never fetches it.
 admittingPublic :: Text -> Value
 admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
 
 {- | A path-aware public double whose packument names its @dist.tarball@ on a
-__different host__ (@crossHost@) than the one the packument was served on, while
-still serving the tarball bytes itself. A @crossHost@ that resolves to this server
-lets a cross-host admit actually fetch through; the host text drives the
-tarball-host policy decision regardless. The fixtures' own upstreams live on
-@localhost@, so the conventional cross alias is a @*.localhost@ subdomain
-(@cross.localhost@): RFC 6761 reserves the whole @.localhost@ domain for loopback,
-and systemd-resolved (dev machines and CI runners alike) resolves any subdomain of
-it to @127.0.0.1@ without an /etc/hosts entry.
+__different host__ (@crossHost@) than the host that served the packument. It still
+serves the tarball bytes itself. A @crossHost@ that resolves to this server lets a
+cross-host admit fetch through. The host text drives the tarball-host policy decision
+either way. The fixtures' own upstreams live on @localhost@, so the conventional cross
+alias is a @*.localhost@ subdomain (@cross.localhost@). RFC 6761 reserves the whole
+@.localhost@ domain for loopback. Dev machines and CI runners alike run
+systemd-resolved, which resolves any subdomain of it to @127.0.0.1@ without an
+/etc/hosts entry.
 -}
 crossHostPublicUpstream :: Text -> Text -> LByteString -> IO Upstream
 crossHostPublicUpstream crossHost version tarballBody = do
@@ -888,21 +889,22 @@ crossHostPublicUpstream crossHost version tarballBody = do
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 [] tarballBody
                     else responseLBS status200 [] (encodePackument (crossHostPackument req))
-        -- The packument is served on this host (its own Host), but its dist.tarball
-        -- names @crossHost@ at this same port -- so the policy sees a cross-host URL.
+        -- The double serves the packument on this host (its own Host). Its
+        -- dist.tarball names @crossHost@ at this same port, so the policy sees a
+        -- cross-host URL.
         crossHostPackument req =
             let port = snd (T.breakOnEnd ":" (decodeUtf8 (maybe "" snd (find ((== hHost) . fst) (requestHeaders req)))))
                 tarballBase = "http://" <> crossHost <> ":" <> port
              in selfHostedAdmitting tarballBase version
     mkUpstream seen app
 
-{- | A double whose version's @dist.tarball@ sits at a __non-conventional path__
-(@\/files\/{filename}@, not the npm @\/-\/@ slot) on its own host, with the given
-@filename@ as the artifact name. The serve path honours that exact URL rather than
-reconstructing @{base}\/{pkg}\/-\/{file}@, so the double serves the bytes at the
-honoured path (matched by @.tgz@ suffix) -- proving the location is honoured, not
-rebuilt. The artifact is selected by @filename@, so a request whose filename differs
-finds no match.
+{- | A double whose version's @dist.tarball@ sits at a __non-conventional path__ on its
+own host: @\/files\/{filename}@, not the npm @\/-\/@ slot. The given @filename@ is the
+artifact name. The serve path honours that exact URL rather than
+reconstructing @{base}\/{pkg}\/-\/{file}@. The double therefore serves the bytes at the
+honoured path, matched by the @.tgz@ suffix. That proves the serve path honours the
+location rather than rebuilding it. Selection is by @filename@, so a request whose
+filename differs finds no match.
 -}
 honouredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
 honouredPathUpstream version filename tarballBody = do
@@ -925,10 +927,10 @@ honouredPathUpstream version filename tarballBody = do
     mkUpstream seen app
 
 {- | A private upstream double whose tarball lives __only__ at an off-convention
-@\/files\/{filename}@ path (a separate files host / CDN shape), @404@ing every other
-path including the conventional @\/-\/@ tarball slot. The private tarball leg reads the
-conventional @{base}\/{pkg}\/-\/{file}@ URL directly, so it never reaches these bytes:
-the conventional read @404@s and the request falls through to the public origin.
+@\/files\/{filename}@ path, a separate files host or CDN shape. It @404@s every other
+path, including the conventional @\/-\/@ tarball slot. The private tarball leg reads
+the conventional @{base}\/{pkg}\/-\/{file}@ URL directly, so it never reaches these
+bytes. The conventional read @404@s and the request falls through to the public origin.
 -}
 offConventionPrivateUpstream :: Text -> LByteString -> IO Upstream
 offConventionPrivateUpstream filename tarballBody = do
@@ -942,13 +944,13 @@ offConventionPrivateUpstream filename tarballBody = do
                     else responseLBS status404 [] "not found"
     mkUpstream seen app
 
-{- | A path-aware upstream double that honours a conditional artifact request: its
-packument fetch is a self-referential single-version admitting packument (@200@), and
-a tarball-slot path answers a bodiless @304 Not Modified@ (carrying an @ETag@) when
-the request carries an @If-None-Match@, else @200@ with the artifact bytes. Lets a
-test drive the pass-through conditional-GET relay end to end: a client validator
-relayed upstream that matches must come straight back as a relayed @304@, the artifact
-never re-downloaded. Used as either the private or the public origin's double.
+{- | A path-aware upstream double that honours a conditional artifact request. Its
+packument fetch is a self-referential single-version admitting packument (@200@). A
+tarball-slot path answers a bodiless @304 Not Modified@ carrying an @ETag@ when the
+request carries an @If-None-Match@, and @200@ with the artifact bytes otherwise. A test
+drives the pass-through conditional-GET relay end to end with it. A relayed client
+validator that matches must come straight back as a relayed @304@, with no re-download
+of the artifact. Used as either the private or the public origin's double.
 -}
 conditionalArtifactUpstream :: Text -> LByteString -> IO Upstream
 conditionalArtifactUpstream version tarballBody = do
@@ -962,7 +964,7 @@ conditionalArtifactUpstream version tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
   where
-    -- A relayed client validator turns the upstream artifact fetch into a 304; an
+    -- A relayed client validator turns the upstream artifact fetch into a 304. An
     -- unconditional fetch still serves the bytes.
     conditionalTarball :: [Header] -> Response
     conditionalTarball headers

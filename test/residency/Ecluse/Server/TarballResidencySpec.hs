@@ -2,32 +2,32 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | S54 -- the bounded-memory streaming gate: peak live bytes on the tarball relay
-are __invariant in artifact size__, proving constant-memory passthrough rather than
+{- | The bounded-memory streaming gate: peak live bytes on the tarball relay are
+__invariant in artifact size__. That proves constant-memory passthrough rather than
 size-proportional buffering.
 
 == Why an invariant, not an absolute
 
 A "peak residency < N MB" assertion is machine- and RTS-dependent, the classic flaky
-residency test. This suite instead streams a small and a large artifact through the
-same path and asserts the peaks differ by no more than a fixed margin: if the relay
-buffered, the large probe's live bytes would exceed the small one's by roughly the
-artifact size (~100 MiB), two orders of magnitude past the margin, so the gate is
-deterministic in the property it checks rather than in an absolute number.
+residency test. This suite streams a small and a large artifact through the same path,
+and asserts the peaks differ by no more than a fixed margin. If the relay buffered, the
+large probe's live bytes would exceed the small one's by roughly the artifact size
+(~100 MiB). That is two orders of magnitude past the margin. The gate is therefore
+deterministic in the property it checks, rather than in an absolute number.
 
 == Why sampling during the stream, in its own process
 
 'GHC.Stats.max_live_bytes' is a process-lifetime high-water mark, so inside a shared
-suite process earlier examples would drown the delta. This suite therefore runs as
-its own executable (with @-T@ baked into its @ghc-options@), and the consumer forces
-a major collection every few chunks and tracks its __own__ per-probe maximum of
-'gcdetails_live_bytes', current live data, immune to process history.
+suite process earlier examples would drown the delta. This suite therefore runs as its
+own executable, with @-T@ baked into its @ghc-options@. The consumer forces a major
+collection every few chunks and tracks its __own__ per-probe maximum of
+'gcdetails_live_bytes': current live data, immune to process history.
 
-The consumer drives the WAI 'Application' directly and discards chunks as they
-arrive: the probe exercises Écluse's relay pump (upstream reader to 'StreamingBody'
-writer) without a buffering test client in the way. The served body itself is a lazy
-'LByteString' of one shared 64 KiB chunk, so the fixture holds ~64 KiB resident no
-matter the size it serves.
+The consumer drives the WAI 'Application' directly and discards chunks as they arrive.
+The probe therefore exercises Écluse's relay pump (upstream reader to 'StreamingBody'
+writer) with no buffering test client in the way. The served body itself is a lazy
+'LByteString' of one shared 64 KiB chunk. The fixture therefore holds ~64 KiB resident,
+no matter the size it serves.
 -}
 module Ecluse.Server.TarballResidencySpec (spec) where
 
@@ -66,15 +66,15 @@ spec = describe "bounded-memory streaming (S54): residency invariant on the tarb
         largePeak <- publicMissPeak largeArtifactBytes
         largePeak `shouldBeWithinMarginOf` smallPeak
 
--- The probe sizes from the slice: two orders of magnitude apart, so buffering
--- dwarfs the margin. Both are whole multiples of the shared chunk.
+-- The probe sizes: two orders of magnitude apart, so buffering dwarfs the margin.
+-- Both are whole multiples of the shared chunk.
 smallArtifactBytes, largeArtifactBytes :: Int
 smallArtifactBytes = 1 * 1024 * 1024
 largeArtifactBytes = 100 * 1024 * 1024
 
 {- | The allowed peak-live growth from the small probe to the large one. Generous
-against fixture noise (connection buffers, chunk copies, GC estimation), still ~6x
-below what even partial buffering of the large artifact would add.
+against fixture noise (connection buffers, chunk copies, GC estimation), and still
+~6x below what even partial buffering of the large artifact would add.
 -}
 residencyMarginBytes :: Integer
 residencyMarginBytes = 16 * 1024 * 1024
@@ -125,7 +125,7 @@ publicMissPeak size = do
 {- | Drive one tarball request through the 'Application', consuming the streaming
 body chunk-by-chunk and discarding it, sampling live bytes as the stream flows.
 Returns the status code, total bytes served (so the caller can prove the stream
-really flowed), and the peak sampled live bytes.
+flowed), and the peak sampled live bytes.
 -}
 streamProbe :: Maybe Text -> Application -> IO (Int, Int64, Word64)
 streamProbe bearer app = do
@@ -160,15 +160,15 @@ samplePeak peakRef = do
     modifyIORef' peakRef (max (gcdetails_live_bytes (gc stats)))
 
 {- | Sampling cadence: the large probe streams thousands of chunks, so this yields
-on the order of a hundred forced collections over a small heap, cheap, and dense
-enough that a growing buffer cannot hide between samples.
+on the order of a hundred forced collections over a small heap. That is cheap, and
+dense enough that a growing buffer cannot hide between samples.
 -}
 sampleEveryChunks :: Int
 sampleEveryChunks = 64
 
-{- | A lazy body of one shared strict chunk: the whole served artifact costs the
-fixture ~64 KiB resident regardless of its size, so any size-proportional
-growth the probe observes belongs to the relay under test.
+{- | A lazy body of one shared strict chunk. The whole served artifact costs the
+fixture ~64 KiB resident regardless of its size. Any size-proportional growth the
+probe observes therefore belongs to the relay under test.
 -}
 syntheticArtifact :: Int -> LByteString
 syntheticArtifact size = LBS.fromChunks (replicate (size `div` chunkBytes) sharedChunk)

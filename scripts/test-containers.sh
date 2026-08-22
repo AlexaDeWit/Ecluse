@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # Reap the Docker containers, networks, and (only in --all mode) images that
-# Écluse's integration and end-to-end suites create, so a killed or interrupted
-# run does not leave a pile of orphans behind and slowly fill the machine. See
+# Écluse's integration and end-to-end suites create. A killed or interrupted run
+# then leaves no pile of orphans behind to slowly fill the machine. See
 # AGENTS.md -> "Build and tooling" and docs/testing.md -> "Tests and Docker".
 #
-# Every test container is stamped with two labels (see the shared writer,
+# The suites stamp every test container with two labels (see the shared writer,
 # Ecluse.Test.Containers, and test/e2e/Ecluse/E2E/Harness/Docker.hs):
 #
 #   com.ecluse.test        = e2e | integration   # "this is an Écluse test object"
@@ -28,9 +28,9 @@ readonly LABEL_KEY="com.ecluse.test"
 readonly SCOPE_KEY="com.ecluse.test.scope"
 
 # The reaping scope for the current worktree. Honours ECLUSE_TEST_SCOPE when the caller
-# (a container-running `task` target: the `test-*` suites or the `coverage`/`check` path)
-# has pinned it; otherwise derives a stable id from the worktree root path, so each checkout
-# owns a distinct scope.
+# has pinned it: a container-running `task` target, the `test-*` suites or the `coverage`
+# and `check` path. Otherwise it derives a stable id from the worktree root path, so each
+# checkout owns a distinct scope.
 scope_id() {
   if [ -n "${ECLUSE_TEST_SCOPE:-}" ]; then
     printf '%s\n' "$ECLUSE_TEST_SCOPE"
@@ -41,9 +41,9 @@ scope_id() {
   printf 'ecl-%s\n' "$(printf '%s' "$root" | sha1sum | cut -c1-12)"
 }
 
-# True when a Docker daemon is reachable. Everything downstream degrades to a
-# no-op (exit 0) when it is not, so a `defer` reap never masks a suite result and
-# `task test-clean` on a daemonless box is harmless.
+# True when a Docker daemon is reachable. Without one, everything downstream
+# degrades to a no-op (exit 0). A `defer` reap then never masks a suite result,
+# and `task test-clean` on a daemonless box is harmless.
 docker_ready() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
@@ -89,7 +89,7 @@ reap() {
   docker network ls -q "${filters[@]}" | rm_networks
   # Images carry only the coarse label: a Dockerfile LABEL is static, so it has no
   # per-worktree scope. Prune them only in --all mode, where nothing else is meant
-  # to be running and so nothing else can be relying on the shared build image.
+  # to run, and so nothing else can rely on the shared build image.
   if [ "$mode" = "--all" ]; then
     docker images -q --filter "label=$LABEL_KEY" | rm_images
   fi

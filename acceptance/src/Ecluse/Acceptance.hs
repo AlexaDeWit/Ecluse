@@ -6,29 +6,32 @@
 performance-acceptance harness.
 
 The harness fetches real packuments from the live registries and times Écluse's
-work-per-request over each, then asks one question: __is the per-request overhead
+work-per-request over each. It then asks one question: __is the per-request overhead
 within the acceptance budget under today's real-world conditions?__ A breach is a
-prompt for a human decision -- a code regression, or reality outgrowing the
-provisioned budget -- never an automatic block.
+prompt for a human decision, a code regression or reality outgrowing the provisioned
+budget, never an automatic block.
 
-Two overheads are measured per package, each with its own budget:
+The harness measures two overheads per package, each with its own budget:
 
-  * the __full-packument__ transform (decode, project, rule sweep, filter, URL
-    rewrite, re-serialise) that backs a metadata read of every version; and
-  * the __single-version__ selective decode the tarball gate consults to serve one
-    package version -- the cold path's per-package overhead, which a whole-document
-    decode dominates on the heavy many-version packuments and a selective decode does
-    not. Tracking it separately keeps an improvement to the single-version path
-    visible in the report rather than lost behind the full-packument figure.
+  * The __full-packument__ transform (decode, project, rule sweep, filter, URL
+    rewrite, re-serialise) that backs a metadata read of every version.
+  * The __single-version__ selective decode the tarball gate consults to serve one
+    package version. This is the cold path's per-package overhead, which a
+    whole-document decode dominates on the heavy many-version packuments and a
+    selective decode does not. Tracking it separately keeps an improvement to the
+    single-version path visible in the report rather than lost behind the
+    full-packument figure.
 
 This module is the deterministic part: the version-controlled acceptance 'Criteria',
-the per-package 'evaluate' that turns a measured 'Sample' into a per-leg 'Assessment'
-against its budget, and the 'renderReport' summary. The live fetch and timing live in
-the harness executable; everything here is pure and unit-tested, so the acceptance
-decision is exercised deterministically rather than only against the live registries.
+the per-package 'evaluate', and the 'renderReport' summary. 'evaluate' turns a
+measured 'Sample' into a per-leg 'Assessment' against its budget.
 
-The criteria are read from a __version-controlled__ JSON file ('criteriaPath') so
-moving the bar is an explicit, reviewed act.
+The live fetch and timing live in the harness executable. Everything here is pure and
+unit-tested, so a test exercises the acceptance decision deterministically rather than
+only against the live registries.
+
+The criteria come from a __version-controlled__ JSON file ('criteriaPath'), so moving
+the bar is an explicit, reviewed act.
 -}
 module Ecluse.Acceptance (
     -- * Acceptance criteria
@@ -62,7 +65,7 @@ import Numeric (showFFloat)
 
 {- | The acceptance budget: the maximum Écluse work-per-request overhead, in
 milliseconds, allowed before the run reds. A separate default applies to the
-full-packument transform and to the single-version selective decode, each with
+full-packument transform and to the single-version selective decode. Each takes
 optional per-package overrides for the heavy, many-version packuments whose
 processing is legitimately costlier.
 -}
@@ -96,8 +99,8 @@ criteriaPath = "acceptance/criteria.json"
 decodeCriteria :: LByteString -> Either String Criteria
 decodeCriteria = eitherDecode
 
-{- | Read and decode the committed criteria from 'criteriaPath'. Fails loudly if
-the file is missing or malformed -- a committed-config defect, not a runtime
+{- | Read and decode the committed criteria from 'criteriaPath'. Fails loudly if the
+file is missing or malformed: that is a committed-config defect, not a runtime
 condition the harness decides on.
 -}
 loadCriteria :: IO Criteria
@@ -116,10 +119,10 @@ singleVersionBudgetFor crit name =
     Map.findWithDefault (critDefaultSingleVersionBudgetMs crit) name (critPerPackageSingleVersionBudgetMs crit)
 
 {- | One package's live measurement: how long the registry took to serve the
-packument (the upstream leg) and how long Écluse took to process it -- split into the
-full-packument transform and the single-version selective decode -- so an
-upstream-bound cost is never mistaken for an Écluse one, and the single-version path
-is tracked on its own.
+packument (the upstream leg), and how long Écluse took to process it. The Écluse leg
+splits into the full-packument transform and the single-version selective decode. A
+reader therefore never mistakes an upstream-bound cost for an Écluse one, and the
+single-version path stays tracked on its own.
 -}
 data Sample = Sample
     { sampleName :: Text
@@ -150,10 +153,10 @@ data Assessment = Assessment
     }
     deriving stock (Eq, Show)
 
-{- | A package's outcome in a run: either it was measured (with the per-leg
-assessments -- the full-packument leg, then the single-version leg), or it could not
-be assessed (a fetch or decode failure, which is __not__ a breach -- only an
-over-budget measurement reds the run).
+{- | A package's outcome in a run: either the harness measured the package, or it
+could not assess it. A measured outcome carries the per-leg assessments, the
+full-packument leg then the single-version leg. A fetch or decode failure is __not__
+a breach: only an over-budget measurement reds the run.
 -}
 data PackageOutcome
     = -- | A measured package: its sample, the full-packument assessment, then the single-version assessment.
@@ -169,9 +172,9 @@ newtype Report = Report
     deriving stock (Eq, Show)
 
 {- | Evaluate each package's raw input against the criteria. A @Left (name, reason)@
-is an unavailable package (carried through, never a breach); a @Right sample@ is
-measured against its resolved budgets -- each leg over budget yields a 'Breached'
-margin, otherwise 'Within'.
+is an unavailable package, carried through and never a breach. It measures a
+@Right sample@ against its resolved budgets: each leg over budget yields a 'Breached'
+margin, and every other leg 'Within'.
 -}
 evaluate :: Criteria -> [Either (Text, Text) Sample] -> Report
 evaluate crit = Report . map outcome
@@ -189,8 +192,8 @@ assess budget overheadMs =
     let margin = overheadMs - budget
      in Assessment budget (if margin > 0 then Breached margin else Within)
 
-{- | Whether any measured leg breached its budget -- the run's red condition. An
-unavailable package never counts (a flaky registry is not a perf regression).
+{- | Whether any measured leg breached its budget: the run's red condition. An
+unavailable package never counts, because a flaky registry is not a perf regression.
 -}
 reportBreached :: Report -> Bool
 reportBreached = any isBreach . reportOutcomes
@@ -203,22 +206,22 @@ breached :: Assessment -> Bool
 breached (Assessment _ (Breached _)) = True
 breached _ = False
 
-{- | The run-shape facts the summary names so a reader can interpret the numbers
-without opening the harness: how many packages the catalogue held, and how many
-timed passes each reported leg's median came from.
+{- | The run-shape facts the summary names, so a reader interprets the numbers
+without opening the harness. It carries how many packages the catalogue held, and
+how many timed passes each reported leg's median came from.
 -}
 data OperatingPoint = OperatingPoint
     { opPassesPerLeg :: Int
-    -- ^ Timed passes per leg; the reported figure is their median.
+    -- ^ Timed passes per leg. The reported figure is their median.
     , opCatalogueSize :: Int
     -- ^ Packages in the curated catalogue this run set out to measure.
     }
     deriving stock (Eq, Show)
 
 {- | The budget-to-observed multiple for one leg: how many times the measured
-overhead fits inside its budget ('Nothing' when the observed figure is zero or
-negative, where the multiple is meaningless). Rendered per package so the report
-shows how much room each leg has before a breach, not just the binary verdict.
+overhead fits inside its budget. 'Nothing' when the observed figure is zero or
+negative, where the multiple is meaningless. Rendered per package, so the report
+shows how much room each leg has before a breach, beyond the binary verdict.
 -}
 headroom :: Double -> Double -> Maybe Double
 headroom budget observed
@@ -226,16 +229,17 @@ headroom budget observed
     | otherwise = Just (budget / observed)
 
 {- | The fraction of its budget a within-budget leg may consume before the report
-marks it __watch__ -- early warning that reality is drifting toward the bar, while
-the exit code stays green (only a breach exits non-zero). Budgets are calibrated at
-roughly 2.2x the observed CI maxima, so a healthy leg sits near 45% of its budget:
-0.7 stays quiet across that range and trips once a leg reaches about 1.55x its
-calibration-time maximum, well before the breach at 2.2x.
+marks it __watch__. The mark is early warning that reality is drifting toward the
+bar, while the exit code stays green (only a breach exits non-zero).
+
+Budgets are calibrated at roughly 2.2x the observed CI maxima, so a healthy leg sits
+near 45% of its budget. 0.7 stays quiet across that range and trips once a leg
+reaches about 1.55x its calibration-time maximum, well before the breach at 2.2x.
 -}
 watchFraction :: Double
 watchFraction = 0.7
 
--- Whether a within-budget leg has consumed enough of its budget to be on watch. A
+-- Whether a within-budget leg consumed enough of its budget to be on watch. A
 -- breached leg is never merely on watch, and a non-positive budget cannot express a
 -- meaningful fraction.
 watching :: Assessment -> Double -> Bool
@@ -244,12 +248,13 @@ watching a observed = case assessVerdict a of
     Breached _ -> False
 
 {- | Render a run as a Markdown summary: an overall verdict line, the operating
-point, then a per-package table that keeps the __upstream__, __full-packument
-overhead__, and __single-version overhead__ legs in separate columns -- so an
-upstream-normalisation view can be added without reshaping the table -- with each
-measured row naming its budgets, its per-leg headroom, and a verdict: @within@, a
-@watch@ mark on a leg at or above 'watchFraction' of its budget, or on a breach
-which leg went over and by how much. Unavailable packages are listed as such, never
+point, then a per-package table. The table keeps the __upstream__, __full-packument
+overhead__, and __single-version overhead__ legs in separate columns, so an
+upstream-normalisation view fits later without reshaping the table.
+
+Each measured row names its budgets, its per-leg headroom, and a verdict. The verdict
+is @within@, a @watch@ on a leg at or above 'watchFraction' of its budget, or a breach
+naming the leg and its margin. The report lists unavailable packages as such, never
 as breaches.
 -}
 renderReport :: OperatingPoint -> Report -> Text
@@ -331,9 +336,9 @@ renderReport op report =
             ]
         | otherwise = []
 
--- A measured row's verdict cell: "within" when both legs are in budget and clear of
--- the watch fraction, else each breached leg named with its margin and each watched
--- leg named with the budget share it has consumed.
+-- A measured row's verdict cell. It is "within" when both legs are in budget and
+-- clear of the watch fraction. Otherwise it names each breached leg with its margin,
+-- and each watched leg with the budget share it consumed.
 renderVerdicts :: Sample -> Assessment -> Assessment -> Text
 renderVerdicts s full single =
     case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of

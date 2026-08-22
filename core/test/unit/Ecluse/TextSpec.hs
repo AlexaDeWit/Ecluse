@@ -14,13 +14,13 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, renderIso8601Utc, stripTrailingSlash)
 
-{- | Tests for the shared text helpers. They pin the promises callers depend on:
+{- | Tests for the shared text helpers. They pin the promises callers depend on.
 'nonBlank' treats an empty or all-whitespace value as absent and returns the surviving
-text __trimmed__, the URL-path helpers tolerate exactly one trailing slash on the
-base so a join never doubles or drops the separator, 'lastPathSegment' returns the
-text after the final slash or nothing when the string ends in one, and the hot-path
-ISO-8601 renderer is byte-for-byte 'iso8601Show' -- pinned by a property over the
-whole domain, including the delegating edges.
+text trimmed. The URL-path helpers tolerate exactly one trailing slash on the base, so a
+join never doubles or drops the separator. 'lastPathSegment' returns the text after the
+final slash, or nothing when the string ends in one. The hot-path ISO-8601 renderer is
+byte-for-byte 'iso8601Show', pinned by a property over the whole domain, including the
+delegating edges.
 -}
 spec :: Spec
 spec = do

@@ -1,9 +1,9 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- The totality properties below are polymorphic in the decoded type @a@, which
--- appears only under a type application at each call site (e.g.
--- @valueDecodeIsTotal \@Person@); that is exactly what AllowAmbiguousTypes is for.
+-- The totality properties below are polymorphic in the decoded type @a@, which appears
+-- only under a type application at each call site (e.g. @valueDecodeIsTotal \@Person@).
+-- That is what AllowAmbiguousTypes is for.
 {-# LANGUAGE AllowAmbiguousTypes #-}
 
 module Ecluse.Registry.Npm.WireSpec (spec) where
@@ -33,14 +33,13 @@ import Ecluse.Core.Registry.Npm.Wire
 {- | Decoding tests for the npm wire types. Every fixture under
 @core\/test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
 in @docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §3 errors).
-The suite is pure and offline -- it never touches the network; protocol drift is
-surfaced separately by the non-gating smoke suite.
+The suite is pure and offline, and never touches the network. The non-gating smoke suite
+surfaces protocol drift separately.
 
-The cases pin down the two things the decoders promise: __faithful__ capture of
-the rule-decisive fields (@hasInstallScript@, @deprecated@, the @dist@ integrity
-triple, the @scripts@ map) and __lenient__ input handling (string-or-object
-@license@\/@person@\/@bugs@\/@repository@, the bare-string 404, and ignored unknown
-keys).
+The cases pin down the two things the decoders promise. The first is __faithful__ capture
+of the rule-decisive fields: @hasInstallScript@, @deprecated@, the @dist@ integrity
+triple, and the @scripts@ map. The second is __lenient__ input handling: string-or-object
+@license@\/@person@\/@bugs@\/@repository@, the bare-string 404, and ignored unknown keys.
 -}
 spec :: Spec
 spec = do
@@ -60,8 +59,8 @@ versionManifestSpec = describe "VersionManifest" $ do
         vmVersion vm `shouldBe` "3.49.0"
 
     it "captures the full-form scripts map (no hasInstallScript key)" $ do
-        -- core-js full manifest has scripts.postinstall but NO hasInstallScript;
-        -- a later slice derives install-script presence from this map.
+        -- The core-js full manifest has scripts.postinstall but NO hasInstallScript.
+        -- The projection derives install-script presence from this map.
         vm <- decodeFixture @VersionManifest "core-js.manifest.json"
         vmHasInstallScript vm `shouldBe` Nothing
         Map.keys (vmScripts vm) `shouldBe` ["postinstall"]
@@ -112,8 +111,7 @@ distSpec = describe "Dist" $ do
         let d = vmDist vm
         distFileCount d `shouldBe` Just 1455
         distUnpackedSize d `shouldBe` Just 6789012
-        -- Pin the whole signature object so both fields (sig and keyid) are
-        -- asserted, not just the keyid.
+        -- Pin the whole signature object so the assertion covers sig as well as keyid.
         distSignatures d
             `shouldBe` [Signature{sigSig = "MEQCIH", sigKeyid = "SHA256:jl3bwswu80"}]
 
@@ -140,12 +138,12 @@ distSpec = describe "Dist" $ do
                 }
             )
 
-{- | A regression guard for the advisory-field denial defect: the __advisory__
-@dist@ sub-fields (@unpackedSize@, @fileCount@, @signatures@) decide no rule and
-no serve, so a single hostile value in one must degrade that field alone, never
-failing the 'Dist' decode. The load-bearing integrity fields (@tarball@,
-@integrity@) stay strict and intact. Whole-packument survival across such a version
-is the projection layer's concern, pinned on the live decoder by @ProjectSpec@.
+{- | A regression guard on advisory-field leniency. The __advisory__ @dist@ sub-fields
+(@unpackedSize@, @fileCount@, @signatures@) decide no rule and no serve. A single hostile
+value in one must degrade that field alone, never failing the 'Dist' decode. The
+load-bearing integrity fields (@tarball@, @integrity@) stay strict and intact.
+Whole-packument survival across such a version is the projection layer's concern, which
+@ProjectSpec@ pins on the live decoder.
 -}
 advisoryFieldLeniencySpec :: Spec
 advisoryFieldLeniencySpec = describe "advisory dist-field leniency" $ do
@@ -216,7 +214,7 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
                 "{\"name\":\"mikeal\",\"email\":\"m@example.com\"}"
                 (Person "mikeal" (Just "m@example.com") Nothing)
         it "reads name, email, and url from the full object form" $ do
-            -- Exercise each selector, not just the structural equality above.
+            -- Exercise each selector directly, beyond the structural equality above.
             p <-
                 decodeOrFail @Person
                     "{\"name\":\"Sindre\",\"email\":\"s@example.com\",\"url\":\"https://sindresorhus.com\"}"
@@ -251,12 +249,11 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             bugsUrl b `shouldBe` Just "https://x/issues"
             bugsEmail b `shouldBe` Just "b@x"
 
-    -- A string-or-object scalar must reject any other JSON kind rather than
-    -- silently mis-parsing it. We spread the four rejected kinds (number, array,
-    -- boolean, null) across the lenient decoders so each is proven to refuse a
-    -- shape it was never meant to accept. Asserting the full message (not just
-    -- `isLeft`) pins the descriptive error, naming both the accepted shapes and
-    -- the JSON kind actually found.
+    -- A string-or-object scalar must reject any other JSON kind rather than silently
+    -- mis-parsing it. We spread the four rejected kinds (number, array, boolean, null)
+    -- across the lenient decoders. Each one then proves it refuses a shape it was never
+    -- meant to accept. Asserting the full message rather than `isLeft` pins the
+    -- descriptive error, which names both the accepted shapes and the JSON kind found.
     describe "rejecting the wrong JSON kind" $ do
         it "rejects a number for License, naming the number kind" $
             (eitherDecode "42" :: Either String License)
@@ -295,11 +292,11 @@ errorResponseSpec = describe "ErrorResponse" $ do
             `shouldBe` ErrorObject
                 ErrorBody{errMessage = Just "you must be logged in", errError = Just "Unauthorized"}
 
-{- | The wire types appear inside JSON arrays on the registry (maintainer and
-signature lists, and @versions@\/@dist-tags@ are objects of them), so each must
-decode as an element of a homogeneous list too. These cases decode a JSON array
-of each type and assert the decoded elements, exercising the list path of every
-decoder (HPC tracks it as a distinct @parseJSONList@ box) with real values.
+{- | The wire types appear inside JSON arrays on the registry: maintainer and signature
+lists. The @versions@\/@dist-tags@ fields are objects of them. Each type must decode as an
+element of a homogeneous list too. These cases decode a JSON array of each type and assert
+the decoded elements. That drives the list path of every decoder with real values. HPC
+tracks that path as a distinct @parseJSONList@ box.
 -}
 jsonListSpec :: Spec
 jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
@@ -343,22 +340,21 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
                        , ErrorObject ErrorBody{errMessage = Just "nope", errError = Nothing}
                        ]
 
-{- | The wire decoders eat __untrusted__ upstream JSON, so every one must be
-__total__: an arbitrary input may never make a decoder bottom (throw, or hit a
-partial function); it must always return a typed 'Success'\/'Error' (for a
-'Value') or a 'Right'\/'Left' (for raw bytes). These generative properties feed
-each 'FromJSON' instance a bounded-but-arbitrary 'Value' and a run of arbitrary
-bytes and assert the result is fully evaluable without an exception -- the
-totality half of /parse, don't validate/ that the fixture suite above only spot-
-checks. (The companion projection-layer properties live in
-"Ecluse.Registry.Npm.ProjectSpec".)
+{- | The wire decoders eat __untrusted__ upstream JSON, so every one must be __total__.
+An arbitrary input may never make a decoder bottom by throwing or by hitting a partial
+function. It must always return a typed 'Success'\/'Error' for a 'Value', or a
+'Right'\/'Left' for raw bytes. These generative properties feed each 'FromJSON' instance
+a bounded-but-arbitrary 'Value' and a run of arbitrary bytes. They then assert the result
+is fully evaluable without an exception. That is the totality half of /parse, don't
+validate/, which the fixture suite above only spot-checks. The companion projection-layer
+properties live in "Ecluse.Registry.Npm.ProjectSpec".
 -}
 totalitySpec :: Spec
 totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
-    -- Each decoder must be total over an arbitrary 'Value': the result is a
-    -- typed Success or a typed Error, never ⊥. We force the whole decoded
-    -- structure (via its 'Show' rendering) so a partial function anywhere in it
-    -- would surface as a caught exception rather than slipping past in a thunk.
+    -- Each decoder must be total over an arbitrary 'Value': the result is a typed
+    -- Success or a typed Error, never a ⊥ value. We force the whole decoded structure
+    -- through its 'Show' rendering. A partial function anywhere in it then surfaces as a
+    -- caught exception rather than slipping past in a thunk.
     describe "every wire decoder is total over an arbitrary Value" $ do
         it "Person" $ hedgehog (valueDecodeIsTotal @Person)
         it "Repository" $ hedgehog (valueDecodeIsTotal @Repository)
@@ -398,12 +394,11 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
                 Success (ErrorString captured) -> captured H.=== s
                 other -> annotateShow other >> H.failure
 
-{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value': feed it a
-bounded-but-arbitrary value and fully evaluate the typed 'Result', so a bottom
-anywhere in the decoded structure surfaces as a caught exception ('H.eval' runs
-the forcing in pure code and turns any thrown bottom into a test failure) rather
-than a pass. Forcing the 'Show' rendering walks the whole structure, not just its
-outermost constructor.
+{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value'. Feed it a
+bounded-but-arbitrary value and fully evaluate the typed 'Result'. A bottom anywhere in
+the decoded structure then surfaces as a caught exception rather than a pass. 'H.eval' runs
+the forcing in pure code and turns any thrown bottom into a test failure. Forcing the
+'Show' rendering walks the whole structure, down past its outermost constructor.
 -}
 valueDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeIsTotal = do
@@ -412,9 +407,9 @@ valueDecodeIsTotal = do
     _ <- H.eval (resultRendering (fromJSON v :: Result a))
     H.success
 
-{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over
-arbitrary bytes: random (mostly non-JSON) bytes must yield a typed 'Left', never
-a crash. As above, the whole 'Either' is forced through its rendering.
+{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over arbitrary
+bytes: random (mostly non-JSON) bytes must yield a typed 'Left', never a crash. As above,
+the rendering forces the whole 'Either'.
 -}
 bytesDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 bytesDecodeIsTotal = do
@@ -449,41 +444,41 @@ isSuccess = \case
 
 {- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value': the
 five scalar kinds (null\/bool\/number\/string) plus small arrays and objects of
-recursively-generated values. 'Gen.recursive' shrinks toward the scalar
-(non-recursive) cases and the small ranges keep it terminating, so it covers the
-JSON shapes a registry might send (and many it never would) without diverging.
-The object keys lean on a small alphabet that includes the real wire field names,
-so generated objects routinely land on a decoder's expected keys.
+recursively-generated values. 'Gen.recursive' shrinks toward the scalar (non-recursive)
+cases, and the small ranges keep it terminating. It covers the JSON shapes a registry
+might send, and many it never would, without diverging. The object keys lean on a small
+alphabet that includes the real wire field names, so generated objects routinely land on
+a decoder's expected keys.
 -}
 genValue :: H.Gen Value
 genValue =
     Gen.recursive
         Gen.choice
-        -- non-recursive (leaf) generators -- also the shrink targets
+        -- non-recursive (leaf) generators, also the shrink targets
         [ pure Null
         , Bool <$> Gen.bool
         , Number <$> genNumber
         , String <$> genJsonText
         ]
-        -- recursive generators -- small fan-out so the tree stays bounded
+        -- recursive generators, small fan-out so the tree stays bounded
         [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
         , Object . KeyMap.fromList
             <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
         ]
 
-{- | A small arbitrary integer to seed a JSON number (kept in a modest range so
-'Show' is cheap; 'fromInteger' lifts it into aeson's 'Number' 'Scientific').
+{- | A small arbitrary integer to seed a JSON number, kept in a modest range so 'Show'
+is cheap. 'fromInteger' lifts it into aeson's 'Number' 'Scientific'.
 -}
 genInteger :: H.Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
 
-{- | A small arbitrary JSON number. Most draws are modest integers (cheap to
-'Show'), but a deliberate minority are hostile to a strict 'Int' decode --
-fractional or far outside 'Int' range (built from a bounded coefficient and a
-wide base-10 exponent, so the magnitude is astronomical yet the value stays cheap
-to render). This reaches the fractional\/huge\/overflowing shapes a plain integer
-generator never produces, so the totality fuzz exercises the lenient numeric
-@dist@ decoders' graceful degradation, not merely the absence of a crash.
+{- | A small arbitrary JSON number. Most draws are modest integers, cheap to 'Show'. A
+deliberate minority are hostile to a strict 'Int' decode: fractional, or far outside
+'Int' range. Those come from a bounded coefficient and a wide base-10 exponent, so the
+magnitude is astronomical yet the value stays cheap to render. This reaches the
+fractional, huge, and overflowing shapes a plain integer generator never produces. The
+totality fuzz therefore drives the lenient numeric @dist@ decoders' graceful degradation,
+beyond the absence of a crash.
 -}
 genNumber :: H.Gen Scientific
 genNumber =
@@ -497,8 +492,8 @@ genJsonText :: H.Gen Text
 genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
 
 {- | An object key drawn from a pool biased toward the real wire field names
-(@name@, @version@, @dist@, @tarball@, …) so generated objects frequently satisfy
-a decoder's required\/optional keys -- otherwise almost every object would miss
+(@name@, @version@, @dist@, @tarball@, …). Generated objects then frequently satisfy
+a decoder's required\/optional keys. Without the bias almost every object would miss
 @.: \"name\"@ and the success arm would go unsampled.
 -}
 genKey :: H.Gen Key.Key
@@ -531,9 +526,9 @@ genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
         , "hasInstallScript"
         ]
 
-{- | Decode a committed fixture by file name (under @core\/test\/unit\/fixtures\/npm\/@,
-a path relative to the package root that Cabal runs tests from), failing the
-example with the aeson error on a decode failure.
+{- | Decode a committed fixture by file name, under @core\/test\/unit\/fixtures\/npm\/@,
+a path relative to the package root that Cabal runs tests from. A decode failure fails
+the example with the aeson error.
 -}
 decodeFixture :: forall a. (FromJSON a) => FilePath -> IO a
 decodeFixture name = do
@@ -549,8 +544,8 @@ decodesTo :: forall a. (FromJSON a, Eq a, Show a) => LByteString -> a -> Expecta
 decodesTo json expected = eitherDecode json `shouldBe` Right expected
 
 {- | A 'Dist' carrying only its required tarball, every advisory field at its
-absent\/empty default. The expected shape when a poisoned advisory field has
-degraded; record-update one selector for the cases that keep a good value.
+absent\/empty default. This is the expected shape when a poisoned advisory field
+degrades. Record-update one selector for the cases that keep a good value.
 -}
 bareDist :: Text -> Dist
 bareDist tarball =
@@ -564,7 +559,7 @@ bareDist tarball =
         }
 
 {- | Decode a JSON literal, failing the example with the aeson error rather than
-returning an 'Either', so an example can go on to read selectors off the value.
+returning an 'Either'. An example can then go on to read selectors off the value.
 -}
 decodeOrFail :: forall a. (FromJSON a) => LByteString -> IO a
 decodeOrFail json = case eitherDecode json of

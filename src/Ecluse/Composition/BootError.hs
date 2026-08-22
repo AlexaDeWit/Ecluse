@@ -5,14 +5,13 @@
 {- | The boot-error vocabulary of the composition root: every reason Écluse refuses
 to start, and its operator-facing rendering.
 
-Each case is a __fail-loud__ boot failure; the composition root aggregates them so a
-single run reports every problem an operator must fix (see
-@docs\/architecture\/configuration.md@ → "Validation"). The sibling composition
-modules produce these -- credential resolution
-("Ecluse.Composition.Credential"), queue-backend selection
-("Ecluse.Composition.MirrorQueue"), and the mount\/publish wiring
-("Ecluse.Composition") -- and this module is their shared spine, so it holds no
-policy of its own beyond the rendering.
+Each case is a __fail-loud__ boot failure. The composition root aggregates them, so
+a single run reports every problem an operator must fix (see
+@docs\/architecture\/configuration.md@ → "Validation"). Three sibling modules produce
+them: credential resolution ("Ecluse.Composition.Credential"), queue-backend
+selection ("Ecluse.Composition.MirrorQueue"), and the mount\/publish wiring
+("Ecluse.Composition"). This module is their shared spine, so it holds no policy of
+its own beyond the rendering.
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
@@ -30,70 +29,69 @@ import Ecluse.Config.Resolve qualified as Resolve
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | A reason the composition root refuses to start. Every case is a __fail-loud__
-boot failure; they are aggregated so a single run reports every problem an
+boot failure. The root aggregates them, so a single run reports every problem an
 operator must fix.
 -}
 data BootError
     = -- | A rule policy did not resolve (surfaced by 'Ecluse.Config.loadConfig').
       PolicyBootError PolicyError
-    | {- | A configured mount's ecosystem has no adapter wired, so it
-      cannot be served (a loud miss, never a silent drop). Carries the ecosystem.
+    | {- | A configured mount's ecosystem has no adapter wired, so Écluse cannot
+      serve it: a loud miss, never a silent drop. Carries the ecosystem.
       -}
       MissingAdapter Ecosystem
-    | {- | A mount has no initialised mirror-write provider. The credential is derived
-      from the mirror-target URL and realised for every active mount, so this is a
-      total safety net rather than a reachable operator misconfiguration. Carries the
+    | {- | A mount has no initialised mirror-write provider. Every active mount derives
+      its credential from the mirror-target URL and realises it, so this case is a
+      total safety net, not a reachable operator misconfiguration. Carries the
       ecosystem of the mount.
       -}
       UnresolvedCredential Ecosystem
-    | {- | The queue URL names a backend (by its shape) that has no implementation
-      compiled into this binary, so no queue can be built for it. Carries the
-      provider's name. An honest refusal -- never a silent fall-through to a
-      different backend.
+    | {- | The queue URL's shape names a backend this binary compiled no
+      implementation for, so no queue can exist for it. Carries the provider's name.
+      An honest refusal, never a silent fall-through to a different backend.
       -}
       QueueProviderUnavailable Text
-    | {- | An SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is set but no
-      @AWS_REGION@ was supplied: an emulator or VPC endpoint does not carry a
-      region in its host, so the ambient region must scope it. A real SQS queue
-      URL carries its own region and never raises this.
+    | {- | An SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is set but @AWS_REGION@
+      is not. An emulator or VPC endpoint does not carry a region in its host, so the
+      ambient region must scope it. A real SQS queue URL carries its own region and
+      never raises this.
       -}
       QueueRegionMissing
     | {- | @ECLUSE_QUEUE__URL@ is set but its shape names no backend this binary
-      knows, so refusing is the only honest move (guessing a backend would send
-      mirror jobs somewhere the operator did not point at). Carries the value.
+      knows. Refusing is the only honest move: guessing a backend would send mirror
+      jobs somewhere the operator did not point at. Carries the value.
       -}
       QueueUrlUnrecognised Text
     | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is not a
       parseable endpoint URL. Carries the offending value.
       -}
       QueueEndpointMalformed Text
-    | {- | The eager boot-time CodeArtifact mint threw -- a transient AWS error (worth a
-      retry) or a permanent one (a bad domain\/region or missing permission, to be
-      fixed). Carries the rendered exception so the cause is legible and aggregated.
+    | {- | The eager boot-time CodeArtifact mint threw. The cause is a transient AWS
+      error, worth a retry, or a permanent one to fix: a bad domain\/region, or a
+      missing permission. Carries the rendered exception, so the cause is legible and
+      aggregated.
       -}
       CodeArtifactMintFailed Text
-    | {- | A publication target was configured (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET@)
-      but no publish allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@) was
-      supplied, so the anti-shadowing
-      guard would have nothing to enforce. Refused at boot rather than defaulting to an
-      empty allow-list (which would deny every publish) or an open one (which would let
-      a client shadow any public name).
+    | {- | A publication target is set (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET@)
+      but no publish allow-list (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@) is, so
+      the anti-shadowing guard has nothing to enforce. Refused at boot, not defaulted:
+      an empty allow-list would deny every publish, and an open one would let a client
+      shadow any public name.
       -}
       PublishAllowMissing Ecosystem
     | {- | A static publish credential (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLICATION_TARGET_TOKEN@)
-      was configured without a verifiable inbound edge (@ECLUSE_SERVER__AUTH_TOKEN@). Écluse would otherwise
-      substitute its own standing write credential for a publishing caller who forwards
-      none, so an unauthenticated request could publish within the configured scopes
-      under Écluse's own identity. Refused at boot so an internal publish credential
-      paired with an open edge is unrepresentable -- the write-side counterpart of the
-      fail-closed read identity.
+      is set without a verifiable inbound edge (@ECLUSE_SERVER__AUTH_TOKEN@). Écluse
+      would otherwise substitute its own standing write credential for a publishing
+      caller who forwards none. An unauthenticated request could then publish within
+      the configured scopes under Écluse's own identity. Refused at boot, so an
+      internal publish credential paired with an open edge is unrepresentable: the
+      write-side counterpart of the fail-closed read identity.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem
     | {- | An explicit memory override breaks the combined memory-plan invariant even
       after every computed tenant shed to its minimum
       ("Ecluse.Composition.MemoryPlan"). Carries the solver's per-violation
       diagnostics. A computed plan never raises this: it degrades gracefully and
-      boots; an override is an operator claim, and a false one is refused.
+      boots. An override is an operator claim, and Écluse refuses a false one.
       -}
       MemoryPlanOverrideUnsafe [Text]
     deriving stock (Eq, Show)
@@ -132,9 +130,9 @@ renderBootError = \case
         "memory plan refused: " <> T.intercalate "; " details
 
 {- | The full environment key of a mount-scoped setting
-(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it: the
-'Ecosystem'-typed wrapper over the shared 'Resolve.mountEnvKey', used by the
-boot-error renderings above.
+(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it. The
+'Ecosystem'-typed wrapper over the shared 'Resolve.mountEnvKey', for the boot-error
+renderings above.
 -}
 mountEnvKey :: Ecosystem -> Text -> Text
 mountEnvKey eco = Resolve.mountEnvKey (ecosystemName eco)

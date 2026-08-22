@@ -52,34 +52,36 @@ tasks:
   test-integration:
     desc: Run the integration suite (requires a Docker daemon)
     env:
-      # Pin this worktree's reaping scope so the harness stamps every container with
-      # it (see Ecluse.Test.Containers) and the reaps below target only our own.
+      # Pin this worktree's reaping scope. The harness stamps every container with it
+      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
       ECLUSE_TEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
-      # exit. Both are scoped, so a sibling worktree's live containers are never touched.
+      # exit. Both reaps carry the scope, so neither touches a sibling worktree's
+      # live containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - cabal test ecluse-integration --test-show-details=direct
   test-residency:
-    desc: Run the bounded-memory streaming gate (S54; own process, RTS -T)
+    desc: Run the bounded-memory streaming gate (own process, RTS -T)
     cmds:
       - cabal test ecluse-residency --test-show-details=direct
   test-smoke:
-    desc: Run the smoke suite (live registries; non-gating)
+    desc: Run the smoke suite (live registries, non-gating)
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
   test-e2e:
-    desc: End-to-end suite against a locally built OCI image (requires E2E image to run tests, E2E daemon must be active, E2E deps must be built)
+    desc: End-to-end suite against a locally built OCI image (needs the E2E image, an active Docker daemon, and the E2E dependencies built)
     env:
-      # Pin this worktree's reaping scope so the harness stamps every container with
-      # it (see Ecluse.Test.Containers) and the reaps below target only our own.
+      # Pin this worktree's reaping scope. The harness stamps every container with it
+      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
       ECLUSE_TEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
-      # exit. Both are scoped, so a sibling worktree's live containers are never touched.
+      # exit. Both reaps carry the scope, so neither touches a sibling worktree's
+      # live containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - |
@@ -97,7 +99,7 @@ tasks:
         echo "==> running ecluse-e2e"
         ECLUSE_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
   test-clean:
-    desc: Reap THIS worktree's leftover test containers/networks (scoped; safe while other agents or worktrees run)
+    desc: Reap THIS worktree's leftover test containers/networks (scoped, safe while other agents or worktrees run)
     cmds:
       - bash scripts/test-containers.sh reap
   test-clean-all:
@@ -129,7 +131,7 @@ tasks:
         ghc-prof-flamegraph ecluse-bench.prof -o ecluse-bench.svg; \
         echo "flame graph: ecluse-bench.svg  (cost-centre profile: ecluse-bench.prof)"'
   bench-load:
-    desc: Run the throughput & latency load tests
+    desc: Run the throughput and latency load tests
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-load'
   perf-acceptance:
@@ -154,12 +156,13 @@ tasks:
         vars: { SUITE: ecluse-unit }
       - task: coverage-unit
         vars: { SUITE: ecluse-runtime-unit }
-      # The integration tier drives ministack containers, so it runs in its own task that pins
-      # the reaping scope and reaps around itself -- the integration suite's Docker lifecycle on
-      # the `task check` path (which runs coverage), matching what `test-integration` does. It is
-      # kept out of the shared `coverage-unit` because that scope env (an ECLUSE_-prefixed var)
-      # would leak into the unit tiers, whose BootSpec boots the real server from the process
-      # environment and rejects the unknown ECLUSE_TEST_SCOPE config key.
+      # The integration tier drives ministack containers, so it runs in its own task
+      # that pins the reaping scope and reaps around itself. That gives the integration
+      # suite the same Docker lifecycle on the `task check` path (which runs coverage)
+      # that `test-integration` gives it. It stays out of the shared `coverage-unit`
+      # because the scope env var is ECLUSE_-prefixed. It would leak into the unit
+      # tiers, whose BootSpec boots the real server from the process environment and
+      # rejects ECLUSE_TEST_SCOPE as an unknown config key.
       - task: coverage-integration
       - |
         core_unit_tix="$(find dist-coverage -type f -name ecluse-core-unit.tix | head -n1)"
@@ -191,20 +194,21 @@ tasks:
     cmds:
       - bash scripts/coverage.sh {{.SUITE}} {{.COVERAGE_FLAGS}}
   coverage-integration:
-    desc: Integration-tier coverage (drives ministack; scoped + reaped like test-integration)
+    desc: Integration-tier coverage (drives ministack, scoped and reaped like test-integration)
     env:
-      # Pin this worktree's reaping scope so the ministack containers this tier starts are
-      # stamped with it (see Ecluse.Test.Containers) and the reaps below target only our own.
-      # Isolated to this task -- never the shared `coverage-unit` -- because ECLUSE_TEST_SCOPE
-      # is an ECLUSE_-prefixed var the config resolver treats as an unknown key, which would
-      # abort BootSpec's boot-the-real-server cases in the unit tiers (they read the process
-      # environment). The Haskell writer defaults to an unreapable "local" when it is unset.
+      # Pin this worktree's reaping scope. The harness stamps every ministack container
+      # this tier starts with it (see Ecluse.Test.Containers), and the reaps below then
+      # target only this worktree's. Keep it on this task alone, never on the shared
+      # `coverage-unit`. The config resolver treats the ECLUSE_-prefixed
+      # ECLUSE_TEST_SCOPE as an unknown key, which aborts BootSpec's
+      # boot-the-real-server cases in the unit tiers (they read the process
+      # environment). Unset, the Haskell writer defaults to an unreapable "local".
       ECLUSE_TEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
-      # Sweep this worktree's strays from a prior killed run first, then reap again on exit, so a
-      # hard-killed coverage run leaves no scoped ministack orphans. Both scoped, so a sibling
-      # worktree's live containers are never touched.
+      # Sweep this worktree's strays from a prior killed run first, then reap again on
+      # exit, so a hard-killed coverage run leaves no scoped ministack orphans. Both
+      # reaps carry the scope, so neither touches a sibling worktree's live containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
@@ -223,13 +227,13 @@ tasks:
     cmds:
       - bash scripts/new-worktree.sh "{{.BRANCH}}" "{{.BASE}}" "{{.DIR}}"
   rm-worktree:
-    desc: Retire BRANCH's agent worktree and reap its HLS cache (the branch is kept; FORCE=1 to discard local changes)
+    desc: Retire BRANCH's agent worktree and reap its HLS cache, keeping the branch (FORCE=1 discards local changes)
     requires:
       vars: [BRANCH]
     cmds:
       - bash scripts/rm-worktree.sh "{{.BRANCH}}" "{{.DIR}}"
   worktree-clean:
-    desc: Reap HLS caches stranded by deleted worktrees and prune stale registrations (safe while other worktrees build; --dry-run to preview)
+    desc: Reap HLS caches stranded by deleted worktrees and prune stale registrations (safe while other worktrees build, --dry-run to preview)
     cmds:
       - bash scripts/reap-hls-caches.sh {{.CLI_ARGS}}
   format:
@@ -287,13 +291,13 @@ tasks:
       - exclude: 'sbom/**'
       - exclude: '*.json'
     cmds:
-      # missing-integrity is excluded by repo-owner disposition (PR #694): SRI
-      # applies to fetched subresources, and this site has none that are
-      # externally hosted. The only absolute-URL <link> tags are rel="canonical"
-      # (pure metadata, no fetch), and all runtime assets (Mermaid, Redoc, CSS)
-      # are vendored same-origin and hash-pinned through the flake. Excluding
-      # the rule here, rather than per-tag nosemgrep comments, also keeps the
-      # findings out of the SARIF upload, so code scanning stays quiet too.
+      # The repo owner excluded missing-integrity. SRI applies to fetched
+      # subresources, and this site hosts none externally. The only absolute-URL
+      # <link> tags are rel="canonical", which is pure metadata and fetches nothing.
+      # The flake vendors every runtime asset (Mermaid, Redoc, CSS) same-origin and
+      # hash-pinned. Excluding the rule here, rather than through per-tag
+      # nosemgrep comments, also keeps the findings out of the SARIF upload, so code
+      # scanning stays quiet too.
       - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
   cabal-check:
     desc: Validate the .cabal package metadata
@@ -332,19 +336,19 @@ tasks:
       - exclude: '_site/**'
       - exclude: 'scratchpad/**'
     cmds:
-      # The file list comes from git at run time, never a static list, so the
-      # gate stays correct while concurrent work adds, moves, or splits modules.
+      # The file list comes from git at run time, never a static list. The gate then
+      # stays correct while concurrent work adds, moves, or splits modules.
       - git ls-files -z -- '*.hs' | xargs -0 -r reuse lint-file
   spdx-fix:
     desc: Insert missing SPDX licence headers into tracked Haskell sources
     cmds:
-      # Select-then-stamp: only tracked files missing the tag reach reuse, so a
-      # rerun never touches a stamped file. That is load-bearing, not merely an
-      # optimisation: fourmolu glues the header to a directly following comment
-      # block (it drops the blank separator in a pragma prologue), and
-      # re-annotating a glued block makes reuse rewrite it as "the header" and
-      # discard the original comment. git grep -L lists tracked files without
-      # the tag and exits 1 when every file carries it, hence the guard.
+      # Select, then stamp: only tracked files missing the tag reach reuse, so a
+      # rerun never touches a stamped file. That matters beyond speed. `fourmolu`
+      # glues the header to a directly following comment block, dropping the blank
+      # separator in a pragma prologue. Re-annotating a glued block then makes reuse
+      # rewrite it as "the header" and discard the original comment. `git grep -L`
+      # lists tracked files without the tag and exits 1 when every file carries it,
+      # hence the guard.
       - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
   test-scripts:
     desc: Run the shell-script unit tests
@@ -356,16 +360,16 @@ tasks:
   analysis-build:
     desc: Build exe:ecluse with .hie output for weeder and stan
     # weeder and stan want the same artefact: exe:ecluse built with -fwrite-ide-info.
-    # One build serves both. Building it per-tool instead would have each cabal build
+    # One build serves both. A build per tool would instead have each cabal build
     # clone the amazonka source-repository-package into its own builddir at the same
-    # moment, and two concurrent clones of one repo get the connection reset: git exits
-    # 128 and reddens the whole of `check` on a clean tree (#826).
+    # moment. Two concurrent clones of one repo get the connection reset, git exits
+    # 128, and the whole of `check` reddens on a clean tree.
     #
-    # `run: once` is load-bearing. weeder and stan both depend on this task and run
-    # concurrently, and go-task's default (`always`) honours both calls: that is two
+    # `run: once` is load-bearing. Both weeder and stan depend on this task and run
+    # concurrently, and go-task's default (`always`) honours both calls. That is two
     # builds again, now racing into ONE builddir. With `once`, go-task dedupes on the
-    # task name and the second caller blocks until the first execution finishes, so stan
-    # waits for the build rather than reading a half-written dist-analysis.
+    # task name, and the second caller blocks until the first execution finishes. So
+    # stan waits for the build instead of reading a half-written dist-analysis.
     run: once
     cmds:
       - cabal build exe:ecluse --builddir=dist-analysis --ghc-options=-fwrite-ide-info
@@ -386,7 +390,7 @@ tasks:
         if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (fails the gate)"; exit 1; fi; \
         echo "stan: clean at the configured floor"
   stan-all:
-    desc: Full stan report incl Performance/space-leak
+    desc: Full stan report including the Performance and space-leak findings
     deps:
       - analysis-build
     cmds:
@@ -396,8 +400,8 @@ tasks:
     cmds:
       - task: build
       - task: coverage
-      # The residency gate runs outside coverage on purpose: it measures live bytes,
-      # and its process must not carry hpc's tix apparatus or another suite's heap.
+      # The residency gate runs outside coverage on purpose. It measures live bytes,
+      # so its process must not carry hpc's tix apparatus or another suite's heap.
       - task: test-residency
       - task: doctest
       - task: cabal-check
@@ -415,18 +419,19 @@ tasks:
   analysis-checks:
     desc: Dead-code (weeder) and Haskell static analysis (stan)
     # Both tools share one -fwrite-ide-info build (analysis-build), then read its .hie
-    # output. Reading is read-only, so they still run concurrently with each other; only
-    # the build is serialised, which is where the contention actually was. The tier runs
-    # AFTER the cabal and static tiers (see `check`), never piled onto the coverage
-    # build's Docker ministack. Both fail on findings (weeder natively; stan via its own
-    # exit), so this tier reddens `check` until the tree is clean of both.
+    # output. Reading takes no lock, so the two still run concurrently. go-task
+    # serialises only the build, and the build is where the contention sat. The tier
+    # runs AFTER the cabal and static tiers (see `check`), never piled onto the
+    # coverage build's Docker ministack. Both tools fail on findings, weeder natively
+    # and stan through its own exit, so this tier reddens `check` until the tree is
+    # clean of both.
     deps:
       - weeder
       - stan
   check:
     desc: Pre-push checks (build, tests, doctest, lint, Semgrep, dead-code, static analysis)
-    # cabal and static tiers run concurrently first; the analysis tier follows so its
-    # ide-info build does not contend with the coverage build for CPU.
+    # The cabal and static tiers run concurrently first. The analysis tier follows, so
+    # its ide-info build does not contend with the coverage build for CPU.
     deps:
       - cabal-checks
       - static-checks
@@ -435,7 +440,8 @@ tasks:
   ci:
     desc: Reproduce the core CI pipeline locally
     cmds:
-      # weeder and stan are part of `check` now (via analysis-checks); not repeated here.
+      # `check` already runs weeder and stan through analysis-checks, so this task does
+      # not repeat them.
       - task: check
       - task: docs-check
   gate:
@@ -504,11 +510,11 @@ tasks:
       - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - mkdir -p _site/architecture
       - task: site:pandoc
-  # PR-tier site gate: everything the link and metadata checks cover lives in
-  # web/, the Markdown sources, and the sitemap, none of which needs Haddock or
-  # the OpenAPI generator. Stub the two generated API artefacts (the hub pages
-  # are real; the checkers exempt the Haddock tree interiors, which docs-site
-  # gates itself) and run the same site:check the Pages deploy runs on main.
+  # PR-tier site gate. Everything the link and metadata checks cover lives in web/,
+  # the Markdown sources, and the sitemap. None of that needs Haddock or the OpenAPI
+  # generator. So stub the two generated API artefacts and run the same site:check
+  # the Pages deploy runs on main. The hub pages stay real, and the checkers exempt
+  # the Haddock tree interiors, which docs-site gates itself.
   site-stub:
     desc: Assemble the pandoc site over stubbed API artefacts and run the site checks
     cmds:
@@ -602,8 +608,8 @@ tasks:
   scan-osv:
     desc: Scan the pinned Haskell closure for HSEC advisories (osv-scanner over the freeze)
     cmds:
-      # Exit 1 is "findings" (report-only, surfaced via the SARIF upload in
-      # security.yml); only a scanner error (>1) fails.
+      # Exit 1 means findings, which are report-only: the SARIF upload in
+      # security.yml surfaces them. Only a scanner error (>1) fails the task.
       - osv-scanner scan source --lockfile cabal.project.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
       - bash scripts/sarif-locations.sh osv-freeze.sarif cabal.project.freeze
   clean:

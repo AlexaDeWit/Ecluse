@@ -29,22 +29,22 @@ complementary checks:
 
   1. The committed curated fixture is still byte-identical to what the oracles
      produce (the same comparisons the gating unit suite checks offline).
-  2. A /generative/ differential: random version strings (a mix of valid and
-     messy) are compared by our parser and by the live oracle, asserting they
-     agree whenever __both__ accept the input. One-sided disagreement on /what
-     parses/ is out of scope here and is skipped.
+  2. A /generative/ differential: our parser and the live oracle compare random
+     version strings, a mix of valid and messy. They must agree whenever __both__
+     accept the input. This skips one-sided disagreement on /what parses/, which
+     is out of scope here.
   3. A /real-registry/ differential: for a curated handful of real packages we
-     fetch their __actually published__ versions from the live registry, let the
-     reference oracle sort the reference-valid subset, and assert our
-     'compareVersions' induces the same order over that subset (and never
-     abstains on a version the reference accepts). This exercises gnarly version
-     shapes the curated and random sets never imagined -- divergences it surfaces
-     are a backlog of corrections, not something to paper over here.
+     fetch their __actually published__ versions from the live registry. The
+     reference oracle sorts the reference-valid subset, and our 'compareVersions'
+     must induce the same order over that subset. It must never abstain on a
+     version the reference accepts. This exercises gnarly version shapes the
+     curated and random sets never imagined. The divergences it surfaces are a
+     backlog of corrections, not something to paper over here.
 
-Non-gating by design (the smoke tier): the oracles come from the Nix dev shell's
-version-ordering inputs and the registries are uncontrolled external services, so
-the tests pend rather than fail when a tool, the network, or a registry is
-unavailable. A red here is a real disagreement worth investigating.
+Non-gating by design (the smoke tier). The oracles come from the Nix dev shell's
+version-ordering inputs, and the registries are uncontrolled external services.
+The tests therefore pend rather than fail when a tool, the network, or a registry
+is unavailable. A red here is a real disagreement worth investigating.
 -}
 spec :: Spec
 spec = do
@@ -71,9 +71,9 @@ spec = do
     describe "compareVersions agrees with the live oracle on random inputs" $
         modifyMaxSuccess (const 60) $
             for_ [(Npm, npmish), (PyPI, pypiish), (RubyGems, gemish)] $ \(eco, gen) -> do
-                -- Probe the oracle once on a known-valid pair. If it can't be
+                -- Probe the oracle once on a known-valid pair. If it cannot be
                 -- reached (interpreter or library missing), pend the whole
-                -- ecosystem -- otherwise every iteration would skip and the
+                -- ecosystem. Otherwise every iteration would skip and the
                 -- property would pass vacuously, hiding a broken oracle.
                 available <- runIO (oracleAvailable eco)
                 let title = show eco <> " -- generative differential (both-accept only)"
@@ -88,24 +88,24 @@ spec = do
                             raw2 <- H.forAll gen
                             let ours = compareVersions (mkVersion eco raw1) (mkVersion eco raw2)
                             theirs <- H.evalIO (oracleCompare eco raw1 raw2)
-                            -- Assert only when both sides accepted the inputs;
-                            -- skip one-sided "what parses" disagreement.
+                            -- Assert only when both sides accepted the inputs.
+                            -- Skip one-sided "what parses" disagreement.
                             case (ours, theirs) of
                                 (Just o, Just t) -> do
                                     H.footnote (toString (raw1 <> " vs " <> raw2))
                                     o H.=== t
                                 _ -> H.success
 
-    -- Real-registry differential: fetch each package's actually-published
-    -- versions from the live registry, let the reference oracle sort the subset
-    -- it accepts, then assert our 'compareVersions' induces the same order over
-    -- that subset (and never abstains on a version the reference accepts). One
-    -- subprocess per package (the oracle sorts the whole list), so this scales
-    -- to packages with thousands of versions. Registry/network/tool failures
-    -- pend rather than fail -- only a genuine disagreement reddens.
+    -- Real-registry differential: fetch each package's actually-published versions
+    -- from the live registry. The reference oracle sorts the subset it accepts. Our
+    -- 'compareVersions' must induce the same order over that subset, and never abstain
+    -- on a version the reference accepts. One subprocess per package (the
+    -- oracle sorts the whole list), so this scales to packages with thousands of
+    -- versions. A registry, network, or tool failure pends rather than fails, so
+    -- only a genuine disagreement reddens.
     describe "compareVersions agrees with the reference oracle on live registry versions" $
         for_ (smokeRegistryPackages catalogue) $ \(eco, pkgs) -> do
-            -- Probe the oracle once; if its interpreter/library is missing, pend
+            -- Probe the oracle once. If its interpreter or library is missing, pend
             -- the whole ecosystem rather than letting every package skip.
             available <- runIO (oracleAvailable eco)
             if not available
@@ -150,8 +150,8 @@ spec = do
 
 {- | Whether the live oracle for @eco@ is reachable, probed once on a known-valid
 pair (@1.0.0 < 1.0.1@) that every working oracle must order as 'LT'. A 'Nothing'
-means the interpreter or its library is missing (e.g. Python @packaging@ not on
-@PATH@), so the caller pends rather than running a vacuously-green property.
+means the interpreter or its library is missing, for example Python @packaging@ not
+on @PATH@. The caller then pends rather than running a vacuously-green property.
 -}
 oracleAvailable :: Ecosystem -> IO Bool
 oracleAvailable eco = (== Just LT) <$> oracleCompare eco "1.0.0" "1.0.1"
@@ -159,14 +159,14 @@ oracleAvailable eco = (== Just LT) <$> oracleCompare eco "1.0.0" "1.0.1"
 {- | Compare two version strings with the live reference tool for @eco@, mirroring
 the exact expressions @scripts/gen-version-fixtures.sh@ uses (npm→@semver.compare@,
 PyPI→@packaging.version.Version@, RubyGems→@Gem::Version <=>@). 'Nothing' means the
-tool rejected an input (non-zero exit, e.g. a parse error) or is unavailable -- the
+tool rejected an input (non-zero exit, e.g. a parse error) or is unavailable. The
 caller then skips, since one-sided "what parses" disagreement is out of scope.
 -}
 oracleCompare :: Ecosystem -> Text -> Text -> IO (Maybe Ordering)
 oracleCompare eco a b = do
     let (interp, prog) = oracleProgram eco
-    -- A missing interpreter makes readProcessWithExitCode throw; treat that as
-    -- "unavailable" (Nothing), same as a non-zero exit, so probing stays total.
+    -- A missing interpreter makes readProcessWithExitCode throw. Treat that as
+    -- "unavailable" (Nothing), the same as a non-zero exit, so probing stays total.
     result <-
         try (readProcessWithExitCode interp ["-", toString a, toString b] (toString prog))
     pure $ case result of
@@ -175,7 +175,7 @@ oracleCompare eco a b = do
         Right (ExitFailure _, _, _) -> Nothing
 
 {- | The interpreter and stdin program for an ecosystem's oracle. Each reads the
-two versions from @argv@ and prints @-1@\/@0@\/@1@ (the sign of @a <=> b@), exiting
+two versions from @argv@ and prints @-1@\/@0@\/@1@, the sign of @a <=> b@. It exits
 non-zero if either input does not parse for that tool.
 -}
 oracleProgram :: Ecosystem -> (String, Text)
@@ -222,13 +222,13 @@ parseOrdInt = \case
     "1" -> Just GT
     _ -> Nothing
 
--- The curated package names and the live registry fetch ('fetchVersions') are the
--- shared "Ecluse.Test.RegistryCapture"; what stays here is the reference-oracle
+-- The curated package names and the live registry fetch ('fetchVersions') live in
+-- the shared "Ecluse.Test.RegistryCapture". What stays here is the reference-oracle
 -- sort and the divergence analysis specific to the ordering differential.
 
 {- | Sort a version list with the live reference tool for @eco@, keeping only the
 versions that tool considers valid (node @semver.valid@, Python @packaging@, Ruby
-@Gem::Version@). One subprocess per call -- the whole list goes on @argv@ and the
+@Gem::Version@). One subprocess per call: the whole list goes on @argv@, and the
 reference-sorted valid subset comes back one-per-line. 'Nothing' if the tool is
 unavailable or errors, mirroring 'oracleCompare'.
 -}
@@ -295,7 +295,7 @@ oracleSortProgram = \case
 a real, reference-valid version list.
 -}
 data Divergence
-    = {- | Our parser yields no ordering key for a version the reference accepts --
+    = {- | Our parser yields no ordering key for a version the reference accepts:
       we cannot order what the reference can.
       -}
       Abstained Text
@@ -306,13 +306,13 @@ data Divergence
     deriving stock (Eq, Show)
 
 {- | Every way our 'compareVersions' disagrees with @refSorted@ (the
-reference-sorted, reference-valid subset). Two kinds: an abstention (our parser
-returns no key for an accepted version) and a misordering (a consecutive pair the
-reference put @a@-before-@b@ for which we report 'GT'). Because our key 'Ord' is a
-total order, checking only consecutive pairs is sufficient: if our order differed
+reference-sorted, reference-valid subset). Two kinds. An abstention: our parser
+returns no key for an accepted version. A misordering: a consecutive pair the
+reference put @a@-before-@b@ for which we report 'GT'. Because our key 'Ord' is a
+total order, checking only consecutive pairs is sufficient. If our order differed
 from the reference's anywhere, some adjacent reference pair would be reversed. An
-'EQ' is tolerated -- the reference's stable sort tie-breaks by input order, which
-we cannot (and need not) reproduce.
+'EQ' passes: the reference's stable sort tie-breaks by input order, which we cannot
+(and need not) reproduce.
 -}
 findDivergences :: Ecosystem -> [Text] -> [Divergence]
 findDivergences eco refSorted = abstentions <> misorders
@@ -346,7 +346,7 @@ renderDivergences eco pkg refSorted ds =
             "  misorder -- reference orders " <> a <> " before " <> b <> ", but compareVersions says GT"
 
 -- The structurally valid cores come from the shared 'Ecluse.Test.Version'
--- generators; each is mixed here with the deliberately 'messy' generator so the
+-- generators. Each one mixes with the deliberately 'messy' generator here, so the
 -- differential also exercises malformed inputs. The both-accept gate filters out
 -- whatever neither side (ours or the live oracle) should compare.
 
@@ -363,7 +363,7 @@ gemish :: Gen Text
 gemish = Gen.choice [V.genGem, messy]
 
 {- | Deliberately messy version-ish text: short tokens, stray separators, and
-mixed alnum. Most of these are rejected by one or both sides (and thus skipped),
+mixed alnum. One or both sides reject most of these, so the property skips them,
 but they widen the input distribution beyond the strictly-valid generators.
 -}
 messy :: Gen Text

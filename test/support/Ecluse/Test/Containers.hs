@@ -7,16 +7,16 @@ end-to-end suites spin up.
 
 Integration ('TestContainers.Hspec.withContainers') and e2e (the raw @docker@
 harness in "Ecluse.E2E.Harness.Docker") both stamp every container they create with two
-labels, so a killed or interrupted run can be swept up afterwards rather than left to
+labels. A killed or interrupted run can then be swept up afterwards, rather than left to
 accumulate:
 
-  * @com.ecluse.test@ names the suite (@integration@ or @e2e@); and
-  * @com.ecluse.test.scope@ carries a per-worktree id (from @ECLUSE_TEST_SCOPE@, set by
-    the container-running @task@ targets -- the @test-*@ suites and the @coverage@ tier
-    @task check@ runs) so a scoped reap only ever removes /this/ worktree's containers and
+  * @com.ecluse.test@ names the suite (@integration@ or @e2e@).
+  * @com.ecluse.test.scope@ carries a per-worktree id, from @ECLUSE_TEST_SCOPE@. The
+    container-running @task@ targets set it: the @test-*@ suites and the @coverage@ tier
+    @task check@ runs. A scoped reap therefore removes only /this/ worktree's containers,
     never a sibling worktree's live ones.
 
-@scripts\/test-containers.sh@ is the reaper that reads these labels; this module is the
+@scripts\/test-containers.sh@ is the reaper that reads these labels. This module is the
 matching writer, so the two cannot drift on the label spelling. See @docs\/testing.md@
 -> "Tests and Docker".
 -}
@@ -28,9 +28,10 @@ module Ecluse.Test.Containers (
 
 -- 'lookupEnv', 'Text', 'toText', 'toString', and '<&>' all come from the relude prelude.
 
-{- | The reaping scope for the current run: @ECLUSE_TEST_SCOPE@ when a container-running
-@task@ target has pinned it to this worktree's id (the @test-*@ suites and the @coverage@
-tier @task check@ runs), else @local@ for a bare @cabal test@ invocation.
+{- | The reaping scope for the current run. It is @ECLUSE_TEST_SCOPE@ when a
+container-running @task@ target pins that variable to this worktree's id: the @test-*@
+suites and the @coverage@ tier @task check@ runs. Otherwise it is @local@, for a bare
+@cabal test@ invocation.
 -}
 testScope :: IO Text
 testScope =

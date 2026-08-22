@@ -10,13 +10,13 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Version
 
-{- | Differential test: our 'compareVersions' must agree with the canonical
-reference implementations (node-semver, Python @packaging@, Ruby
-@Gem::Version@) on every comparison in the committed fixture. The fixture is
-regenerated from those tools by @scripts/gen-version-fixtures.sh@
-(@make gen-version-fixtures@); this test stays pure and offline by reading the
-baked results. The same comparisons are re-checked against the live tools by the
-non-gating smoke suite.
+{- | Differential test against the canonical reference implementations: node-semver,
+Python @packaging@, and Ruby @Gem::Version@. Our 'compareVersions' must agree with
+them on every comparison in the committed fixture.
+@scripts/gen-version-fixtures.sh@ (@make gen-version-fixtures@) regenerates the
+fixture from those tools. This test stays pure and offline by reading the baked
+results. The non-gating smoke suite re-checks the same comparisons against the
+live tools.
 -}
 spec :: Spec
 spec = do

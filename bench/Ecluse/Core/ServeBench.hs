@@ -2,21 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Work-per-request benches for the npm serve path: deciding a packument's
-survivors, merging the gated set ("Ecluse.Core.Package.Merge"), assembling the
-served document with the fused tarball rewrite
-("Ecluse.Core.Registry.Npm.Filter"), re-serialising the body, and computing the own
-@ETag@ over it ("Ecluse.Core.Server.Conditional") -- the transform a metadata response
-goes through before it is served.
+{- | Work-per-request benches for the npm serve path: deciding a packument's survivors,
+merging the gated set ("Ecluse.Core.Package.Merge"), assembling the served document with
+the fused tarball rewrite ("Ecluse.Core.Registry.Npm.Filter"), re-serialising the body,
+and computing the own @ETag@ over it ("Ecluse.Core.Server.Conditional"). That is the
+transform a metadata response goes through before the proxy serves it.
 
-The realistic benches run the full serve transform over each corpus package, so the
-filter\/merge\/assemble\/re-serialise cost is reported across the real distribution
-of sizes and shapes -- the re-serialise touches the whole heterogeneous body, so a
-heavy packument is where its cost is felt. A synthetic bench scales the version count
-and asserts the serve transform stays linear, guarding the accidentally quadratic
-class on the merge\/assemble\/re-serialise path; the synthetic generator is retained
-__only__ for that complexity-scaling assertion. Building the filter plan runs the
-engine's effectful rule sweep, so the filter+serve benches are 'IO'.
+The realistic benches run the full serve transform over each corpus package. They
+therefore report the filter\/merge\/assemble\/re-serialise cost across the real
+distribution of sizes and shapes. The re-serialise touches the whole heterogeneous body, so a heavy
+packument is where its cost shows. A synthetic bench scales the version count and asserts
+the serve transform stays linear, guarding the accidentally quadratic class on the
+merge\/assemble\/re-serialise path. The synthetic generator serves __only__ that
+complexity-scaling assertion. Building the filter plan runs the engine's effectful rule
+sweep, so the filter+serve benches are 'IO'.
 -}
 module Ecluse.Core.ServeBench (
     benchmarks,
@@ -54,7 +53,7 @@ benchmarks loaded =
         ]
             <> [ -- A smaller upper bound than the other scaled benches: the serve op is the
                  -- heaviest (filter + rewrite + a full re-serialise + a SHA-256 over the
-                 -- body), so each measured size costs more; this range still spans 128x,
+                 -- body), so each measured size costs more. The range still spans 128x,
                  -- enough to fit the curve and flag a super-linear regression.
                  notWorseThanLinearIO
                     "scales linearly in version count"
@@ -65,10 +64,10 @@ benchmarks loaded =
 
 {- | The full serve transform, mirroring the serve pipeline's composition: build the
 filter plan over the versions (the engine's effectful rule sweep), merge the gated
-survivor set, assemble the served document from the plan (each surviving version
-taken from the raw body with its tarball URL rewritten in the same pass),
-and re-serialise. (The validator is no longer hashed over the output -- it derives
-from the inputs -- so the measured tail is plan, merge, assemble, encode.)
+survivor set, assemble the served document from the plan, and re-serialise. The assemble
+takes each surviving version from the raw body and rewrites its tarball URL in the same
+pass. The validator derives from the inputs rather than a hash over the output, so the
+measured tail is plan, merge, assemble, encode.
 -}
 serveDepth :: (Value, PackageInfo) -> IO Int
 serveDepth (value, info) = do
@@ -80,9 +79,9 @@ serveDepth (value, info) = do
                  in fromIntegral (BSL.length body)
         _ -> 0
 
-{- | A permissive rule set: every legitimately-aged version survives, so the assemble
-and re-serialise path is exercised over the whole packument rather than short-circuited
-to a no-survivors denial.
+{- | A permissive rule set: every legitimately-aged version survives. The bench therefore
+exercises the assemble and re-serialise path over the whole packument, never
+short-circuiting to a no-survivors denial.
 -}
 serveRules :: [PrecededRule]
 serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]

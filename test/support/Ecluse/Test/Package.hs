@@ -4,15 +4,13 @@
 
 {- | Test helpers and fixtures for "Ecluse.Core.Package".
 
-This mirrors the module under test: helpers that support exercising
-@Ecluse.Core.Package@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
-support library follows. It carries the digest plumbing every suite reuses --
-'unsafeHash', which lifts a known-good digest into a 'Hash', the canonical
-well-formed digest fixtures (each the empty-input digest of its algorithm) that
-appear across the queue, integrity, env, and worker specs, and the SHA-256
-admission-floor fixtures the suites and harnesses gate with. Digest renderers
-compute npm's hexadecimal shasums and Subresource-Integrity text independently
-of the production integrity machinery, so tests retain a separate oracle.
+The module name follows this support library's @Ecluse.X → Ecluse.Test.X@ convention.
+It carries the digest plumbing every suite reuses. 'unsafeHash' lifts a known-good
+digest into a 'Hash'. The canonical well-formed digest fixtures, each the empty-input
+digest of its algorithm, appear across the queue, integrity, env, and worker specs. The
+suites and harnesses gate with the SHA-256 admission-floor fixtures. The digest
+renderers compute npm's hexadecimal shasums and Subresource-Integrity text apart from
+the production integrity machinery, so tests keep a separate oracle.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
@@ -80,9 +78,8 @@ import Ecluse.Core.Version (Version)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
 
-{- | Build a 'Hash' from a known-valid digest, for fixtures. Errors on a malformed
-digest, so a typo in a fixture fails loudly rather than silently constructing
-nothing.
+{- | Build a 'Hash' from a known-valid digest, for fixtures. A malformed digest errors,
+so a fixture typo fails loudly instead of silently yielding nothing.
 -}
 unsafeHash :: HashAlg -> Text -> Hash
 unsafeHash alg = either error id . mkHash alg
@@ -90,27 +87,25 @@ unsafeHash alg = either error id . mkHash alg
 {- HLINT ignore unsafeSriHashes "Avoid restricted function" -}
 
 {- | Split a known-valid Subresource-Integrity wire string into its per-component
-hashes, for fixtures. Errors on a malformed component, so a typo in a fixture
-fails loudly.
+hashes, for fixtures. A malformed component errors, so a fixture typo fails loudly.
 -}
 unsafeSriHashes :: Text -> NonEmpty Hash
 unsafeSriHashes = either error id . mkSriHashes
 
 {- HLINT ignore unsafeRegistryUrl "Avoid restricted function" -}
 
-{- | Build the https egress witness from a known-https fixture URL, for fixtures.
-Errors on a non-https value, so a typo fails loudly.
+{- | Build the https egress witness from a known-https fixture URL. A non-https value
+errors, so a typo fails loudly.
 -}
 unsafeRegistryUrl :: Text -> RegistryUrl
 unsafeRegistryUrl = either error id . mkRegistryUrl
 
 {- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
 
-{- | The SHA-256 public-integrity floor fixture: the hard minimum
-'mkMinIntegrity' enforces, built through the public smart constructor (SHA-256
-always clears the hard floor, so the construction cannot fail). Suites and
-harnesses gate with it wherever an admission floor is needed and the floor
-itself is not the axis under test.
+{- | The SHA-256 public-integrity floor fixture: the hard minimum 'mkMinIntegrity'
+enforces. The public smart constructor builds it, and SHA-256 always clears the hard
+floor, so the construction cannot fail. Suites and harnesses gate with it wherever a
+spec needs an admission floor and the floor is not the axis under test.
 -}
 defaultMinIntegrity :: MinIntegrity
 defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
@@ -118,8 +113,8 @@ defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
 {- HLINT ignore defaultMinTrustedIntegrity "Avoid restricted function" -}
 
 {- | The SHA-256 trusted-integrity floor fixture: the same secure posture as
-'defaultMinIntegrity', built through 'mkMinTrustedIntegrity' (SHA-256 names a
-concrete algorithm, so the construction cannot fail).
+'defaultMinIntegrity'. 'mkMinTrustedIntegrity' builds it, and SHA-256 names a concrete
+algorithm, so the construction cannot fail.
 -}
 defaultMinTrustedIntegrity :: MinTrustedIntegrity
 defaultMinTrustedIntegrity = either error id (mkMinTrustedIntegrity SHA256)
@@ -149,10 +144,10 @@ renderSri prefix digest = prefix <> renderBase Base64 digest
 renderBase :: (ByteArrayAccess digest) => Base -> digest -> Text
 renderBase base digest = decodeUtf8 (convertToBase base digest :: ByteString)
 
-{- | Canonical well-formed digests -- each the empty-input digest of its algorithm,
-so every fixture 'Hash' is 'mkHash'-constructible and survives a validated decode
+{- | Canonical well-formed digests, each the empty-input digest of its algorithm. Every
+fixture 'Hash' is therefore 'mkHash'-constructible and survives a validated decode
 round-trip. The values are immaterial beyond being well-formed: a suite uses them
-wherever a digest must merely parse, not match any particular bytes.
+wherever a digest must parse, not match particular bytes.
 -}
 validSha1, validSha256, validSha384Hex, validSha512Hex, validMd5, validBlake2b :: Text
 validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
@@ -170,7 +165,7 @@ validSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
 validSha384Sri = "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
 validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
 
--- | A single inert artifact; the packument-level tests do not inspect artifacts.
+-- | A single inert artifact. The packument-level tests do not inspect artifacts.
 sampleArtifact :: Artifact
 sampleArtifact =
     Artifact
@@ -184,9 +179,9 @@ sampleArtifact =
         , artProvenance = Nothing
         }
 
-{- | A minimal per-version snapshot for a given name and version. Only the fields
-a 'PackageInfo' threads through (the name and version) are meaningful here; the
-rest are inert defaults.
+{- | A minimal per-version snapshot for a given name and version. Only the fields a
+'PackageInfo' threads through, the name and version, carry meaning. The rest are inert
+defaults.
 -}
 sampleDetails :: PackageName -> Version -> PackageDetails
 sampleDetails name version =

@@ -45,7 +45,7 @@ spec = do
     describe "run" $ do
         it "boots from the environment layer alone (no document, no AWS_REGION) and serves" $ do
             -- The queue URL's own host carries the region, so a real SQS
-            -- deployment needs no AWS_REGION at all.
+            -- deployment needs no AWS_REGION.
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
@@ -54,8 +54,8 @@ spec = do
             outcome `shouldBe` Nothing
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            -- The two-variable start (ECLUSE_SERVER__PUBLIC_URL being the other, for real
-            -- installs): no mount mirrors, so the shipped sqs default is never
+            -- The two-variable start for a real install, ECLUSE_SERVER__PUBLIC_URL
+            -- being the other. No mount mirrors, so the shipped sqs default is never
             -- consulted and no queue configuration is needed.
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
@@ -101,8 +101,8 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $ do
-            -- A directory is the portable unreadable-path shape (no chmod games);
-            -- the read failure must land on the same typed exit-2 path as every
+            -- A directory is the portable unreadable-path shape, with no chmod games.
+            -- The read failure must land on the same typed exit-2 path as every
             -- other config refusal.
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 traverse_ (uncurry setEnv) awsRunEnv
@@ -136,7 +136,6 @@ spec = do
             setEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) runEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "boots on the in-memory mirror queue when no ECLUSE_QUEUE__URL is set (graceful rollover) and serves" $ do
@@ -157,39 +156,36 @@ spec = do
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             unsetEnv "AWS_ENDPOINT_URL_SQS"
             traverse_ (unsetEnv . fst) runEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a write-only mirror setting remains without a mirror target" $ do
-            -- The write token is a write-only setting: with no mirrorTarget to
-            -- write to it is refused per key (MirrorSettingWithoutWrite), never
+            -- The write token is a write-only setting. With no mirrorTarget to write
+            -- to, each such key is refused (MirrorSettingWithoutWrite), never
             -- silently ignored.
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst) awsRunEnv)
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) awsRunEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a non-CodeArtifact mirror target has no write token" $ do
-            -- The mirror credential is derived from the target: a non-CodeArtifact
-            -- endpoint is written with a static token, so its absence fails at boot.
+            -- The mirror credential is derived from the target: Écluse writes a
+            -- non-CodeArtifact endpoint with a static token, so a missing token
+            -- fails at boot.
             traverse_ (uncurry setEnv) awsRunEnv
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) awsRunEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a CodeArtifact mirror target also carries a static token" $ do
-            -- A CodeArtifact endpoint mints its own token, so pairing it with a static
-            -- token is a loud conflict (caught before any AWS call), never a silent choice.
+            -- A CodeArtifact endpoint mints its own token. A static token beside it is
+            -- a loud conflict, caught before any AWS call, never a silent choice.
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             traverse_ (unsetEnv . fst) awsRunEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
     describe "the *_FILE secret indirection" $ do
@@ -215,7 +211,6 @@ spec = do
                 outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
                 unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
                 traverse_ (unsetEnv . fst) runEnv
-                -- The typed process supervisor maps the boot abort to exit 2.
                 outcome `shouldBe` Left (ExitFailure 2)
 
         it "passes JSON-looking *_FILE contents through to the exact secret string" $
@@ -255,7 +250,6 @@ spec = do
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
             traverse_ (unsetEnv . fst) runEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
     describe "check-config (validate and print, boot nothing)" $ do
@@ -310,7 +304,7 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "validates a CodeArtifact-shaped mirror target structurally and exits 0 (no mint, no cloud call)" $ do
-            -- The derived-credential expectation is structural on the loaded config;
+            -- The derived-credential expectation is structural on the loaded config.
             -- check-config must never mint the token a boot would.
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
@@ -334,10 +328,10 @@ spec = do
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
-            -- A genuine asynchronous delivery (base 'Conc.throwTo', the exact
-            -- channel 'killThread' and the RTS use), so the case pins that the
-            -- perimeter observes real kills -- an async-hygienic catch would
-            -- rethrow it before the classification could run.
+            -- A genuine asynchronous delivery through base 'Conc.throwTo', the
+            -- channel 'killThread' and the RTS use. The case pins that the perimeter
+            -- observes real kills: an async-hygienic catch would rethrow the
+            -- delivery before the classification ran.
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled)
                 `shouldReturn` RunCancelled
 

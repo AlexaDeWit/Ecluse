@@ -2,10 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | S54's residency gate runs as its own suite (own process, RTS @-T@), so the
-one spec is imported explicitly rather than discovered: discovery over the shared
-fixture directory would sweep the whole integration tier into this process and
-defeat the isolation the measurement depends on.
+{- | The residency gate runs as its own suite (own process, RTS @-T@), so this module
+imports the one spec explicitly rather than discovering it. Discovery over the shared
+fixture directory would sweep the whole integration tier into this process, and defeat
+the isolation the measurement depends on.
 -}
 module Main (main) where
 

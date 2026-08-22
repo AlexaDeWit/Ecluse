@@ -28,21 +28,22 @@ data E2E = E2E
     -}
     , e2eProxyContainer :: String
     {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
-    ('proxyContainerLogs') -- what it wrote to stdout\/stderr.
+    ('proxyContainerLogs'): what it wrote to stdout\/stderr.
     -}
     , e2eCollectorContainer :: Maybe String
-    {- ^ The OTLP collector container name when one was booted ('ecCollector'), so a
-    test can read the collector's debug-exporter output to assert which signals arrived.
-    'Nothing' for an environment booted without a collector.
+    {- ^ The OTLP collector container name when the environment booted one
+    ('ecCollector'), so a test can read the collector's debug-exporter output to assert
+    which signals arrived. 'Nothing' for an environment booted without a collector.
     -}
     , e2eManager :: Manager
     -- ^ A shared HTTP manager for the harness's own probes.
     }
 
-{- | What an end-to-end environment boots beyond the base topology: whether to stand
-up an OTLP collector for the proxy to export to, and any extra proxy environment
-(telemetry switches, the OTLP\/Datadog dialect) layered over the base 'proxyEnv'. The
-default boots neither -- the plain topology the non-telemetry scenarios use.
+{- | What an end-to-end environment boots beyond the base topology: an optional OTLP
+collector for the proxy to export to, plus extra proxy environment. The extra
+environment (telemetry switches, the OTLP\/Datadog dialect) layers over the base
+'proxyEnv'. The default boots neither: the plain topology the non-telemetry scenarios
+use.
 -}
 data E2EConfig = E2EConfig
     { ecCollector :: Bool
@@ -73,10 +74,10 @@ data NpmResult = NpmResult
     }
     deriving stock (Show)
 
-{- | An isolated, throwaway @npm@ project: its directory plus the fully isolated
-environment (own cache, userconfig, prefix, @HOME@) so a developer's global npm state
-cannot leak in and the only registry is the proxy. The lockfile is left __enabled__, so
-an @npm install@ here writes a @package-lock.json@ a later 'npmCiIn' installs from.
+{- | An isolated, throwaway @npm@ project: its directory plus its own environment (own
+cache, userconfig, prefix, @HOME@). A developer's global npm state cannot leak in, and
+the only registry is the proxy. The project keeps the lockfile __enabled__, so an
+@npm install@ here writes a @package-lock.json@ that a later 'npmCiIn' installs from.
 -}
 data NpmProject = NpmProject
     { npDir :: FilePath

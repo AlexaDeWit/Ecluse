@@ -13,10 +13,10 @@ import Ecluse.Core.Registry.Npm.Serve (npmError, npmErrorCodec)
 import Ecluse.Core.Server.Contract (encodeBody)
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
-{- | Decode a denial body and read its @error@ string. 'Right' the string when the
-body is a JSON object carrying a string @error@; 'Left' (which fails the
-@`shouldBe` Right …@ assertion) for any other shape, so the npm @{"error": …}@
-contract is pinned without a partial decode.
+{- | Decode a denial body and read its @error@ string. Return 'Right' with the string
+when the body is a JSON object carrying a string @error@. Return 'Left' for any other
+shape, which fails the @`shouldBe` Right …@ assertion. This pins the npm
+@{"error": …}@ contract without a partial decode.
 -}
 errorField :: LByteString -> Either Text Text
 errorField raw =
@@ -27,8 +27,8 @@ errorField raw =
                 _ -> Left "denial body has no string \"error\" field"
         _ -> Left "denial body is not a JSON object"
 
--- The npm denial body: an 'NpmError' (with any operator help appended) encoded through
--- 'npmErrorCodec' -- the same codec the manifest documents, so wire and schema are one.
+-- The npm denial body: an 'NpmError' with any operator help appended, encoded through
+-- 'npmErrorCodec'. That is the codec the manifest documents, so wire and schema are one.
 denialBody :: Maybe HelpMessage -> Text -> LByteString
 denialBody help message = encodeBody npmErrorCodec (npmError help message)
 

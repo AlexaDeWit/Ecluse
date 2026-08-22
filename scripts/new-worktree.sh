@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 #
 # Create a git worktree for one agent slice and warm its HLS index in the
-# background, so the implementer's first agent-lsp navigation call lands on a hot index
-# instead of paying a cold full-project typecheck mid-session. See AGENTS.md ->
-# "Build & Tooling" and .agents/orchestration-strategy.md -> "Subagents and
-# isolation".
+# background. The implementer's first agent-lsp navigation call then lands on a
+# hot index instead of paying a cold full-project typecheck mid-session. See
+# AGENTS.md -> "Build & Tooling" and .agents/orchestration-strategy.md ->
+# "Subagents and isolation".
 #
 # Why warm at creation, not on first call: each worktree is a separate HLS
 # workspace with its own (git-ignored) dist-newstyle / .hie. Dependencies already
 # come warm from the shared Nix store, so the only per-worktree cost is
 # typechecking this project's own modules. `task build` (== cabal build all
-# --enable-tests) populates dist-newstyle with the interface files HLS reuses, so
-# the heavy load is already on disk by the time the agent's MCP boots HLS. We
-# delegate to `task build` rather than re-spelling the build so the warm-up can
-# never drift from the canonical one.
+# --enable-tests) populates dist-newstyle with the interface files HLS reuses. The
+# heavy load then sits on disk by the time the agent's MCP boots HLS. We delegate
+# to `task build` rather than re-spell the build, so the warm-up can never drift
+# from the canonical one.
 #
-# The build is backgrounded and its output redirected to a log OUTSIDE the
-# worktree (so it never shows up as an untracked file there), so creation returns
-# immediately. A build failure — e.g. a base that does not yet compile — warms
+# Creation returns immediately, because the build runs in the background. Its
+# output goes to a log OUTSIDE the worktree, so it never shows up as an untracked
+# file there. A build failure, such as a base that does not yet compile, warms
 # what it can and never blocks creation.
 #
-# One worktree per agent is a hard rule; concurrency is capped at 2-3 and HLS is
-# memory-hungry (~1-3 GB per load), so stagger creations rather than firing
-# several cold builds at once.
+# One worktree per agent is a hard rule. Concurrency is capped at 2-3 and HLS is
+# memory-hungry (~1-3 GB per load), so stagger creations rather than fire several
+# cold builds at once.
 #
 # Usage: scripts/new-worktree.sh <branch> [base-ref] [dir]
 #   <branch>    new branch to create for the worktree
@@ -40,8 +40,8 @@ if [ -e "$dir" ]; then
   exit 1
 fi
 
-# Best-effort: make an origin/* base current. Never fatal — an offline run still
-# branches from whatever ref resolves.
+# Best-effort: make an origin/* base current. Never fatal, because an offline run
+# still branches from whatever ref resolves.
 git fetch --quiet origin 2>/dev/null || true
 
 git worktree add -b "$branch" "$dir" "$base"

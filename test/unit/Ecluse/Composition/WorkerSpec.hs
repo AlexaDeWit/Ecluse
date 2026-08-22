@@ -20,11 +20,11 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Rules (inertRuleDeps)
 
-{- | Tests for the composition root's worker bundle construction: the served mounts,
-the resolved publish targets, and the adapter registry in; the per-ecosystem
-'Ecluse.Core.Worker.WorkerPolicies' out. Construction only, no network: every
-bundle field is a closure the worker applies later, so these pins assert what is
-wired (and what deliberately is not), never a live fetch or publish.
+{- | Tests for the composition root's worker bundle construction. In go the served
+mounts, the resolved publish targets, and the adapter registry. Out come the
+per-ecosystem 'Ecluse.Core.Worker.WorkerPolicies'. Construction only, no network:
+every bundle field is a closure the worker applies later. These pins assert what is
+wired, and what deliberately is not, never a live fetch or publish.
 -}
 spec :: Spec
 spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)" $ do
@@ -34,7 +34,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
 
     it "reuses the mount's own serve-side policy inputs on the bundle" $ do
         -- The floor (and every sibling input) is the mount's own 'PackumentDeps'
-        -- value, so the ingest decision cannot diverge from the serve decision; the
+        -- value, so the ingest decision cannot diverge from the serve decision. The
         -- injected clock rides through likewise.
         (env, bindings, targets) <- composedFixtures
         deps <- case bindings of
@@ -48,16 +48,16 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
                 now `shouldBe` fixedNow
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
-        -- The bundle is whole or absent: without a publish target there is no
-        -- mirror write to marry, so no half-wired bundle exists and a job for the
-        -- ecosystem is fail-closed at the worker rather than publishing nowhere.
+        -- The bundle is whole or absent: without a publish target there is no mirror
+        -- write to marry, so no half-wired bundle exists. A job for the ecosystem then
+        -- fails closed at the worker rather than publishing nowhere.
         (env, bindings, _) <- composedFixtures
         Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
 
     it "sizes the bundle's artifact fetch cap from the supplied plan value" $ do
-        -- The worker's per-artifact byte cap is threaded from the memory plan's
-        -- mirror-artifact tenant (issue #846), not a hard-coded constant: the value
-        -- the composition root passes is exactly the fetch bound each bundle carries.
+        -- The worker's per-artifact byte cap comes from the memory plan's
+        -- mirror-artifact tenant, not a hard-coded constant. The value the composition
+        -- root passes is the fetch bound each bundle carries.
         (env, bindings, targets) <- composedFixtures
         case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
@@ -65,11 +65,11 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
 
     it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ do
         -- The probe must honour the same boot-computed, operator-overridable response
-        -- bound every other metadata read on the mount does ('pdLimits'), so a mirror
-        -- packument larger than the shipped default cannot silently defeat duplicate
-        -- suppression. A distinctive plan bound (below the default) pins that the wired
-        -- transport tracks the plan value rather than the shipped constant: were the
-        -- probe re-pinned to 'defaultLimits', 'shouldNotBe' would catch it.
+        -- bound every other metadata read on the mount does ('pdLimits'). A mirror
+        -- packument larger than the shipped default then cannot silently defeat
+        -- duplicate suppression. A distinctive plan bound, below the default, pins that
+        -- the wired transport tracks the plan value rather than the shipped constant.
+        -- Were the probe re-pinned to 'defaultLimits', 'shouldNotBe' would catch it.
         (env, bindings, targets) <- composedFixturesWith probeLimits
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)

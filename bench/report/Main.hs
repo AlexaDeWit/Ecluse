@@ -2,16 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @bench-report@ entry point: read the work-per-request benchmark CSV (and,
-when captured, the raw console log), render the structured Markdown report
-("Ecluse.BenchReport"), print it, and mirror it to the GitHub step summary when
-@GITHUB_STEP_SUMMARY@ is set -- the same self-append the load and acceptance
-harnesses do, so the workflow step stays a single unwrapped command.
+{- | The @bench-report@ entry point. It reads the work-per-request benchmark CSV and,
+when captured, the raw console log. It renders the structured Markdown report
+("Ecluse.BenchReport"), prints it, and mirrors it to the GitHub step summary when
+@GITHUB_STEP_SUMMARY@ is set. The load and acceptance harnesses self-append the same
+way, so the workflow step stays a single unwrapped command.
 
-A missing or malformed file becomes a loud note __inside__ the report rather than a
-failure: the bench run itself already reds the job on a genuine benchmark failure,
-and a partial CSV from a red run is still worth rendering. The only non-zero exit is
-a usage error.
+A missing or malformed file becomes a loud note inside the report rather than a
+failure. The bench run itself already reds the job on a genuine benchmark failure, and
+a partial CSV from a red run is still worth rendering. The only non-zero exit is a
+usage error.
 -}
 module Main (main) where
 
@@ -41,8 +41,8 @@ run csvPath logPath = do
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
 
--- Read a file as leniently decoded UTF-8, describing a failure instead of throwing:
--- an unreadable CSV becomes the report's loud note, and an unreadable console log
+-- Read a file as leniently decoded UTF-8, and describe a failure instead of throwing.
+-- An unreadable CSV becomes the report's loud note, and an unreadable console log
 -- degrades to the report's log-not-captured note.
 readTextFile :: FilePath -> IO (Either Text Text)
 readTextFile path = do

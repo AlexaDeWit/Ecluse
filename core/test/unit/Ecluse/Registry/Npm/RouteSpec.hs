@@ -29,14 +29,14 @@ import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
 
-{- | What a request routes to, reconstructed for the assertions from the table's __public__
-surface: which route claimed it ('matchRoute'), and what that route's captures parse to
-('takePackage', 'tarballCoordinate').
+{- | What a request routes to, rebuilt for the assertions from the table's __public__
+surface. Two parts: which route claimed it ('matchRoute'), and what that route's captures
+parse to ('takePackage', 'tarballCoordinate').
 
-The routes themselves carry actions, not values, so there is nothing to compare directly.
-This restates the routing decision /and/ its parse as one comparable value, which is what
-these specs are actually about: that a hostile path never yields an accepted route whose
-components are unsafe.
+The routes carry actions, not values, so there is nothing to compare directly. This type
+restates the routing decision /and/ its parse as one comparable value. That is what these
+examples are about: a hostile path never yields an accepted route whose components are
+unsafe.
 -}
 data Routed
     = ToPackument PackageName
@@ -64,9 +64,8 @@ routed method segments =
             pure (ToTarball name version filename)
         Just _ -> Denied
 
-{- | The read classification (a @GET@) of an npm path, the existing routing table's
-subject: 'Route.classify' restricted to a read method, so each @pathInfo → Route@
-assertion below reads as before now that the classifier is method-aware. A @HEAD@
+{- | The read classification (a @GET@) of an npm path: 'Route.classify' restricted to a
+read method. Each @pathInfo → Route@ assertion below goes through it. A @HEAD@
 classifies identically (the dispatcher answers it bodiless), so @GET@ stands for every
 read method here.
 -}
@@ -74,8 +73,8 @@ classify :: [Text] -> Routed
 classify = routed methodGet
 
 {- | The __publish__ classification (a @PUT@) of an npm path: 'Route.classify' at the
-publish method, so the publish routing cases assert @PUT \/{pkg} → Publish@ apart from
-the read table.
+publish method. The publish routing cases assert @PUT \/{pkg} → Publish@ apart from the
+read table.
 -}
 publish :: [Text] -> Routed
 publish = routed methodPut
@@ -92,10 +91,9 @@ scoped scope = mkPackageName Npm (Just (mkScope scope))
 npmVersion :: Text -> Version
 npmVersion = mkVersion Npm
 
-{- | The npm routing table, asserted as @pathInfo → Route@. The path is
-percent-decoded before it reaches 'classify', so each scoped case appears in
-__both__ wire encodings (one decoded segment @\@scope\/pkg@ and two segments
-@\@scope@,@pkg@); both must agree.
+{- | The npm routing table, asserted as @pathInfo → Route@. The path arrives
+percent-decoded at 'classify', so each scoped case appears in __both__ wire encodings:
+one decoded segment @\@scope\/pkg@ and two segments @\@scope@,@pkg@. Both must agree.
 -}
 spec :: Spec
 spec = do
@@ -123,19 +121,19 @@ spec = do
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
                 `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
         it "reads a prerelease-hyphen version out of the basename verbatim" $
-            -- The version itself carries hyphens (@1.0.0-rc.1@); the parse must split
-            -- on the FIRST @{name}-@ boundary, taking everything after as the version.
+            -- The version itself carries hyphens (@1.0.0-rc.1@). The parse must split on
+            -- the FIRST @{name}-@ boundary, taking everything after it as the version.
             classify ["pkg", "-", "pkg-1.0.0-rc.1.tgz"]
                 `shouldBe` ToTarball (unscoped "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
         it "preserves the filename verbatim, not one rebuilt from (name, version)" $
             -- The file's parsed version round-trips and the Filename is byte-identical
-            -- to what arrived -- it, not a reconstruction, fetches the bytes.
+            -- to what arrived. That Filename, not a reconstruction, fetches the bytes.
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
                 `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
-            -- The file names a DIFFERENT package's artifact under @is-odd@'s path; the
-            -- basename does not begin with @is-odd-@, so it is denied, never coerced
-            -- into a fabricated @is-odd@ coordinate.
+            -- The file names a DIFFERENT package's artifact under @is-odd@'s path. The
+            -- basename does not begin with @is-odd-@, so the coordinate parse denies it
+            -- rather than coercing a fabricated @is-odd@ coordinate.
             classify ["is-odd", "-", "is-even-3.0.1.tgz"] `shouldBe` Denied
         it "denies a basename that is the bare package name with no version" $
             -- @{name}.tgz@ has no @-{version}@ run, so there is no coordinate to parse.
@@ -163,7 +161,7 @@ spec = do
         it "agrees on the same Publish route for both scoped encodings" $
             publish ["@acme", "widget"] `shouldBe` publish ["@acme/widget"]
         it "denies a PUT to a tarball slot (a publish is a bare-package path only)" $
-            -- The version lives in the body, not the path; a PUT to /{pkg}/-/{file}.tgz
+            -- The version lives in the body, not the path. A PUT to /{pkg}/-/{file}.tgz
             -- is not a publish.
             publish ["is-odd", "-", "is-odd-3.0.1.tgz"] `shouldBe` Denied
         it "denies a PUT to a meta-route" $
@@ -177,8 +175,8 @@ spec = do
         it "denies a PUT of a bare scope with no package name" $
             publish ["@acme"] `shouldBe` Denied
         it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
-            -- The method, not just the path, decides: the same /{pkg} reads under GET and
-            -- publishes under PUT.
+            -- The method decides as much as the path: the same /{pkg} reads under GET
+            -- and publishes under PUT.
             classify ["is-odd"] `shouldBe` ToPackument (unscoped "is-odd")
 
     describe "classify -- unrecognised paths deny by default" $ do
@@ -192,14 +190,14 @@ spec = do
             -- The basename is empty, so it can never match @{name}-{version}@.
             classify ["is-odd", "-", ".tgz"] `shouldBe` Denied
         it "routes a version-manifest request to Unsupported" $
-            -- @GET /{pkg}/{version}@ is not a packument: a bare package is, but a
-            -- trailing version segment is not recognised.
+            -- @GET /{pkg}/{version}@ is not a packument. Only a bare package path is, so
+            -- a trailing version segment matches no route.
             classify ["is-odd", "3.0.1"] `shouldBe` Denied
         it "routes a scope with no package name to Unsupported" $
             classify ["@babel"] `shouldBe` Denied
         it "routes a scope with an empty trailing name to Unsupported" $
             -- Reachable from @\/\@scope%2F@: percent-decoding @%2F@ yields one segment
-            -- @"\@babel\/"@, whose base name is empty -- a degenerate scoped name.
+            -- @"\@babel\/"@, whose base name is empty. That is a degenerate scoped name.
             classify ["@babel/"] `shouldBe` Denied
         it "routes an empty scope (\"@\" then name) to Unsupported" $
             -- @mkScope "@"@ strips to @""@, which would render as @\/code-frame@.
@@ -211,12 +209,12 @@ spec = do
             classify ["is-odd", "extra", "junk"] `shouldBe` Denied
 
     describe "classify -- unsafe path components deny by default" $ do
-        -- A single percent-decoded segment can carry traversal/separator/control
-        -- content; 'classify' must never accept it as a name, scope, or file,
-        -- since the component is interpolated into the upstream URL downstream.
+        -- A single percent-decoded segment can carry traversal, separator, or control
+        -- content. 'classify' must never accept it as a name, scope, or file, because
+        -- downstream code interpolates the component into the upstream URL.
         it "rejects an unscoped name with an embedded slash" $
             -- Reachable from @\/foo%2Fbar@: percent-decoding @%2F@ yields one segment
-            -- @"foo\/bar"@; accepting it as a packument would smuggle a path.
+            -- @"foo\/bar"@. Accepting it as a packument would smuggle a path.
             classify ["foo/bar"] `shouldBe` Denied
         it "rejects an unscoped name with an embedded backslash" $
             classify ["foo\\bar"] `shouldBe` Denied
@@ -240,8 +238,8 @@ spec = do
             classify ["is-odd", "-", "sub/is-odd-3.0.1.tgz"] `shouldBe` Denied
 
     describe "classify -- real names still classify (no over-rejection)" $ do
-        -- Guard against the safe-component check rejecting plausibly-real names:
-        -- interior dots, hyphens, and uppercase are all fine -- this is a security
+        -- Guard against the safe-component check rejecting plausibly-real names.
+        -- Interior dots, hyphens, and uppercase are all fine: this is a security
         -- boundary, not an npm-policy validator.
         it "accepts an unscoped name with interior dots" $
             classify ["lodash.merge"] `shouldBe` ToPackument (unscoped "lodash.merge")
@@ -260,14 +258,13 @@ spec = do
 
     describe "properties" $
         -- The safety invariant: no hostile path yields an accepted route whose
-        -- structural components are unsafe. The generator frequently emits
-        -- hostile fragments AND real-looking names, so it exercises both denied
-        -- and accepted routes (the classification below proves it is not
-        -- vacuous). For each accepted 'Packument'/'Tarball' we check every
-        -- component -- scope, base name, and (for tarballs) the file -- with the
-        -- same safe-component rule the router enforces. We split the rendered
-        -- name back into its components rather than scanning it whole, because a
-        -- legitimate scoped name renders as @\@scope\/base@ and so contains the
+        -- structural components are unsafe. The generator emits hostile fragments AND
+        -- real-looking names, so it drives both denied and accepted routes. The coverage
+        -- classification below proves it is not vacuous. For each accepted
+        -- 'Packument'/'Tarball' we check every component against the same safe-component
+        -- rule the router enforces: scope, base name, and, for tarballs, the file. We
+        -- split the rendered name back into its components rather than scanning it
+        -- whole. A legitimate scoped name renders as @\@scope\/base@, so it carries the
         -- structural @\'\/\'@ separator by design.
         it "an accepted route never carries an unsafe component" $
             hedgehog $ do
@@ -290,25 +287,25 @@ isAccepted = \case
     ToTarball{} -> True
     _ -> False
 
-{- | The structural components of an accepted name -- its scope (if any) and its
-base name -- recovered from the public surface. The base name is the rendered
-display form with any @\@scope\/@ prefix stripped, so each component is checked
-on its own rather than across the scope separator.
+{- | The structural components of an accepted name, its scope (if any) and its base
+name, recovered from the public surface. The base name is the rendered display form with
+any @\@scope\/@ prefix stripped. The caller then checks each component on its own rather
+than across the scope separator.
 -}
 nameComponents :: PackageName -> [Text]
 nameComponents pn =
     case pkgNamespace pn of
         Nothing -> [renderPackageName pn]
-        -- A scoped name renders as "@scope/base"; recover [scope, base] by
-        -- dropping the "@scope/" prefix, so neither component is judged across
-        -- the structural separator.
+        -- A scoped name renders as "@scope/base". Recover [scope, base] by dropping the
+        -- "@scope/" prefix, so the check never judges a component across the structural
+        -- separator.
         Just s ->
             let scopeTxt = unScope s
                 base = fromMaybe (renderPackageName pn) (T.stripPrefix ("@" <> scopeTxt <> "/") (renderPackageName pn))
              in [scopeTxt, base]
 
 {- | The router's safety rule, restated here so the property pins the externally
-observable guarantee independently of the implementation: a component is safe
+observable guarantee independently of the implementation. A component is safe
 iff it is non-empty, is not @"."@\/@".."@, and carries no @\'\/\'@, @\'\\\\\'@,
 or control character.
 -}
@@ -319,9 +316,9 @@ safe c =
         && c /= ".."
         && T.all (\ch -> ch /= '/' && ch /= '\\' && not (isControl ch)) c
 
-{- | A path generator that mixes real-looking segments with hostile fragments
-(@"."@, @".."@, slashes, backslashes, control chars, empties, @"-"@, @"@"@), so
-'classify' is driven down both its accepting and its denying paths.
+{- | A path generator that mixes real-looking segments with hostile fragments:
+@"."@, @".."@, slashes, backslashes, control chars, empties, @"-"@, and @"@"@. It
+drives 'classify' down both its accepting and its denying paths.
 -}
 genSegments :: Gen [Text]
 genSegments = Gen.list (Range.linear 0 4) genSegment

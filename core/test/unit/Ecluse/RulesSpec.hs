@@ -34,7 +34,7 @@ ctx :: EvalContext
 ctx = EvalContext now Nothing
 
 {- | A package version under an optional npm scope, published @ageDays@ days
-before 'now'. Other fields are fixed; the rules under test read only the scope,
+before 'now'. Other fields are fixed. The rules under test read only the scope,
 the publish age, and the install-code signal.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
@@ -119,9 +119,9 @@ genAgeDays = Gen.integral (Range.linear 0 3650)
 genPrecedence :: Gen Int
 genPrecedence = Gen.int (Range.linear 0 1000)
 
-{- | A rule that takes a position against the package the order-independence
-property builds (scoped @scopeTxt@, old, running install scripts): a matching
-'AllowScope', an 'AllowIfOlderThan' it is old enough for, or
+{- | A rule that takes a position against the package the order-independence property
+builds: scoped @scopeTxt@, old, and running install scripts. It is a matching
+'AllowScope', an 'AllowIfOlderThan' the package is old enough for, or
 'DenyInstallTimeExecution'. None yields no decision, so every generated rule competes.
 -}
 genFiringRule :: Text -> Gen Rule
@@ -132,11 +132,11 @@ genFiringRule scopeTxt =
         , DenyInstallTimeExecution
         ]
 
-{- | Canonicalise a decision for order-independence comparison: the audit-reason
-list of a 'BlockedByDefault' is sorted, since reasons are gathered in boot order and
-a permutation of the configured set only reorders the non-decisive ones at equal
-precedence. 'Admitted' \/ 'Blocked' are left as-is -- a permutation cannot change the
-credited rule, since the boot order resolves every equal-precedence tie by name.
+{- | Canonicalise a decision for order-independence comparison. Sort the audit-reason
+list of a 'BlockedByDefault'. The engine gathers reasons in boot order, and a
+permutation of the configured set only reorders the non-decisive ones at equal
+precedence. 'Admitted' and 'Blocked' stay as they are. A permutation cannot change the
+credited rule, because the boot order resolves every equal-precedence tie by name.
 -}
 canonical :: Decision -> Decision
 canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
@@ -220,7 +220,7 @@ spec = do
                 >>= (`shouldBe` NoDecision "no advisory database is loaded")
 
     describe "evalRule (DenyIfCve)" $ do
-        -- 'pkg' builds thing@1.0.0; an advisory covering [0, 2.0.0) affects it.
+        -- 'pkg' builds thing@1.0.0. An advisory covering [0, 2.0.0) affects it.
         let affecting sev = [("thing", AdvisoryRange "GHSA-affect-0001" sev (Just "0") (Just "2.0.0") Nothing)]
             denyAt s = DenyIfCve (DenyIfCveParams s FailDeny)
         it "denies an affected version whose advisory meets the threshold, naming it" $
@@ -245,9 +245,9 @@ spec = do
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "cveIdsInReason -- recovering advisory ids for the denial audit line" $ do
-        -- The deny reason 'denyVerdict' builds (asserted verbatim by the DenyIfCve
-        -- describe above); the audit layer reads the ids back from it, so the two must
-        -- stay in lockstep. A reword of either fails one of these.
+        -- The deny reason 'denyVerdict' builds, asserted verbatim by the DenyIfCve
+        -- describe above. The audit layer reads the ids back from it, so the two must
+        -- stay in lockstep: a reword of either fails one of these.
         let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
         it "recovers the id a DenyIfCve denial named" $
             cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
@@ -357,8 +357,8 @@ spec = do
             decide [atDefaultPrecedence (AllowScope (mkScope "myorg"))] (pkg (Just "myorg") 0)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
         it "the higher-precedence allow wins among allows" $
-            -- The version is too young for the age rule, but the scope rule
-            -- matches; at default precedences the scope allow outranks it anyway.
+            -- The version is too young for the age rule, but the scope rule matches.
+            -- At default precedences the scope allow outranks it anyway.
             decide
                 (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowScope (mkScope "myorg")])
                 (pkg (Just "myorg") 0)
@@ -369,21 +369,20 @@ spec = do
             decide rs p >>= \d -> blockedBy d `shouldBe` Just "DenyInstallTimeExecution"
             decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyInstallTimeExecution"
         it "resolves an equal-precedence allow-vs-deny tie by name, not by deny-priority" $ do
-            -- The deliberate change from the two-tier design: at *equal explicit*
-            -- precedence there is no deny-over-allow runtime rule -- the boot order
-            -- resolves the tie by name. "AllowScope" sorts before
-            -- "DenyInstallTimeExecution", so the allow is credited even though the
-            -- version also trips the deny. (Deny-over-allow still holds out of the
+            -- At equal explicit precedence there is no deny-over-allow runtime rule:
+            -- the boot order resolves the tie by name. "AllowScope" sorts before
+            -- "DenyInstallTimeExecution", so the engine credits the allow even though
+            -- the version also trips the deny. (Deny-over-allow still holds out of the
             -- box, where the deny default sits strictly higher.)
             let rs = [at 300 (AllowScope (mkScope "myorg")), at 300 DenyInstallTimeExecution]
                 p = withInstallScripts (pkg (Just "myorg") 99)
             decide rs p >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
             decide (reverse rs) p >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
         it "breaks an equal-precedence allow-vs-allow tie by name, regardless of order" $ do
-            -- Two allows fire at the *same* precedence; the tie is resolved by name
-            -- (the smallest ruleName), not list position, so the same rule is
-            -- credited whichever order it is supplied in.
-            -- "AllowIfOlderThan" sorts before "AllowScope", so it is credited.
+            -- Two allows fire at the same precedence. The boot order breaks the tie by
+            -- name (the smallest ruleName), not by list position, so the same rule wins
+            -- whichever order the list supplies. "AllowIfOlderThan" sorts before
+            -- "AllowScope", so it takes the credit.
             let allows =
                     [ at 150 (AllowScope (mkScope "myorg"))
                     , at 150 (AllowIfOlderThan (7 * nominalDay))
@@ -392,8 +391,8 @@ spec = do
             decide allows p >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
             decide (reverse allows) p >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
         it "an operator-elevated allow outranks a higher-default deny" $
-            -- The scope allow is lifted above the deny's default precedence, so a
-            -- trusted internal scope is admitted despite running install scripts.
+            -- The operator lifts the scope allow above the deny's default precedence,
+            -- so the engine admits a trusted internal scope despite its install scripts.
             decide
                 [ at (defaultDenyInstallTimeExecutionPrecedence + 1) (AllowScope (mkScope "myorg"))
                 , atDefaultPrecedence DenyInstallTimeExecution
@@ -407,8 +406,8 @@ spec = do
             decide rs p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
             decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
         it "the remediation fast lane admits a young fix ahead of the quarantine" $
-            -- The whole point of the rule: a security patch too young for min-age is
-            -- admitted immediately because an advisory names it as the exact fix.
+            -- The whole point of the rule: the engine admits a security patch too young
+            -- for min-age because an advisory names it as the exact fix.
             decideWith
                 (depsWith fixRows)
                 (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve])
@@ -429,7 +428,7 @@ spec = do
             -- An old enough version still rides the ordinary allow.
             decideWith broken policy (pkg Nothing 30)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
-            -- A young version is denied by default -- not fail-closed 'Undecidable'.
+            -- A young version is denied by default, not fail-closed 'Undecidable'.
             decideWith broken policy (pkg Nothing 1) >>= \case
                 BlockedByDefault _ -> pass
                 other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
@@ -479,9 +478,9 @@ spec = do
 
         it "every rule non-decisive yields deny-by-default" $
             hedgehog $ do
-                -- A non-matching scope and a too-young age make both allows
-                -- yield no decision; the package runs no install scripts so the deny
-                -- does too -- so whatever the precedences, nothing fires.
+                -- A non-matching scope and a too-young age make both allows yield no
+                -- decision. The package runs no install scripts, so the deny yields
+                -- none either. Whatever the precedences, nothing fires.
                 scopeTxt <- forAll genScope
                 otherTxt <- forAll (Gen.filter (/= scopeTxt) genScope)
                 precs <- forAll (Gen.list (Range.singleton 3) genPrecedence)
@@ -518,12 +517,12 @@ spec = do
 
         it "the decision is invariant under shuffling the rule list" $
             hedgehog $ do
-                -- Precedences may collide, so equal-precedence ties -- including an
-                -- allow-vs-allow tie where two firing allows share a precedence --
-                -- are exercised. The boot order resolves every tie by name, so the
-                -- credited winner (and the whole 'Decision') is order-independent;
-                -- only the gathered reason order tracks the input list within a tie,
-                -- so 'canonical' sorts it before comparing.
+                -- Precedences may collide, so the draw exercises equal-precedence ties,
+                -- including an allow-vs-allow tie where two firing allows share a
+                -- precedence. The boot order resolves every tie by name, so the credited
+                -- winner, and the whole 'Decision', is order-independent. Only the
+                -- gathered reason order tracks the input list within a tie, so
+                -- 'canonical' sorts it before comparing.
                 scopeTxt <- forAll genScope
                 ageDays <- forAll genAgeDays
                 n <- forAll (Gen.int (Range.linear 0 6))

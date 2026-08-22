@@ -114,8 +114,8 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planMaxHeapBytes plan `shouldBe` (Just (300 * mib), FromRts)
 
     it "sizes the derived heap ceiling from the planned capabilities, not the live count" $ do
-        -- The cgroup grants 2 cores while the RTS claimed 4: the nursery the
-        -- process will actually run with is 2 x allocation area.
+        -- The cgroup grants 2 cores while the RTS claimed 4, so the nursery the
+        -- process runs with is 2 x allocation area.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
         planMaxHeapBytes plan
@@ -124,14 +124,15 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
 derivationSpec :: Spec
 derivationSpec = describe "deriveMaxHeapBytes" $ do
     it "subtracts the nursery budget and ten percent slack, aligned to the RTS's 4 KiB blocks" $ do
-        -- 512 MiB - (2 x 64 MiB nursery) - 51.2 MiB slack = 332.8 MiB, rounded down
-        -- to a whole block so the ceiling reads back exactly after the re-exec.
+        -- 512 MiB - (2 x 64 MiB nursery) - 51.2 MiB slack = 332.8 MiB. The result
+        -- rounds down to a whole block, so the ceiling reads back exactly after the
+        -- re-exec.
         let raw = 512 * mib - 2 * 64 * mib - (512 * mib) `div` 10
         deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
             `shouldBe` (raw - raw `mod` 4096)
 
     it "floors at half the memory limit when the nursery would swallow a tiny pod" $
-        -- 128 MiB with a 4 x 64 MiB nursery would go negative; half the limit stands.
+        -- 128 MiB with a 4 x 64 MiB nursery would go negative, so half the limit stands.
         deriveMaxHeapBytes (128 * mib) 4 (64 * mib) `shouldBe` (64 * mib)
 
 flagsSpec :: Spec
@@ -191,9 +192,8 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
         effectiveHeapCeiling effective `shouldBe` (Just (300 * mib), FromRts)
 
     it "budgets from the live capability count when the desired one never took" $ do
-        -- The re-exec failure shape: neither flag applied. Parallelism budgets
-        -- must track what the RTS actually runs with, provenance degraded to
-        -- the RTS's own.
+        -- The re-exec failure shape: neither flag applied. Parallelism budgets must
+        -- track what the RTS runs, and the provenance degrades to the RTS's own.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan Nothing Nothing cgroup unpinned
             effective = reconcileRuntimePlan cgroup plan unpinned

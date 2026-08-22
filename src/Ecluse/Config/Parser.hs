@@ -39,11 +39,11 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
--- A registry URL entry must be https (mkRegistryUrl) and must carry a dialable
--- authority: a host, and, when a port is written, a decimal port in 1..65535
--- (hostPortAddress, the same extraction the egress gate authorises by). The gate
+-- A registry URL entry must be https (mkRegistryUrl). It must also carry a dialable
+-- authority: a host, and, when it writes a port, a decimal port in 1..65535. That
+-- check is hostPortAddress, the same extraction the egress gate authorises by. The gate
 -- treats an unextractable authority as refused, so an entry that fails here could
--- only ever produce a mount that refuses every fetch; failing the boot names the
+-- only ever produce a mount that refuses every fetch. Failing the boot names the
 -- offending value instead.
 parseRegistryUrl :: Value -> Parser RegistryUrl
 parseRegistryUrl = \case
@@ -90,11 +90,11 @@ parseUrl = withText "Url" $ \t ->
         Right u -> pure u
         Left e -> fail (T.unpack e)
 
-{- | An @http(s)@ URL Écluse itself serves or rewrites against (the public URL):
-the scheme must be http or https (http stays legal for loopback development
-deployments), and the authority must be dialable by the same extraction the egress
-gate authorises ('hostPortAddress'), so a value that cannot name a real listener is
-refused at load instead of surfacing as rewritten artifact URLs no client can fetch.
+{- | An @http(s)@ URL Écluse itself serves or rewrites against (the public URL). The
+scheme must be http or https, and http stays legal for loopback development
+deployments. The authority must be dialable by the same extraction the egress gate
+authorises ('hostPortAddress'). A value that cannot name a real listener is therefore
+refused at load, instead of surfacing as rewritten artifact URLs no client can fetch.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
 parseHttpUrl field = \case
@@ -118,8 +118,8 @@ parsePort field value
     | otherwise = fail (field <> " must be a port in 0..65535 (0 = OS-assigned), got " <> show value)
 
 {- | A CodeArtifact authorisation-token duration in seconds, bounded to the range
-the service accepts (900..43200); an out-of-range value would only fail later, at
-the first mint, with the mirror queue already accepting work.
+the service accepts (900..43200). An out-of-range value would otherwise fail later,
+at the first mint, with the mirror queue already accepting work.
 -}
 parseCodeArtifactDuration :: String -> Value -> Parser Natural
 parseCodeArtifactDuration field v = do

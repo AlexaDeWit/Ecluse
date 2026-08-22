@@ -41,10 +41,10 @@ spec = do
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
         it "pins the shipped redelivery budget to the one a directly-built backend holds" $
-            -- Two statements of the same policy default (the operator-visible YAML and
-            -- the value a backend built without config falls back to) must agree, or a
-            -- deployment and a test double would retire poison messages at different
-            -- delivery counts.
+            -- Two places state the same policy default: the operator-visible YAML, and
+            -- the value a backend built without config falls back to. They must agree.
+            -- If they drift, a deployment and a test double retire poison messages at
+            -- different delivery counts.
             case (loadConfig [] Nothing, defaultDeliveryBudget) of
                 (Right cfg, DeliveryBudget budget) ->
                     qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
@@ -75,8 +75,8 @@ spec = do
                 `shouldBe` Left [MountMissingPrivateUpstream Npm]
 
         it "requires server.publicUrl once any mount is active, aggregated with the mount errors" $ do
-            -- Served tarball URLs are rewritten against the proxy's own base URL;
-            -- omitting it fails here, not client by client at install time.
+            -- Écluse rewrites served tarball URLs against the proxy's own base URL. A
+            -- missing base URL fails here, not client by client at install time.
             loadConfig [] (Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}")
                 `shouldBe` Left [PublicUrlRequired]
             loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
@@ -160,12 +160,11 @@ spec = do
                 (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://priv.example.test/")])
                 ["mirrorTarget", "privateUpstream"]
 
-{- | Load a config document, failing the test on any load error.
-| The client-facing base URL every active-mount load needs (server.publicUrl).
--}
+-- | The client-facing base URL every active-mount load needs (server.publicUrl).
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
+-- | Load a config document, failing the test on any load error.
 configFor :: ByteString -> IO Config
 configFor doc = either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig pubUrlEnv (Just doc))
 
@@ -177,9 +176,9 @@ shouldWarnOnce doc phrases = do
         [warning] -> traverse_ (\phrase -> warning `shouldSatisfy` T.isInfixOf phrase) phrases
         warnings -> expectationFailure ("expected exactly one collision warning, got " <> show warnings)
 
-{- | An npm mount document with the given string fields; the shipped npm template
-supplies the rest (public upstream, tarball-host posture). A static
-@mirrorTargetToken@ is added so the (non-CodeArtifact) mirror targets these
+{- | An npm mount document with the given string fields. The shipped npm template
+supplies the rest: the public upstream and the tarball-host posture. The document
+carries a static @mirrorTargetToken@, so the non-CodeArtifact mirror targets these
 collision cases use derive a valid write credential and the config loads.
 -}
 npmMountDoc :: [(Text, Text)] -> ByteString
@@ -194,6 +193,6 @@ bareNpmMountDoc fields =
   where
     field (key, value) = "\"" <> key <> "\":\"" <> value <> "\""
 
--- | The served npm mount's resolved mode, when one is served.
+-- | The npm mount's resolved mode, when the config serves one.
 modeOf :: Config -> Maybe MountMode
 modeOf cfg = regMode . mountRegistries <$> Map.lookup Npm (configMounts cfg)

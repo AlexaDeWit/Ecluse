@@ -14,8 +14,8 @@ import Ecluse.Core.Osv.Schema (MetaKey, osvDbFileName, renderMetaKey)
 spec :: Spec
 spec = do
     describe "osvDbFileName" $ do
-        -- The literal pins the published object key: a change here is a change
-        -- to the writer/reader contract and must be a conscious epoch bump.
+        -- The literal pins the published object key. A change here changes the
+        -- writer and reader contract, so it must be a deliberate epoch bump.
         it "names the artifact by ecosystem and schema epoch" $
             osvDbFileName "npm" `shouldBe` "npm-osv-schema3.db"
 

@@ -1,17 +1,16 @@
 # Getting started
 
-Everything you need to set up a development environment and run the inner loop. For the
-contribution *process* (conventions, sign-off, AI policy), see
-[`CONTRIBUTING.md`](../CONTRIBUTING.md); for the test tiers and coverage, see
-[Testing Strategy](testing.md).
+How to set up a development environment and run the inner loop. For the contribution *process*
+(conventions, sign-off, AI policy), see [`CONTRIBUTING.md`](../CONTRIBUTING.md). For the test tiers
+and coverage, see [Testing Strategy](testing.md).
 
 ## Local development
 
 **Nix (with flakes) is a hard dependency.** The whole toolchain (GHC 9.10, Cabal, fourmolu, hlint,
-Semgrep) comes from the dev shell, pinned by `flake.lock`; there's no supported system-level build.
-Enter the shell with `nix develop` (or let `direnv` do it), then run everything through **`task`**,
-the entry point shared by local development and CI. Running it from outside the shell works but
-re-enters per target, so keep that for one-offs.
+Semgrep) comes from the dev shell, pinned by `flake.lock`. There is no supported system-level build.
+Enter the shell with `nix develop` (or let `direnv` do it), then run everything through `task`, the
+entry point shared by local development and CI. Running `task` from outside the shell works, but it
+re-enters the shell per target, so keep that for one-offs.
 
 | Task | Command |
 |------|---------|
@@ -28,15 +27,15 @@ re-enters per target, so keep that for one-offs.
 Run `task --list` for the full set. The underlying commands live in
 [`Taskfile.yml`](../Taskfile.yml), so local and CI never drift.
 
-**Before you push,** run `task check` clean: build (`-Werror`), units, doctest over the Haddock
-`>>>` examples, `fourmolu --mode check`, `hlint`, Semgrep (zero findings), and the two analysis
-tiers `weeder` (dead code) and `stan`, each failing `check` on any finding. It's a full `-Werror`
-build of every component plus two `-fwrite-ide-info` builds, so cold it runs well over 10 minutes.
-`task gate` adds the Docker-bound integration suite and the Haddock build, the two tiers `check`
-lacks. The CI gate expects all of that, plus end-to-end (`task test-e2e`) and a live-registry smoke
-suite (`task test-smoke`): e2e gates on every PR but is kept out of local `check` and `gate` for its
-weight; smoke is allowed to fail and never gates. Performance tests run server-side, not at push. See
-[Testing Strategy](testing.md).
+**Before you push,** run `task check` clean. It runs the build (`-Werror`), units, doctest over the
+Haddock `>>>` examples, `fourmolu --mode check`, `hlint`, and Semgrep (zero findings). It also runs
+the two analysis tiers `weeder` (dead code) and `stan`. A finding in either tier fails `check`. It
+is a full `-Werror` build of every component plus two `-fwrite-ide-info` builds, so cold it runs
+well over 10 minutes. `task gate` adds the two tiers `check` lacks: the Docker-bound integration
+suite and the Haddock build. The CI gate expects all of that, plus end-to-end (`task test-e2e`) and
+a live-registry smoke suite (`task test-smoke`). The e2e suite gates every PR, but its weight keeps
+it out of local `check` and `gate`. Smoke is allowed to fail and never gates. Performance tests run
+server-side, not at push. See [Testing Strategy](testing.md).
 
 ### Reproducible build and checks (Nix)
 
@@ -49,14 +48,14 @@ exact Nix-store closure (GHC and C libraries from `flake.lock`), use the Nix out
 | Evaluate the flake, build the Haddock check | `task nix-check` (`nix flake check`) |
 
 `nix flake check` builds the one flake check, `checks.docs`: the library Haddock, so a broken doc
-comment fails; it's the check the CI `docs` job builds. The tests, formatting, and linting are
-**not** flake checks; they run through `task` against the incremental cabal build, which is what gates
-in CI. Three couldn't be flake checks even in principle: `ecluse-integration` (needs Docker),
+comment fails it. The CI `docs` job builds the same check. The tests, formatting, and linting are
+not flake checks. They run through `task` against the incremental cabal build, which is what gates
+in CI. Three could not be flake checks even in principle: `ecluse-integration` (needs Docker),
 `ecluse-smoke` (live network), and Semgrep (`--config auto` fetches rules over the network).
 
 > **Flakes only see git-tracked files.** `git add` new sources before `nix build` /
-> `nix flake check`, or they're invisible and a build that references them (via the cabal file)
-> fails on the missing modules.
+> `nix flake check`. Otherwise they're invisible, and a build that references them (via the cabal
+> file) fails on the missing modules.
 
 ### Dependency locking
 
@@ -64,44 +63,44 @@ One version authority, two build paths:
 
 | Path | Resolver | Lock |
 |------|----------|------|
-| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.10 set + the flake overlay | `flake.lock` |
-| `cabal` (dev shell + the CI gate) | Hackage, held to the same versions | `cabal.project.freeze`, **generated** from the Nix set |
+| Nix / hermetic build (the shipped artifact) | nixpkgs GHC 9.10 set + the flake overlay | `flake.lock` |
+| `cabal` (dev shell + the CI gate) | Hackage, held to the same versions | `cabal.project.freeze`, generated from the Nix set |
 
-`callCabal2nix` doesn't read `cabal.project` / `.freeze`; instead the freeze is generated *from* the
-Nix package set (`task freeze`, backed by the flake's `cabal-freeze` output), so the cabal path
-resolves the exact dependency closure the shipped artifact is built from, and the `freeze-sync`
+`callCabal2nix` does not read `cabal.project` or `.freeze`. Instead `task freeze` generates the
+freeze *from* the Nix package set, backed by the flake's `cabal-freeze` output. The cabal path
+therefore resolves the exact dependency closure the shipped artifact is built from. The `freeze-sync`
 flake check fails CI whenever the committed freeze drifts from the set. The `index-state` in
-`cabal.project` caps the Hackage snapshot the solver may see; it only needs to contain every pinned
+`cabal.project` caps the Hackage snapshot the solver may see. It only needs to contain every pinned
 version, so advance it with `task bump-index-state` only when cabal reports a pinned version as
-unknown. amazonka is the one source pin held in two places (`amazonkaRev` in `flake.nix`, the
-`source-repository-package` tag in `cabal.project`); the `amazonka-lockstep` flake check keeps them
+unknown. The one source pin held in two places is amazonka: `amazonkaRev` in `flake.nix`, and the
+`source-repository-package` tag in `cabal.project`. The `amazonka-lockstep` flake check keeps them
 equal.
 
-Move the pins deliberately: `nix flake update` (or merging Renovate's weekly `flake.lock` refresh),
+Move the pins deliberately: run `nix flake update` (or merge Renovate's weekly `flake.lock` refresh),
 then `task freeze`, and commit both together. When the weekly Renovate PR moves Haskell versions,
-`freeze-sync` reds it; a single `task freeze` commit on that branch completes the refresh. Renovate
-widens the *bounds* in `ecluse.cabal` (only the few explicit `>= && <` ranges its manager can
-parse); versions themselves move only through the flake.
+`freeze-sync` reds it, and a single `task freeze` commit on that branch completes the refresh.
+Renovate widens the *bounds* in `ecluse.cabal`, only the few explicit `>= && <` ranges its manager
+can parse. Versions themselves move only through the flake.
 
 ---
 
 ## Codebase layout
 
-The *principles* of module organisation (types with their functions, one `Ecluse.<Area>` namespace
-per area, when a `.Types` split is justified) live in [`docs/style.md`](style.md) →
-"Module organisation". This section records the current layout and one project-specific pattern.
+[`docs/style.md`](style.md) → "Module organisation" holds the *principles*: types with their
+functions, one `Ecluse.<Area>` namespace per area, and when a `.Types` split is justified. This
+section records the current layout and one project-specific pattern.
 
-- **Two libraries behind one `ecluse.cabal`.** The pure capability core is `ecluse-core` (`core/src`,
-  `Ecluse.Core.*`); the application shell that composes it into a running proxy (config, the `Env`
-  composition root, logging, the WAI app, telemetry) is `ecluse` (`src`, `Ecluse.*`), with
-  `app/Main.hs` the executable. The boundary is build-enforced: the core's unit suite can't depend on
-  the app library. See
+- **Two libraries behind one `ecluse.cabal`.** `ecluse-core` (`core/src`, `Ecluse.Core.*`) is the
+  pure capability core. `ecluse` (`src`, `Ecluse.*`) is the application shell that composes it into a
+  running proxy: config, the `Env` composition root, logging, the WAI app, and telemetry.
+  `app/Main.hs` is the executable. The build enforces the boundary: the core's unit suite cannot
+  depend on the app library. See
   [architecture → Codebase decomposition](architecture.md#codebase-decomposition).
 - **Handles are records of functions, selected at one composition root.** A swappable backend
-  (registry protocol, mirror queue, credential provider) is a record whose fields are functions (the
-  *Handle pattern*), built by a per-backend smart constructor (e.g.
-  `newSqsQueue :: SqsConfig -> IO MirrorQueue`). Adding a backend means a constructor behind the
-  *existing* record, wired into the single composition root, not provider selection smeared across
+  (registry protocol, mirror queue, credential provider) is a record whose fields are functions: the
+  *Handle pattern*. A per-backend smart constructor builds it (e.g.
+  `newSqsQueue :: SqsConfig -> IO MirrorQueue`). Adding a backend means a new constructor behind the
+  *existing* record, wired into the single composition root, never provider selection smeared across
   call sites. See
   [Cloud Backends → Handles](architecture/cloud-backends.md#handles-records-of-functions).
 

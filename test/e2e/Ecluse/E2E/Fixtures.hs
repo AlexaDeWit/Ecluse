@@ -5,12 +5,12 @@
 {- | Fixture generation for the end-to-end suite: the static file tree the nginx
 public-upstream stub serves.
 
-Each fixture package is written as an npm-format packument plus a real gzipped tar
-artifact whose __sha-512 SRI is computed from the bytes actually written__, so the
-proxy's serve path, the worker's integrity gate, and npm's own SRI check all see a
-consistent (or, for the tamper case, deliberately inconsistent) digest. Versions are
-backdated well past the default @min-age@ quarantine so the allow path is not gated
-shut by the age rule.
+Each fixture package is an npm-format packument plus a real gzipped tar artifact.
+Its __sha-512 SRI covers the bytes actually written__. The proxy's serve path, the
+worker's integrity gate, and npm's own SRI check therefore see one digest. The tamper
+case makes that digest deliberately inconsistent. The builder backdates each version
+well past the default @min-age@ quarantine, so the age rule does not gate the allow path
+shut.
 
 The tree mirrors the npm registry layout the stub serves over HTTP:
 
@@ -45,10 +45,10 @@ import System.Process.Typed (proc, runProcess_)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 
-{- | One fixture package: its identity plus the two behaviours the scenarios turn
-on -- whether it declares an install script (so the @DenyInstallTimeExecution@ rule
-blocks it) and whether its served bytes are corrupted after the SRI is fixed (so the
-integrity gate must reject it).
+{- | One fixture package: its identity plus the two behaviours the scenarios turn on.
+The first is whether it declares an install script, which makes the
+@DenyInstallTimeExecution@ rule block it. The second is whether the builder corrupts its
+served bytes after fixing the SRI, which the integrity gate must reject.
 -}
 data PkgSpec = PkgSpec
     { psName :: Text
@@ -56,7 +56,7 @@ data PkgSpec = PkgSpec
     , psVersion :: Text
     -- ^ The single published version.
     , psInstallScript :: Bool
-    -- ^ Declare an install script -- the @DenyInstallTimeExecution@ trigger.
+    -- ^ Declare an install script: the @DenyInstallTimeExecution@ trigger.
     , psTamper :: Bool
     {- ^ Corrupt the artifact bytes after the packument's SRI is computed, so the
     served bytes no longer match the declared integrity.
@@ -81,14 +81,14 @@ denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 mirrorPkg :: PkgSpec
 mirrorPkg = defaultPkgSpec "e2e-mirror"
 
--- | A package whose artifact bytes are tampered: the worker must refuse to mirror it.
+-- | A package with tampered artifact bytes: the worker must refuse to mirror it.
 tamperPkg :: PkgSpec
 tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 
 {- | A package used only for @HEAD@ probes. A @HEAD@ on a tarball must report the
-artifact size without streaming the body and without enqueueing a mirror, so this
-package is never installed or @GET@ (either would itself mirror it) -- leaving an empty
-mirror attributable to the @HEAD@ alone.
+artifact size without streaming the body and without enqueueing a mirror. No scenario
+installs or @GET@s this package, since either would itself mirror it, so an empty mirror
+is attributable to the @HEAD@ alone.
 -}
 headPkg :: PkgSpec
 headPkg = defaultPkgSpec "e2e-head"
@@ -104,10 +104,10 @@ telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 fixturePackages :: [PkgSpec]
 fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPkg, telemetryDdPkg]
 
-{- | Write every fixture package under @root@ (the directory bind-mounted into the
-nginx stub as its document root). Creates the packument and the gzipped artifact and
-fixes the packument's @dist.integrity@ to the artifact's real sha-512, then -- for a
-tamper spec -- corrupts the artifact so the served bytes diverge from that digest.
+{- | Write every fixture package under @root@, the directory bind-mounted into the
+nginx stub as its document root. Creates the packument and the gzipped artifact, and
+fixes the packument's @dist.integrity@ to the artifact's real sha-512. For a tamper
+spec it then corrupts the artifact, so the served bytes diverge from that digest.
 -}
 buildFixtures :: FilePath -> [PkgSpec] -> IO ()
 buildFixtures root = traverse_ (buildOne root)
@@ -143,14 +143,14 @@ buildOne root spec = do
             ]
     bytes <- BS.readFile tgzPath
     let sri = sha512Sri bytes
-    -- The packument is served at @/\<name\>@ but the tarball lives under
+    -- The stub serves the packument at @/\<name\>@ but the tarball lives under
     -- @/\<name\>/-/@, so @\<name\>@ cannot be both a file and a directory. The
-    -- packument is therefore stored *inside* the package directory and the nginx
-    -- stub config (see "Ecluse.E2E.Harness") maps @/\<name\>@ to it.
+    -- packument therefore sits *inside* the package directory, and the nginx stub
+    -- config (see "Ecluse.E2E.Harness") maps @/\<name\>@ to it.
     writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec sri))
     when (psTamper spec) $
-        -- Corrupt the served artifact after the SRI is fixed: the integrity gate
-        -- (worker) and npm's own check must now reject these bytes.
+        -- Corrupt the served artifact after the SRI is fixed: the worker's integrity
+        -- gate and npm's own check must now reject these bytes.
         BS.appendFile tgzPath "tampered"
 
 -- | @sha512-<base64>@ Subresource-Integrity string over the given bytes.
@@ -166,9 +166,9 @@ tarballPackageJson spec =
         ]
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
 
-{- | The npm packument the stub serves for a package: a single backdated version
-pointing its artifact at the stub, with the integrity fixed to the real digest and
-(for the deny case) @hasInstallScript@ + a declared install script so the rule fires.
+{- | The npm packument the stub serves: one backdated version pointing its artifact at
+the stub, with the integrity fixed to the real digest. The deny case adds
+@hasInstallScript@ and a declared install script, so the rule fires.
 -}
 packument :: PkgSpec -> Text -> Value
 packument spec sri =

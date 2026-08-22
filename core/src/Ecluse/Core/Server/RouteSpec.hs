@@ -7,8 +7,8 @@
 'specsOf' erases an "Ecluse.Core.Server.Route".'Route' into the operations the
 capability manifest needs. A write route contributes @PUT@. A read route contributes
 both @GET@ and its derived bodiless @HEAD@ operation. The capture type, builder, and
-typed response value disappear, but each operation's 'ResponseDoc's are projected from
-the same 'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
+typed response value disappear. Each operation's 'ResponseDoc's still come from the same
+'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
 -}
 module Ecluse.Core.Server.RouteSpec (
     -- * The documented view
@@ -39,7 +39,7 @@ are functions.
 -}
 data RouteSpec = RouteSpec
     { rsName :: RouteName
-    -- ^ The operation name within its ecosystem; @HEAD@ projections carry a @.head@ suffix.
+    -- ^ The operation name within its ecosystem. A @HEAD@ projection adds a @.head@ suffix.
     , rsMethod :: StdMethod
     -- ^ The exact HTTP method this operation serves.
     , rsPattern :: [PathSeg]
@@ -70,8 +70,8 @@ data ParamSpec = ParamSpec
     deriving stock (Eq, Show)
 
 {- | Project a route to every exact method it serves. The @HEAD@ contract is the
-'bodilessContract' interpretation of the same response value used by @GET@, so its
-status set cannot drift and neither its manifest nor wire response can carry a body.
+'bodilessContract' interpretation of the same response value @GET@ uses. Its status set
+therefore cannot drift, and neither its manifest nor its wire response can carry a body.
 -}
 specsOf :: Route v -> [RouteSpec]
 specsOf

@@ -68,17 +68,16 @@ spec = do
                 topKeys = ["components", "info", "openapi", "paths", "servers", "tags"]
                 marker k = "\n  \"" <> k <> "\":"
                 offsetOf k = T.length (fst (T.breakOn (marker k) rendered))
-            -- every top-level key is present at the document root ...
             all (\k -> marker k `T.isInfixOf` rendered) topKeys `shouldBe` True
-            -- ... and they appear in ascending order, so confCompare = compare is in
-            -- effect and the output does not depend on insertion order.
+            -- Ascending offsets prove confCompare = compare is in effect, so the output
+            -- does not depend on insertion order.
             map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
-    -- The manifest's specs are the documentation projection ('specOf') of the very
+    -- The manifest's specs are the documentation projection ('specOf') of the same
     -- RoutePatterns the classifier routes on, so their paths and methods agree by
-    -- construction. These assert that projection reaches the rendered document: every
-    -- route is emitted under its declared method at its rendered template, and a path
-    -- claimed by no route still denies by default.
+    -- construction. These cases assert that the projection reaches the rendered
+    -- document. The manifest emits every route under its declared method at its
+    -- rendered template, and a path claimed by no route still denies by default.
     describe "documented routes correspond to the live classifier" $ do
         it "the npm mount exposes a route grammar" $
             null npmSpecs `shouldBe` False

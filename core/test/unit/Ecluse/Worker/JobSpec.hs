@@ -47,10 +47,10 @@ import Ecluse.Worker.Support
 spec :: Spec
 spec = do
     describe "outcomeOfFetchFault (issue #846: over-cap is terminal, dead-lettered, not retried)" $ do
-        -- The pre-fix worker treated every fetch Left as a retry, so a deterministically
-        -- over-cap tarball redelivered until the queue's redrive/DLQ retired it. The fix
-        -- splits an over-cap fault (a terminal fault the backend dead-letters) from a
-        -- transient one (an ordinary redelivery).
+        -- An over-cap fault is terminal, so the backend dead-letters it. A transient
+        -- fault is an ordinary redelivery. Treating every fetch Left as a retry would
+        -- redeliver a deterministically over-cap tarball until the queue's redrive or DLQ
+        -- retired it.
         it "dead-letters an over-cap artifact (it can never succeed, so it rides the terminus)" $
             outcomeOfFetchFault (ArtifactOverCap "artifact exceeded the response bound")
                 `shouldBe` DeadLettered "artifact exceeded the response bound"
@@ -84,9 +84,9 @@ spec = do
                     length published `shouldBe` 1
 
         it "publishes a sha384-only version end to end (fetch, compute sha384, verify, publish)" $
-            -- The end-to-end proof that a sha384-admitted artifact is not admit-but-
-            -- uncomputable: current metadata carries only the sha384, so the worker
-            -- fetches, recomputes sha384, matches, and publishes.
+            -- The end-to-end proof that a sha384-admitted artifact is not
+            -- admit-but-uncomputable. Current metadata carries only the sha384, so the
+            -- worker fetches, recomputes sha384, matches, and publishes.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSha384Sri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -96,9 +96,9 @@ spec = do
                     length published `shouldBe` 1
 
         it "publishes a sha256-only version end to end (the #409 fix on the default floor)" $
-            -- A sha256-only artifact is admitted by the default public floor; before #409 the
-            -- worker could not compute sha256 and Dropped it. Now it fetches, recomputes
-            -- sha256, matches, and publishes, never the admitted-but-dropped defect.
+            -- The default public floor admits a sha256-only artifact, and the worker
+            -- fetches, recomputes sha256, matches, and publishes it. A worker that could
+            -- not compute sha256 would drop an artifact it had already admitted.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SHA256 trueSha256]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -108,8 +108,8 @@ spec = do
                     length published `shouldBe` 1
 
         it "publishes a blake2b-only version end to end (the #409 fix, the top tier)" $
-            -- A blake2b-only artifact is admitted by the floor and was likewise Dropped before
-            -- #409; the worker now recomputes blake2b-512, matches, and publishes.
+            -- The floor admits a blake2b-only artifact, and the worker recomputes
+            -- blake2b-512, matches, and publishes it.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash Blake2b trueBlake2b]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -131,11 +131,10 @@ spec = do
                     published `shouldBe` []
 
         it "hands the publish step the re-admitted descriptor exactly" $
-            -- The queue payload names the artifact by filename only, so the publish
-            -- must be handed the descriptor derived from the re-admitted artifact
-            -- (its digests, its filename, its declared size), pinning that every
-            -- field of the trusted-tier publish document is sourced from current
-            -- metadata.
+            -- The queue payload names the artifact by filename only. The worker must
+            -- hand the publish the descriptor derived from the re-admitted artifact: its
+            -- digests, its filename, and its declared size. Every field of the
+            -- trusted-tier publish document comes from current metadata.
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -151,8 +150,9 @@ spec = do
                                    ]
 
         it "leaves the job for redelivery on a transient fetch failure (no publish)" $
-            -- An unreachable upstream (connection refused) is a transient fault: the
-            -- fetch throws, so the job is left for redelivery and nothing is published.
+            -- An unreachable upstream (connection refused) is a transient fault. The
+            -- fetch throws, so the worker leaves the job for redelivery and publishes
+            -- nothing.
             withRuntime (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -161,9 +161,10 @@ spec = do
                 published `shouldBe` []
 
         it "renders a failed artifact fetch without the URL's userinfo, path, or query" $
-            -- The fetch fault's text becomes the Retried reason: it is logged at the
-            -- queue-realisation site and set as the mirror-job span's error status, so it
-            -- must name the authority and the bounded transport cause, never the location.
+            -- The fetch fault's text becomes the Retried reason. The queue-realisation
+            -- site logs that text, and the mirror-job span carries it as an error status.
+            -- It must therefore name the authority and the bounded transport cause, never
+            -- the location.
             withRuntime (Right ()) $ \runtime queue _logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -184,9 +185,9 @@ spec = do
 
         it "renders a transport fault's retry reason with the prefix exactly once" $
             -- The mirror write folds a thrown transport failure through the shared
-            -- classifier into a PublishTransport value; the consumer renders the reason
-            -- prefix here, once. Regression: the fault once carried the prefix as raw
-            -- text and the consumer added it again, so the log line doubled it.
+            -- classifier into a PublishTransport value. The consumer renders the reason
+            -- prefix here, once. A fault carrying the prefix as raw text would make the
+            -- consumer add it again, doubling it in the log line.
             withUpstream $ \url ->
                 withRuntime (Left (PublishTransport (transportFault TransportUnreachable "connection refused"))) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -199,8 +200,8 @@ spec = do
 
         it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
             -- A job whose artifact URL cannot be parsed into a request never reaches a
-            -- fetch: the by-URL build fails, which the worker treats as a transient
-            -- reason (Retried) rather than crashing the iteration. Nothing is published.
+            -- fetch. The by-URL build fails, and the worker treats that as a transient
+            -- reason (Retried) rather than crashing the iteration. It publishes nothing.
             withRuntime (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -209,10 +210,10 @@ spec = do
                 published `shouldBe` []
 
         it "drops a job (non-retryable) when the publish URL is unformable (a config fault)" $
-            -- An unformable PUBLISH URL is a misconfiguration redelivery cannot fix, so
-            -- the registry handle surfaces it as PublishUrlUnformable and the worker
-            -- DROPS the job rather than re-enqueueing it forever -- the non-retryable
-            -- terminal outcome, distinct from a retryable registry rejection.
+            -- An unformable PUBLISH URL is a misconfiguration redelivery cannot fix. The
+            -- registry handle surfaces it as PublishUrlUnformable, and the worker
+            -- DROPS the job rather than re-enqueueing it forever. That is the
+            -- non-retryable terminal outcome, distinct from a retryable registry rejection.
             withUpstream $ \url ->
                 withRuntime (Left (PublishUrlUnformable EmptyBaseUrl)) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -220,10 +221,11 @@ spec = do
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
         it "drops a job whose version current policy denies, without publishing" $
-            -- The drift-to-deny close: a version admitted at serve time but denied by current
-            -- policy must be dropped (acked/retired), never frozen into the trusted mirror store.
-            -- 'unreachableUrl' doubles as a guard: were re-evaluation skipped, the artifact
-            -- fetch would surface a Retried, not the Dropped this asserts.
+            -- The drift-to-deny close: current policy denies a version admitted at serve
+            -- time. The worker drops it (acks and retires it) rather than freezing it
+            -- into the trusted mirror store. 'unreachableUrl' doubles as a guard: a skipped
+            -- re-evaluation would surface a Retried from the artifact fetch, not this
+            -- Dropped.
             withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -241,8 +243,9 @@ spec = do
                     length published `shouldBe` 1
 
         it "drops a job whose version the upstream no longer offers (withdrawn), without publishing" $
-            -- The re-fetch yields no version (a yanked/unpublished version): a non-retryable
-            -- drop, since a version the upstream has withdrawn must not be mirrored.
+            -- The re-fetch yields no version (a yanked or unpublished version): a
+            -- non-retryable drop, since a version the upstream withdrew must not be
+            -- mirrored.
             withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMissing) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -271,8 +274,8 @@ spec = do
 
         it "fetches through the request formation keyed by the job's own ecosystem" $
             -- The policies map also carries a PyPI bundle whose request formation
-            -- refuses outright: the npm job must ride its own ecosystem's builder,
-            -- so the decoy entry is never consulted and the publish succeeds.
+            -- refuses outright. The npm job must ride its own ecosystem's builder, so
+            -- nothing consults the decoy entry and the publish succeeds.
             withUpstream $ \url -> do
                 let refusing = (npmPolicy presentResolver [admitRule]){wpBuildArtifactRequest = \_ _ _ _ _ -> Left EmptyBaseUrl}
                     policies = Map.insert PyPI refusing (npmPolicies presentResolver [admitRule])
@@ -284,9 +287,9 @@ spec = do
                     length published `shouldBe` 1
 
         it "publishes through the publish capability keyed by the job's own ecosystem" $
-            -- The policies map also carries a PyPI bundle with its own recording
-            -- publish capability: the npm job's probe and publish must both ride
-            -- npm's, so the foreign ecosystem's capability records nothing.
+            -- The policies map also carries a PyPI bundle with its own recording publish
+            -- capability. The npm job's probe and publish must both ride npm's, so the
+            -- foreign ecosystem's capability records nothing.
             withUpstream $ \url -> do
                 npmLog <- newIORef (PublishLog [] [])
                 decoyLog <- newIORef (PublishLog [] [])
@@ -304,9 +307,9 @@ spec = do
                     decoyPublished `shouldBe` []
 
         it "retries when the job ecosystem's own request formation refuses the URL, without publishing" $
-            -- The npm bundle's builder is swapped for one that cannot form a request:
-            -- the refusal the fetch surfaces is that bundle's (there is no other
-            -- builder to fall back to), and the job is left for redelivery.
+            -- The npm bundle's builder cannot form a request. The refusal the fetch
+            -- surfaces is that bundle's, with no other builder to fall back to. The
+            -- worker leaves the job for redelivery.
             withRuntimePolicies (withArtifactRequest (\_ _ _ _ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -317,9 +320,9 @@ spec = do
                 published `shouldBe` []
 
         it "drops a job whose artifact host the current tarball-host policy refuses (payload re-gated)" $
-            -- The queue payload is a trust boundary: the host gate the serve path
-            -- applied before its public fetch is re-established at ingest, so a URL
-            -- injected or no-longer-honoured since enqueue is refused before any fetch.
+            -- The queue payload is a trust boundary. Ingest re-establishes the host gate
+            -- the serve path applied before its public fetch. It refuses a URL injected or
+            -- no-longer-honoured since enqueue, before any fetch.
             withRuntimePolicies (withHostGate (const False) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -336,9 +339,9 @@ spec = do
 
         it "drops a job whose artifact's current digests fall below the integrity floor" $
             -- Admission-policy drift toward refuse: the upstream now serves only a
-            -- legacy SHA-1 for the file. The serve gate would 403 it below the floor;
-            -- the shared oracle refuses it at ingest identically, so a
-            -- no-longer-admissible artifact is never frozen into the rule-exempt mirror.
+            -- legacy SHA-1 for the file. The serve gate would 403 it below the floor, and
+            -- the shared oracle refuses it at ingest identically. A no-longer-admissible
+            -- artifact is never frozen into the rule-exempt mirror.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = [unsafeHash SHA1 trueSha1]}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -348,7 +351,7 @@ spec = do
 
         it "drops a job whose version no longer carries any integrity digest" $
             -- The stripped-digest degrade: current metadata offers nothing to tie the
-            -- bytes to. The serve gate 403s it as MissingIntegrity; the worker drops it.
+            -- bytes to. The serve gate 403s it as MissingIntegrity, and the worker drops it.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = []}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -357,9 +360,9 @@ spec = do
                 published `shouldBe` []
 
         it "drops a job whose admitted artifact file the current metadata no longer carries" $
-            -- The withdrawn-file degrade: the version survives upstream but its file
-            -- set no longer names the admitted artifact. A forwarded miss on the serve
-            -- path; a non-retryable drop here (redelivery cannot restore the file).
+            -- The withdrawn-file degrade: the version survives upstream but its file set
+            -- no longer names the admitted artifact. That is a forwarded miss on the serve
+            -- path, and a non-retryable drop here, since redelivery cannot restore the file.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artFilename = "renamed-9.9.9.tgz"}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
@@ -368,8 +371,8 @@ spec = do
                 published `shouldBe` []
 
         it "retries a job when a fail-closed rule cannot be computed (undecidable), without publishing" $
-            -- The advisory-outage degrade: the serve path renders the same cause a
-            -- transient 503; the worker leaves the job for redelivery rather than
+            -- The advisory-outage degrade: the serve path renders the same cause as a
+            -- transient 503 status. The worker leaves the job for redelivery rather than
             -- dropping a serviceable job or publishing it unvetted.
             withRuntimePolicies (npmPolicies presentResolver [cannotVetRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
@@ -379,9 +382,10 @@ spec = do
                 published `shouldBe` []
 
         it "acks a policy-denied job, retiring it from the queue" $ do
-            -- Mirrors the integrity-mismatch ack test for the deny path: a current-policy
-            -- deny is non-retryable, so the worker acks the job (the retire decision,
-            -- observed at the handle) rather than leaving it for the backend to redeliver.
+            -- Mirrors the integrity-mismatch ack test for the deny path. A current-policy
+            -- deny is non-retryable, so the worker acks the job rather than leaving it for
+            -- the backend to redeliver. The ack is the retire decision, observed at the
+            -- handle.
             (queue, ackedReceipts) <- recordingAckQueue
             withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue (jobWith unreachableUrl)
@@ -393,10 +397,10 @@ spec = do
                 acked `shouldBe` map msgReceipt messages
 
         it "dead-letters an over-cap artifact on the memory backend: metered, never published, routed to deadLetter not ack (issue #846)" $
-            -- A fetch cap below the served bytes: the over-cap fault is terminal, so the
-            -- worker routes it to the backend's dead-letter terminus (the memory backend
-            -- drops it -- its only terminus) and meters it, rather than acking it clean or
-            -- retrying it. The artifact is never mirrored.
+            -- A fetch cap below the served bytes makes the over-cap fault terminal. The
+            -- worker routes it to the backend's dead-letter terminus and meters it, rather
+            -- than acking it clean or retrying it. The memory backend drops it, its only
+            -- terminus. The worker never mirrors the artifact.
             withUpstream $ \url -> do
                 (queue, deadReceipts) <- recordingDeadLetterQueue
                 (metricsPort, recordedMetrics) <- recordingWorkerMetricsPort
@@ -414,7 +418,7 @@ spec = do
     describe "processJob: the mirror-presence dedup probe" $ do
         -- The default 'recordingPublish' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that
-        -- fall-through; these cover the confirmed-present skip and the cannot-tell arms.
+        -- fall-through. These cover the confirmed-present skip and the cannot-tell arms.
         it "acks an already-mirrored version without fetching or publishing" $
             -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
@@ -426,9 +430,9 @@ spec = do
                 published `shouldBe` []
 
         it "falls through to the full pipeline when the probe cannot reach the mirror" $
-            -- A mirror outage means the probe cannot tell: the transport fault arrives
-            -- as a typed value and the job must run the full gated pipeline (here, to
-            -- a publish), never be skipped or failed on the probe alone.
+            -- A mirror outage means the probe cannot tell. The transport fault arrives as
+            -- a typed value, and the job must run the full gated pipeline, here to a
+            -- publish. It is never skipped or failed on the probe alone.
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeUnreachablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -438,8 +442,8 @@ spec = do
                     length published `shouldBe` 1
 
         it "falls through when the mirror lists other versions but not this one" $
-            -- Presence is judged per version: a package already partially mirrored must
-            -- still mirror its missing versions.
+            -- The worker judges presence per version: a package already partially
+            -- mirrored must still mirror its missing versions.
             withUpstream $ \url ->
                 withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [otherVer]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -459,8 +463,9 @@ spec = do
                 acked <- ackedReceipts
                 acked `shouldBe` map msgReceipt messages
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
-        -- The serve-time tarball gate and the worker both resolve a version through this one
-        -- function, so its classification (the no-divergence boundary) is asserted directly.
+        -- The serve-time tarball gate and the worker both resolve a version through this
+        -- one function, so these cases assert its classification, the no-divergence
+        -- boundary, directly.
         it "classifies a resolved version as present" $
             fetchVersionDetails (versionClient (Right (Just (sampleDetails pkg ver)))) pkg ver
                 `shouldReturn` VersionPresent (sampleDetails pkg ver)
@@ -478,18 +483,18 @@ spec = do
                 `shouldReturn` VersionMetadataUnavailable
 
         it "propagates a client that escapes its total contract (the invariant channel)" $ do
-            -- The typed channel reports every real failure, so nothing here catches:
-            -- a throw out of the fetch is an invariant break that must reach the
-            -- caller's supervision (the worker loop, or the serve boundary), never be
-            -- laundered into the transient degrade.
+            -- The typed channel reports every real failure, so nothing here catches. A
+            -- throw out of the fetch is an invariant break. It must reach the caller's
+            -- supervision, the worker loop or the serve boundary, and never be laundered
+            -- into the transient degrade.
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
     describe "processBatch -- ack decisions at the queue handle" $ do
         -- The worker's retire-vs-retry decision is its ack call, recorded by
-        -- 'recordingAckQueue' (the production memory backend's own ack is a no-op,
-        -- so the decision has no queue-state observable). What an un-acked message
-        -- does over a redelivering backend -- the real second delivery -- is pinned
-        -- against real SQS in the integration suite's "Ecluse.WorkerSpec".
+        -- 'recordingAckQueue'. The production memory backend's own ack is a no-op, so
+        -- the decision has no queue-state observable. The integration suite's
+        -- "Ecluse.WorkerSpec" pins what an un-acked message does over a redelivering
+        -- backend, the real second delivery, against real SQS.
         it "acks a successfully-mirrored job, retiring it from the queue" $
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue
@@ -507,26 +512,26 @@ spec = do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
-                    -- The publish was rejected (retryable), so the worker must not
-                    -- ack: over a redelivering backend the un-acked message comes
+                    -- The registry rejected the publish (retryable), so the worker must
+                    -- not ack: over a redelivering backend the un-acked message comes
                     -- back ("retry is don't ack").
                     acked <- ackedReceipts
                     acked `shouldBe` []
 
         it "acks a DROPPED job, retiring a tampered artifact rather than retrying it" $
-            -- An integrity mismatch is non-retryable: redelivery could never make the
-            -- bytes match, so the worker acks the job (having alarmed at the mismatch)
-            -- rather than leaving it for the backend to redeliver indefinitely.
+            -- An integrity mismatch is non-retryable, because redelivery could never make
+            -- the bytes match. The worker alarms at the mismatch, then acks the job rather
+            -- than leaving it for the backend to redeliver indefinitely.
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue
                 withRuntimeQueue queue (`recordingPublish` Right ()) (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort $ \runtime logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
-                    -- Nothing was published (the mismatch refused the publish)...
+                    -- The worker published nothing (the mismatch refused the publish)...
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
-                    -- ...and the job was acked: retired at the handle.
+                    -- ...and it acked the job: retired at the handle.
                     acked <- ackedReceipts
                     acked `shouldBe` map msgReceipt messages
     describe "processBatch -- the redelivery budget, the terminus a queue without a DLQ has (issue #935)" $ do
@@ -539,16 +544,17 @@ spec = do
                     enqueue_ queue (jobWith url)
                     [message] <- receive_ queue
                     runWM runtime (processBatch [message{msgReceiveCount = 3}])
-                    -- The job never ran, so the artifact was not re-fetched: checking
-                    -- the budget before processing is what spares that repeated cost.
+                    -- The worker checks the budget before it runs the job, so it never
+                    -- re-fetches the artifact and spares that repeated cost.
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
-                    -- The message was acked, so it is killed rather than left to cycle
-                    -- until the queue's retention window drops it unseen...
+                    -- The worker acked the message, so it retires the delivery rather
+                    -- than leave it to cycle until the queue's retention window drops it
+                    -- unseen...
                     acked <- ackedReceipts
                     acked `shouldBe` [msgReceipt message]
-                    -- ...and counted as a discard: the signal an operator alerts on,
-                    -- distinct from an ordinary failure.
+                    -- ...and it counts the delivery as a discard: the signal an operator
+                    -- alerts on, distinct from an ordinary failure.
                     readResults >>= (`shouldBe` [Discarded])
 
         it "still runs the job on the delivery one below the budget" $
@@ -560,7 +566,7 @@ spec = do
                     enqueue_ queue (jobWith url)
                     [message] <- receive_ queue
                     runWM runtime (processBatch [message{msgReceiveCount = 2}])
-                    -- The job mirrors and is acked on success.
+                    -- The worker mirrors the job and acks it on success.
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
                     acked <- ackedReceipts
@@ -570,7 +576,8 @@ spec = do
     describe "the worker metrics port" $ do
         it "records a Published result for a successfully-mirrored job, through the port" $
             -- Drive the recording 'WorkerMetricsPort' and assert the worker classified the
-            -- terminal outcome and recorded it through the interface -- proof the port is wired.
+            -- terminal outcome and recorded it through the interface. That proves the port
+            -- is wired.
             withUpstream $ \url -> do
                 (metricsPort, readResults) <- recordingWorkerMetricsPort
                 withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do

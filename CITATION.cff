@@ -2,10 +2,11 @@ cff-version: 1.2.0
 message: "If you use Écluse in your work, please cite it as below."
 title: "Écluse: a supply-chain resilience proxy for package registries"
 abstract: >-
-  Écluse is a deny-by-default policy gate that vets package-registry
-  dependencies before they reach a build. It proxies a private upstream first,
-  falls back to the public registry with rules applied, and mirrors approved
-  packages asynchronously — without hosting packages itself.
+  Écluse is a supply-chain policy proxy that applies a deny-by-default policy
+  to package-registry dependencies before they reach a build. It proxies a
+  private upstream first, falls back to the public registry with rules
+  applied, and mirrors approved packages asynchronously, without hosting
+  packages itself.
 type: software
 authors:
   - given-names: Alexandra

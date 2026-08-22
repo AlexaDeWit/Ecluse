@@ -5,9 +5,10 @@
 
 {- | Compile the fixture corpus into a real @osv.db@ artifact.
 
-Serves a corpus version through a local HTTP stub and runs it through Pilot's
-actual compiler ('Ecluse.Core.Osv.Compile.compileOsvToSqlite', in @ecluse-core@),
-so a suite exercises a genuine artifact rather than a hand-built one.
+A local HTTP stub serves a corpus version, and Pilot's own compiler
+('Ecluse.Core.Osv.Compile.compileOsvToSqlite', in @ecluse-core@) builds the
+database from it. A suite therefore exercises a genuine artifact, not a
+hand-built one.
 -}
 module Ecluse.Test.OsvDb (
     withFixtureOsvDb,
@@ -36,10 +37,10 @@ instance KatipContext CompileM where
     getKatipNamespace = pure mempty
     localKatipNamespace _ m = m
 
-{- | Serve a corpus version through a local HTTP stub, compile it into a real
-@osv.db@ with Pilot's pipeline, and hand the artifact's path to the
-continuation. The artifact lives in a temporary directory that is gone when
-the continuation returns.
+{- | Serve a corpus version through a local HTTP stub and compile it into a real
+@osv.db@ with Pilot's pipeline. Hand the artifact's path to the continuation.
+The artifact lives in a temporary directory that the harness deletes when the
+continuation returns.
 -}
 withFixtureOsvDb :: CorpusVersion -> (FilePath -> IO a) -> IO a
 withFixtureOsvDb v use = do

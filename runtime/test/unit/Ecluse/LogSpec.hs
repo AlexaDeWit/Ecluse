@@ -61,9 +61,8 @@ testIdentity :: DdContext
 testIdentity = DdContext "ecluse" (Just "prod") (Just "1.4.2") Nothing
 
 {- | Build a log 'Item' with the given structured payload and message, holding
-every other field fixed. This is the unit the scribe serialises; rendering it
-through the production formatter asserts on the emitted line with no stdout
-dependency.
+every other field fixed. This is the unit the scribe serialises. Rendering it through
+the production formatter asserts on the emitted line with no stdout dependency.
 -}
 item :: SimpleLogPayload -> Text -> Item SimpleLogPayload
 item = itemAt WarningS
@@ -144,8 +143,8 @@ captureStdout act =
         hClose saved
 
 {- | Emit one event through a real 'LogEnv' at the given level, capturing what the
-scribe wrote to stdout. The whole admission decision lives in the scribe, so this is
-how a level's floor is asserted.
+scribe wrote to stdout. The whole admission decision lives in the scribe, so a case
+asserts a level's floor through this helper.
 -}
 emitAt :: LogLevel -> Severity -> Text -> IO Text
 emitAt level severity message =
@@ -248,8 +247,8 @@ spec = do
             (dd >>= ddStr "span_id") `shouldBe` Just "7"
 
         it "does not repeat the identity inside data.dd" $ do
-            -- The identity is already top level; the payload's dd object is consumed
-            -- for its ids alone, so the line never carries the same service twice.
+            -- The identity is already top level. The line consumes the payload's dd
+            -- object for its ids alone, so it never carries the same service twice.
             let logItem =
                     item
                         (ddField (DdContext "ecluse" (Just "prod") (Just "1.4.2") (Just (DdSpan "42" "7"))))
@@ -262,8 +261,8 @@ spec = do
             ddObjectOf testIdentity (item deniedContext "denied") `shouldBe` Nothing
 
         it "omits dd when the payload's dd object carries no ids" $
-            -- A line raised under the identity context but outside a span: the object
-            -- is installed, the ids are not, so no half-filled correlation pair renders.
+            -- A line raised under the identity context but outside a span: the context
+            -- carries the object, not the ids, so no half-filled correlation pair renders.
             ddObjectOf testIdentity (item (ddField testIdentity) "denied") `shouldBe` Nothing
 
     describe "log level admission (the scribe's floor)" $ do
@@ -293,9 +292,9 @@ spec = do
         for_ escapeCases $ \(label, raw) ->
             it ("keeps one physical line for: " <> toString label) $ do
                 captured <- emitAt InfoLevel WarningS raw
-                -- The scribe terminates each event with one trailing newline, so a message
-                -- carrying embedded newlines still emits as a single physical JSONL line,
-                -- its newline escaped to the two characters '\' 'n' inside the JSON string.
+                -- The scribe ends each event with one trailing newline, so a message
+                -- carrying embedded newlines still emits as a single physical JSONL line.
+                -- Its newline is escaped to the two characters '\' 'n' inside the JSON string.
                 case filter (not . T.null) (T.lines captured) of
                     [line] -> line `shouldSatisfy` T.isInfixOf "\\n"
                     other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))
@@ -327,9 +326,9 @@ spec = do
 
     describe "newScribe" $
         it "constructs a scribe for each format without throwing" $ do
-            -- A 'Scribe' is opaque, so constructing it (the format switch and
-            -- scribe wiring) and forcing it to weak-head normal form is the
-            -- assertion: the pipeline assembles for both shapes.
+            -- A 'Scribe' is opaque. Constructing it (the format switch and scribe
+            -- wiring) and forcing it to weak-head normal form is the assertion: the
+            -- pipeline assembles for both shapes.
             _ <- newScribe JsonLog InfoLevel testIdentity >>= evaluate
             _ <- newScribe ConsoleLog InfoLevel testIdentity >>= evaluate
             pure () :: Expectation
@@ -341,8 +340,8 @@ spec = do
                 runKatipT logEnv $
                     logF deniedContext (Namespace ["serve"]) WarningS (logStr ("denied" :: Text))
                 void (closeScribes logEnv)
-            -- The scribe terminates each event with a newline, so a single event
-            -- is one non-empty physical line; that line is a complete JSON object
+            -- The scribe ends each event with a newline, so a single event
+            -- is one non-empty physical line. That line is a complete JSON object
             -- carrying the structured data.
             let physicalLines = filter (not . T.null) (T.lines captured)
             length physicalLines `shouldBe` 1
@@ -355,9 +354,9 @@ spec = do
         it "round-trips a newline-bearing message: the decoded message equals the exact original" $ do
             let original = "denied\nfor cause" :: Text
             captured <- emitAt InfoLevel WarningS original
-            -- The escaped newline in the single physical JSONL line decodes back to the
-            -- exact newline-bearing message: the JSON string escaping is lossless, not
-            -- merely one-line-safe.
+            -- The escaped newline in the single physical JSONL line decodes back to
+            -- the exact newline-bearing message. The JSON string escaping is lossless,
+            -- rather than merely one-line-safe.
             case filter (not . T.null) (T.lines captured) of
                 [line] -> lineMessage line `shouldBe` Just original
                 other -> expectationFailure ("expected exactly one JSON log line, got " <> show (length other))

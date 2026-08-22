@@ -81,7 +81,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extFixed = Just "4.6.5"
                                     , extLastAffected = Nothing
                                     , -- The fixture carries both a CVSS 3.1 vector and the
-                                      -- "MODERATE" label; the computed base score wins.
+                                      -- "MODERATE" label. The computed base score wins.
                                       extSeverity = Just 5.9
                                     }
                                ]
@@ -104,7 +104,7 @@ spec = describe "Osv parsing and streaming" $ do
 
         it "parses a CVSS v4 vector (needs cvss >= 0.3) rather than dropping it" $
             -- A critical v4 vector, no label: it can only score above 8 if the v4
-            -- parser is present. On cvss 0.2 it would have been unscored (Nothing).
+            -- parser is present. On cvss 0.2 the vector is unscored (Nothing).
             advisorySeverity
                 (advisory [OsvSeverityEntry "CVSS_V4" "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"] Nothing)
                 `shouldSatisfy` maybe False (>= 8.0)
@@ -120,7 +120,7 @@ spec = describe "Osv parsing and streaming" $ do
     describe "extractFromAdvisory (affected-set shapes)" $ do
         it "records an exact enumerated version as a point segment (no ranges)" $ do
             -- The npm malware feed names the single bad version in versions[] with
-            -- no ranges; the old parser dropped these entirely.
+            -- no ranges.
             let adv = OsvAdvisory "MAL-test" (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing
             extractFromAdvisory adv
                 `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") Nothing (Just "1.0.0") Nothing]
@@ -134,7 +134,7 @@ spec = describe "Osv parsing and streaming" $ do
         it "ignores a GIT range whose commit-SHA bounds are not versions" $ do
             -- A GIT range carries commit identifiers in its introduced/fixed events.
             -- Carving them into segments would store a SHA as a version bound, which
-            -- the matcher fails closed-to-affected -- quarantining every version of a
+            -- the matcher fails closed-to-affected, quarantining every version of a
             -- healthy package. Such a range constrains no npm version, so it must
             -- yield no segments.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0") Nothing]
@@ -143,7 +143,7 @@ spec = describe "Osv parsing and streaming" $ do
 
         it "extracts the version range and drops a co-published GIT range" $ do
             -- OSV advisories often carry a GIT range alongside the ECOSYSTEM/SEMVER
-            -- one; only the version-typed range contributes a segment.
+            -- one. Only the version-typed range contributes a segment.
             let semverEvents = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "2.0.0") Nothing]
                 gitEvents = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") Nothing]
                 adv =
@@ -311,9 +311,9 @@ spec = describe "Osv parsing and streaming" $ do
     describe "ingest bounds (issue #571)" $ do
         it "drops an over-large advisory and keeps ingesting the entries after it" $ do
             le <- initLogEnv "test" (Environment "test")
-            -- The oversized entry is dropped before decode, so its bytes need not be
-            -- valid JSON; it is placed first, so the good entry after it only surfaces
-            -- if the drop drained cleanly to the next entry boundary.
+            -- The stream drops the oversized entry before decode, so its bytes need
+            -- not be valid JSON. It comes first, so the good entry after it surfaces
+            -- only if the drop drained cleanly to the next entry boundary.
             zipData <-
                 osvZipOf
                     [ ("big.json", LBS.replicate 3000 120)

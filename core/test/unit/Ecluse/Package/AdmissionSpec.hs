@@ -2,16 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared admission oracle, and the differential guarantee it exists to hold:
-the serve gate and the mirror worker decide one artifact the same way, and what the
-admission floor admits the worker's tamper gate can always verify.
+{- | The shared admission oracle, and the differential guarantee it holds. The serve
+gate and the mirror worker decide one artifact the same way, and the worker's tamper
+gate can verify anything the admission floor admits.
 
-The unit cases pin each 'ArtifactAdmission' arm; the golden cases replay the
-historical worker\/serve divergences (the floor-admitted-but-unverifiable gap of
-issue 409 and the multi-component SRI split-brain of issue 738) so they stay
-closed; and the Hedgehog property states the standing contract over arbitrary
-digest sets: __floor-admitted implies worker-verifiable__, under one shared
-authority order, with tampered bytes always refused.
+The unit cases pin each 'ArtifactAdmission' arm. The golden cases replay two
+worker\/serve divergences and keep them closed: the floor-admitted-but-unverifiable
+gap of issue 409, and the multi-component SRI split-brain of issue 738. The Hedgehog
+property states the standing contract over arbitrary digest sets:
+__floor-admitted implies worker-verifiable__, under one shared authority order, with
+tampered bytes always refused.
 -}
 module Ecluse.Package.AdmissionSpec (spec) where
 
@@ -62,13 +62,13 @@ import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, Integri
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails, unsafeHash, unsafeSriHashes)
 import Ecluse.Test.Package qualified as Package
 
--- The blessed splitter, as the plain list the artifact fixtures take.
+-- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
 sriHashesOf = toList . unsafeSriHashes
 
 -- ── fixtures ────────────────────────────────────────────────────────────────────
 
--- A fixed evaluation context; the injected rules here are not time-sensitive.
+-- A fixed evaluation context. The rules injected here are not time-sensitive.
 ctx :: EvalContext
 ctx = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
 
@@ -198,10 +198,10 @@ spec = do
 
     describe "the closed divergences, replayed (golden corpus)" $ do
         it "#738: a multi-component SRI is admitted at the floor AND verified by the worker" $ do
-            -- The historical split-brain: serve admitted on the first component while
-            -- the worker compared against the joined tail and could never match, so
-            -- the version was served from public forever and never mirrored. Split
-            -- into components, both gates read the same digest.
+            -- The split-brain: serve admitted on the first component while the worker
+            -- compared against the joined tail and never matched. Écluse served that
+            -- version from public forever and never mirrored it. Split into
+            -- components, both gates read the same digest.
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 details = detailsWith hashes
@@ -216,15 +216,15 @@ spec = do
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "#738 (ranking): the strongest component decides, not the first on the wire" $ do
-            -- "sha256-… sha512-…" used to rank at the SHA-256 tier because only the
-            -- first component was read; per-component hashes rank exactly.
+            -- Reading only the first component ranked "sha256-… sha512-…" at the
+            -- SHA-256 tier. Per-component hashes rank exactly.
             let joined = Package.sriSha256Of sampleBytes <> " " <> Package.sriSha512Of sampleBytes
                 hashes = NE.fromList (sriHashesOf joined)
             assertedAlg (authoritativeDigest hashes) `shouldBe` Just SHA512
             hashValue (authoritativeDigest hashes) `shouldBe` Package.sriSha512Of sampleBytes
 
         it "#409: a SHA-256-only artifact admitted by the default floor is worker-verifiable" $ do
-            -- The predecessor gap: the floor admitted SHA-256 while the worker's
+            -- The closed gap: the floor admitted SHA-256 while the worker's
             -- hand-rolled vocabulary could not verify it, stranding the version.
             let hashes = [unsafeHash SHA256 (Package.hexSha256Of sampleBytes)]
                 details = detailsWith hashes
@@ -251,7 +251,7 @@ spec = do
                                 IntegrityMismatch _ -> pass
                                 IntegrityVerified -> assert False
   where
-    -- Realise one digest kind over the bytes (the joined multi-component wire
-    -- shape is pinned by the #738 golden case above).
+    -- Realise one digest kind over the bytes. The #738 golden case above pins the
+    -- joined multi-component wire shape.
     expand :: ByteString -> DigestKind -> [Hash]
     expand bytes kind = [hashOfKind bytes kind]

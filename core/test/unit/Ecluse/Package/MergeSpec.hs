@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 -- This spec deliberately writes out the Monoid identity laws (@mempty <> a@ and
--- @a <> mempty@) to /assert/ them; hlint would otherwise "simplify" the very
--- expressions under test. Silenced file-wide because proving the laws is the
+-- @a <> mempty@) to /assert/ them. hlint would otherwise "simplify" the exact
+-- expressions under test. The silence is file-wide because proving the laws is the
 -- file's purpose, not an oversight.
 {- HLINT ignore "Monoid law, left identity" -}
 {- HLINT ignore "Monoid law, right identity" -}
@@ -31,8 +31,8 @@ import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, un
 name :: PackageName
 name = mkPackageName Npm Nothing "thing"
 
-{- | One tarball carrying a chosen set of integrity digests, so two copies of the
-same version key can be made to agree, contradict, or merely expose asymmetric
+{- | One tarball carrying a chosen set of integrity digests. A test can make two
+copies of the same version key agree, contradict, or merely expose asymmetric
 algorithm sets purely on integrity.
 -}
 artifactWith :: [Hash] -> Artifact
@@ -49,8 +49,8 @@ artifactWith hs =
         }
 
 {- | A per-version snapshot for a raw version string, carrying a chosen set of
-integrity digests. Everything else is inert -- the merge reads only the version
-key, the parsed version (for @latest@), and artifact integrity (for divergence).
+integrity digests. Everything else is inert: the merge reads only the version key,
+the parsed version (for @latest@), and artifact integrity (for divergence).
 -}
 detailsWith :: Text -> [Hash] -> PackageDetails
 detailsWith rawVer hs =
@@ -67,18 +67,18 @@ detailsWith rawVer hs =
         }
 
 {- | The fixed publish instant every 'detailsWith' version carries (the folded
-per-version @time@); overridden per-version by 'withPublishedAt' where a test needs
+per-version @time@). 'withPublishedAt' overrides it per version where a test needs
 distinct cross-source instants.
 -}
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 1 1) 0
 
-{- | Build a single-package packument from @(rawVersion, integrityDigests)@ pairs,
-each version carrying the given set of integrity hashes (so two copies of one key
-can expose asymmetric algorithm sets). @latest@ is pointed at the lexically-highest
-version (a coherent packument always tags its newest release), so a lone source is
-already a fixed point of the merge's @latest@ reconciliation; every version carries the
-fixed publish instant 't0' on its own snapshot.
+{- | Build a single-package packument from @(rawVersion, integrityDigests)@ pairs.
+Each version carries the given set of integrity hashes, so two copies of one key can
+expose asymmetric algorithm sets. The @latest@ tag points at the lexically-highest
+version, because a coherent packument always tags its newest release. A lone source
+is therefore already a fixed point of the merge's @latest@ reconciliation. Every
+version carries the fixed publish instant 't0' on its own snapshot.
 -}
 packumentWith :: [(Text, [Hash])] -> PackageInfo
 packumentWith vs =
@@ -91,22 +91,23 @@ packumentWith vs =
         , infoInvalidEntries = []
         }
 
-{- | Override the publish instant carried by every version of a packument: the per-version
-counterpart of the old sibling @time@ override, for tests pinning cross-source instants.
+{- | Override the publish instant every version of a packument carries, for tests
+pinning cross-source instants.
 -}
 withPublishedAt :: UTCTime -> PackageInfo -> PackageInfo
 withPublishedAt t info =
     info{infoVersions = Map.map (\d -> d{pkgPublishedAt = Just t}) (infoVersions info)}
 
-{- | Build a packument whose every version carries a single SRI digest -- the common
-case for the collision and reconciliation tests, where the algorithm set is uniform
-and only the digest value varies.
+{- | Build a packument whose every version carries a single SRI digest. That is the
+common case for the collision and reconciliation tests, where the algorithm set is
+uniform and only the digest value varies.
 -}
 packument :: [(Text, Text)] -> PackageInfo
 packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 
--- A well-formed sha512 SRI deterministically derived from a mnemonic label, so distinct
--- labels yield distinct well-formed digests and the same label always yields the same one.
+-- A well-formed sha512 SRI deterministically derived from a mnemonic label. Distinct
+-- labels yield distinct well-formed digests, and the same label always yields the
+-- same digest.
 validSriOf :: Text -> Text
 validSriOf = sriSha512Of . encodeUtf8
 
@@ -115,9 +116,9 @@ validSha1Of, validSha256Of :: Text -> Text
 validSha1Of = hexSha1Of . encodeUtf8
 validSha256Of = hexSha256Of . encodeUtf8
 
--- A well-formed sha256 SRI (@sha256-\<base64\>@) deterministically derived from a label --
--- the SRI encoding of a sha256 digest a recomputing mirror serves in place of, or beside,
--- npm's sha512.
+-- A well-formed sha256 SRI (@sha256-\<base64\>@) deterministically derived from a
+-- label. It is the SRI encoding of a sha256 digest, which a recomputing mirror
+-- serves in place of, or beside, npm's sha512.
 validSha256SriOf :: Text -> Text
 validSha256SriOf = sriSha256Of . encodeUtf8
 
@@ -154,7 +155,7 @@ sha256Def = validSha256Of "def"
 -- The fingerprint triple an SRI digest resolves to under the merge's keying: the
 -- fixture artifact's filename, its embedded algorithm (via 'sriAlgorithm'), and its
 -- base64 body (via 'sriBody'), as 'integrityHashes' reads them back. The mnemonic
--- fixtures are all well-formed SRIs, so the algorithm is always 'Just'; the file is
+-- fixtures are all well-formed SRIs, so the algorithm is always 'Just'. The file is
 -- the single fixture artifact every 'artifactWith' version carries.
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
 sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
@@ -172,14 +173,14 @@ latestKey :: MergePlan -> Maybe Text
 latestKey p = unVersion <$> Map.lookup "latest" (mpDistTags p)
 
 {- | The winning __provenance__ per surviving version key, resolved back through the
-inputs the plan was built from. A 'SourceId' is a list index, so this maps each
-survivor's winning index to the 'Provenance' of the input at that position -- the
+inputs behind the plan. A 'SourceId' is a list index, so this maps each survivor's
+winning index to the 'Provenance' of the input at that position. That is the
 order-/independent/ decision the merge owns, beneath the order-/dependent/ label.
 -}
 winnerProvenances :: [(Provenance, PackageInfo)] -> MergePlan -> Map Text Provenance
 winnerProvenances inputs plan =
     -- Index the inputs by 'SourceId' (their list position) up front, so the lookup
-    -- is total -- no partial indexing into the list.
+    -- is total, with no partial indexing into the list.
     Map.mapMaybe (`Map.lookup` byId) (mpSurvivors plan)
   where
     byId = Map.fromList (zip [0 ..] (map fst inputs))
@@ -211,10 +212,10 @@ genSource = do
 genSources :: Gen [(Provenance, PackageInfo)]
 genSources = Gen.list (Range.linear 1 4) genSource
 
-{- | An arbitrary 'Merge' accumulator: a 'foldMap' of 'contribute' over a small
-list of sources, so the value carries internal 'SourceId's @0..n-1@ and exercises
-collisions, tags, and times -- the realistic inputs the laws must hold over. The
-empty list yields 'mempty', so the identity is in the generated range too.
+{- | An arbitrary 'Merge' accumulator: a 'foldMap' of 'contribute' over a small list
+of sources. The value carries internal 'SourceId's @0..n-1@ and exercises collisions,
+tags, and times, the realistic inputs the laws must hold over. The empty list yields
+'mempty', so the identity is in the generated range too.
 -}
 genMerge :: Gen Merge
 genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
@@ -232,7 +233,7 @@ spec = do
         it "carries mpName from a contribution, never a manufactured value" $ do
             -- Every contribution shares the validated identity (name validation runs
             -- upstream of the merge), so the plan's mpName originates from an input's
-            -- own 'infoName' -- it is never substituted or fabricated.
+            -- own 'infoName'. Nothing substitutes or fabricates it.
             let a = packument [("1.0.0", sriAaa)]
                 b = packument [("2.0.0", sriBbb)]
                 inputs = [(TrustedSource, a), (GatedSource, b)]
@@ -293,7 +294,7 @@ spec = do
 
         it "drops a dist-tag whose target is absent from the union" $ do
             -- A source advertises a "next" tag pointing at a version it does not
-            -- actually carry; the merge drops it rather than serving a dangling tag.
+            -- actually carry. The merge drops it rather than serving a dangling tag.
             let info =
                     (packument [("1.0.0", sriAaa)])
                         { infoDistTags =
@@ -314,8 +315,8 @@ spec = do
     describe "collision resolution & divergence correction (the supply-chain signal)" $ do
         -- A version present in both a trusted (private) and a gated (public) source
         -- is a collision: the trusted copy wins. If the two copies' artifact
-        -- integrity disagrees the merge *flags* it as a tampering signal -- and
-        -- flags without dropping the version, leaving fail-closed to the caller.
+        -- integrity disagrees, the merge *flags* it as a tampering signal without
+        -- dropping the version, leaving fail-closed to the caller.
         let trusted = packument [("1.0.0", sriPrivate)] -- source 0
             gated = packument [("1.0.0", sriPublic)] -- source 1
             plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
@@ -333,8 +334,8 @@ spec = do
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "applyDivergencePolicy (the caller's fail-closed projection)" $ do
-        -- 2.0.0 (the @latest@) diverges across sources; 1.0.0 agrees. The projection is
-        -- what the serve layer runs AFTER logging and metering the divergence, so a
+        -- 2.0.0 (the @latest@) diverges across sources and 1.0.0 agrees. The serve
+        -- layer runs the projection AFTER logging and metering the divergence, so a
         -- fail-closed operator withholds only the contested version, coherently.
         let trusted = packument [("1.0.0", sriSame), ("2.0.0", sriPrivate)]
             gated = packument [("1.0.0", sriSame), ("2.0.0", sriPublic)]
@@ -375,57 +376,57 @@ spec = do
             parseDivergencePolicy "drop" `shouldSatisfy` isLeft
 
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
-        -- A divergence is reported only when two copies *contradict* on an algorithm
-        -- they both carry. An asymmetric digest set -- one mirror also serving a digest
-        -- the other omits -- is not, on its own, a contradiction: an older registry
-        -- exposing only a legacy shasum while npmjs serves shasum + a modern SRI
-        -- describes the same bytes and must not be flagged.
+        -- The merge reports a divergence only when two copies *contradict* on an
+        -- algorithm they both carry. An asymmetric digest set, where one mirror also
+        -- serves a digest the other omits, is not on its own a contradiction. An older
+        -- registry may expose only a legacy shasum while npmjs serves that shasum plus
+        -- a modern SRI. Both describe the same bytes, and the merge must not flag them.
         let sha1 = unsafeHash SHA1
             sri = unsafeHash SRI
 
         it "agreeing on the shared SRI is not a divergence though one also carries SHA-1" $ do
-            -- Both expose the same sha512 SRI; the private copy additionally carries a
+            -- Both expose the same sha512 SRI, and the private copy also carries a
             -- legacy SHA-1 shasum the public copy lacks. The shared algorithm (SRI)
-            -- agrees, so this is the same bytes -- not a divergence.
+            -- agrees, so this is the same bytes, not a divergence.
             let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Dead])])
                 gated = (GatedSource, packumentWith [("1.0.0", [sri sriX])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "contradicting on the shared SRI is a divergence even when SHA-1 agrees" $ do
             -- Both carry the same SHA-1 but a *different* sha512 SRI. A SHA-1 agreement
-            -- can never rescue a contradicting secure digest, so the SRI contradiction
-            -- is flagged regardless of the matching weak digest beside it.
+            -- can never rescue a contradicting secure digest, so the merge flags the SRI
+            -- contradiction regardless of the matching weak digest beside it.
             let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Abc])])
                 gated = (GatedSource, packumentWith [("1.0.0", [sri sriY, sha1 sha1Abc])])
                 plan = mergePackuments [trusted, gated]
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
         it "private SHA-1 vs public SHA-1+SHA-256 cross-checks on the shared SHA-1 (not a divergence)" $ do
-            -- The blessed asymmetric-trust case: a private (trusted) upstream serving
+            -- The sanctioned asymmetric-trust case: a private (trusted) upstream serving
             -- only a legacy SHA-1 shasum, a public one serving that shasum plus a modern
-            -- SHA-256. They share SHA-1 and it agrees, so the cross-check passes -- the
-            -- public copy independently clears the admission floor on its SHA-256, and
+            -- SHA-256. They share SHA-1 and it agrees, so the cross-check passes. The
+            -- public copy clears the admission floor on its SHA-256 independently, and
             -- the asymmetric SHA-256 is no contradiction.
             let trusted = (TrustedSource, packumentWith [("1.0.0", [sha1 sha1Abc])])
                 gated = (GatedSource, packumentWith [("1.0.0", [sha1 sha1Abc, unsafeHash SHA256 sha256Def])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "SRI+SHA-1 vs SHA-1-only, agreeing on the shared SHA-1, is not a divergence" $ do
-            -- One copy carries sha512 + sha1, the other only the legacy sha1, and that
-            -- single shared algorithm agrees. With no contradiction on a shared
-            -- algorithm this is not a divergence; the comparison only ever flags a
-            -- shared algorithm whose digests disagree. (Pinned so the current behaviour
-            -- is explicit: whether a weak-only agreement should itself be treated as
-            -- suspicious is a separate, stricter policy not decided by this fold.)
+            -- One copy carries sha512 plus sha1, the other only the legacy sha1, and
+            -- that single shared algorithm agrees. With no contradiction on a shared
+            -- algorithm this is not a divergence. The comparison only ever flags a
+            -- shared algorithm whose digests disagree. (Pinned so the behaviour is
+            -- explicit: whether a weak-only agreement is itself suspicious is a
+            -- separate, stricter policy this fold does not decide.)
             let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Abc])])
                 gated = (GatedSource, packumentWith [("1.0.0", [sha1 sha1Abc])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
-        -- A single version can carry several digests of *one* algorithm -- the domain
+        -- A single version can carry several digests of *one* algorithm. The domain
         -- model allows many artifacts ('pkgArtifacts' is a 'NonEmpty'), each with its
-        -- own hashes (a PyPI sdist + wheels may each carry a SHA-256), and 'fingerprint'
-        -- gathers them all. For a shared algorithm the copies therefore agree only when
-        -- the set of digests they each offer for it matches.
+        -- own hashes. A PyPI sdist and its wheels may each carry a SHA-256, and
+        -- 'fingerprint' gathers them all. For a shared algorithm the copies therefore
+        -- agree only when the set of digests they each offer for it matches.
         it "agrees when a shared algorithm carries the same set of digests in any order" $ do
             -- The same two SRI digests on both copies, listed in opposite order: the
             -- per-algorithm set is identical, so this is not a divergence.
@@ -434,8 +435,8 @@ spec = do
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "contradicts when a shared algorithm's set of digests differs" $
-            -- One copy offers two SRI digests for the key, the other only one of them:
-            -- the digest sets for the shared algorithm differ, so it is flagged.
+            -- One copy offers two SRI digests for the key, the other only one of them.
+            -- The digest sets for the shared algorithm differ, so the merge flags it.
             let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sri sriY])])
                 gated = (GatedSource, packumentWith [("1.0.0", [sri sriX])])
              in case Set.toList . mpDivergences <$> mergePackuments [trusted, gated] of
@@ -447,8 +448,8 @@ spec = do
 
     describe "divergence keys per artifact, not per version (#739)" $ do
         -- A multi-artifact ecosystem (PyPI: an sdist plus wheels) spreads a version's
-        -- digests across files. Collapsing them into one per-algorithm set made two
-        -- mirrors with a different file *set* read as tampering; the fingerprint keys
+        -- digests across files. Collapsing them into one per-algorithm set makes two
+        -- mirrors with a different file *set* read as tampering. The fingerprint keys
         -- each digest by its file, so only a shared file's shared algorithm can
         -- contradict.
         let sri = unsafeHash SRI
@@ -458,9 +459,9 @@ spec = do
                 (artifactWith hs){artFilename = fileName, artUrl = "https://example.test/" <> fileName}
 
         it "a mirror carrying fewer files than the index is availability, not a divergence" $ do
-            -- Both serve thing.tgz with the same digest; the public index additionally
-            -- carries a wheel the mirror lacks. No shared file contradicts, so no
-            -- divergence -- the differing file set describes availability, not
+            -- Both serve thing.tgz with the same digest, and the public index also
+            -- carries a wheel the mirror lacks. No shared file contradicts, so there is
+            -- no divergence: the differing file set describes availability, not
             -- substituted bytes.
             let sharedFile = artifactWith [sri sriX]
                 extraWheel = wheelWith "thing-extra.whl" [sri sriY]
@@ -469,7 +470,7 @@ spec = do
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "a shared file contradicting under a shared algorithm diverges even amid differing file sets" $ do
-            -- The tampering signal survives the per-artifact keying: the shared
+            -- The tampering signal survives the per-artifact keying. The shared
             -- thing.tgz disagrees on its sha512 body, so the version diverges even
             -- though the sides also differ in which files they carry.
             let extraWheel = wheelWith "thing-extra.whl" [sri sriY]
@@ -480,33 +481,35 @@ spec = do
 
         it "the same digest under a renamed file is asymmetric, not a divergence" $ do
             -- A file served under different names on the two sides shares no
-            -- (file, algorithm) key, so nothing can contradict: the fail-open reading
-            -- on absence, consistent with the asymmetric-algorithm stance above.
+            -- (file, algorithm) key, so nothing can contradict. That is the fail-open
+            -- reading on absence, consistent with the asymmetric-algorithm stance above.
             let trusted = (TrustedSource, withArtifacts (one (artifactWith [sri sriX])) (packumentWith [("1.0.0", [])]))
                 gated = (GatedSource, withArtifacts (one (wheelWith "renamed.tgz" [sri sriY])) (packumentWith [("1.0.0", [])]))
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
     describe "divergence keys on the resolved algorithm, not the raw digest tag" $ do
         -- The comparison resolves each digest to the algorithm it asserts and compares
-        -- the digest body under that resolved key, so an SRI is bucketed by its embedded
-        -- algorithm rather than the opaque SRI wrapper tag. This closes a live false
-        -- positive (different algorithms over the same bytes) and a latent false negative
-        -- (one algorithm expressed two ways).
+        -- the digest body under that resolved key. It therefore buckets an SRI by its
+        -- embedded algorithm, not by the opaque SRI wrapper tag. That closes a live false
+        -- positive (different algorithms over the same bytes) and a latent false
+        -- negative (one algorithm expressed two ways).
 
         it "a sha256 SRI and a sha512 SRI for the same bytes are asymmetric, not a divergence" $ do
-            -- A private mirror that recomputes integrity as sha256 and a public copy
-            -- serving sha512 over the same bytes share NO resolved algorithm, so the
-            -- digest sets are asymmetric -- not a contradiction. (Keying on the raw SRI tag
-            -- bucketed both under one tag with differing strings and spuriously diverged.)
+            -- A private mirror may recompute integrity as sha256 while a public copy
+            -- serves sha512 over the same bytes. The two share NO resolved algorithm,
+            -- so the digest sets are asymmetric, not a contradiction. (Keying on the raw SRI
+            -- tag buckets both under one tag with differing strings and diverges
+            -- spuriously.)
             let trusted = (TrustedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "same")])])
                 gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSriOf "same")])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "a hex SHA-256 and an sha256 SRI that disagree are a divergence (same resolved algorithm)" $ do
             -- One upstream expresses SHA-256 as a hex Hash, the other as an sha256 SRI,
-            -- with different digests. Both resolve to SHA-256, so the contradiction is
-            -- caught. (Keying on the raw tag put them under different tags -- SHA256 vs SRI
-            -- -- so a genuine same-algorithm contradiction was silently missed.)
+            -- with different digests. Both resolve to SHA-256, so the comparison catches
+            -- the contradiction. (Keying on the raw tag puts them under different tags,
+            -- SHA256 against SRI, and silently misses a genuine same-algorithm
+            -- contradiction.)
             let trusted = (TrustedSource, packumentWith [("1.0.0", [unsafeHash SHA256 (validSha256Of "aaa")])])
                 gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "bbb")])])
                 plan = mergePackuments [trusted, gated]
@@ -534,10 +537,10 @@ spec = do
 
         it "resolves identically whichever order trusted/gated is passed" $ do
             -- Every provenance-resolved decision must be order-independent: the
-            -- surviving keys, the reconciled tags (incl. latest), the time union,
-            -- and the divergences. The only thing that legitimately differs is the
-            -- winner's 'SourceId' -- a faithful pointer to the trusted input's
-            -- position, asserted to name the trusted source below.
+            -- surviving keys, the reconciled tags (including latest), the time union,
+            -- and the divergences. The one thing that legitimately differs is the
+            -- winner's 'SourceId', a faithful pointer to the trusted input's position,
+            -- asserted to name the trusted source below.
             let forward = mergePackuments [trusted, gated]
                 backward = mergePackuments [gated, trusted]
             (Map.keys . mpSurvivors <$> forward) `shouldBe` (Map.keys . mpSurvivors <$> backward)
@@ -546,12 +549,12 @@ spec = do
             (mpDivergences <$> forward) `shouldBe` (mpDivergences <$> backward)
 
         it "a non-latest tag resolves to the trusted target regardless of order" $ do
-            -- 'beta' is a non-'latest' tag; both sources tag it at 1.0.0 but with
+            -- 'beta' is a non-'latest' tag. Both sources tag it at 1.0.0 but with
             -- different integrity behind that key. The plan keeps the tag, and the
             -- survivor for 1.0.0 is the trusted copy either ordering.
             let forward = winnerOf "1.0.0" =<< mergePackuments [trusted, gated]
                 backward = winnerOf "1.0.0" =<< mergePackuments [gated, trusted]
-            -- trusted is index 0 forward, index 1 backward; both must name trusted.
+            -- trusted is index 0 forward and index 1 backward. Both must name trusted.
             forward `shouldBe` Just 0
             backward `shouldBe` Just 1
 
@@ -562,14 +565,14 @@ spec = do
                 `shouldBe` Just tTrusted
 
     describe "a version's served time comes from the source that won its manifest" $ do
-        -- The correctness fix: the served publish time is read off the SAME winning
-        -- candidate whose manifest is served, so it can never be fabricated from a
-        -- different source than the bytes it stamps. The decisive case is a manifest
-        -- whose winning source carries NO time while a losing source does: the served
-        -- time must be ABSENT, not the loser's date applied to bytes it never described.
+        -- The served publish time comes off the SAME winning candidate that supplies
+        -- the manifest, so no other source can stamp those bytes. The decisive case is
+        -- a manifest whose winning source carries NO time while a losing source does.
+        -- The served time must be ABSENT, not the loser's date applied to bytes it
+        -- never described.
         it "does not borrow a losing source's time for a winning manifest (no false time)" $ do
-            -- Trusted wins 1.0.0's manifest but knows no publish time for it; the gated
-            -- copy carries a date. The served time must not be that gated date.
+            -- Trusted wins 1.0.0's manifest but knows no publish time for it, and the
+            -- gated copy carries a date. The served time must not be that gated date.
             let trustedNoTime =
                     ( TrustedSource
                     , (packument [("1.0.0", sriPriv)]){infoVersions = noTime (infoVersions (packument [("1.0.0", sriPriv)]))}
@@ -583,7 +586,7 @@ spec = do
                 `shouldBe` Nothing
 
         it "serves the winning manifest's own time when it has one (not the loser's)" $ do
-            -- Both sources carry a date; trusted wins the manifest, so its date is served.
+            -- Both sources carry a date. Trusted wins the manifest, so the plan serves its date.
             let tWin = UTCTime (fromGregorian 2026 4 4) 0
                 tLose = UTCTime (fromGregorian 2018 2 2) 0
                 trustedDated = (TrustedSource, withPublishedAt tWin (packument [("1.0.0", sriPriv)]))
@@ -594,10 +597,10 @@ spec = do
                 `shouldBe` Just tWin
 
     describe "latest via the shared selector" $ do
-        -- latest is resolved by Ecluse.Core.Version.selectLatest, so the merge inherits
-        -- keep-unless-denied + stable-preferring + unparseable-safe behaviour.
-        -- selectLatest is exhaustively unit-tested in its own spec; these only
-        -- check that it is wired into the merge correctly.
+        -- Ecluse.Core.Version.selectLatest resolves latest, so the merge inherits
+        -- keep-unless-denied, stable-preferring, and unparseable-safe behaviour.
+        -- selectLatest has exhaustive unit tests in its own spec. These cases only
+        -- check that the merge wires it in correctly.
         it "keeps the chosen latest when it still survives (no promotion)" $ do
             -- The trusted source tags latest at 1.0.0 and that version survives, so
             -- latest stays 1.0.0 even though 2.0.0 exists in the union.
@@ -611,8 +614,8 @@ spec = do
             (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
 
         it "chooses the chosen-latest by provenance (trusted's tag wins)" $ do
-            -- Both sources survive and both tag a latest; the trusted source's
-            -- latest is the chosen one, even though it is the lower version.
+            -- Both sources survive and both tag a latest. The trusted source's latest
+            -- is the chosen one, even though it is the lower version.
             let trusted =
                     ( TrustedSource
                     , (packument [("1.0.0", sriAaa)])
@@ -628,8 +631,8 @@ spec = do
             (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
 
         it "repoints to the highest stable survivor over a prerelease when chosen is gone" $ do
-            -- The chosen latest (5.0.0) was denied/absent; among survivors a stable
-            -- release is preferred over a higher prerelease.
+            -- The chosen latest (5.0.0) was denied or absent. Among the survivors, a
+            -- stable release wins over a higher prerelease.
             let info =
                     (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
@@ -690,13 +693,13 @@ spec = do
 
         it "the surviving set and time union are order-independent" $
             hedgehog $ do
-                -- On disjoint sources there are no cross-source collisions, so the
-                -- survivor set and the time union are a pure set operation and any
-                -- permutation yields the same ones. (The winning SourceId of a key
-                -- is its source's index, which a permutation relabels by design; and
-                -- the provenance precedence of a *colliding* tag/time is checked
-                -- deterministically in "precedence is by provenance" above, the
-                -- two-source split the architecture defines.)
+                -- On disjoint sources there are no cross-source collisions. The
+                -- survivor set and the time union are a pure set operation, so any
+                -- permutation yields the same ones. (The winning SourceId of a key is
+                -- its source's index, which a permutation relabels by design. The
+                -- "precedence is by provenance" cases above check the precedence of a
+                -- \*colliding* tag or time deterministically, over the two-source split
+                -- the architecture defines.)
                 sources <- forAll genDisjointSources
                 perm <- forAll (Gen.shuffle sources)
                 a <- H.evalMaybe (mergePackuments sources)
@@ -711,7 +714,7 @@ spec = do
                 pubDigest <- forAll (Gen.filter (/= privDigest) genDigest)
                 let trusted = (TrustedSource, packument [(ver, privDigest)])
                     gated = (GatedSource, packument [(ver, pubDigest)])
-                -- trusted at index 0 forward, index 1 backward; the survivor must
+                -- trusted at index 0 forward and index 1 backward. The survivor must
                 -- name the trusted source either way.
                 forward <- H.evalMaybe (winnerOf ver =<< mergePackuments [trusted, gated])
                 backward <- H.evalMaybe (winnerOf ver =<< mergePackuments [gated, trusted])
@@ -731,9 +734,9 @@ spec = do
 
         it "an extra SHA-1 on one copy never diverges while the shared SRI agrees" $
             hedgehog $ do
-                -- The asymmetric-digest invariant, generalised: whatever legacy SHA-1
+                -- The asymmetric-digest invariant, generalised. Whatever legacy SHA-1
                 -- one mirror adds, two copies that agree on the shared SRI are the same
-                -- bytes and never diverge on the asymmetry alone.
+                -- bytes. They never diverge on the asymmetry alone.
                 ver <- forAll genVersionStr
                 sri <- forAll genDigest
                 extra <- forAll genSha1
@@ -743,11 +746,12 @@ spec = do
                 mpDivergences plan === Set.empty
 
     describe "the merge accumulator is a lawful Monoid" $ do
-        -- The fold is realised over the 'Merge' accumulator; its laws are what make
+        -- The fold runs over the 'Merge' accumulator, and its laws are what make
         -- 'mergePackuments' associative and identity-respecting. The instance is
-        -- deliberately associative + identity but *not* commutative (the 'SourceId'
-        -- tiebreak is positional); the decision-order-independence the business
-        -- rules need is proved separately below, over input permutations.
+        -- deliberately associative and identity-respecting but *not* commutative,
+        -- because the 'SourceId' tiebreak is positional. The properties below prove
+        -- the decision-order-independence the business rules need, over input
+        -- permutations.
         it "is associative: (a <> b) <> c === a <> (b <> c)" $
             hedgehog $ do
                 a <- forAll genMerge
@@ -766,19 +770,19 @@ spec = do
                 a <> mempty === a
 
         it "is intentionally NOT commutative (SourceId labels are positional)" $ do
-            -- This is documented behaviour, not a defect: 'SourceId' must name the
-            -- input's *position* so the serve layer can index back to a raw Value,
-            -- so swapping operands swaps the labels. We assert the asymmetry rather
-            -- than papering over it: two single-input merges of *different*
-            -- provenance at the *same* version key, combined both ways. The decision
-            -- (trusted wins) is identical; the winning SourceId label flips with
-            -- the order -- which is exactly why commutativity is the wrong law.
+            -- This asymmetry is deliberate, not a defect. 'SourceId' must name the
+            -- input's *position* so the serve layer can index back to a raw Value, so
+            -- swapping operands swaps the labels. This case asserts the asymmetry
+            -- rather than papering over it, with two single-input merges of
+            -- \*different* provenance at the *same* version key, combined both ways.
+            -- The decision (trusted wins) is identical, and the winning SourceId label
+            -- flips with the order. That is exactly why commutativity is the wrong law.
             let trusted = contribute TrustedSource (packument [("1.0.0", sriPriv)])
                 gated = contribute GatedSource (packument [("1.0.0", sriPub)])
                 forward = planFrom (trusted <> gated)
                 backward = planFrom (gated <> trusted)
-            -- Same decision (trusted wins) but opposite positional label, so the
-            -- two plans -- and the two accumulators -- are genuinely not equal.
+            -- Same decision (trusted wins) but opposite positional label, so the two
+            -- plans, and the two accumulators, are genuinely not equal.
             (trusted <> gated == gated <> trusted) `shouldBe` False
             (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
             (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
@@ -789,36 +793,36 @@ spec = do
                 mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
 
     describe "the laws do not erode the trust hierarchy" $ do
-        -- The architect's explicit requirement: prove the lawful refactor still
-        -- enforces the business rules -- trusted-wins precedence, the union, the
-        -- divergence signal, and (the core property) order-independence of every
-        -- decision a caller can observe except the positional 'SourceId' label.
+        -- These prove the lawful fold still enforces the business rules: trusted-wins
+        -- precedence, the union, and the divergence signal. The core property is
+        -- order-independence of every decision a caller can observe, except the
+        -- positional 'SourceId' label.
 
         it "the trust order IS the hierarchy: TrustedSource < GatedSource (keystone -- do not reorder)" $
             -- DO NOT read this as a trivial Enum/Ord check. This single line is the
-            -- keystone of the entire merge. Every "the private registry always wins"
-            -- decision the module makes -- which copy survives a version collision,
-            -- whose integrity is recorded as the divergence winner, and which
-            -- source's dist-tags and time are kept -- is resolved by 'Set.findMin' /
-            -- 'keepBetter' over the @(Provenance, SourceId)@ rank, whose precedence
-            -- is governed entirely by this 'Ord Provenance'. 'TrustedSource' is
-            -- declared before 'GatedSource', so the derived 'Ord' makes it the
-            -- smaller value, and "smallest wins" is what gives the private upstream
-            -- authority.
+            -- keystone of the entire merge. 'Set.findMin' and 'keepBetter' resolve
+            -- every "the private registry always wins" decision the module makes, over
+            -- the @(Provenance, SourceId)@ rank. Those decisions are which copy
+            -- survives a version collision, whose integrity the divergence records as
+            -- the winner, and which source's dist-tags and time the plan keeps. This
+            -- 'Ord Provenance' governs that precedence entirely. 'TrustedSource' is
+            -- declared before
+            -- 'GatedSource', so the derived 'Ord' makes it the smaller value, and
+            -- "smallest wins" is what gives the private upstream its authority.
             --
-            -- If a future edit reorders the 'Provenance' constructors (or otherwise
-            -- inverts this comparison), the trust relationship flips SILENTLY: the
-            -- public upstream would win every collision, and a tampered public copy
-            -- could shadow the vetted private one -- the precise supply-chain failure
-            -- Écluse exists to prevent -- with nothing else in the types objecting.
-            -- A failure here therefore means "the trust hierarchy has been inverted,"
-            -- NOT "update the expected value." This assertion is the tripwire; keep it.
+            -- If an edit reorders the 'Provenance' constructors, or otherwise inverts
+            -- this comparison, the trust relationship flips SILENTLY. The public
+            -- upstream would win every collision, and a tampered public copy could
+            -- shadow the vetted private one. That is the precise supply-chain failure
+            -- Écluse exists to prevent, and nothing else in the types would object. A failure
+            -- here therefore means "the trust hierarchy has been inverted," NOT
+            -- "update the expected value." This assertion is the tripwire. Keep it.
             compare TrustedSource GatedSource `shouldBe` LT
 
         it "trusted wins a collision; the divergence's winner is the trusted copy" $ do
             -- Trusted and gated collide at 1.0.0 with differing integrity. The
-            -- survivor is the trusted copy and the recorded divergence's *winning*
-            -- fingerprint is the trusted integrity -- the hierarchy, intact.
+            -- survivor is the trusted copy, and the recorded divergence's *winning*
+            -- fingerprint is the trusted integrity: the hierarchy, intact.
             let trusted = (TrustedSource, packument [("1.0.0", sriPriv)])
                 gated = (GatedSource, packument [("1.0.0", sriPub)])
                 plan = mergePackuments [gated, trusted] -- trusted at index 1
@@ -831,7 +835,7 @@ spec = do
                 other -> expectationFailure ("expected one divergence, got " <> show other)
 
         it "the merged set is the mixed-provenance union trusted ∪ filtered(public)" $ do
-            -- Versions unique to each upstream are all present; the trust split does
+            -- Versions unique to each upstream are all present. The trust split does
             -- not drop a side, it unions them.
             let trusted = (TrustedSource, packument [("1.0.0", sriLowA), ("1.1.0", sriLowB)])
                 gated = (GatedSource, packument [("2.0.0", sriLowC), ("1.1.0", sriLowB)])
@@ -846,9 +850,9 @@ spec = do
         it "a 3+-copy collision fans the winner out against each distinct loser" $ do
             -- THREE copies of one key with three distinct fingerprints: one trusted
             -- (wins), two gated. A non-associative pairwise divergence definition
-            -- would miss or double-count one of the losing pairs; the set-of-distinct
-            -- -fingerprints definition records the trusted winner against *each* of
-            -- the two distinct losers, exactly once.
+            -- would miss or double-count one of the losing pairs. The
+            -- set-of-distinct-fingerprints definition records the trusted winner
+            -- against *each* of the two distinct losers, exactly once.
             let t = (TrustedSource, packument [("1.0.0", sriT)]) -- index 0, wins
                 g1 = (GatedSource, packument [("1.0.0", sriG1)]) -- index 1
                 g2 = (GatedSource, packument [("1.0.0", sriG2)]) -- index 2
@@ -867,9 +871,9 @@ spec = do
             actual `shouldBe` Just expected
 
         it "a 3+-copy collision's divergences are associativity-stable (regroup the fold)" $ do
-            -- The same three copies, folded in two different associativity groupings
-            -- of 'contribute', must yield the same divergence fingerprint-pairs -- the
-            -- property a pairwise winner-vs-loser fold would violate.
+            -- The same three copies, folded in two associativity groupings of
+            -- 'contribute', must yield the same divergence fingerprint-pairs. A
+            -- pairwise winner-vs-loser fold would violate that property.
             let t = contribute TrustedSource (packument [("1.0.0", sriT)])
                 g1 = contribute GatedSource (packument [("1.0.0", sriG1)])
                 g2 = contribute GatedSource (packument [("1.0.0", sriG2)])
@@ -878,8 +882,9 @@ spec = do
             (mpDivergences <$> left) `shouldBe` (mpDivergences <$> right)
 
         it "dist-tags: keep-unless-denied, absent-target dropped, by provenance" $ do
-            -- 'latest' kept at the trusted source's surviving tag; a 'next' tag whose
-            -- target is absent from the union is dropped; resolution is by provenance.
+            -- 'latest' stays at the trusted source's surviving tag. The merge drops a
+            -- 'next' tag whose target is absent from the union. Provenance resolves
+            -- both.
             let trusted =
                     ( TrustedSource
                     , (packument [("1.0.0", sriLowA)])
@@ -908,14 +913,15 @@ spec = do
 
         it "the always-invariant decisions survive any permutation of any inputs" $
             hedgehog $ do
-                -- Over arbitrary mixed-provenance inputs ('genSources' freely collides
-                -- keys, including *same-provenance* collisions), two decisions are
-                -- order-independent without qualification: the surviving key *set* and
-                -- the winning *provenance* per key. (A same-provenance collision's
-                -- concrete winner is positional -- provenance cannot break that tie --
-                -- so the value-level targets are asserted in the npm topology below,
-                -- and the positional boundary is documented after.) Only the 'SourceId'
-                -- labels move; the provenance beneath them does not.
+                -- 'genSources' freely collides keys, including *same-provenance*
+                -- collisions. Over those arbitrary mixed-provenance inputs, two
+                -- decisions are order-independent without qualification: the surviving
+                -- key *set* and the winning *provenance* per key. (A same-provenance
+                -- collision's concrete winner is positional, because provenance cannot
+                -- break that tie. The npm topology below asserts the value-level
+                -- targets, and the case after it documents the positional boundary.)
+                -- Only the 'SourceId' labels move. The provenance beneath them does
+                -- not.
                 sources <- forAll genSources
                 perm <- forAll (Gen.shuffle sources)
                 base <- H.evalMaybe (mergePackuments sources)
@@ -925,13 +931,13 @@ spec = do
 
         it "every decision is order-independent in the npm (1 trusted, 1 gated) topology" $
             hedgehog $ do
-                -- The architecture's defined two-source topology -- exactly one trusted
-                -- and one gated upstream -- is where the merge actually runs today. Every
-                -- collision there is *cross-provenance*, so provenance (trusted wins)
-                -- resolves it regardless of position and EVERY decision is fully
-                -- order-independent: survivors, winning provenance, divergence
-                -- fingerprint-pairs, dist-tags, and time. Only the winner's 'SourceId'
-                -- label tracks position. This is the "behaviour preserved" anchor.
+                -- The architecture's defined two-source topology, exactly one trusted
+                -- and one gated upstream, is where the merge runs. Every collision
+                -- there is *cross-provenance*, so provenance (trusted wins) resolves it
+                -- regardless of position. EVERY decision is fully order-independent:
+                -- survivors, winning provenance, divergence fingerprint-pairs,
+                -- dist-tags, and time. Only the winner's 'SourceId' label tracks
+                -- position. This is the "behaviour preserved" anchor.
                 trusted <- forAll (snd <$> genSource)
                 gated <- forAll (snd <$> genSource)
                 let fwd = [(TrustedSource, trusted), (GatedSource, gated)]
@@ -945,15 +951,15 @@ spec = do
                 mpTime forward === mpTime backward
 
         it "within one provenance, the divergence winner is positional (documented boundary)" $ do
-            -- The boundary of the order-independence guarantee, asserted not hidden:
-            -- when two same-provenance copies of a key carry differing integrity,
-            -- \*provenance cannot break the tie*, so the lower 'SourceId' (earlier
-            -- position) wins -- the same positional tiebreak that makes the Semigroup
-            -- non-commutative. This case never arises in the npm topology (collisions
-            -- there are always cross-provenance); it is the multi-same-provenance
-            -- topology 'SourceId' exists for, where the winner legitimately tracks
-            -- order. The *surviving set* and *winning provenance* stay invariant; only
-            -- the winner/loser fingerprint labels flip.
+            -- The boundary of the order-independence guarantee, asserted not hidden.
+            -- When two same-provenance copies of a key carry differing integrity,
+            -- \*provenance cannot break the tie*, so the lower 'SourceId' (the earlier
+            -- position) wins. That is the same positional tiebreak that makes the
+            -- Semigroup non-commutative. This case never arises in the npm topology,
+            -- where collisions are always cross-provenance. It is the
+            -- multi-same-provenance topology 'SourceId' exists for, where the winner
+            -- legitimately tracks order. The *surviving set* and *winning provenance*
+            -- stay invariant. Only the winner/loser fingerprint labels flip.
             let a = (GatedSource, packument [("1.0.0", sriCapA)]) -- earlier wins
                 b = (GatedSource, packument [("1.0.0", sriCapB)])
                 forward = Set.toList . mpDivergences <$> mergePackuments [a, b]
@@ -962,7 +968,7 @@ spec = do
             (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[sriPair sriCapB]]
 
 {- | Sources with pairwise-disjoint version keys, so the merge is a pure set union
-with no collisions -- the regime in which order cannot matter at all.
+with no collisions: the regime in which order cannot matter at all.
 -}
 genDisjointSources :: Gen [(Provenance, PackageInfo)]
 genDisjointSources = do

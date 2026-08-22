@@ -1,18 +1,19 @@
 name: Performance Acceptance
 
-# The live performance-acceptance harness: it fetches LIVE packuments for
-# the curated catalogue set and checks Écluse's work-per-request overhead against the
+# The live performance-acceptance harness. It fetches LIVE packuments for the curated
+# catalogue set and checks Écluse's work-per-request overhead against the
 # version-controlled acceptance budget (acceptance/criteria.json).
 #
-# Standalone and deliberately NON-REQUIRED. Unlike the deterministic work-per-request and load benchmarks
-# benchmarks (which red only on a literal crash), this job REDS on a real budget breach
-# — a visible red check on the pull request — so the team reacts when real-world
-# conditions degrade and decides: code regression, or reality outgrew the budget? But it
-# is NOT wired into ci.yml's `gate` and must not be a branch-protection required check,
-# so the red informs without ever blocking merge. Live + non-deterministic, so a flaky
-# registry is reported as unavailable, never a breach (the harness exits non-zero only
-# on an over-budget measurement). The run summary separates the upstream and Écluse
-# overhead legs, leaving room for a later upstream-normalisation column.
+# Standalone and deliberately NON-REQUIRED. The deterministic work-per-request and load
+# benchmarks red only on a literal crash. This job instead REDS on a real budget breach,
+# as a visible red check on the pull request. The team then reacts when real-world
+# conditions degrade, and decides: code regression, or reality outgrew the budget?
+# The `gate` job in ci.yml does not depend on it, and it must not be a branch-protection
+# required check. The red therefore informs without ever blocking a merge. The run is
+# live and non-deterministic, so the harness reports a flaky registry as unavailable,
+# never a breach. It exits non-zero only on an over-budget measurement. The run summary
+# separates the upstream and Écluse overhead legs, leaving room for a later
+# upstream-normalisation column.
 on:
   pull_request:
   push:
@@ -22,8 +23,8 @@ on:
     - cron: "37 6 * * *"
   workflow_dispatch:
 
-# One run per ref; a superseded PR run is cancelled when a newer commit lands (only the
-# latest commit's verdict matters). Never cancel a scheduled or dispatch run.
+# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
+# the latest commit's verdict matters. Never cancel a scheduled or dispatch run.
 concurrency:
   group: perf-acceptance-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -36,7 +37,7 @@ jobs:
   perf-acceptance:
     name: Performance acceptance (live, non-blocking)
     runs-on: ubuntu-latest
-    # Observed ~13 min mean, 21 min worst; sized to clear a cold-cache run.
+    # Observed ~13 min mean, 21 min worst. Sized to clear a cold-cache run.
     timeout-minutes: 45
     env:
       # Pin the cabal store to a deterministic, cacheable location, as the other
@@ -53,26 +54,26 @@ jobs:
         with:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
-          # Restore the shared Nix store but never write it: build-test on main is the
-          # single writer. Restore-only.
+          # Restore the shared Nix store but never write it. The build-test job on
+          # main is the single writer. Restore-only.
           save-nix-store: "false"
 
       - name: Update package index
         run: nix develop .#ci --command task update
 
       # Run the harness. It appends its summary to $GITHUB_STEP_SUMMARY itself and
-      # prints the same report to stdout; `tee` captures that copy as this run's
-      # downloadable report. pipefail preserves the harness exit code through the
-      # pipe: non-zero ONLY on a real budget breach, which reds this (non-required)
-      # check. No expression interpolation reaches the run body, so the step stays
-      # injection-free.
+      # prints the same report to stdout. `tee` captures that copy as this run's
+      # downloadable report. The pipefail option preserves the harness exit code
+      # through the pipe: non-zero ONLY on a real budget breach, which reds this
+      # (non-required) check. No expression interpolation reaches the run body, so
+      # the step stays injection-free.
       - name: Run performance acceptance
         run: |
           set -eo pipefail
           nix develop .#ci --command task perf-acceptance 2>&1 | tee perf-acceptance-report.md
 
       # This run's rendered report, downloadable from the run page even when the run
-      # reds on a breach. A convenience for a human comparing runs by hand; there is
+      # reds on a breach. A convenience for a human comparing runs by hand: there is
       # no cross-run baseline store.
       - name: Upload this run's report
         if: always()

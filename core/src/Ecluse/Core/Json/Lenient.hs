@@ -2,16 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Small __lenient-decode__ primitives shared by every ecosystem's aeson wire
-decoders. Pure aeson support with no registry or package concept, so it sits beside
-the bounded selective-decode engine in "Ecluse.Core.Json.Selective" rather than in
-any one ecosystem's wire module:
+{- | The __lenient-decode__ primitives every ecosystem's aeson wire decoder shares.
+They are pure aeson support with no registry or package concept. They therefore sit
+beside the bounded selective-decode engine in "Ecluse.Core.Json.Selective", not in any
+one ecosystem's wire module.
 
-* 'lenientOptional' reads an optional field, degrading a present-but-undecodable
-  value to 'Nothing' rather than failing the whole decode, so one poisoned advisory
+* 'lenientOptional' reads an optional field. It degrades a present-but-undecodable
+  value to 'Nothing' instead of failing the whole decode, so one poisoned advisory
   value cannot deny a whole document.
-* 'typeMismatchOneOf' fails a permissive string-or-object decoder with a descriptive
-  message that names the accepted shapes and the JSON kind actually found.
+* 'typeMismatchOneOf' fails a permissive string-or-object decoder with a message that
+  names the accepted shapes and the JSON kind it found.
 -}
 module Ecluse.Core.Json.Lenient (
     lenientOptional,
@@ -29,25 +29,25 @@ import Data.Aeson.Types (Parser, parseMaybe)
 
 {- | Decode an optional field __leniently__: an absent, @null@, or
 present-but-undecodable value all yield 'Nothing'. Where @(.:?)@ fails the whole
-decode on a present-but-wrong value, this degrades a hostile value (wrong-typed,
-fractional, or outside the target's range) to 'Nothing' instead. Reserved for
-__advisory__ fields, so one poisoned value cannot deny the whole document; a
+decode on a present-but-wrong value, this degrades a hostile value to 'Nothing'
+instead: wrong-typed, fractional, or outside the target's range. Use it for
+__advisory__ fields only, so one poisoned value cannot deny the whole document. A
 load-bearing field keeps @(.:?)@\/@(.:)@.
 -}
 lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
 lenientOptional o k = do
     mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
-    pure (mv >>= parseMaybe parseJSON) -- but a Value that will not decode becomes Nothing
+    pure (mv >>= parseMaybe parseJSON) -- a Value that will not decode becomes Nothing
 
-{- | Fail a lenient string-or-object decoder with a descriptive message, naming the
-accepted shapes and reporting what was actually found. Keeps the @other ->@ branch of
-each tolerant instance to one readable line.
+{- | Fail a lenient string-or-object decoder with a message that names the accepted
+shapes and the JSON kind it found. It keeps the @other ->@ branch of each tolerant
+instance to one line.
 -}
 typeMismatchOneOf :: String -> Value -> Parser a
 typeMismatchOneOf expected actual =
     fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
 
--- A short, human description of a JSON value's kind, for parse-error messages.
+-- A short description of a JSON value's kind, for parse-error messages.
 valueKind :: Value -> String
 valueKind = \case
     Object{} -> "an object"

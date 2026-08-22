@@ -6,21 +6,21 @@
 shared "Ecluse.Core.Server.Admission.Weighted" core, capping the aggregate bytes
 concurrently held rather than a count of unit slots.
 
-The publish path buffers whole request bodies (base64-inflated tarballs bounded only by
-the per-request cap), so a burst of concurrent publishes could hold many caps' worth of
-heap at once with no aggregate bound. An acquisition here reserves the request's weight
--- its declared Content-Length, or the per-request cap when the body is chunked and
-declares nothing -- against a fixed byte capacity before the body is read, and releases
-it on every exit path. Reservation precedes buffering and is always at least the bytes
-actually buffered (the publish route's bounded read refuses a body past the cap), so the
-aggregate holds by construction.
+The publish path buffers whole request bodies: base64-inflated tarballs bounded only by
+the per-request cap. A burst of concurrent publishes could therefore hold many caps'
+worth of heap at once, with no aggregate bound. An acquisition here reserves the
+request's weight against a fixed byte capacity before the body is read, and releases it
+on every exit path. The weight is the declared Content-Length, or the per-request cap
+when the body is chunked and declares nothing. Reservation precedes buffering, and the
+publish route's bounded read refuses a body past the cap. The reserved weight is
+therefore always at least the bytes buffered, so the aggregate holds by construction.
 
-The door discipline is the core's: acquire immediately when the capacity holds the
-weight and no one is waiting, wait briefly in a bounded room otherwise, and shed past
-the room or past the wait budget. This module supplies only the byte capacity for the
+The door discipline is the core's: take the weight at once when the capacity holds it
+and no one is waiting. Otherwise wait briefly in a bounded room, and shed past the room
+or past the wait budget. This module supplies only the byte capacity for the
 per-call weight clamp and the publish-path metric hooks (the in-flight byte gauge and
-the shed signal); unlike serve admission, a shed here records @ecluse.publish.body.shed@
-on both the door refusal and the expired wait.
+the shed signal). Unlike serve admission, a shed here records
+@ecluse.publish.body.shed@ on both the door refusal and the expired wait.
 -}
 module Ecluse.Core.Server.Admission.Bytes (
     ByteAdmission,
@@ -54,15 +54,15 @@ data ByteAdmission = ByteAdmission
 
 {- | How long an acquisition finding the capacity busy waits before it is shed: the
 shared 'admissionWaitMicros' budget, the same one-retry-interval as the unit-slot
-admission, and for the same reason -- a refusal must never be faster than the client was
+admission. The reason is the same: a refusal must never be faster than the client was
 told to come back.
 -}
 byteAdmissionWaitMicros :: Int
 byteAdmissionWaitMicros = admissionWaitMicros
 
-{- | The bounded waiting room, a count of waiters: publishes are rare and heavy, so a
-short queue absorbs a brush with the capacity while anything deeper gets the instant,
-cheap refusal.
+{- | The bounded waiting room, a count of waiters. Publishes are rare and heavy, so a
+short queue absorbs a brush with the capacity. Anything deeper gets the instant, cheap
+refusal.
 -}
 byteAdmissionWaiterRoom :: Int
 byteAdmissionWaiterRoom = 8
@@ -83,16 +83,16 @@ newByteAdmissionTuned capacity room waitMicros = do
 
 {- | Run an action holding the given weight against the aggregate. 'Nothing' means the
 request was shed: the room was full, or the weight did not fit within the wait budget.
-The weight is clamped to the capacity defensively (a request the publish route's bounded
-read admitted always fits the plan's floors, but a bound must never deadlock on arithmetic it
-did not make), and released on every exit path -- normal completion, a synchronous
-throw, and asynchronous cancellation.
+The weight is clamped to the capacity defensively: a bound must never deadlock on
+arithmetic it did not make. A request the publish route's bounded read admitted always
+fits the plan's floors. The weight is released on every exit path: normal completion, a
+synchronous throw, and asynchronous cancellation.
 
 The in-flight gauge (@ecluse.publish.body.in_flight_bytes@) moves with the reserved
 weight, and a shed records @ecluse.publish.body.shed@.
 
 Inlined so the literal 'AdmissionObservers' folds into the shared core's saturated call
-at each request site, leaving no per-request record allocation on the admitted path.
+at each request site. The admitted path then allocates no per-request record.
 -}
 {-# INLINE withByteAdmission #-}
 withByteAdmission :: (MonadUnliftIO m) => MetricsPort -> ByteAdmission -> Int -> m a -> m (Maybe a)

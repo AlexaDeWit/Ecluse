@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability (private)
     url: https://github.com/AlexaDeWit/Ecluse/security/advisories/new
-    about: Never report vulnerabilities in a public issue. Use private reporting — see SECURITY.md.
+    about: Never report a vulnerability in a public issue. Use the private reporting in SECURITY.md.
   - name: Questions & support
     url: https://github.com/AlexaDeWit/Ecluse/blob/main/SUPPORT.md
     about: How to get help, and where usage questions belong.

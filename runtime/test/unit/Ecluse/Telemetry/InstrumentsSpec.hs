@@ -48,10 +48,10 @@ import Ecluse.Runtime.Telemetry.Instruments (
 {- | Tests for the runtime instrument layer. With telemetry off, 'newMetrics' builds
 against the SDK's no-op meter, so the handle is total and every @record*@ helper is a
 silently-discarded no-op. The crux these prove is that the emit surface is __inert when
-telemetry is off__: every signal can be recorded without an SDK, without a network, and
-without throwing -- the property the hot path relies on to instrument unconditionally.
-The timing helper is exercised too. No SDK is initialised here (that is the integration
-tier), so these run pure of any exporter.
+telemetry is off__. Every signal records without an SDK, without a network, and without
+throwing, the property the hot path relies on to instrument unconditionally. They
+exercise the timing helper too. No SDK is initialised here, since that is the
+integration tier, so these run pure of any exporter.
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ do

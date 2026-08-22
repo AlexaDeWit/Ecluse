@@ -1,12 +1,12 @@
 name: Benchmarks
 
 # Runs on every pull request and on manual dispatch. The benchmarks are a standalone,
-# inform-only tier: they are NOT wired into ci.yml's `gate`, so they never block a
-# merge, and the run's only red state is a literal benchmark failure (a build error, a
-# crashed harness, or a tripped complexity assertion). It never computes a
-# perf-regression fail — time and allocations are reported in the run summary for a
-# human to read, never compared to a threshold. There is no cross-run baseline: a run's
-# results are downloadable from its own page but are not consumed by any other run.
+# inform-only tier. ci.yml's `gate` does not depend on them, so they never block a
+# merge. A run's only red state is a literal benchmark failure: a build error, a
+# crashed harness, or a tripped complexity assertion. It never computes a
+# perf-regression fail. The run summary reports time and allocations for a human to
+# read, never against a threshold. There is no cross-run baseline: a run's results are
+# downloadable from its own page, and no other run consumes them.
 on:
   pull_request:
   push:
@@ -14,8 +14,8 @@ on:
       - main
   workflow_dispatch:
 
-# One run per ref. Cancel a superseded PR run when a newer commit is pushed (only the
-# latest commit's numbers matter); never cancel a manual dispatch.
+# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
+# the latest commit's numbers matter. Never cancel a manual dispatch.
 concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -45,35 +45,36 @@ jobs:
         with:
           # Restore the warm cabal store (this job compiles the benchmark).
           cabal-cache: "true"
-          # Restore the shared Nix store but never write it: build-test on main is the
-          # single writer, and this dispatch job realizes the `.#ci` closure, so
-          # saving here would race and bloat the canonical entry. Restore-only.
+          # Restore the shared Nix store but never write it. The build-test job on
+          # main is the single writer. This job realises the same `.#ci` closure, so a
+          # save here would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"
 
       - name: Update package index
         run: nix develop .#ci --command task update
 
-      # Run the benches, teeing the console output (progress lines, the generator
-      # tests, the complexity assertions) for the report's raw-output section, and
-      # writing the CSV the report renders from. pipefail: `tee` must not mask a
-      # tripped complexity assertion or a crashed harness. `task bench` never gates
-      # on performance; this step fails only on a genuine benchmark failure.
+      # Run the benches. `tee` captures the console output (progress lines, the
+      # generator tests, the complexity assertions) for the report's raw-output
+      # section. The harness writes the CSV the report renders from. pipefail: `tee`
+      # must not mask a tripped complexity assertion or a crashed harness.
+      # `task bench` never gates on performance, so this step fails only on a genuine
+      # benchmark failure.
       - name: Run benchmarks
         run: |
           set -eo pipefail
           nix develop .#ci --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
 
       # Render the CSV as the structured Markdown report. The renderer writes to
-      # stdout and appends to $GITHUB_STEP_SUMMARY itself (as the load and acceptance
-      # harnesses do), so the step needs no shell wrapping and stays injection-free.
-      # Runs even on a red bench: a partial CSV is still worth reading, and a missing
-      # CSV renders as an explicit note, never a second failure.
+      # stdout and appends to $GITHUB_STEP_SUMMARY itself, as the load and acceptance
+      # harnesses do. The step therefore needs no shell wrapping and stays
+      # injection-free. It runs even on a red bench. A partial CSV is still worth
+      # reading, and a missing CSV renders as an explicit note, never a second failure.
       - name: Render results to the run summary
         if: always()
         run: nix develop .#ci --command task bench-report
 
-      # This run's results, downloadable from the run page (the CSV + the console
-      # table). A convenience for a human comparing by hand — there is no cross-run
+      # This run's results, downloadable from the run page (the CSV and the console
+      # table). A convenience for a human comparing by hand: there is no cross-run
       # baseline store. Uploaded even when a complexity assertion fails, so the numbers
       # survive a red run.
       - name: Upload this run's results

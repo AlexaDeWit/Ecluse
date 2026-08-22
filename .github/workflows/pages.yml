@@ -1,40 +1,40 @@
 name: Docs
 
-# Publish the project site to GitHub Pages so it tracks the code on main: the home
-# page at the root and the library's Haddock API docs under /api. Runs nightly and
-# on demand (see the schedule below), not on every push. This is a separate lifecycle
-# from the PR `gate` in ci.yml (a docs-deploy failure must never block a merge), and,
-# like every workflow here, each action is pinned to a full commit SHA (Dependabot
-# keeps them current).
+# Publish the project site to GitHub Pages so it tracks the code on main. The site is
+# the home page at the root and the library's Haddock API docs under /api. Runs
+# nightly and on demand (see the schedule below), not on every push. This is a
+# separate lifecycle from the PR `gate` in ci.yml, because a docs-deploy failure must
+# never block a merge. Like every workflow here, each action carries a full commit SHA
+# pin, which Dependabot keeps current.
 on:
-  # Nightly rebuild so the site tracks main without deploying on every push: main
-  # moves fast and most pushes touch no site content, and each redundant deploy is a
-  # fresh chance to hit the Pages backend's intermittent "try again later" or its
-  # ~10-builds/hour soft limit. 07:17 UTC is roughly 03:17 in America/Montreal; the
-  # off-the-hour minute dodges the top-of-hour cron congestion GitHub warns about.
-  # Scheduled runs always execute against the latest main commit, so this publishes
-  # current main.
+  # Nightly rebuild, so the site tracks main without deploying on every push. The
+  # main branch moves fast, and most pushes touch no site content. Each redundant
+  # deploy is a fresh chance to hit the Pages backend's intermittent "try again
+  # later" or its ~10-builds/hour soft limit. 07:17 UTC is roughly 03:17 in
+  # America/Montreal. The off-the-hour minute dodges the top-of-hour cron congestion
+  # GitHub warns about. A scheduled run always executes against the latest main
+  # commit, so this publishes current main.
   schedule:
     - cron: "17 7 * * *"
-  # On demand, to expedite a publish (say, right after a threat-model or doc change)
+  # On demand, to speed up a publish (say, right after a threat-model or doc change)
   # rather than waiting for the nightly run.
   workflow_dispatch:
 
-# Serialise Pages deploys: only one runs at a time, and the `pages` group collapses
-# any runs queued behind the in-flight one down to the latest, so a burst of merges
-# still publishes once. cancel-in-progress is deliberately false. A deploy that has
-# reached its final step has already registered a deployment with the Pages backend;
-# cancelling it mid-flight can leave that deployment wedged, and the backend then
+# Serialise Pages deploys: only one runs at a time. The `pages` group collapses any
+# runs queued behind the in-flight one down to the latest, so a burst of merges still
+# publishes once. The cancel-in-progress setting is deliberately false. A deploy that
+# reaches its final step has already registered a deployment with the Pages backend.
+# Cancelling it mid-flight can leave that deployment wedged, and the backend then
 # rejects the next push with "Deployment failed, try again later" until it clears.
-# Letting the in-flight production deploy finish avoids that (this matches GitHub's
-# own Pages starter workflow). Pages publishes atomically, so a superseded build
-# simply leaves the prior deployment live until the newer one completes; there is no
-# half-applied state, and at most one extra build's worth of CI is spent.
+# Letting the in-flight production deploy finish avoids that, and it matches GitHub's
+# own Pages starter workflow. Pages publishes atomically, so a superseded build leaves
+# the prior deployment live until the newer one completes. There is no half-applied
+# state, and the cost is at most one extra build's worth of CI.
 concurrency:
   group: pages
   cancel-in-progress: false
 
-# Least privilege: read the repo, write the Pages artifact + deployment, and mint
+# Least privilege: read the repo, write the Pages artifact and deployment, and mint
 # the OIDC token the deploy step exchanges with the Pages service.
 permissions:
   contents: read
@@ -45,8 +45,8 @@ jobs:
   deploy:
     name: Build & deploy site
     runs-on: ubuntu-latest
-    # The only bound this job had was GitHub's six-hour default. Observed
-    # ~12 min mean, 22 min worst.
+    # Without this bound the job falls back to GitHub's six-hour default.
+    # Observed ~12 min mean, 22 min worst.
     timeout-minutes: 60
     environment:
       name: github-pages
@@ -54,12 +54,12 @@ jobs:
     env:
       # Pin the cabal store to a deterministic, cacheable location (as in ci.yml).
       # Unlike the gate jobs, Pages does NOT restore build-test's pristine cabal
-      # store into this directory: it fills it with the documentation-variant
-      # closure instead (see the doc-variant cache steps below).
+      # store into this directory. It fills the directory with the
+      # documentation-variant closure instead (see the doc-variant cache steps below).
       CABAL_DIR: ${{ github.workspace }}/.cabal
-      # The build directory `task site` writes Haddock + the OpenAPI manifest into.
-      # Cached under its own dist-docs-* key, so the doc-variant build products never
-      # collide with the gate's regular-variant dist-newstyle entry.
+      # The build directory `task site` writes Haddock and the OpenAPI manifest into.
+      # Its own dist-docs-* key keeps the doc-variant build products from colliding
+      # with the gate's regular-variant dist-newstyle entry.
       DOCS_BUILDDIR: dist-docs
     steps:
       - name: Checkout
@@ -67,31 +67,34 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same SHA-pinned setup as the gate jobs (install Nix + restore the shared Nix
-      # store). save-nix-store: false keeps Pages RESTORE-ONLY for the Nix store:
-      # build-test is the single writer, and Pages runs on main concurrently, so it
-      # must not race it for the nix-<os>-<flakehash> entry. cabal-cache is OFF: the
-      # composite's cabal/dist caches hold the REGULAR build variant (written by
-      # build-test's `cabal build all`), which `cabal haddock` cannot reuse — it needs
-      # a documentation-variant of the whole closure. Pages restores/saves its own
-      # doc-variant store + builddir instead (the two steps below). See AGENTS.md.
+      # Same SHA-pinned setup as the gate jobs: install Nix, restore the shared Nix
+      # store. The save-nix-store: false input keeps Pages RESTORE-ONLY for the Nix
+      # store. The build-test job is the single writer, Pages runs on main
+      # concurrently, and it must not race build-test for the nix-<os>-<flakehash>
+      # entry.
+      #
+      # The cabal-cache input is OFF. The composite's cabal and dist caches hold the
+      # REGULAR build variant, written by build-test's `cabal build all`.
+      # `cabal haddock` cannot reuse it: it needs a documentation-variant of the whole
+      # closure. Pages restores and saves its own doc-variant store and builddir
+      # instead, in the two steps below. See AGENTS.md.
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "false"
           save-nix-store: "false"
 
-      # The documentation-variant cabal store. `cabal haddock` builds + installs a
-      # doc-variant of every dependency (different ConfiguredId than the regular
-      # build variant), and that closure — not our own ~55 s of Haddock — is ~84% of
-      # this job's wall time. It lives in CABAL_DIR (= the store), cached under a
-      # docs-specific key so it never collides with build-test's pristine
-      # cabal-store-* entry. Keyed on the same dependency plan, so it stays a hit
-      # until a real dependency bump; the restore-keys prefix gives partial warmth
-      # across an epoch change (cabal reuses unchanged store entries, rebuilds only
-      # the changed deps). Pages always runs on main and the `pages` concurrency
-      # group serializes it, so Pages is this cache's single writer — restore here,
-      # save below (main only).
+      # The documentation-variant cabal store. `cabal haddock` builds and installs a
+      # doc-variant of every dependency, with a different ConfiguredId than the regular
+      # build variant. That closure is ~84% of this job's wall time. The project's own
+      # Haddock accounts for only ~55 s of that. It lives in CABAL_DIR (= the store),
+      # under a docs-specific key so it never collides with build-test's pristine
+      # cabal-store-* entry. The key covers the same dependency plan, so it stays a hit
+      # until a real dependency bump. The restore-keys prefix gives partial warmth
+      # across an epoch change: cabal reuses unchanged store entries and rebuilds only
+      # the changed deps. Pages always runs on main, and the `pages` concurrency group
+      # serialises it, so Pages is this cache's single writer: restore here, save
+      # below (main only).
       - name: Restore doc-variant cabal store
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -100,10 +103,10 @@ jobs:
           restore-keys: |
             cabal-store-docs-${{ runner.os }}-
 
-      # The doc-variant build products of our own two libraries (the published
-      # Haddock HTML) + the openapi-gen executable, in their own builddir
-      # (DOCS_BUILDDIR), kept distinct from the gate's regular-variant dist-newstyle.
-      # Small and fast-moving next to the store above; same dep-plan key.
+      # The doc-variant build products of the project's two libraries (the published
+      # Haddock HTML) and the openapi-gen executable, in their own builddir
+      # (DOCS_BUILDDIR). Kept distinct from the gate's regular-variant dist-newstyle.
+      # Small and fast-moving next to the store above. Same dep-plan key.
       - name: Restore doc-variant builddir
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -123,12 +126,12 @@ jobs:
       - name: Build the Pages site into ./_site
         run: nix develop .#ci --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
 
-      # Cache writes: main only, single writer (Pages). Right after the build that
-      # produced them and before the deploy steps, so the expensive doc-variant
-      # closure is saved even if a later step (Configure/Upload/Deploy) fails — the
-      # deps built fine and are worth caching. actions/cache/save no-ops when the key
-      # already exists, so an unchanged-deps push writes nothing; a dependency epoch
-      # is saved once, then reused untouched. Keys match the restore keys exactly.
+      # Cache writes: main only, single writer (Pages). They sit right after the build
+      # that produced them and before the deploy steps. The save therefore still
+      # happens when a later step (Configure/Upload/Deploy) fails: the deps built fine
+      # and are worth caching. The actions/cache/save step no-ops when the key already
+      # exists, so an unchanged-deps push writes nothing. Pages writes a dependency
+      # epoch once, then reuses it untouched. Keys match the restore keys exactly.
       - name: Save doc-variant cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -143,8 +146,8 @@ jobs:
           path: ${{ env.DOCS_BUILDDIR }}
           key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
-      # enablement: true turns Pages on via the API on first run, so no manual
-      # repo-settings step is needed to bootstrap this.
+      # enablement: true turns Pages on via the API on first run, so bootstrapping
+      # this needs no manual repo-settings step.
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
         with:
@@ -155,12 +158,12 @@ jobs:
         with:
           path: _site
 
-      # The Pages backend intermittently fails an individual deployment with
-      # "Deployment failed, try again later" even with no cancellation, no incident,
-      # and well under the hourly limit; GitHub's own guidance for it is to re-run.
-      # continue-on-error lets the job try once more rather than going red on a
-      # transient flake. deploy-pages re-fetches the same uploaded artifact and
-      # registers a fresh deployment, so the retry is a clean second attempt.
+      # The Pages backend intermittently fails a deployment with "Deployment failed,
+      # try again later", even with no cancellation, no incident, and well under the
+      # hourly limit. GitHub's own guidance for it is to re-run. The continue-on-error
+      # setting lets the job try once more rather than going red on a transient flake.
+      # The deploy-pages action re-fetches the same uploaded artifact and registers a
+      # fresh deployment, so the retry is a clean second attempt.
       - name: Deploy to GitHub Pages
         id: deploy
         continue-on-error: true

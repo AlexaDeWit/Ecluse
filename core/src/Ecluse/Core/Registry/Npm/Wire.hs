@@ -4,58 +4,58 @@
 
 {- | The npm registry __wire__ JSON types and their lenient decoders.
 
-This module is the npm protocol __boundary__: it models the JSON the registry
-actually sends and parses it with deliberately forgiving 'FromJSON' instances.
-It is the raw-wire layer of "parse, don't validate" -- it captures /what the
-registry said/ as faithfully as the rules and serving need, and __nothing
-more__. Projecting these wire types into the ecosystem-agnostic domain model
-("Ecluse.Core.Package": @PackageDetails@ et al.) is a separate concern; keeping the
-two apart is what keeps the lenient\/faithful handle clean.
+This module is the npm protocol __boundary__. It models the JSON the registry
+actually sends and parses it with deliberately forgiving 'FromJSON' instances. It is
+the raw-wire layer of "parse, don't validate". It captures /what the registry said/ as
+faithfully as the rules and serving need, and __nothing more__. Projecting these wire
+types into the ecosystem-agnostic domain model ("Ecluse.Core.Package":
+@PackageDetails@ et al.) is a separate concern. Keeping the two apart is what keeps
+the lenient\/faithful handle clean.
 
-The shapes here are reverse-engineered from live captures of
-@registry.npmjs.org@; the authoritative reference (with real bodies) is
-@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §11 type
-model, §3 errors).
+The shapes here are reverse-engineered from live captures of @registry.npmjs.org@. The
+authoritative reference (with real bodies) is
+@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §11 type model,
+§3 errors).
 
 == Lenient on input
 
-The public registry has drifted from its own spec and is inconsistent across
-endpoints, so every decoder here is forgiving in five specific ways, matching
-the documented reality:
+The public registry drifted from its own spec and is inconsistent across endpoints.
+Every decoder here is forgiving in five specific ways, matching the documented reality:
 
-* __Unknown keys are ignored.__ Manifests carry arbitrary author keys
-  (@gitHead@, @exports@, tool-config blocks like @is-odd@'s @verb@) and
-  registry bookkeeping (@_npmOperationalInternal@); a decoder must not choke on
-  them. aeson's record decoders already ignore extra keys, so this falls out of
-  using @(.:?)@\/@(.:)@ rather than enumerating the whole object.
-* __String-or-object scalars.__ @license@, @bugs@, @repository@, and the
-  @author@\/maintainer person fields each arrive as /either/ a bare string /or/
-  an object, depending on the package's age and tooling. Each corresponding
+* __Unknown keys__. Manifests carry arbitrary author keys (@gitHead@, @exports@,
+  tool-config blocks like @is-odd@'s @verb@) and registry bookkeeping
+  (@_npmOperationalInternal@). A decoder must not choke on them. The @aeson@ record
+  decoders already ignore extra keys, so this falls out of using @(.:?)@\/@(.:)@ rather
+  than enumerating the whole object.
+* __String-or-object scalars__. Some slots arrive as /either/ a bare string /or/ an
+  object, depending on the package's age and tooling. They are @license@, @bugs@,
+  @repository@, and the @author@\/maintainer person fields. Each corresponding
   type ('License', 'Bugs', 'Repository', 'Person') therefore parses both shapes.
-* __The bare-string error body.__ npm's per-version 404 is a bare JSON
+* __The bare-string error body__. The per-version 404 from npm is a bare JSON
   __string__ (@"version not found: ^3.0.0"@), not the documented
   @{error|message}@ object. 'ErrorResponse' tolerates both.
-* __The string-or-boolean @deprecated@ flag.__ @deprecated@ is conventionally the
-  deprecation message string, but some published versions carry a boolean instead
-  (@true@ = deprecated without a message, @false@ = not deprecated). 'vmDeprecated'
-  reads every form, so a boolean never fails the whole packument decode (a real
-  packument such as react's mixes the string and boolean forms across versions).
-* __Advisory @dist@ sub-fields degrade rather than deny.__ @fileCount@,
-  @unpackedSize@, and @signatures@ are advisory -- they decide no rule and no
-  serve -- so a hostile value in one (a fractional\/huge\/@Int@-overflowing number,
-  a wrong-typed field, or a malformed\/non-array @signatures@) reads as
-  absent\/empty rather than failing the version. One poisoned value therefore
-  cannot deny the whole packument ('Dist').
+* __The string-or-boolean @deprecated@ flag__. The @deprecated@ key is conventionally
+  the deprecation message string. Some published versions carry a boolean instead:
+  @true@ = deprecated without a message, @false@ = not deprecated. 'vmDeprecated'
+  reads every form, so a boolean never fails the whole packument decode. A real
+  packument such as react's mixes the string and boolean forms across versions.
+* __Advisory @dist@ sub-fields degrade rather than deny__. The @fileCount@,
+  @unpackedSize@, and @signatures@ fields are advisory: they decide no rule and no
+  serve. A hostile value in one (a fractional\/huge\/@Int@-overflowing number, a
+  wrong-typed field, or a malformed\/non-array @signatures@) reads as absent\/empty
+  rather than failing the version. One poisoned value therefore cannot deny the whole
+  packument ('Dist').
 
 == Faithful on the rule-decisive fields
 
-The fields the rules engine and the serving path actually need are captured
-precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
-notice, the whole 'vmScripts' map (so the full form's install-script presence
-can be /derived/ -- the full manifest has no @hasInstallScript@ key), and the
-'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@).
+This module captures the fields the rules engine and the serving path need precisely.
+They are the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated' notice, the
+whole 'vmScripts' map, and the 'Dist' integrity triple
+(@tarball@\/@shasum@\/@integrity@). It captures the @scripts@ map whole so the full
+form's install-script presence can be /derived/, because the full manifest has no
+@hasInstallScript@ key.
 
-Only the decode path (@FromJSON@) is modelled here.
+This module models only the decode path (@FromJSON@).
 -}
 module Ecluse.Core.Registry.Npm.Wire (
     -- * Shared scalars
@@ -89,16 +89,15 @@ import Data.Aeson.Types (Parser, parseMaybe)
 
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 
-{- | A person associated with a package -- an author, maintainer, contributor, or
+{- | A person associated with a package: an author, maintainer, contributor, or
 the per-version publisher (@_npmUser@).
 
-__Lenient:__ npm sends a person as /either/ an object @{name, email?, url?}@ /or/
-a single packed string of the conventional form
-@"Name \<email\> (url)"@. The packed form is captured __verbatim__ in
-'personName' (with 'personEmail'\/'personUrl' left 'Nothing'); this wire layer
-does not attempt to split it, leaving that to the domain projection if it is ever
-needed. Distinct from "Ecluse.Core.Package"'s domain @Person@ -- this is the raw wire
-shape.
+__Lenient:__ npm sends a person as /either/ an object @{name, email?, url?}@ /or/ a
+single packed string of the conventional form @"Name \<email\> (url)"@. The decoder
+keeps the packed form __verbatim__ in 'personName', and leaves
+'personEmail'\/'personUrl' 'Nothing'. This wire layer does not split it, leaving that to
+the domain projection if it is ever needed. Distinct from "Ecluse.Core.Package"'s domain
+@Person@: this is the raw wire shape.
 -}
 data Person = Person
     { personName :: Text
@@ -125,8 +124,8 @@ instance FromJSON Person where
 {- | An SCM location for a package.
 
 __Lenient:__ npm sends @repository@ as /either/ an object @{type?, url}@ /or/ a
-bare string (a shorthand URL such as @"github:user\/repo"@). Both are captured;
-the bare-string form fills 'repoUrl' and leaves 'repoType' 'Nothing'.
+bare string (a shorthand URL such as @"github:user\/repo"@). This type carries both.
+The bare-string form fills 'repoUrl' and leaves 'repoType' 'Nothing'.
 -}
 data Repository = Repository
     { repoType :: Maybe Text
@@ -169,9 +168,9 @@ instance FromJSON Bugs where
 
 {- | A declared license.
 
-__Lenient:__ modern packages send a bare SPDX __string__ (@"MIT"@); legacy
-packages send an object @{type, url?}@. Both are preserved as a sum so the
-distinction is not lost: 'LicenseSpdx' for the string, 'LicenseObject' for the
+__Lenient:__ modern packages send a bare SPDX __string__ (@"MIT"@). Legacy
+packages send an object @{type, url?}@. This type keeps both as a sum, so the
+distinction survives: 'LicenseSpdx' for the string, 'LicenseObject' for the
 legacy object.
 -}
 data License
@@ -196,7 +195,7 @@ instance FromJSON License where
 
 {- | One registry signature over a published artifact: an ECDSA signature and
 the id of the key that produced it. Verifiable against npm's published public
-keys (@GET \/-\/npm\/v1\/keys@) -- the basis of @npm audit signatures@.
+keys (@GET \/-\/npm\/v1\/keys@), the basis of @npm audit signatures@.
 -}
 data Signature = Signature
     { sigSig :: Text
@@ -216,20 +215,18 @@ instance FromJSON Signature where
 manifest (full and abbreviated). It is the gateway to the tarball bytes and the
 integrity guarantee.
 
-The integrity triple ('distTarball', 'distShasum', 'distIntegrity') is
-rule-decisive and serving-decisive -- a client __fails the install__ if the
-downloaded bytes do not match @integrity@\/@shasum@, so any mirror or URL rewrite
-must preserve these byte-for-byte. Prefer 'distIntegrity' (SRI) over the legacy
-SHA-1 'distShasum'.
+The integrity triple ('distTarball', 'distShasum', 'distIntegrity') is rule-decisive
+and serving-decisive. A client __fails the install__ if the downloaded bytes do not
+match @integrity@\/@shasum@, so any mirror or URL rewrite must preserve these
+byte-for-byte. Prefer 'distIntegrity' (SRI) over the legacy SHA-1 'distShasum'.
 
-The remaining sub-fields ('distFileCount', 'distUnpackedSize',
-'distSignatures') are __advisory__ -- they inform reporting but decide no rule and
-no serve -- and so are decoded __leniently__: a present-but-undecodable number
-(fractional, huge, or 'Int'-overflowing) reads as absent ('Nothing'), a malformed
-signature element is skipped rather than failing the array, and a
-@signatures@ value that is not even an array reads as empty. A hostile value in
-one version therefore degrades that field alone, never denying the whole
-packument.
+The remaining sub-fields ('distFileCount', 'distUnpackedSize', 'distSignatures') are
+__advisory__: they inform reporting but decide no rule and no serve, and the decoder
+reads them __leniently__. A present but undecodable number (fractional, huge, or
+'Int'-overflowing) reads as absent ('Nothing'). The decoder skips a malformed signature
+element rather than failing the array. A @signatures@ value that is not even an array
+reads as empty. A hostile value in one version therefore degrades that field alone,
+never denying the whole packument.
 -}
 data Dist = Dist
     { distTarball :: Text
@@ -238,14 +235,14 @@ data Dist = Dist
     -- ^ The tarball's SHA-1, hex-encoded (legacy integrity).
     , distIntegrity :: Maybe Text
     {- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
-    @"sha512-…"@). The modern integrity check; prefer it over the shasum.
+    @"sha512-…"@). The modern integrity check, preferred over the shasum.
     -}
     , distFileCount :: Maybe Int
     -- ^ Number of files in the tarball, if reported.
     , distUnpackedSize :: Maybe Int
     -- ^ Unpacked size in bytes, if reported.
     , distSignatures :: [Signature]
-    -- ^ Registry ECDSA signatures; empty when none are present.
+    -- ^ Registry ECDSA signatures, empty when none are present.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -259,10 +256,10 @@ instance FromJSON Dist where
             <*> lenientOptional o "unpackedSize"
             <*> lenientSignatures o
 
-{- Decode the advisory @signatures@ array __leniently__: skip any element that
-does not parse as a 'Signature' rather than failing the array, and treat a
+{- Decode the advisory @signatures@ array __leniently__. Skip any element that
+does not parse as a 'Signature' rather than failing the array. Treat a
 present-but-non-array value (or absence\/@null@) as no signatures. The 'Signature'
-instance itself stays strict; only its aggregation here tolerates a malformed
+instance itself stays strict. Only its aggregation here tolerates a malformed
 entry, so one bad signature cannot deny the version. -}
 lenientSignatures :: Object -> Parser [Signature]
 lenientSignatures o = do
@@ -271,25 +268,25 @@ lenientSignatures o = do
         Just (Array xs) -> mapMaybe (parseMaybe parseJSON) (toList xs)
         _ -> []
 
-{- | A single version's manifest -- the per-version object that is essentially
+{- | A single version's manifest: the per-version object that is essentially
 the package's @package.json@ at publish time plus registry-injected fields. It
-appears three ways on the wire and this one type decodes all of them: embedded in
-a full packument's @versions[v]@ object, embedded in an abbreviated packument's
-trimmed subset of the same shape, and standalone (@GET \/{pkg}\/{version}@).
+appears three ways on the wire, and this one type decodes all of them. It sits in a
+full packument's @versions[v]@ object, in an abbreviated packument's trimmed subset of
+the same shape, or standalone (@GET \/{pkg}\/{version}@).
 
-Only the fields Écluse's rules and serving need are modelled; everything else is
-ignored (see the module header). The two rule-decisive optionals deserve note:
+This type models only the fields Écluse's rules and serving need. It ignores
+everything else (see the module header). The two rule-decisive optionals deserve note:
 
-* 'vmHasInstallScript' is __abbreviated-only__ -- the registry sets it when the
+* 'vmHasInstallScript' is __abbreviated-only__. The registry sets it when the
   version declares @preinstall@\/@install@\/@postinstall@ scripts. It is the
   cleanest install-script signal, but it is __absent from the full manifest__.
-* 'vmScripts' is therefore captured whole so that, when only the full form is
-  available, install-script presence can be /derived/
-  (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
-  is a domain-projection concern, not this layer's.
+* 'vmScripts' is therefore captured whole, so install-script presence can be
+  /derived/ when only the full form is available (@scripts@ has any of
+  @preinstall@\/@install@\/@postinstall@). That derivation is a domain-projection
+  concern, not this layer's.
 
-The publish timestamp is __not__ here -- it lives in the packument's @time@ map,
-not the manifest (see §8 of the protocol reference).
+The publish timestamp is __not__ here. It lives in the packument's @time@ map, not
+the manifest (see §8 of the protocol reference).
 -}
 data VersionManifest = VersionManifest
     { vmName :: Text
@@ -300,13 +297,14 @@ data VersionManifest = VersionManifest
     -- ^ The artifact descriptor (always present).
     , vmDeprecated :: Maybe Text
     {- ^ The deprecation message when the version is deprecated, else 'Nothing'.
-    npm sends @deprecated@ as the message string, or as a boolean (@true@ =
-    deprecated with no message, captured as @""@; @false@ = not deprecated); an
-    absent, @null@, @false@, or otherwise-shaped value reads as 'Nothing'.
+    The @deprecated@ key arrives from npm as the message string, or as a boolean. A
+    @true@ is deprecated with no message, captured as @""@, and @false@ is not
+    deprecated. An absent, @null@, @false@, or otherwise-shaped value reads as
+    'Nothing'.
     -}
     , vmHasInstallScript :: Maybe Bool
     {- ^ Whether the version declares install scripts. Present in the
-    __abbreviated__ form only; 'Nothing' in the full form (derive from
+    __abbreviated__ form only, and 'Nothing' in the full form (derive from
     'vmScripts' there).
     -}
     , vmScripts :: Map Text Text
@@ -314,14 +312,13 @@ data VersionManifest = VersionManifest
     source for deriving install-script presence from the full form.
     -}
     , vmLicense :: Maybe License
-    {- ^ The declared license, if any (string or legacy object; see 'License').
+    {- ^ The declared license, if any (a string or the legacy object, see 'License').
 
     The manifest's dependency maps and maintainer list are __deliberately not
-    parsed__: no rule or serve path consults them, the raw document relays them
-    to the client untouched, and a heavy packument carries thousands of
-    per-version entries of pure parse cost (architect ruling, 2026-07-02 --
-    including that a malformed entry there may degrade rather than deny). Restore
-    them from history if a dependency-reading rule ever lands.
+    parsed__. No rule or serve path consults them, and the raw document relays them
+    to the client untouched. A heavy packument carries thousands of per-version
+    entries of pure parse cost. A malformed entry there may degrade rather than
+    deny. Restore the fields from history if a dependency-reading rule ever lands.
     -}
     }
     deriving stock (Eq, Show)
@@ -338,9 +335,10 @@ instance FromJSON VersionManifest where
             <*> o .:? "license"
 
 {- Decode the @deprecated@ field leniently (see the module header's "string-or-boolean
-@deprecated@ flag"): a string is the deprecation message, the boolean @true@ a
-deprecated version with no message ('Just' @""@), and @false@, @null@, absence, or any
-other shape a non-deprecated one ('Nothing'). Total, so a boolean never fails the decode. -}
+@deprecated@ flag"). A string is the deprecation message. The boolean @true@ is a
+deprecated version with no message ('Just' @""@). @false@, @null@, absence, or any
+other shape is a non-deprecated one ('Nothing'). Total, so a boolean never fails the
+decode. -}
 deprecatedNotice :: Maybe Value -> Maybe Text
 deprecatedNotice = \case
     Just (String message) -> Just message
@@ -350,11 +348,11 @@ deprecatedNotice = \case
 {- | An npm error body.
 
 __Lenient:__ the documented shape is an object @{ message?, error?, ok?: false
-}@ and clients "should check for @message@, then @error@". But the registry is
-inconsistent -- its per-version 404 is a bare JSON __string__
-(@"version not found: ^3.0.0"@), not an object. This type tolerates both: the
-object form keeps its fields in an 'ErrorBody', and a bare string is captured
-whole as 'ErrorString'.
+}@ and clients "should check for @message@, then @error@". The registry is
+inconsistent: its per-version 404 is a bare JSON __string__
+(@"version not found: ^3.0.0"@), not an object. This type tolerates both. The object
+form keeps its fields in an 'ErrorBody', and a bare string arrives whole as
+'ErrorString'.
 -}
 data ErrorResponse
     = -- | The documented object form @{ message?, error? }@.
@@ -364,14 +362,14 @@ data ErrorResponse
     deriving stock (Eq, Show)
 
 {- | The fields of npm's object-form error body. A product type (not inline
-constructor fields on 'ErrorResponse') so its selectors are __total__ -- there is
+constructor fields on 'ErrorResponse') so its selectors are __total__: there is
 no @ErrorString@ case for them to be partial over.
 -}
 data ErrorBody = ErrorBody
     { errMessage :: Maybe Text
-    -- ^ The @message@ field -- the preferred human-facing reason.
+    -- ^ The @message@ field: the preferred human-facing reason.
     , errError :: Maybe Text
-    -- ^ The @error@ field -- the fallback reason.
+    -- ^ The @error@ field: the fallback reason.
     }
     deriving stock (Eq, Show)
 

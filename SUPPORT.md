@@ -1,13 +1,14 @@
 # Support
 
-Écluse is pre-1.0 and maintained in spare time, so please help me keep the signal high.
+Where to take a question, a bug, or a security report. I maintain Écluse in spare time and
+it's pre-1.0, so please help me keep the signal high.
 
-- **Start with the docs.** [`README.md`](README.md) covers what Écluse is and how to run it;
-  [`docs/architecture.md`](docs/architecture.md) covers the design;
+- **Start with the docs.** [`README.md`](README.md) covers what Écluse is and how to run it.
+  [`docs/architecture.md`](docs/architecture.md) covers the design.
   [`CONTRIBUTING.md`](CONTRIBUTING.md) covers building and developing it.
 - **Found a bug?** Open a [bug report](https://github.com/AlexaDeWit/Ecluse/issues/new?template=bug_report.yml).
 - **Want a capability?** Open a [feature request](https://github.com/AlexaDeWit/Ecluse/issues/new?template=feature_request.yml).
-- **Security vulnerability?** Do not open a public issue; follow [`SECURITY.md`](SECURITY.md)
+- **Security vulnerability?** Do not open a public issue. Follow [`SECURITY.md`](SECURITY.md)
   for private reporting.
 
-There's no SLA. Well-scoped, reproducible reports get answered fastest.
+There's no SLA. I answer well-scoped, reproducible reports fastest.
