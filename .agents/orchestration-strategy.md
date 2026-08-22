@@ -152,7 +152,7 @@ three are more precise than `grep` over this codebase's qualified imports. Confi
 environment provides the MCP. An instruction to use a tool the agent cannot reach is decoration.
 
 **Invoke the toolchain through the current flake, never the ambient shell** (the `env -u
-IN_NIX_SHELL` form in [AGENTS.md → Build and tooling](../AGENTS.md#build-and-tooling)). A
+IN_NIX_SHELL` form in [AGENTS.md, Build and tooling](../AGENTS.md#build-and-tooling)). A
 long-lived session's `nix develop` shell goes stale when a flake upgrade merges mid-session.
 
 ## Evaluation: two independent passes

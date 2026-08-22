@@ -12,7 +12,7 @@ condition, the path template, what to /do/ on a match, and its prose. Its
 'Ecluse.Core.Server.Contract.ResponseContract' admits every response the route can emit.
 'npmRouter' folds the list into the mount's router, where the first match wins and no
 match is the deny-by-default @404@. 'npmRouteSpecs' projects the same list for the
-capability manifest. The routed surface, the emitted responses, and the documented ones
+OpenAPI spec. The routed surface, the emitted responses, and the documented ones
 are all readings of one declaration.
 
 Each response body is a codec ('Ecluse.Core.Registry.Npm.Serve.npmErrorCodec' for a
@@ -473,7 +473,7 @@ tarballCoordinate name file =
             | not (T.null version) -> Just (mkVersion Npm version, Filename file)
         _ -> Nothing
 
-{- | npm's routes as data for the __capability manifest__: the 'specsOf' projection of the
+{- | npm's routes as data for the __OpenAPI spec__: the 'specsOf' projection of the
 same 'npmRoutes' the router runs, plus the synthetic deny-by-default catch-all.
 -}
 npmRouteSpecs :: NonEmpty RouteSpec

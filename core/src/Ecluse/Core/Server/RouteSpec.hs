@@ -5,7 +5,7 @@
 {- | The documented operation view of a route, as plain OpenAPI-free data.
 
 'specsOf' erases an "Ecluse.Core.Server.Route".'Route' into the operations the
-capability manifest needs. A write route contributes @PUT@. A read route contributes
+OpenAPI spec needs. A write route contributes @PUT@. A read route contributes
 both @GET@ and its derived bodiless @HEAD@ operation. The capture type, builder, and
 typed response value disappear. Each operation's 'ResponseDoc's still come from the same
 'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.

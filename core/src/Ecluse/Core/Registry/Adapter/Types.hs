@@ -94,7 +94,7 @@ data AdapterServe = AdapterServe
     -}
     , serveRoutes :: NonEmpty RouteSpec
     {- ^ The same route table as data, one 'RouteSpec' per route 'serveRouter' serves. The
-    capability manifest ("Ecluse.Manifest") renders this instead of re-describing the grammar.
+    OpenAPI spec ("Ecluse.Manifest") renders this instead of re-describing the grammar.
     -}
     , serveCredential :: CredentialMapping
     {- ^ The ecosystem's credential presentation: how the mount recovers a client's credential

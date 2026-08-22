@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @openapi-gen@ build-time generator: write Écluse's capability manifest to
+{- | The @openapi-gen@ build-time generator: write Écluse's OpenAPI spec to
 disk.
 
 It assembles the OpenAPI 3 document from the __fixed canonical source__
@@ -14,7 +14,7 @@ closure, as the benchmark components are. The running server has no manifest sur
 
 The output is __derived data__, a pure function of the source. The build generates it
 on demand, and the repository does not carry it. The output path is the first
-argument and defaults to @openapi\/openapi.json@, the published capability manifest.
+argument and defaults to @openapi\/openapi.json@, the published OpenAPI spec.
 The generator creates the directory if it is absent, so a clean tree regenerates it
 cleanly.
 -}

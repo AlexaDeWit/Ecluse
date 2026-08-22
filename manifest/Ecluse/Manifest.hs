@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DerivingVia #-}
 
-{- | The capability manifest: a pure assembly of Écluse's OpenAPI 3 document from
+{- | The OpenAPI spec: a pure assembly of Écluse's OpenAPI 3 document from
 the closed serve-route enumeration and the configured mounts.
 
 The manifest is a __capability statement__, not a client-integration contract.
@@ -177,12 +177,12 @@ buildOpenApi src =
 manifestInfo :: Info
 manifestInfo =
     (mempty :: Info)
-        { _infoTitle = "Écluse capability manifest"
+        { _infoTitle = "Écluse OpenAPI spec"
         , _infoVersion = "0.1.0"
         , _infoDescription =
             Just
                 "Which registry protocols this Écluse server speaks, and exactly what is and is not \
-                \supported, per ecosystem. A capability manifest for operators and contributors -- \
+                \supported, per ecosystem. An OpenAPI spec for operators and contributors -- \
                 \not a client-integration contract: registry clients hardcode the protocol and never \
                 \read this document. Generated statically from the closed serve-route enumeration; \
                 \it is not served."

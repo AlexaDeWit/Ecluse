@@ -11,57 +11,69 @@ _why_.
 ## Contents
 
 - [What Écluse does](#what-écluse-does)
-- [Deployment model](#deployment-model)
+- [What it gates](#what-it-gates)
+- [How a request flows](#how-a-request-flows)
 - [The two-variable start (serve-only gate)](#the-two-variable-start-serve-only-gate)
+- [Connecting your clients](#connecting-your-clients)
 - [The Golden Path](#the-golden-path)
 - [Deviating from the Golden Path](#deviating-from-the-golden-path)
+- [Deployment model](#deployment-model)
 - [Configuration](#configuration)
   - [Environment variables](#environment-variables)
   - [The configuration document](#the-configuration-document)
   - [Secrets](#secrets)
-- [Connecting your clients](#connecting-your-clients)
+- [Rule policy](#rule-policy)
 - [Securing network egress (required)](#securing-network-egress-required)
 - [Locking down CI egress (recommended)](#locking-down-ci-egress-recommended)
-- [Rule policy](#rule-policy)
 - [Operating Écluse](#operating-écluse)
 - [Appendix: runtime-sizing arithmetic](#appendix-runtime-sizing-arithmetic)
 - [Learn more](#learn-more)
 
 ## What Écluse does
 
-Écluse sits between your build and the upstream registry and applies a deny-by-default policy
-before any package reaches a build. [`README.md`](README.md) and
-[`docs/architecture.md`](docs/architecture.md) describe the design.
+Most damage from a malicious package publish happens in the first days, before the ecosystem
+notices and pulls the version. Écluse makes a build late instead of trying to detect malice.
+Every new version waits in a quarantine, seven days by default, before a build can install it.
+A version that an advisory names as the fix for a vulnerability skips the queue, so the
+quarantine never delays a security patch. Écluse runs in front of the registry you already have,
+AWS CodeArtifact today. It reads your private registry first, gates the public one, and mirrors
+approved versions into yours with the cloud's own identity. It hosts nothing.
 
-## Deployment model
+Point npm at Écluse as its registry. The sections below start with what the gate decides and
+how a request flows, then build down to deployment, configuration, and operation.
 
-Écluse ships as one reproducible container image, a multicall executable selected by the container
-command:
+## What it gates
 
-- **`ecluse proxy`** (default): the HTTP proxy on `ECLUSE_SERVER__PORT` (default `8080`) plus the
-  mirror worker.
-- **`ecluse pilot`**: the OSV advisory ingestion pipeline.
-- **`ecluse dredger`**: the registry cleanup (reaper) worker.
-- **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
-  the whole resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI
-  or before a rollout.
+The policy is deny by default: a public version reaches a build only when a rule admits it.
+Rules run in precedence order and the first decisive one wins. The revoke and the install-time
+deny sit above every allow by default. The shipped policy has two rules on. Every public version
+older than seven days is admitted. A version that a synced advisory names as the exact fix for a
+vulnerability is admitted at once. That holds as long as no other advisory still affects it.
 
-All roles share one config file and rule set. The proxy scales horizontally behind a load balancer.
-**Pilot and Dredger must run as singletons:** multiple instances race, duplicate API calls, and
-overlap registry deletions.
+Everything else you turn on by name:
 
-`ecluse pilot compile --out DIR` runs one OSV compilation and exits. It fetches an ecosystem's
-advisory export (`--ecosystem`, default `npm`, with `--source URL` overriding the configured
-`advisories.osvExportBaseUrl`). It writes `<ecosystem>-osv-schema<N>.db` (e.g.
-`npm-osv-schema3.db`) into `DIR` and exits non-zero on failure. `--upload` also publishes the
-artifact to the advisory bucket, a full sync cycle in one invocation, and aborts immediately
-without a configured bucket. A systemically corrupt or truncated export aborts the compile without
-publishing. A running proxy then keeps its last-good database rather than adopt one that silently
-omits advisories.
+- an allow-list for your own scopes
+- a pin for one package or version
+- a deny for one package or version (the revoke)
+- a deny for packages that run code at install time
+- a deny for versions with a known vulnerability above a severity you choose
 
-Point your package manager at the proxy as a registry (see
-[Connecting your clients](#connecting-your-clients)). Before running a published image, verify its
-provenance and SBOM attestations. The recipe is in the [README](README.md#verifying-the-image).
+No rule re-gates a version your private registry already holds. Only the trusted integrity floor
+still applies to it. The rule names and their knobs are under [Rule policy](#rule-policy).
+
+## How a request flows
+
+npm asks Écluse for a package's version listing (the packument), then for a tarball. For the
+listing, Écluse fetches the private registry and the public one in parallel. It trusts every
+private version that meets the trusted integrity floor, gates every public version through the
+policy, and serves the merged listing.
+A public version the policy did not admit is absent from it, so a resolver never picks it.
+
+For a tarball, a private hit streams through unfiltered. A private miss is gated on its public
+metadata. When admitted, Écluse streams it from the public registry and a mirror job copies it
+into your registry in the background. Mirroring is demand-driven: only a version a client pulls
+gets mirrored. A publish (`npm publish`) is off unless you configure a publication target, and
+then Écluse refuses any name outside your allow-list before it writes upstream.
 
 ## The two-variable start (serve-only gate)
 
@@ -79,6 +91,37 @@ deployment. Only the mirror write is missing. The trade: the public leg is perma
 stays coupled to the public registry, and no mirrored copy survives an upstream yank. Use it to
 evaluate the gate, then graduate to the [Golden Path](#the-golden-path) by declaring a
 `mirrorTarget`.
+
+## Connecting your clients
+
+Point your package manager at the proxy as its registry. With `ECLUSE_SERVER__AUTH_TOKEN` set,
+supply it the standard npm way:
+
+```ini
+# .npmrc
+registry=https://ecluse.example.internal/
+//ecluse.example.internal/:_authToken=${ECLUSE_TOKEN}
+```
+
+Edge authentication to the proxy has two shipped modes:
+
+1. **Open**: `ECLUSE_SERVER__AUTH_TOKEN` unset, so the network layer (VPC, service mesh) owns
+   access control. Appropriate only on a closed network.
+2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Clients send it as
+   `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
+
+
+Authenticating at the edge is separate from how Écluse reaches the registries behind it. The edge
+token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the caller's own
+credential to the private upstream, which stays the authority on what that caller may see. Before
+the anonymous public fetch Écluse strips that credential, so a client token never leaves for a
+public registry. It never caches the private origin across callers, so one caller's read can never
+answer another's. By default the only credential of Écluse's own is a mirrored mount's write to the
+mirror target, derived from the mirror-target URL. An `npm publish` forwards the publisher's own
+token the same way as a read. Opt into a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and
+Écluse publishes as itself instead. Without an edge token it can verify, Écluse refuses that
+combination at boot. The reasoning is in
+[security posture](docs/architecture/security.md#a-static-publish-credential-is-fail-closed).
 
 ## The Golden Path
 
@@ -127,7 +170,7 @@ you have a specific reason to diverge.
 
 The reasoning behind each choice, and the residual risks it accepts, is in the
 [threat model](https://ecluse-proxy.com/threat-model.html) and
-[Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
+[Security posture](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Deviating from the Golden Path
 
@@ -151,6 +194,36 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 The [threat model](https://ecluse-proxy.com/threat-model.html) records both. The other deviations
 self-announce. An open edge leans on your network boundary. A static publish credential fails
 closed at boot without that edge, and a static mirror-write secret forgoes the minted token.
+
+## Deployment model
+
+Écluse ships as one reproducible container image, a multicall executable selected by the container
+command:
+
+- **`ecluse proxy`** (default): the HTTP proxy on `ECLUSE_SERVER__PORT` (default `8080`) plus the
+  mirror worker.
+- **`ecluse pilot`**: the OSV advisory ingestion pipeline.
+- **`ecluse dredger`**: the registry cleanup (reaper) worker.
+- **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
+  the whole resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI
+  or before a rollout.
+
+All roles share one config file and rule set. The proxy scales horizontally behind a load balancer.
+**Pilot and Dredger must run as singletons:** multiple instances race, duplicate API calls, and
+overlap registry deletions.
+
+`ecluse pilot compile --out DIR` runs one OSV compilation and exits. It fetches an ecosystem's
+advisory export (`--ecosystem`, default `npm`, with `--source URL` overriding the configured
+`advisories.osvExportBaseUrl`). It writes `<ecosystem>-osv-schema<N>.db` (e.g.
+`npm-osv-schema3.db`) into `DIR` and exits non-zero on failure. `--upload` also publishes the
+artifact to the advisory bucket, a full sync cycle in one invocation, and aborts immediately
+without a configured bucket. A systemically corrupt or truncated export aborts the compile without
+publishing. A running proxy then keeps its last-good database rather than adopt one that silently
+omits advisories.
+
+Point your package manager at the proxy as a registry (see
+[Connecting your clients](#connecting-your-clients)). Before running a published image, verify its
+provenance and SBOM attestations. The recipe is in the [README](README.md#verifying-the-image).
 
 ## Configuration
 
@@ -206,7 +279,7 @@ misconfiguration is then a loud, immediate failure rather than a quietly mis-enf
 validation model is in
 [Validation: fail fast, reject the unknown](docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
 
-> ⚠️ **The first-party publish surface authorises _names_, not _callers_.**
+> **The first-party publish surface authorises _names_, not _callers_.**
 > `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` limits which package names a client may publish. It is not
 > authentication. A static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without
 > `ECLUSE_SERVER__AUTH_TOKEN` refuses to boot (`PublishStaticCredentialNeedsEdge`), because that
@@ -270,36 +343,78 @@ mount never writes and holds none. What Écluse does with a client's own token i
 [Credential flow and authority](docs/architecture/registry-model.md#credential-flow-and-authority) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
-## Connecting your clients
+## Rule policy
 
-Point your package manager at the proxy as its registry. With `ECLUSE_SERVER__AUTH_TOKEN` set,
-supply it the standard npm way:
+Écluse evaluates a named map of rules over a built-in **deny-by-default** policy. It admits a
+package only if a rule allows it, and every deny type outranks every allow type by default. The
+policy lives in the config document's `rules` object. It also has an environment spelling,
+`ECLUSE_RULES` carrying the JSON object, which suits a one-rule tweak. The document stays the
+reviewable home for a real policy. The shipped default is small and biased toward resilience:
 
-```ini
-# .npmrc
-registry=https://ecluse.example.internal/
-//ecluse.example.internal/:_authToken=${ECLUSE_TOKEN}
+- **`min-age`** (`AllowIfOlderThan`): admit public versions older than a quarantine window (7 days
+  by default), the core defence against race-to-publish typosquatting and dependency confusion.
+- **`remediation-fast-track`** (`AllowIfRemediatesCve`): admit a release a synced advisory names as
+  its exact fixed version ahead of the quarantine, provided no other advisory still affects it. It
+  abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__BUCKET` and run Pilot),
+  so without one only the quarantine governs.
+
+Every other built-in rule is off by default and opts in by name:
+
+- **`AllowByIdentity`**: admit a specific package or `package@version` past the quarantine, at the
+  top of the allow band but still below every deny.
+- **`DenyByIdentity`** (the `revoke` shape): a hard-deny for a specific package or `package@version`.
+- **`DenyInstallTimeExecution`**: deny install-time code execution (off because many legitimate
+  packages ship install scripts).
+- **`DenyIfCve`**: block a version a synced advisory records as affected at or above a CVSS
+  `minSeverity` (0-10). The npm malware feed carries no score and counts as above every threshold,
+  so enabling it also blocks known-malicious packages. It sits just below `AllowByIdentity`, so an
+  identity pin overrides it. Its `onUnavailable` knob (`deny` by default, or `skip`) decides what
+  happens when the advisory database can't answer. Read
+  [Onboarding DenyIfCve](#onboarding-denyifcve) before enabling.
+
+Override a value, add a rule, or suppress a default by name in the document:
+
+```json
+{
+  "rules": {
+    "min-age": { "ageSeconds": 1209600 },
+    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 },
+    "revoke-bad": { "type": "DenyByIdentity", "identity": "bad-package" },
+    "cve-fast-lane": { "type": "AllowIfRemediatesCve" },
+    "deny-known-cves": { "type": "DenyIfCve", "minSeverity": 8 },
+    "pin-fix": { "type": "AllowByIdentity", "identity": "left-pad@1.3.0" }
+  }
+}
 ```
 
-Edge authentication to the proxy has two shipped modes:
+The precedence values, the patch/add/suppress merge model, and the strict validation are in
+[Rule policy](docs/architecture/configuration.md#rule-policy) and
+[Rules engine](docs/architecture/rules-engine.md#evaluation-model).
 
-1. **Open**: `ECLUSE_SERVER__AUTH_TOKEN` unset, so the network layer (VPC, service mesh) owns
-   access control. Appropriate only on a closed network.
-2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Clients send it as
-   `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
+Independent of the rules, Écluse serves a **public** version only if it carries a digest meeting
+the public integrity floor. That floor is `ECLUSE_INTEGRITY__MIN_PUBLIC` (`integrity.minPublic`, default
+`sha256`). One **gotcha:** on a custom or off-spec public upstream, versions without a
+floor-meeting digest silently disappear and their tarballs `403`. To serve such a source, point it
+at the **private** upstream slot and loosen `ECLUSE_INTEGRITY__MIN_TRUSTED` below `sha256`. The
+mechanics are in [Integrity floors](docs/architecture/security.md#integrity-floors).
 
+### Onboarding DenyIfCve
 
-Authenticating at the edge is separate from how Écluse reaches the registries behind it. The edge
-token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the caller's own
-credential to the private upstream, which stays the authority on what that caller may see. Before
-the anonymous public fetch Écluse strips that credential, so a client token never leaves for a
-public registry. It never caches the private origin across callers, so one caller's read can never
-answer another's. By default the only credential of Écluse's own is a mirrored mount's write to the
-mirror target, derived from the mirror-target URL. An `npm publish` forwards the publisher's own
-token the same way as a read. Opt into a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and
-Écluse publishes as itself instead. Without an edge token it can verify, Écluse refuses that
-combination at boot. The reasoning, the invariants, and the planned extensions are in
-[security posture](docs/architecture/security.md#a-static-publish-credential-is-fail-closed).
+`DenyIfCve` can break a cold deployment. On a freshly-stood-up mirror it can deny historical
+versions your existing builds still depend on that an advisory has since covered. Enable it *after*
+you warm your private mirror:
+
+1. Leave `DenyIfCve` out of your policy and run Écluse normally, so your CI and developers pull the
+   versions you depend on. Each lands in the trusted store, which the rules never re-gate once the
+   version is there.
+2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minSeverity` you are
+   comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
+   of the threshold.
+3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
+   which outranks `DenyIfCve`. That covers a false positive or a risk you accept.
+
+Set `onUnavailable: skip` if you would rather the gate fail open (skip itself, logging loudly) than
+refuse traffic when the advisory database is briefly unavailable. The default `deny` fails closed.
 
 ## Securing network egress (required)
 
@@ -378,79 +493,6 @@ makes the policy _unbypassable_ rather than merely _default_. A per-project pack
 can override what you ship to a machine, but none can route around a network that only reaches
 Écluse. See [MOTIVATION → The bar](MOTIVATION.md#the-bar-a-chokepoint-you-cant-step-around). The
 same idea extends to developer workstations, a softer control than CI.
-
-## Rule policy
-
-Écluse evaluates a named map of rules over a built-in **deny-by-default** policy. It admits a
-package only if a rule allows it, and every deny type outranks every allow type by default. The
-policy lives in the config document's `rules` object. It also has an environment spelling,
-`ECLUSE_RULES` carrying the JSON object, which suits a one-rule tweak. The document stays the
-reviewable home for a real policy. The shipped default is small and biased toward resilience:
-
-- **`min-age`** (`AllowIfOlderThan`): admit public versions older than a quarantine window (7 days
-  by default), the core defence against race-to-publish typosquatting and dependency confusion.
-- **`remediation-fast-track`** (`AllowIfRemediatesCve`): admit a release a synced advisory names as
-  its exact fixed version ahead of the quarantine, provided no other advisory still affects it. It
-  abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__BUCKET` and run Pilot),
-  so without one only the quarantine governs.
-
-Every other built-in rule is off by default and opts in by name:
-
-- **`AllowByIdentity`**: admit a specific package or `package@version` past the quarantine, at the
-  top of the allow band but still below every deny.
-- **`DenyByIdentity`** (the `revoke` shape): a hard-deny for a specific package or `package@version`.
-- **`DenyInstallTimeExecution`**: deny install-time code execution (off because many legitimate
-  packages ship install scripts).
-- **`DenyIfCve`**: block a version a synced advisory records as affected at or above a CVSS
-  `minSeverity` (0-10). The npm malware feed carries no score and counts as above every threshold,
-  so enabling it also blocks known-malicious packages. It sits just below `AllowByIdentity`, so an
-  identity pin overrides it. Its `onUnavailable` knob (`deny` by default, or `skip`) decides what
-  happens when the advisory database can't answer. Read
-  [Onboarding DenyIfCve](#onboarding-denyifcve) before enabling.
-
-Override a value, add a rule, or suppress a default by name in the document:
-
-```json
-{
-  "rules": {
-    "min-age": { "ageSeconds": 1209600 },
-    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 },
-    "revoke-bad": { "type": "DenyByIdentity", "identity": "bad-package" },
-    "cve-fast-lane": { "type": "AllowIfRemediatesCve" },
-    "deny-known-cves": { "type": "DenyIfCve", "minSeverity": 8 },
-    "pin-fix": { "type": "AllowByIdentity", "identity": "left-pad@1.3.0" }
-  }
-}
-```
-
-The precedence values, the patch/add/suppress merge model, and the strict validation are in
-[Rule policy](docs/architecture/configuration.md#rule-policy) and
-[Rules engine](docs/architecture/rules-engine.md#evaluation-model).
-
-Independent of the rules, Écluse serves a **public** version only if it carries a digest meeting
-the public integrity floor. That floor is `ECLUSE_INTEGRITY__MIN_PUBLIC` (`integrity.minPublic`, default
-`sha256`). One **gotcha:** on a custom or off-spec public upstream, versions without a
-floor-meeting digest silently disappear and their tarballs `403`. To serve such a source, point it
-at the **private** upstream slot and loosen `ECLUSE_INTEGRITY__MIN_TRUSTED` below `sha256`. The
-mechanics are in [Integrity floors](docs/architecture/security.md#integrity-floors).
-
-### Onboarding DenyIfCve
-
-`DenyIfCve` can break a cold deployment. On a freshly-stood-up mirror it can deny historical
-versions your existing builds still depend on that an advisory has since covered. Enable it *after*
-you warm your private mirror:
-
-1. Leave `DenyIfCve` out of your policy and run Écluse normally, so your CI and developers pull the
-   versions you depend on. Each lands in the trusted store, which the rules never re-gate once the
-   version is there.
-2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minSeverity` you are
-   comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
-   of the threshold.
-3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
-   which outranks `DenyIfCve`. That covers a false positive or a risk you accept.
-
-Set `onUnavailable: skip` if you would rather the gate fail open (skip itself, logging loudly) than
-refuse traffic when the advisory database is briefly unavailable. The default `deny` fails closed.
 
 ## Operating Écluse
 

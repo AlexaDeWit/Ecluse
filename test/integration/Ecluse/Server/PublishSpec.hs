@@ -249,7 +249,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             seen <- targetSaw target
             seen `shouldBe` [(Just "Bearer publisher-token", LBS.toStrict publishBody)]
 
-    it "forwards the static ECLUSE_PUBLICATION_TARGET_TOKEN only when the client sends no token of its own" $
+    it "forwards the static ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN only when the client sends no token of its own" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort (Just (mkSecret "fallback-token"))))
             resp <- putPublish "/npm/@acme/widget" Nothing publishBody app

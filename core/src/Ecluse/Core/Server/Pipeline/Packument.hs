@@ -23,16 +23,16 @@ It reads its mount's serve dependencies and the request runtime
 == Credential authority
 
 This handler applies the @passthrough@ credential posture (see
-@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). The invariant that holds under __every__ strategy
-is the __public strip__: the client's credential is __stripped before any public-upstream
-fetch__, which is always anonymous. Sending an internal token to the public registry
-would be a credential disclosure, so the public-upstream fetch carries no token at all.
-Under @passthrough@ the handler additionally __forwards the client's own credential
-verbatim to the private upstream__, which is the authority for who may read what. It
+@docs\/architecture\/registry-model.md@, "Credential flow and authority"). The invariant is
+the __public strip__: the client's credential is __stripped before any public-upstream
+fetch__, which is always anonymous. Sending an internal token to the public registry would
+be a credential disclosure, so the public-upstream fetch carries no token at all.
+The handler also __forwards the client's own credential verbatim to the private
+upstream__, which is the authority for who may read what. It
 fetches the two origins concurrently, each with its own credential posture, and nothing
 shares a token across the trust split.
 
-@passthrough@ makes the private upstream the __per-client authority__, so its metadata is
+The private upstream is the __per-client authority__, so its metadata is
 __not cached across clients__ here. Every request fetches and parses the private origin
 with that client's own credential, so the upstream re-authorises each client itself. Only
 the anonymous public origin is cached: one shared document, with no per-client authority
@@ -44,7 +44,7 @@ authorisation. That is a cross-client disclosure.
 
 A packument is the /set of available versions/, spread across upstreams. The handler
 therefore __merges__ them rather than short-circuiting on a private hit (see
-@docs\/architecture\/registry-model.md@ → "Packument merge across upstreams"). Private
+@docs\/architecture\/registry-model.md@, "Packument merge across upstreams"). Private
 versions are trusted and enter unfiltered. The rules and the structural filter gate public
 versions first, where the 'FilterPlan''s survivors restrict the typed view. The merge then
 combines the two: a private version wins a collision, and an integrity divergence is
@@ -57,7 +57,7 @@ The merge and filter reason over the /typed/ 'PackageInfo'. The document served 
 __raw upstream document__, held opaquely here as a
 'Ecluse.Core.Registry.CachedDocument.CachedDoc' and rebuilt from the winning sources.
 Every unmodeled wire key therefore survives (see
-@docs\/architecture\/registry-model.md@ → "Decision surface vs served surface").
+@docs\/architecture\/registry-model.md@, "Decision surface vs served surface").
 
 The 'MergePlan' names, for each surviving version, the source that won it. The mount's
 injected assembly capability ('Ecluse.Core.Registry.Npm.Filter.assembleMergedDocument' for

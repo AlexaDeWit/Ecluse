@@ -466,7 +466,7 @@
           pkgs.pandoc
         ];
 
-        # Vendored Redoc bundle for the capability-manifest page: the self-contained
+        # Vendored Redoc bundle for the OpenAPI spec page: the self-contained
         # standalone UMD build, pinned by hash. `task site` copies it into the
         # published site, so the OpenAPI manifest renders client-side, with no
         # external CDN dependency and no Node needed to render it. Bump the version
