@@ -3,10 +3,10 @@ name: open-pull-request
 description: >-
   Prepare a commit and pull request the way this repo gates them: GPG-signed,
   DCO-signed-off as the author (never the AI), Conventional-Commit, AI-disclosed,
-  opened as a draft, with a body that follows the template and explains the change
-  in plain terms. Invoke before committing and opening or finalising a PR; it
-  encodes the rules agents most often miss, so DCO-red, missing trailers, and a
-  review-time "explain it simply" round-trip do not happen.
+  opened as a draft, with a short body a reader outside the subsystem understands
+  on its own. Invoke before committing and opening or finalising a PR; it encodes
+  the rules agents most often miss, so DCO-red, missing trailers, and a verbose or
+  unclear body do not happen.
 ---
 
 # Open a pull request
@@ -21,9 +21,10 @@ Two rules bite most often, so lead with them:
    the AI.** The DCO probot gates on a `Signed-off-by` matching the commit author's email; a bot
    address red-fails it. AI help is disclosed separately, via `Assisted-by:`; the two never
    substitute.
-2. **Every non-trivial PR body carries a `## In plain terms` section.** The architect reviews each
-   PR and routinely asks for a plain-language "explain it simply" of the change and its threat and
-   behaviour model; writing it up front pre-empts the round-trip.
+2. **The PR body is short and understandable on its own.** The architect reads the body before
+   the diff; a body that narrates the diff, or needs a second explanation, costs a round-trip.
+   Lead with what changed and why, in plain words. There is no separate plain-language section:
+   the whole body is plain.
 
 ## 1. Commits
 
@@ -48,26 +49,15 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Ag
 
 ## 2. The PR body
 
-Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · AI assistance) and, for
-any non-trivial change, add a `## In plain terms` section:
+Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · AI assistance). Keep it
+short, and write it so a reader who has not opened the diff understands it on its own.
 
 ```markdown
 ## Summary
 
-<What changed and why, at engineering depth. Closes #NNN.>
-
-## In plain terms
-
-<One or two plain sentences first: what this means for someone outside the subsystem, the human
- point before the mechanism. Then a few short signposted beats, each 1-3 sentences; use the beats
- that fit.>
-
-**The situation / the risk.** <What was wrong, missing, or risky. For a security or behaviour
-change: who could do what, under what conditions.>
-
-**What changed.** <The key idea in everyday terms; define any unavoidable term in a clause.>
-
-**The trade-off.** <What was deliberately accepted or chosen against, and the honest reason.>
+<Two to five sentences: what changed and why, in words a sharp colleague on another team follows
+ without the diff. For a security or behaviour change, say who could do what before and what holds
+ now. Name a deliberate trade-off in one sentence if there was one. Closes #NNN.>
 
 ## Checklist
 - [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
@@ -81,15 +71,16 @@ change: who could do what, under what conditions.>
       Author reviewed and is responsible for every line.
 ```
 
-Write it as you would explain the change to a sharp colleague on another team: give it a throughline
-(what was going on, what changed, what you chose not to do and why), lead with the human point, and
-make it scan (short paragraphs, a bold lead-in per beat, a tight bullet list when enumerating cases).
-It answers "what does this mean and why should I trust it" for a reader unfamiliar with the file.
-Canadian spelling throughout.
+Rules for the Summary:
 
-**Omit the section only when the Summary is self-evident on its own**: a process-doc or typo fix, a
-dependency bump, a mechanical no-behaviour rename. Anything with a security, behaviour, interface, or
-design-rationale dimension keeps it.
+- Lead with the point: what a reviewer or operator gains or is protected from. The mechanism comes
+  second, and only as far as the diff does not already show it. No play-by-play of files.
+- Prefer the plain word; define an unavoidable term in a clause.
+- Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
+  the Summary.
+- Include evidence only where review depends on it (a verification table, a sweep result), and keep
+  it compact. Tick a checklist item only when it is true; otherwise say "not applicable" and why.
+- Canadian spelling. No em-dashes or en-dashes. No filler adjectives.
 
 ## 3. Draft until hand-off
 
