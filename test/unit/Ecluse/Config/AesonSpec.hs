@@ -23,6 +23,7 @@ import Ecluse.Config (
     ServerSettings (..),
     loadConfig,
     renderConfigError,
+    unUrl,
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -393,6 +394,54 @@ spec = describe "decodeDocument" $ do
         it "rejects a mirror-target URL carrying userinfo, naming that key" $
             loadConfig [] (Just (mountDocWithMirrorTarget "https://deploy:hunter2@mirror.example.test/npm"))
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
+
+    describe "non-registry configured URLs (the same boot echo prints these keys)" $ do
+        -- server.publicUrl and advisories.osvExportBaseUrl are not registry endpoints, so the
+        -- mount-side refusal above never sees them. Each carries the refusal under its own key.
+        it "rejects server.publicUrl carrying userinfo, naming the key and not the credential" $ do
+            let outcome = loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://deploy:hunter2@registry.example.test")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+
+        it "refuses a credential in server.publicUrl before the scheme check, which quotes the value" $ do
+            -- A schemeless value falls to the scheme refusal, and that refusal echoes what
+            -- it rejects. The credential refusal has to run ahead of it.
+            let outcome = loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "deploy:hunter2@registry.example.test")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+
+        it "rejects server.publicUrl carrying a query string, naming the key" $
+            loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test?token=abc")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry a query string"
+
+        it "rejects server.publicUrl carrying a fragment, naming the key" $
+            loadConfig [] (Just "{\"server\":{\"publicUrl\":\"https://registry.example.test#frag\"}}")
+                `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry a fragment"
+
+        it "rejects advisories.osvExportBaseUrl carrying userinfo, naming the key and not the credential" $ do
+            let outcome = loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://deploy:hunter2@osv.example.test")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry userinfo"
+            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+
+        it "rejects advisories.osvExportBaseUrl carrying a query string, naming the key" $
+            loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test?sig=abc")] Nothing
+                `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry a query string"
+
+        it "rejects advisories.osvExportBaseUrl carrying a fragment, naming the key" $
+            loadConfig [] (Just "{\"advisories\":{\"osvExportBaseUrl\":\"https://osv.example.test#frag\"}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry a fragment"
+
+        it "accepts a plain advisories.osvExportBaseUrl through both layers" $ do
+            case loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test/exports")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc ->
+                    unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
+                        `shouldBe` "https://osv.example.test/exports"
+            case loadConfig [] (Just "{\"advisories\":{\"osvExportBaseUrl\":\"http://localhost:8080/osv\"}}") of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc ->
+                    unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
+                        `shouldBe` "http://localhost:8080/osv"
 
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do

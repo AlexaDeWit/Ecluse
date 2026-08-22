@@ -15,6 +15,10 @@ here carries no policy of its own.
 
 'authorityLabel' renders that same extraction back to text. Every log line and span
 attribute reduces a URL through it before it names one.
+
+'refuseCredentialMaterial' is the load-time counterpart. It refuses an
+operator-configured URL that carries a credential. The boot-time configuration echo prints
+every configured URL as written, so a credential must never reach it.
 -}
 module Ecluse.Core.Security.Authority (
     -- * The dialled authority
@@ -25,6 +29,9 @@ module Ecluse.Core.Security.Authority (
     hostPortAddress,
     splitHostPort,
     carriesUserinfo,
+
+    -- * Configured-URL refusal
+    refuseCredentialMaterial,
 
     -- * Log-safe rendering
     authorityLabel,
@@ -140,10 +147,9 @@ parsePort t = do
 (@https:\/\/user:token\@host\/@).
 
 A caller outside this module can ask only this about an authority's credential half,
-and the answer hands back no credential-bearing text. The configured-endpoint refusal
-in "Ecluse.Core.Security.Egress" asks it, so that refusal and 'authorityOf' read the
-userinfo boundary the same way. A path segment beginning with @\@@ (an npm scope) sits
-past the authority and is not userinfo.
+and the answer hands back no credential-bearing text. 'refuseCredentialMaterial' asks
+it, so that refusal and 'authorityOf' read the userinfo boundary the same way. A path
+segment beginning with @\@@ (an npm scope) sits past the authority and is not userinfo.
 
 >>> carriesUserinfo "https://deploy:hunter2@registry.npmjs.org/thing?sig=abc"
 True
@@ -153,6 +159,29 @@ False
 -}
 carriesUserinfo :: Text -> Bool
 carriesUserinfo = T.isInfixOf "@" . authoritySpan
+
+{- | Refuse an operator-configured URL that carries credential material: userinfo
+(@https:\/\/user:token\@host\/@), a query string, or a fragment.
+
+@subject@ names the refused URL in the reason. It is the configuration key, or the kind
+of URL where the caller holds no key. The reason reaches the boot log, so it states the
+requirement and never the value. Run this before any check that quotes the value it
+rejects. The rule covers a configured URL only. An upstream-supplied one may carry a
+signed query, and 'authorityLabel' is what names it in a log line.
+
+>>> refuseCredentialMaterial "server.publicUrl" "https://ecluse.example.test"
+Right ()
+
+>>> refuseCredentialMaterial "server.publicUrl" "https://deploy:hunter2@ecluse.example.test"
+Left "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
+-}
+refuseCredentialMaterial :: Text -> Text -> Either Text ()
+refuseCredentialMaterial subject url
+    | carriesUserinfo url =
+        Left (subject <> " must not carry userinfo (a credential belongs in its own configuration key)")
+    | "?" `T.isInfixOf` url = Left (subject <> " must not carry a query string")
+    | "#" `T.isInfixOf` url = Left (subject <> " must not carry a fragment")
+    | otherwise = Right ()
 
 {- The authority component of a URI or bare @host[:port]@ value, userinfo intact. It is
 the text after the scheme separator, truncated at the first path\/query\/fragment

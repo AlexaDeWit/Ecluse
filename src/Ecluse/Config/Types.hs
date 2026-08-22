@@ -190,7 +190,7 @@ data AdvisoriesSettings = AdvisoriesSettings
     , advPollInterval :: NominalDiffTime
     , advCompileInterval :: NominalDiffTime
     , advDataDir :: FilePath
-    , advOsvExportBaseUrl :: Text
+    , advOsvExportBaseUrl :: Url
     , advMaxDatabaseBytes :: Int
     }
     deriving stock (Eq, Show)

@@ -17,6 +17,7 @@ import Ecluse.Core.Security (
     hostPortAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
+    refuseCredentialMaterial,
     splitHostPort,
  )
 
@@ -39,6 +40,7 @@ spec = do
     hostAddressSpec
     hostPortAddressSpec
     authorityLabelSpec
+    refuseCredentialMaterialSpec
     splitHostPortSpec
 
 hostAddressSpec :: Spec
@@ -180,6 +182,34 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://deploy@/thing" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
+
+{- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
+value that survives the refusal is one the echo can print as written. -}
+refuseCredentialMaterialSpec :: Spec
+refuseCredentialMaterialSpec = describe "refuseCredentialMaterial" $ do
+    it "accepts an ordinary configured URL" $
+        refuseCredentialMaterial "server.publicUrl" "https://registry.example.test/npm"
+            `shouldBe` Right ()
+    it "accepts a path segment beginning with @ (an npm scope is not userinfo)" $
+        refuseCredentialMaterial "server.publicUrl" "https://registry.example.test/@acme/thing"
+            `shouldBe` Right ()
+    it "refuses userinfo, naming the subject and not the credential" $
+        refuseCredentialMaterial "server.publicUrl" "https://deploy:hunter2@registry.example.test"
+            `shouldBe` Left "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
+    it "refuses a bare userinfo authority" $
+        refuseCredentialMaterial "server.publicUrl" "https://deploy@registry.example.test/"
+            `shouldBe` Left "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
+    it "refuses a query string" $
+        refuseCredentialMaterial "advisories.osvExportBaseUrl" "https://osv.example.test?sig=abc"
+            `shouldBe` Left "advisories.osvExportBaseUrl must not carry a query string"
+    it "refuses a fragment" $
+        refuseCredentialMaterial "advisories.osvExportBaseUrl" "https://osv.example.test#frag"
+            `shouldBe` Left "advisories.osvExportBaseUrl must not carry a fragment"
+    it "names a registry URL under the subject the egress builder passes" $
+        -- The subject is the one thing that varies between call sites. A wrong argument
+        -- surfaces here as a reason naming something the operator cannot look up.
+        refuseCredentialMaterial "registry URL" "https://deploy:hunter2@repo.internal.example.test/npm"
+            `shouldBe` Left "registry URL must not carry userinfo (a credential belongs in its own configuration key)"
 
 -- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS endpoint parser.
 -- The split is purely structural and gates nothing: the OTLP and SQS endpoints are trusted,

@@ -23,7 +23,7 @@ import Data.Aeson.Types (Parser, withText)
 import Data.Text qualified as T
 
 import Ecluse.Config.Types (Url, mkUrl)
-import Ecluse.Core.Security (hostPortAddress)
+import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
 
 rejectSecretKeys :: KeyMap.KeyMap Value -> Parser ()
@@ -94,25 +94,34 @@ parseUrl = withText "Url" $ \t ->
         Right u -> pure u
         Left e -> fail (T.unpack e)
 
-{- | An @http(s)@ URL Écluse itself serves or rewrites against, such as the public URL. Plain
-http stays legal for loopback development. The authority must be dialable by the same
-extraction the egress gate authorises ('hostPortAddress'), so a value no client could fetch
-fails at load.
+{- | An @http(s)@ URL Écluse itself serves, rewrites against, or fetches from, such as the
+public URL and the OSV export base. Plain http stays legal for loopback development. The
+authority must be dialable by the same extraction the egress gate authorises
+('hostPortAddress'), so a value no client could fetch fails at load.
+
+The key is operator-configured, so it also carries the shared credential refusal
+('refuseCredentialMaterial'). Boot echoes every resolved key, and that echo prints this
+value as written.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
 parseHttpUrl field = \case
-    String t
-        | not (any (`T.isPrefixOf` T.strip t) ["http://", "https://"]) ->
-            fail (field <> " must be an http:// or https:// URL (got " <> T.unpack t <> ")")
-        | isNothing (hostPortAddress (T.strip t)) ->
-            fail
-                ( field
-                    <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
-                    <> T.unpack t
-                    <> ")"
-                )
-        | otherwise -> either (fail . T.unpack) pure (mkUrl t)
+    String t -> httpUrlOf field (T.strip t)
     other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+
+-- The credential refusal runs first, because the two refusals under it quote the value.
+httpUrlOf :: String -> Text -> Parser Url
+httpUrlOf field trimmed
+    | Left reason <- refuseCredentialMaterial (T.pack field) trimmed = fail (T.unpack reason)
+    | not (any (`T.isPrefixOf` trimmed) ["http://", "https://"]) =
+        fail (field <> " must be an http:// or https:// URL (got " <> T.unpack trimmed <> ")")
+    | isNothing (hostPortAddress trimmed) =
+        fail
+            ( field
+                <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                <> T.unpack trimmed
+                <> ")"
+            )
+    | otherwise = either (fail . T.unpack) pure (mkUrl trimmed)
 
 -- | A listener port: 0..65535, where 0 asks the OS for an ephemeral port.
 parsePort :: String -> Int -> Parser Int

@@ -337,8 +337,9 @@ Secrets never live in the config document. Client and registry tokens are always
 cloud-managed registries (CodeArtifact, Artifact Registry) derive short-lived tokens from ambient
 cloud credentials. A registry URL never carries one either. Écluse refuses an endpoint written with
 userinfo (`https://user:token@host/`), a query string, or a fragment at boot. The error names the
-key. A **mirrored** mount holds a mirror-target **write** credential. A serve-only
-mount never writes and holds none. What Écluse does with a client's own token is under
+key. The same refusal covers `server.publicUrl` and `advisories.osvExportBaseUrl`. A **mirrored**
+mount holds a mirror-target **write** credential. A serve-only mount never writes and holds none.
+What Écluse does with a client's own token is under
 [Connecting your clients](#connecting-your-clients). The credential model is in
 [Credential flow and authority](docs/architecture/registry-model.md#credential-flow-and-authority) and
 [Outbound registry credentials](docs/architecture/configuration.md#outbound-registry-credentials).

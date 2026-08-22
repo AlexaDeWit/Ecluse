@@ -27,6 +27,7 @@ import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgServer),
     Config (configApp),
     ServerSettings (srvPort),
+    unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
@@ -94,7 +95,7 @@ runExportLoop telemetry ambient config = do
 exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
 exportNpm telemetry ambient appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
-    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (advOsvExportBaseUrl (cfgAdvisories appCfg)) "npm")
+    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) "npm")
     exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucketName dbPath
 
 -- | Options for the one-shot 'runPilotCompile' mode.
@@ -127,7 +128,7 @@ exits non-zero and the command stays safe to script.
 -}
 runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry ambient appCfg opts = do
-    let url = fromMaybe (osvExportUrl (advOsvExportBaseUrl (cfgAdvisories appCfg)) (pcoEcosystem opts)) (pcoSource opts)
+    let url = fromMaybe (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (pcoEcosystem opts)) (pcoSource opts)
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
         runResourceT $ do
             dbFile <- compileOsvToSqlite (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
