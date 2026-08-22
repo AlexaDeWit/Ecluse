@@ -12,6 +12,7 @@ import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (throwString)
@@ -348,7 +349,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
                     )
                 )
         queue <- newTestMemoryQueue
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdPrivateBaseUrl = Nothing}) $ \app _env _port -> do
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withPrivateBaseUrl Nothing) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
             -- The stubbed private upstream exists only to satisfy the harness; the
@@ -367,7 +368,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
                     )
                 )
         queue <- newTestMemoryQueue
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdPrivateBaseUrl = Nothing}) $ \app _env _port -> do
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withPrivateBaseUrl Nothing) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]

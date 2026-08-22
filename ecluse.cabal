@@ -177,6 +177,7 @@ library ecluse-core
     Ecluse.Core.Server.Route
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
+    Ecluse.Core.Server.Upstream
     Ecluse.Core.Supervision
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
@@ -626,6 +627,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.PathSpec
     Ecluse.Server.StreamSpec
+    Ecluse.Server.UpstreamSpec
     Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec
     Ecluse.Test.Container.ImageSpec

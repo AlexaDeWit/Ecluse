@@ -37,12 +37,20 @@ import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
-    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
     PublishDeps (..),
+    pdMirror,
+    pdPrivateBaseUrl,
+    pdPublicBaseUrl,
+    pdTarballHostGate,
  )
 import Ecluse.Core.Server.Response (appendHelp)
+import Ecluse.Core.Server.Upstream (
+    MirrorServePlan (MirrorOnAdmit, NoMirrorWrite),
+    mountUpstreams,
+    upstreamTarballHostGate,
+ )
 import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Test.Rules (inertRuleDeps)
@@ -127,6 +135,12 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     -- The mirror serve plan is wired from the mount's config: an
                     -- admitted public artifact enqueues toward the declared target.
                     pdMirror deps `shouldBe` MirrorOnAdmit "https://mirror.example.test"
+                    -- The tarball-host gate is derived from the very upstreams the deps
+                    -- carry, never from a second reading of the configuration, so
+                    -- rebinding those three values reproduces it exactly. npm declares
+                    -- no ecosystem artifact hosts, so the allowlist is the upstreams'.
+                    pdTarballHostGate deps
+                        `shouldBe` upstreamTarballHostGate (mountUpstreams [] (pdPrivateBaseUrl deps) (pdPublicBaseUrl deps) (pdMirror deps))
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
 
     it "rewrites the tarball base to an absolute URL under ECLUSE_SERVER__PUBLIC_URL" $ do

@@ -47,7 +47,8 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (MirrorServePlan (MirrorOnAdmit), PackumentDeps (..))
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Env (Env (envQueue))
 import Ecluse.Runtime.Server (
@@ -61,7 +62,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture (publishedDaysAgo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (consistentGateWith, npmServeDeps)
+import Ecluse.Test.Server.Mount (npmServeDeps, withEcosystemHosts)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -631,7 +632,7 @@ withProxyEnvQueueDepsHosts queue privateUp publicUp inbound hostsOf tweakDeps k 
             env <- newTestEnvWithQueue queue manager
             baseDeps <- deps privatePort publicPort inbound
             let tweaked = tweakDeps baseDeps
-                cfg = mkServerConfig (maybeToList (mountBindingFor Npm (consistentGateWith (hostsOf tweaked) tweaked) Nothing))
+                cfg = mkServerConfig (maybeToList (mountBindingFor Npm (withEcosystemHosts (hostsOf tweaked) tweaked) Nothing))
             k (application cfg env) env publicPort
 
 {- | Run an assertion against a proxy over the two upstream doubles and the proxy's

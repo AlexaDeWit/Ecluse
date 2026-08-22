@@ -45,7 +45,6 @@ import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServe
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
-    MirrorServePlan (MirrorOnAdmit),
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
@@ -57,6 +56,7 @@ import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
@@ -66,7 +66,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Server.Mount (consistentGate, npmServeDeps)
+import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -94,7 +94,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 (metricsPort, divergences) <- recordingDivergenceMetricsPort
                 rt <- mkRuntime metricsPort
                 baseDeps <- depsFor publicPort
-                let deps = consistentGate baseDeps{pdPrivateBaseUrl = Just ("http://localhost:" <> show privatePort)}
+                let deps = withPrivateBaseUrl (Just ("http://localhost:" <> show privatePort)) baseDeps
                 resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
                 divergences >>= (`shouldBe` 1)
@@ -187,7 +187,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmission 1
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor 1
-            let privateDeps = deps{pdPrivateBaseUrl = Just ("http://localhost:" <> show port)}
+            let privateDeps = withPrivateBaseUrl (Just ("http://localhost:" <> show port)) deps
             held <-
                 withServeAdmission (srMetrics rt) admission $
                     captureServe

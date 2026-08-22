@@ -9,10 +9,12 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Server.Context (MirrorServePlan (NoMirrorWrite), PackumentDeps (..))
+import Ecluse.Core.Server.Context (pdPublicBaseUrl)
+import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Server.Mount (overPrivateBaseUrl, withMirrorPlan, withPrivateBaseUrl)
 import Network.HTTP.Types (methodGet, methodHead, status200, status404)
 import Network.HTTP.Types.Header (hIfNoneMatch)
 import Network.Wai (responseLBS)
@@ -62,7 +64,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        let breakPrivate d = d{pdPrivateBaseUrl = Just ""}
+        let breakPrivate = withPrivateBaseUrl (Just "")
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -113,7 +115,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMirror = NoMirrorWrite}) $ \app env _publicPort -> do
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withMirrorPlan NoMirrorWrite) $ \app env _publicPort -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
@@ -342,7 +344,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" <$> pdPrivateBaseUrl d}
+        let internalIpPrivate = overPrivateBaseUrl (T.replace "localhost" "127.0.0.1")
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
