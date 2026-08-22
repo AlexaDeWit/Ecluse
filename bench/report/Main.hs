@@ -41,9 +41,8 @@ run csvPath logPath = do
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
 
--- Read a file as leniently decoded UTF-8, and describe a failure instead of throwing.
--- An unreadable CSV becomes the report's loud note, and an unreadable console log
--- degrades to the report's log-not-captured note.
+-- Lenient UTF-8, and a described failure instead of a throw: an unreadable CSV becomes the
+-- report's loud note, and an unreadable console log its log-not-captured note.
 readTextFile :: FilePath -> IO (Either Text Text)
 readTextFile path = do
     result <- Exception.try (readFileBS path)

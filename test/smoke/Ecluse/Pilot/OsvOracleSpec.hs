@@ -53,10 +53,8 @@ spec = describe "osv.dev npm export (live oracle)" $
                     total <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int]
                     lodash <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE package_name = 'lodash'" :: IO [Only Int]
                     close conn
-                    -- Floors, not exact counts: the live dataset only grows.
-                    -- npm carries thousands of advisories, and lodash's are
-                    -- years old and permanent. Dropping below either floor
-                    -- means the parser and the feed no longer agree.
+                    -- Floors, not exact counts: the live dataset only grows. Dropping below
+                    -- either floor means the parser and the feed no longer agree.
                     map fromOnly total `shouldSatisfy` any (>= 1000)
                     map fromOnly lodash `shouldSatisfy` any (>= 1)
 

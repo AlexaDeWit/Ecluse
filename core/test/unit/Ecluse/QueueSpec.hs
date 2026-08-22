@@ -40,10 +40,9 @@ spec = do
             readIORef delivered `shouldReturn` [sampleJob, otherJob, thirdJob]
 
         it "drops the newest hand-off at the cap, reporting every drop's running total" $ do
-            -- The drain loop is deliberately not running, so the buffer stays full
-            -- once it reaches its depth and every further hand-off is a drop. The
-            -- callback fires on every drop (metric-grade). Rate-limiting is the
-            -- caller's job.
+            -- The drain loop deliberately never runs, so the buffer stays full at its depth and
+            -- every further hand-off is a drop. The callback fires on every drop. Rate-limiting is
+            -- the caller's job.
             delivered <- newIORef []
             drops <- newIORef []
             (q, _drainLoop) <- newEnqueueBuffer 2 (\n -> modifyIORef' drops (<> [n])) (\_ _ -> pass) (recordingBackend delivered)
@@ -115,9 +114,8 @@ spec = do
     deliveredTimes n =
         QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n}
 
-    -- A backend stub whose 'enqueue' appends to the given ref, so a test sees what
-    -- the buffer's drain loop delivered, and in what order.
-    -- The consumer fields are inert (the buffer passes them through untouched).
+    -- A backend stub recording what the buffer's drain loop delivered, and in what order. Its
+    -- consumer fields are inert.
     recordingBackend :: IORef [MirrorJob] -> MirrorQueue
     recordingBackend delivered =
         MirrorQueue

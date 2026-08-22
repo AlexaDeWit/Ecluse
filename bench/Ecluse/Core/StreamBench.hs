@@ -37,9 +37,7 @@ import Ecluse.Core.Server.Stream (pumpBody)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 {- | The flush-strategy benches: the shipped flush-per-chunk pump against a
-threshold-batched pump and a flush-once-at-end pump. Each runs over a synthetic
-multi-megabyte body at three chunk sizes, so the interaction of chunk size and flush
-cadence shows.
+threshold-batched pump and a flush-once pump, at three chunk sizes.
 -}
 benchmarks :: Benchmark
 benchmarks =
@@ -67,8 +65,7 @@ benchmarks =
     flushThresholdBytes = 64 * 1024
 
 {- | Run a pump over a fixed chunk list and a buffer-modelling sink, returning the total
-bytes committed (forced by 'whnfAppIO'). Fresh reader and sink per run, so a run neither
-sees a drained reader nor shares a buffer with the next.
+bytes committed. A run gets a fresh reader and sink, so runs share no state.
 -}
 runPump :: (IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()) -> [ByteString] -> IO Int
 runPump pump chunks = do
@@ -89,9 +86,8 @@ runPump pump chunks = do
     pump readChunk write flush
     readIORef committed
 
-{- | A threshold-batched pump: write every chunk, and flush once the bytes written since
-the last flush reach @threshold@ (plus once more for the tail). The same constant-memory
-shape as 'pumpBody', with a coarser commit cadence.
+{- | A threshold-batched pump: flush once the bytes written since the last flush reach
+@threshold@, plus once more for the tail.
 -}
 pumpThreshold :: Int -> IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
 pumpThreshold threshold readChunk write flush = go 0
@@ -107,9 +103,7 @@ pumpThreshold threshold readChunk write flush = go 0
                     then flush >> go 0
                     else go pending'
 
-{- | A flush-once pump: write every chunk, flush a single time at end of body. The
-coarsest cadence: one commit for the whole stream.
--}
+-- | A flush-once pump: one commit for the whole body, the coarsest cadence.
 pumpEndOnly :: IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
 pumpEndOnly readChunk write flush = go
   where
@@ -119,9 +113,8 @@ pumpEndOnly readChunk write flush = go
             then flush
             else write (byteString chunk) >> go
 
-{- | Split a synthetic body of @total@ bytes into equal @chunkSize@ chunks, the shape an
-upstream 'BodyReader' yields. A final short chunk carries any remainder. The split runs
-once, before the measured window.
+{- | Split a synthetic body of @total@ bytes into equal @chunkSize@ chunks, plus a short
+tail chunk. The split runs once, before the measured window.
 -}
 bodyChunks :: Int -> Int -> [ByteString]
 bodyChunks total chunkSize =

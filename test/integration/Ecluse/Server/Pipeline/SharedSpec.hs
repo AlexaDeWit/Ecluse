@@ -306,11 +306,9 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
     it "answers a bottoming assembly with the route's declared neutral 500, never a torn session" $ do
-        -- Both origins serve happily. The assembly hook then bottoms when the render
-        -- forces it, an invariant break escaping the handler pre-commit. The perimeter
-        -- must answer it. The session survives, since an unanswered escape would abort
-        -- it. The status is the neutral 500, and the body is the route's own error
-        -- shape carrying no fault detail.
+        -- The assembly hook bottoms when the render forces it, an invariant break escaping the
+        -- handler pre-commit. The perimeter answers with the neutral 500 carrying no fault detail,
+        -- and the session survives.
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue

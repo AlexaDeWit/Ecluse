@@ -70,16 +70,14 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         sqsRegion cfg `shouldBe` "us-east-1"
 
     it "rolls an absent ECLUSE_QUEUE__URL over to the bounded in-memory queue" $ do
-        -- Graceful rollover, never a boot failure: mirroring is demand-driven and
-        -- self-healing, so the missing URL degrades durability, not safety. The
-        -- depth cap is the memory plan's tenant, allocated after this selection.
+        -- Mirroring is demand-driven and self-healing, so a missing URL degrades durability,
+        -- not safety. Boot rolls over instead of failing.
         env <- expectEnv (withoutQueueUrl staticEnvVars)
         planMirrorQueue noAmbient env `shouldBe` Right MemoryBackend
 
     it "refuses a Pub/Sub topic resource as not built in this binary (no silent fallback)" $ do
-        -- The topic shape names the GCP backend, which has no implementation
-        -- compiled in. It must route to a clear "not built" error, never quietly
-        -- to a different queue.
+        -- The topic shape names the GCP backend, which has no implementation compiled in, so
+        -- boot must报 a clear "not built" error rather than route quietly to another queue.
         env <- expectEnv (overrideEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror" staticEnvVars)
         planMirrorQueue noAmbient env `shouldBe` Left [QueueProviderUnavailable "pubsub"]
 
@@ -165,10 +163,8 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
 deadLetterTerminusSpec :: Spec
 deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
     it "warns loudly when a durable queue has nothing to capture a poison message" $ do
-        -- With no redrive policy the message cycles until the retention window
-        -- discards it unseen, so the operator must be told. The budget passed here
-        -- belongs to the built handle. The plan's own floor is a different number on
-        -- purpose, so a warning that quoted the plan would fail this example.
+        -- With no redrive policy the message cycles until the retention window discards it unseen.
+        -- The budget quoted here is the built handle's, deliberately not the plan's floor.
         case deadLetterTerminusWarning (SqsBackend planConfig) (DeliveryBudget 7) (Right TerminusAbsent) of
             Nothing -> expectationFailure "expected a no-terminus warning on the durable backend"
             Just warning -> do
@@ -194,9 +190,8 @@ deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
                 warning `shouldSatisfy` ("access denied by the emulator" `T.isInfixOf`)
 
     it "stays silent for the in-memory backend, whose own boot warning already covers it" $
-        -- The in-memory backend truly has no terminus. 'memoryQueueBootWarning'
-        -- already says the mirror is non-durable and sheds jobs. A second line would
-        -- dilute it.
+        -- The in-memory backend truly has no terminus, and 'memoryQueueBootWarning' already says
+        -- the mirror is non-durable. A second line would dilute it.
         deadLetterTerminusWarning MemoryBackend (DeliveryBudget 7) (Right TerminusAbsent) `shouldBe` Nothing
   where
     -- The plan's configured floor. It differs on purpose from the handle budget the

@@ -13,12 +13,8 @@ import Ecluse.Runtime.Server.Halt (InteractiveHalt (..), withInteractiveHalt)
 spec :: Spec
 spec =
     describe "withInteractiveHalt (local-dev quit key)" $ do
-        -- The real wiring (TTY guard, stdin EOF, _exit) is process-global and not
-        -- deterministically drivable in-process, the same boundary the OS-signal path
-        -- has. So these cases wire the three injection points and test the
-        -- combinator's logic. It arms only when interactive, and halts when the signal
-        -- fires. It tears the watcher down with the action, so the watcher never fires
-        -- after the action returns.
+        -- The real wiring (TTY guard, stdin EOF, _exit) is process-global and not drivable
+        -- in-process, so these cases wire the three injection points and test the combinator.
 
         it "runs the action and never halts when NOT interactive (the production guard)" $ do
             halted <- newIORef False

@@ -56,10 +56,8 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 ctx :: EvalContext
 ctx = EvalContext now Nothing
 
-{- | The policy under test: a 7-day publish-age quarantine plus an install-script
-deny. A version is approved iff it is at least 7 days old and declares no install
-script. The typed fixture alone controls survival, so the cases drive the real rules
-engine over the domain model, with no @Value@ in sight.
+{- | The policy under test: a 7-day publish-age quarantine plus an install-script deny. A version
+is approved iff it is at least 7 days old and declares no install script.
 -}
 policy :: [PrecededRule]
 policy =
@@ -74,9 +72,8 @@ name = mkPackageName Npm Nothing "thing"
 publishedDaysAgo :: Integer -> UTCTime
 publishedDaysAgo ageDays = addUTCTime (negate (fromInteger ageDays * nominalDay)) now
 
-{- | A per-version snapshot keyed only on what the filter reads: the parsed
-version, the publish time (the age gate), and the install-code signal (the deny).
-Everything else is inert.
+{- | A per-version snapshot carrying only what the filter reads: the version, the publish time,
+and the install-code signal. Every other field is inert.
 -}
 detailsAt :: Text -> Integer -> Bool -> PackageDetails
 detailsAt rawVer ageDays hasInstall =
@@ -225,9 +222,8 @@ propertiesSpec = describe "properties" $ do
                         assert (all (\s -> compareVersions (mkVersion Npm s) (mkVersion Npm l) /= Just GT) stableSurvivors)
                     Nothing -> annotateShow survivors >> H.failure
 
-{- | A generated logical packument: a chosen @latest@ target plus versions, each
-with an age and an install-script flag. 'policy' derives survival from the age
-(≥ 7 days) and the absence of an install script.
+{- | A generated logical packument: a chosen @latest@ target plus versions, each with an age and
+an install-script flag. 'policy' decides which of them survive.
 -}
 data GenSpec = GenSpec
     { specLatest :: Maybe Text
@@ -276,13 +272,9 @@ isApproved = \case
 isStableRaw :: Text -> Bool
 isStableRaw raw = either (const False) isStable (parseVersionKey Npm raw)
 
-{- | The https-only artifact-URL normalisation the egress-scheme fold applies as a
-projection post-step. The fold keeps an https URL and upgrades a same-host @http@
-URL. It drops the version behind a foreign-host @http@ URL and records an
-'InvalidVersionManifest' (the #486 drop-and-record contract). A non-https (test\/dev
-loopback) upstream leaves every URL untouched. Typed fixtures build the input, so
-these cases drive the fold over the domain model directly, with no wire format in
-sight.
+{- | The https-only artifact-URL fold: keep an https URL, upgrade a same-host @http@ URL, and drop
+the version behind a foreign-host @http@ URL while recording an 'InvalidVersionManifest'. A
+non-https upstream leaves every URL untouched.
 -}
 enforceArtifactSchemeSpec :: Spec
 enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact-URL normalisation)" $ do
@@ -317,10 +309,8 @@ enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact
         urlOf (enforceArtifactScheme "http://127.0.0.1:8080" (infoWithArtifact "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"))
             `shouldBe` Just "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"
 
-{- | The single-version 'enforceArtifactSchemeDetails' form the selective-decode path
-uses. It upgrades a same-host @http@ URL, drops the whole version behind a
-foreign-host @http@ URL ('Nothing'), and leaves the version untouched under a
-non-https upstream.
+{- | The single-version form the selective-decode path uses: it upgrades a same-host @http@ URL,
+returns 'Nothing' for a foreign-host @http@ URL, and leaves a non-https upstream untouched.
 -}
 enforceArtifactSchemeDetailsSpec :: Spec
 enforceArtifactSchemeDetailsSpec = describe "enforceArtifactSchemeDetails (single-version form)" $ do
@@ -339,9 +329,7 @@ enforceArtifactSchemeDetailsSpec = describe "enforceArtifactSchemeDetails (singl
         urlOf (enforceArtifactSchemeDetails "http://127.0.0.1:8080" (detailsWithArtifact "http://127.0.0.1:8080/thing-1.0.0.tgz"))
             `shouldBe` Just "http://127.0.0.1:8080/thing-1.0.0.tgz"
 
-{- | A one-version 'PackageInfo' whose sole artifact carries the given URL. The egress
-fold reads only 'artUrl', so the remaining fields ride along inert.
--}
+-- | A one-version 'PackageInfo' whose sole artifact carries the given URL.
 infoWithArtifact :: Text -> PackageInfo
 infoWithArtifact url =
     PackageInfo

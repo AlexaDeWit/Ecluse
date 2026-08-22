@@ -37,10 +37,8 @@ instance KatipContext CompileM where
     getKatipNamespace = pure mempty
     localKatipNamespace _ m = m
 
-{- | Serve a corpus version through a local HTTP stub and compile it into a real
-@osv.db@ with Pilot's pipeline. Hand the artifact's path to the continuation.
-The artifact lives in a temporary directory that the harness deletes when the
-continuation returns.
+{- | Serve a corpus version through a local HTTP stub, compile it into a real @osv.db@, and hand the
+artifact's path to the continuation. The harness deletes the artifact when the continuation returns.
 -}
 withFixtureOsvDb :: CorpusVersion -> (FilePath -> IO a) -> IO a
 withFixtureOsvDb v use = do

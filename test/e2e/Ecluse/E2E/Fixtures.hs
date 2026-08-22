@@ -45,11 +45,7 @@ import System.Process.Typed (proc, runProcess_)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 
-{- | One fixture package: its identity plus the two behaviours the scenarios turn on.
-The first is whether it declares an install script, which makes the
-@DenyInstallTimeExecution@ rule block it. The second is whether the builder corrupts its
-served bytes after fixing the SRI, which the integrity gate must reject.
--}
+-- | One fixture package: its identity plus the two behaviours the scenarios turn on.
 data PkgSpec = PkgSpec
     { psName :: Text
     -- ^ The package name (also the mount-relative path the stub serves it at).
@@ -85,10 +81,8 @@ mirrorPkg = defaultPkgSpec "e2e-mirror"
 tamperPkg :: PkgSpec
 tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 
-{- | A package used only for @HEAD@ probes. A @HEAD@ on a tarball must report the
-artifact size without streaming the body and without enqueueing a mirror. No scenario
-installs or @GET@s this package, since either would itself mirror it, so an empty mirror
-is attributable to the @HEAD@ alone.
+{- | A package used only for @HEAD@ probes. No scenario installs or @GET@s it, so an empty
+mirror is attributable to the @HEAD@ alone.
 -}
 headPkg :: PkgSpec
 headPkg = defaultPkgSpec "e2e-head"
@@ -104,10 +98,8 @@ telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 fixturePackages :: [PkgSpec]
 fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPkg, telemetryDdPkg]
 
-{- | Write every fixture package under @root@, the directory bind-mounted into the
-nginx stub as its document root. Creates the packument and the gzipped artifact, and
-fixes the packument's @dist.integrity@ to the artifact's real sha-512. For a tamper
-spec it then corrupts the artifact, so the served bytes diverge from that digest.
+{- | Write every fixture package under @root@, the nginx stub's document root, with each
+packument's @dist.integrity@ fixed to the artifact's real sha-512.
 -}
 buildFixtures :: FilePath -> [PkgSpec] -> IO ()
 buildFixtures root = traverse_ (buildOne root)
@@ -143,10 +135,8 @@ buildOne root spec = do
             ]
     bytes <- BS.readFile tgzPath
     let sri = sha512Sri bytes
-    -- The stub serves the packument at @/\<name\>@ but the tarball lives under
-    -- @/\<name\>/-/@, so @\<name\>@ cannot be both a file and a directory. The
-    -- packument therefore sits *inside* the package directory, and the nginx stub
-    -- config (see "Ecluse.E2E.Harness") maps @/\<name\>@ to it.
+    -- @<name>@ cannot be both a file and a directory, so the packument sits inside the package
+    -- directory and the nginx stub config maps @/<name>@ to it.
     writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec sri))
     when (psTamper spec) $
         -- Corrupt the served artifact after the SRI is fixed: the worker's integrity
@@ -166,9 +156,8 @@ tarballPackageJson spec =
         ]
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
 
-{- | The npm packument the stub serves: one backdated version pointing its artifact at
-the stub, with the integrity fixed to the real digest. The deny case adds
-@hasInstallScript@ and a declared install script, so the rule fires.
+{- | The npm packument the stub serves: one backdated version whose integrity is the real
+digest. The deny case adds @hasInstallScript@ and a declared install script.
 -}
 packument :: PkgSpec -> Text -> Value
 packument spec sri =

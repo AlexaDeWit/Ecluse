@@ -48,9 +48,7 @@ benchmarks loaded =
         ]
 
 {- The version each entry is read at: the last key in its @versions@ object, the most
-recently published and the realistic install target. 'Nothing' for a value with no
-versions, which never happens for the curated corpus: 'loadCorpus' guarantees it projects
-to a non-empty version set. -}
+recently published and the realistic install target. -}
 targetVersion :: Value -> Maybe Version
 targetVersion value = mkVersion Npm . NE.last <$> nonEmpty (versionKeysOf value)
 

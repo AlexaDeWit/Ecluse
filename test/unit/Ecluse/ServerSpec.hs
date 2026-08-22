@@ -58,18 +58,14 @@ import Ecluse.Runtime.Server (
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
-{- | A registry-handle double whose effectful fields are never invoked. The web
-layer only routes, classifies, and renders. It never fetches, so a handle that
-refuses loudly is enough to assemble an 'Env'. If a route reached an effectful
-field, the refusal would surface the leak.
+{- | A registry-handle double whose effectful fields refuse loudly. The web layer only
+routes and renders, so a refusal surfaces any leak into the data plane.
 -}
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
 
-{- | A test mount binding: the given prefix and router, and __inert__ packument-serve
-dependencies (every upstream a closed port). A bound mount always carries them, so
-these specs supply the fixture and do not drive the data plane. They exercise routing,
-the meta-routes, the prefix strip, and the publish path.
+{- | A test mount binding with the given prefix and router, and __inert__ packument-serve
+dependencies. These specs exercise routing, not the data plane.
 -}
 mountAt :: NonEmpty Text -> MountRouter -> MountBinding
 mountAt prefix router =
@@ -89,29 +85,24 @@ publishMountAt prefix router publishDeps =
         , bindingPublishDeps = publishDeps
         }
 
-{- | The 'application' under a single @\/npm@ mount carrying npm's path grammar. The
-specs then assert prefix-strip dispatch and the npm routing table through the real
-router the composition root wires in.
+{- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, for the
+prefix-strip dispatch and npm routing-table assertions.
 -}
 npmMountApp :: IO Application
 npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount with the first-party publish path
-__enabled__. The allow-list is one publish scope, @\@acme@, and the publication target
-points at an __unconnectable__ address. An in-scope publish then passes the
-anti-shadowing guard and attempts the relay, which fails to connect. That @502@ proves
-the write reached the relay. An out-of-scope publish stops at the guard with a @403@,
-before any connection. That is the assertion that the guard fires before any upstream
-write.
+{- | The 'application' under a single @\/npm@ mount with the publish path __enabled__: one
+allowed scope, @\@acme@, and an __unconnectable__ publication target. An in-scope publish
+then reaches the relay and fails with @502@, while an out-of-scope publish stops at the
+guard with @403@, which proves the guard fires before any upstream write.
 -}
 publishMountApp :: IO Application
 publishMountApp = publishAppWith basePublishDeps
 
-{- | The base first-party publish dependencies the publish tests build on: an @\@acme@
-scope allow-list and a publication target at an unconnectable port. An in-scope publish
-then reaches the relay and fails to connect, a @502@. This is a function over the
-body-byte budget, because 'publishAppWith' allocates the aggregate admission per
-application and the pure fixture cannot carry it.
+{- | The base publish dependencies these tests build on: an @\@acme@ scope allow-list and
+an unconnectable publication target, so an in-scope publish reaches the relay and fails
+with @502@. It takes the body-byte budget because 'publishAppWith' allocates one
+admission per application.
 -}
 basePublishDeps :: ByteAdmission -> PublishDeps
 basePublishDeps bodyBudget =
@@ -137,20 +128,14 @@ publishAppWith mkDeps = do
     bodyBudget <- newByteAdmission (128 * 1024 * 1024)
     application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount whose router is a __fake__ (not
-npm's), proving dispatch follows the binding's router rather than any hardwired
-grammar. The fake recognises a single sentinel path and denies everything else, so a
-response that follows it can only have come from the injected function.
+{- | The 'application' under a single @\/npm@ mount whose router is a __fake__, proving
+dispatch follows the binding's router rather than a hardwired npm grammar.
 -}
 fakeRouterApp :: IO Application
 fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) <$> newTestEnv
   where
-    -- A deliberately non-npm router. It answers @beep@ locally with @200 {}@ and
-    -- denies every other path with the deny-by-default @404@. npm's @is-odd@ would be
-    -- a packument read. Under this router it is a miss, so the two give observably
-    -- different answers. It ignores the method, because it names no write action,
-    -- proving the web layer follows the injected router rather than a baked-in npm
-    -- grammar.
+    -- npm's @is-odd@ would be a packument read. Under this router it is a miss, so the two
+    -- routers give observably different answers.
     fakeRouter :: MountRouter
     fakeRouter _method ["beep"] = RouteAction fakeContract (AnswerLocally (variableResponse status200 [] "{}"))
     fakeRouter _method _ = npmNotFound
@@ -164,9 +149,8 @@ probes matches no mount and is the neutral @404@.
 neutralApp :: IO Application
 neutralApp = application (mkServerConfig []) <$> newTestEnv
 
-{- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing
-in for an instance mid-graceful-shutdown without binding a socket. Used to assert
-the front door's draining behaviour: the readiness flip and the going-away header.
+{- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing in for
+an instance mid-graceful-shutdown without binding a socket.
 -}
 drainingApp :: IO Application
 drainingApp = do
@@ -180,11 +164,8 @@ raisedDrain = do
     beginDrain drain
     pure drain
 
-{- | An npm-mount 'application' whose worker heartbeat is __stale__. The fixture
-records its last successful poll well past 'workerHeartbeatStaleAfter' ago, standing
-in for a single-process worker whose consume loop went quiet. It drives the liveness
-probe to its @503@ "worker stalled" arm, the single-process liveness signal the front
-door folds the worker heartbeat into.
+{- | An npm-mount 'application' whose worker heartbeat is older than
+'workerHeartbeatStaleAfter', driving the liveness probe to its @503@ "worker stalled" arm.
 -}
 stalledWorkerApp :: IO Application
 stalledWorkerApp = do
@@ -198,9 +179,8 @@ stalledWorkerApp = do
     let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatHealthyNow (envWorkerHeartbeat env)}
     pure (application cfg env)
 
-{- | A header matcher that passes only when the response carries __no__
-@Connection@ header: the not-draining expectation, the complement of the
-going-away assertion. (@hspec-wai@'s '<:>' only asserts a header is present.)
+{- | A header matcher that passes only when the response carries __no__ @Connection@
+header. @hspec-wai@'s '<:>' can only assert that a header is present.
 -}
 matchNoConnectionHeader :: MatchHeader
 matchNoConnectionHeader = MatchHeader $ \headers _body ->
@@ -224,16 +204,13 @@ spec = do
     describe "liveness -- worker-stall arm of /livez" $
         with stalledWorkerApp $ do
             it "fails /livez with 503 once the worker heartbeat is stale" $
-                -- The single-process liveness signal folds in the mirror worker's
-                -- consume-loop heartbeat. A loop quiet past the staleness threshold is a
-                -- genuine stall. Liveness must flip to 503 for fail-stop visibility, even
-                -- though the HTTP front door itself is still serving.
+                -- Liveness folds in the mirror worker's consume-loop heartbeat, so a loop quiet
+                -- past the threshold flips /livez to 503 even while the front door still serves.
                 get "/livez" `shouldRespondWith` 503
 
             it "keeps /readyz at 200 (readiness ignores worker staleness; it is not draining)" $
-                -- Readiness is about whether to route NEW traffic, gated only on the drain
-                -- signal, not on worker liveness. A stalled worker fails /livez, never
-                -- /readyz, so the two probes stay independent.
+                -- Readiness gates only on the drain signal, so a stalled worker fails /livez and
+                -- never /readyz.
                 get "/readyz" `shouldRespondWith` 200
 
     describe "graceful shutdown -- readiness flip while draining" $
@@ -275,9 +252,8 @@ spec = do
                 get "/npm//" `shouldRespondWith` 404
 
             it "leaves an internal empty segment for the router to reject (404, not collapsed)" $
-                -- The router drops only /trailing/ empties, so @/npm//is-odd@ keeps its
-                -- leading empty segment. It stays an unrecognised path (404) rather than
-                -- normalising to the @/npm/is-odd@ packument route.
+                -- The router drops only /trailing/ empties, so the leading empty segment stays and
+                -- @/npm//is-odd@ never normalises to the @/npm/is-odd@ packument route.
                 get "/npm//is-odd" `shouldRespondWith` 404
 
             it "404s an unknown /-/… meta-route under the mount" $
@@ -296,25 +272,21 @@ spec = do
 
         with publishMountApp $ do
             it "refuses an out-of-scope publish with 403, before any upstream write (anti-shadowing)" $
-                -- @other is outside the @acme allow-list, so the guard fires before the
-                -- relay. Nothing contacts the unconnectable target, so the answer is a 403,
-                -- not the 502 an attempted write to it would yield.
+                -- Nothing contacts the unconnectable target, so a 403 rather than a 502 proves the
+                -- guard fired before the relay.
                 request methodPut "/npm/@other/widget" [] "" `shouldRespondWith` 403
 
             it "refuses an unscoped publish with 403 (an unscoped name is within no scope)" $
                 request methodPut "/npm/widget" [] "" `shouldRespondWith` 403
 
             it "lets an in-scope publish through the guard to the relay (502 when the target is unreachable)" $
-                -- @acme is in scope, so the guard admits the publish and the relay runs.
-                -- The target is unconnectable, so the relay fails. That 502 proves the
-                -- guard let the write through rather than refusing it at the scope check.
+                -- The target is unconnectable, so the 502 proves the guard let the write through to
+                -- the relay rather than refusing it at the scope check.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
 
-            -- The body-name agreement leg of the anti-shadowing guard. The URL @acme/widget
-            -- is in scope, but the document body declares a DIFFERENT name. A relay would
-            -- then write a name the scope guard never authorised. The refusal is a 403
-            -- BEFORE the relay. That is distinguishable here from the 502 an attempted write
-            -- to the unconnectable target would yield, which proves the relay never ran.
+            -- The body-name agreement leg of the anti-shadowing guard: a relay would otherwise
+            -- write a name the scope guard never authorised. The 403 rather than the unconnectable
+            -- target's 502 proves the relay never ran.
             it "refuses an in-scope publish whose body _id / name disagree with the URL with 403, before any relay" $
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@victim/target\",\"name\":\"@victim/target\",\"versions\":{}}" `shouldRespondWith` 403
 
@@ -328,10 +300,8 @@ spec = do
 
         with (publishAppWith (\b -> (basePublishDeps b){pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
-                -- The relay reports its failures as typed values, so a throw here is
-                -- an invariant break. The typed request perimeter must answer it. The
-                -- session survives with the neutral 500, not the 502 a classified relay
-                -- fault renders, and not a session abort.
+                -- The relay reports its failures as typed values, so a throw is an invariant break.
+                -- The perimeter answers it with the neutral 500 and the session survives.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
 
         with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = ""})) $
@@ -354,9 +324,8 @@ spec = do
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
             it "renders an unrecognised IN-MOUNT path through npm's fallback contract" $
-                -- @/npm/is-odd/3.0.1@ is under the npm mount but not a recognised npm
-                -- path, so its 404 body is the npm {\"error\": …} object. That is the
-                -- mount's surface, distinct from the neutral plain-text 404 above.
+                -- The body is npm's error object, the mount's own surface, rather than the neutral
+                -- plain-text 404 above.
                 get "/npm/is-odd/3.0.1" `shouldRespondWith` "{\"error\":\"not found\"}"{matchStatus = 404}
 
             it "derives a bodiless response for an unrecognised HEAD path" $
@@ -364,17 +333,15 @@ spec = do
                     `shouldRespondWith` ""{matchStatus = 404}
 
     describe "dispatch -- injected router (the routing boundary)" $
-        -- Drive dispatch with a FAKE router, not npm's. The action a request takes must
-        -- follow the injected function, proving the web layer is not hardwired to npm's
-        -- grammar.
+        -- Dispatch runs under a FAKE router, not npm's, so the action a request takes must
+        -- follow the injected function.
         with fakeRouterApp $ do
             it "routes the fake router's recognised path (/npm/beep → answered locally → 200 {})" $
                 get "/npm/beep" `shouldRespondWith` "{}"{matchStatus = 200}
 
             it "denies a path npm would accept but the fake does not (/npm/is-odd → 404)" $
-                -- Under npm's router @is-odd@ is a packument read. Under the injected fake
-                -- it is a miss (404). The 404 proves dispatch followed the injected
-                -- function, not a baked-in npm router.
+                -- Under npm's router @is-odd@ is a packument read, so this 404 proves dispatch
+                -- followed the injected function.
                 get "/npm/is-odd" `shouldRespondWith` 404
 
             it "denies npm's ping meta-route (the fake router does not recognise it)" $
@@ -466,20 +433,17 @@ data AbortLaunch = AbortLaunch
 
 instance Exception AbortLaunch
 
-{- | Pin the real 'runWarp' drain wiring. 'runWarp' must hand the application builder
-the live 'DrainSignal' the shutdown handler raises, not the inert 'neverDraining' a
-bare 'mkServerConfig' carries. Every other draining spec sets 'scDrain' by hand, so
-this is the only one that exercises 'runWarp''s allocate-then-build path. That is the
-gap that let the dead wiring ship.
+{- | Pin the 'runWarp' drain wiring: it must hand the application builder the live
+'DrainSignal', not the inert 'neverDraining' a bare 'mkServerConfig' carries. Every other
+draining spec sets 'scDrain' by hand, so this is the only one exercising 'runWarp''s
+allocate-then-build path.
 -}
 runWarpDrainWiringSpec :: Spec
 runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)" $
     it "hands the application builder the live drain, not the inert neverDraining" $ do
         captured <- newEmptyMVar
-        -- Capture the drain from the config runWarp hands the builder, then abort
-        -- before warp binds a socket. The scDrain from mkServerConfig is neverDraining,
-        -- so an app closed over that inert signal would never see a drain. The live signal
-        -- runWarp allocates must reach the builder instead.
+        -- The scDrain from mkServerConfig is neverDraining, so an app closed over that inert
+        -- signal would never see a drain. Abort before warp binds a socket.
         let getApp cfg = putMVar captured (scDrain cfg) >> throwIO AbortLaunch
         runWarp (mkServerConfig []) getApp `shouldThrow` (== AbortLaunch)
         drain <- takeMVar captured
@@ -497,17 +461,14 @@ newtype RaceBoom = RaceBoom Text
 
 instance Exception RaceBoom
 
-{- | Pin the shutdown-race invariant 'raceServerAgainstLoop' carries, distinguishing
-'race_' from 'concurrently_' with no socket and no signal. The server arm's return
-must cancel the never-returning loop. A fault from either arm must re-raise, never
-vanish.
+{- | Pin the shutdown-race invariant 'raceServerAgainstLoop' carries. The server arm's
+return must cancel the never-returning loop, and a fault from either arm must re-raise.
 -}
 raceServerAgainstLoopSpec :: Spec
 raceServerAgainstLoopSpec = describe "raceServerAgainstLoop -- shutdown-race invariant (issue #842)" $ do
     it "returns when the server arm returns, cancelling the never-returning loop" $ do
-        -- The loop never returns on its own, so a `concurrently_` would keep waiting on
-        -- it after the server arm returned and this would time out. Under `race_` the
-        -- server's return cancels the loop, whose `finally` cleanup then runs.
+        -- A `concurrently_` would keep waiting on the never-returning loop and time out. Under
+        -- `race_` the server's return cancels it, so the loop's `finally` cleanup runs.
         cancelled <- newIORef False
         let server = pass
             loop = forever (threadDelay 1_000_000) `finally` writeIORef cancelled True

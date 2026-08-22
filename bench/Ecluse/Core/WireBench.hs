@@ -45,9 +45,8 @@ benchmarks loaded =
         | le@(ce, raw, _) <- loaded
         ]
 
-{- | Decode bytes through the live wire decoder ('parseVersionList'), forcing every
-version. The version-list result forces the element-wise packument decode, the
-per-version manifest decode that is the read path's GC-dominant cost.
+{- | Decode bytes through 'parseVersionList', forcing every version. That forces the
+per-version manifest decode, the read path's GC-dominant cost.
 -}
 decodeDepth :: ByteString -> Int
 decodeDepth raw = either (const (-1)) length (parseVersionList (RegistryResponse raw))

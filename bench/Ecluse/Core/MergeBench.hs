@@ -46,9 +46,8 @@ benchmarks loaded =
                     mergeDepth
                ]
 
-{- | Merge a packument with a second (gated) copy of itself and force the resolved plan
-by counting its survivors. Two overlapping sources is the collision-heavy case the
-divergence check works on.
+{- | Merge a packument with a gated copy of itself, forcing the plan by counting survivors.
+Two overlapping sources is the collision-heavy case the divergence check works on.
 -}
 mergeDepth :: PackageInfo -> Int
 mergeDepth info =

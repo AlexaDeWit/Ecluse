@@ -17,9 +17,8 @@ import Ecluse.Core.Server.Admission (
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeAdmissionInFlight, mpServeAdmissionQueued))
 import Ecluse.Test.Port (noopMetricsPort)
 
-{- | Wait budgets for the tuned handles. The generous budget lets a test observe a
-wait complete on a loaded runner. The short one lets a test observe a wait expire
-without slowing the suite.
+{- | Wait budgets for the tuned handles. The generous budget lets a wait complete on a loaded
+runner, and the short one lets a wait expire without slowing the suite.
 -}
 generousWaitMicros :: Int
 generousWaitMicros = 5_000_000
@@ -129,10 +128,8 @@ spec = describe "withServeAdmission -- brief-wait admission" $ do
         length (filter isJust results) `shouldSatisfy` (>= 8)
 
     it "releases the slot and re-raises when the queued observer throws" $ do
-        -- The queued record runs inside the release-protected region and after the
-        -- in-flight increment. A throw from it must propagate to the caller, still
-        -- return the held slot, and leave the gauge balanced: increments matched by
-        -- decrements. This is regression cover for a slot leak.
+        -- The queued record runs inside the release-protected region, so a throw must propagate to
+        -- the caller, still return the slot, and leave the gauge balanced. Cover for a slot leak.
         gauge <- newTVarIO (0 :: Int)
         let throwingQueued =
                 noopMetricsPort

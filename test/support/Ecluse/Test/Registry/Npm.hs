@@ -43,10 +43,8 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
-{- | The common fields of an npm version object. 'vsExtraPairs' carries fields whose
-exact representation belongs to a particular test axis, such as dependencies or an
-explicit @hasInstallScript@ signal. An extra pair overrides the common field with the
-same key.
+{- | The common fields of an npm version object. An extra pair in 'vsExtraPairs' overrides the
+common field with the same key.
 -}
 data VersionSpec = VersionSpec
     { vsName :: Text
@@ -100,9 +98,8 @@ versionValue spec =
             <> vsExtraPairs spec
         )
 
-{- | Build an npm packument from its decision-bearing fields. The caller supplies the
-complete @time@ map because created and modified bookkeeping differs by fixture. Extra
-top-level pairs preserve site-specific relay or benchmark fields.
+{- | Build an npm packument from its decision-bearing fields. The caller supplies the complete
+@time@ map because created and modified bookkeeping differs by fixture.
 -}
 packumentValue ::
     -- | The package name self-reported by the packument.
@@ -144,17 +141,15 @@ The default target when no managed backend is configured.
 publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
-{- | The canonical public npm registry as an https 'RegistryUrl': the
-'publicRegistryBaseUrl' text validated through 'unsafeRegistryUrl' (the https-only
-'Ecluse.Core.Security.Egress.mkRegistryUrl').
+{- | The canonical public npm registry as a 'RegistryUrl', validated through the https-only
+'Ecluse.Core.Security.Egress.mkRegistryUrl'.
 -}
 publicRegistryUrl :: RegistryUrl
 publicRegistryUrl = unsafeRegistryUrl publicRegistryBaseUrl
 
-{- | An anonymous client config against the public registry ('publicRegistryBaseUrl'),
-using the given shared 'Manager' and the secure-default response bounds
-('Ecluse.Core.Security.defaultLimits'). Override 'npmBaseUrl'/'npmToken'/'npmLimits' for
-a managed backend or a per-deployment budget.
+{- | An anonymous client config against the public registry, with the secure-default response
+bounds ('Ecluse.Core.Security.defaultLimits'). Override 'npmBaseUrl', 'npmToken', or 'npmLimits'
+for a managed backend or a per-deployment budget.
 -}
 defaultNpmConfig :: Manager -> NpmClientConfig
 defaultNpmConfig manager =

@@ -89,17 +89,8 @@ import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
 import Ecluse.Composition.Sizing (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
-{- | The tunables every scenario shares: the load the generator applies (concurrency,
-duration) and the shape of the upstream it applies it to (injected per-upstream latency
-and the artifact payload size). A scenario's ecosystem-specific setup ('scenarioBoot')
-consumes the latency and the payload. The harness consumes the concurrency and the
-duration when it drives the load. The npm packument scenarios derive their payloads from
-the real-world corpus (see "Ecluse.BenchLoad.Npm"), and 'lkPayloadBytes' sizes the worker
-and tarball scenarios' synthetic artifacts.
-
-The defaults model a realistic operating point. Override them through the environment
-('loadKnobsFromEnv') to probe a different one. Absolutes are runner-dependent and noisy.
-The work-normalised counters (allocations per request) are the cross-runner-stable signal.
+{- | Tunables every scenario shares: the load the generator applies and the shape of the
+upstream it applies it to. Override them through the environment ('loadKnobsFromEnv').
 -}
 data LoadKnobs = LoadKnobs
     { lkConcurrency :: Int
@@ -110,54 +101,38 @@ data LoadKnobs = LoadKnobs
     -- ^ Latency a stub upstream injects before responding, modelling a real network hop.
     , lkPayloadBytes :: Int
     {- ^ Approximate size of the worker and tarball scenarios' synthetic artifacts. The
-    packument scenarios serve the real-world corpus, so their payloads come from the
-    captures, not from this knob.
+    packument scenarios serve the corpus captures, so this knob does not size them.
     -}
     , lkCacheMaxEntries :: Int
-    {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set it below the
-    working set, so the cache cannot hold the whole set and continually evicts and
-    re-derives. The fits-in-cache baseline scenario bounds at the working-set size instead.
+    {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set it below
+    'lkWorkingSet', or the cache holds the whole set and never evicts.
     -}
     , lkWorkingSet :: Int
-    {- ^ Number of distinct large packages in the cache-eviction working set (taken from
-    the head of the corpus, heaviest first). The default exceeds the corpus, so the whole
-    corpus is the working set unless this knob narrows it.
+    {- ^ Number of distinct large packages in the cache-eviction working set, taken from the
+    head of the corpus, heaviest first. The default exceeds the corpus, so the corpus bounds it.
     -}
     , lkServeMaxInFlight :: Maybe Int
-    {- ^ Process-wide metadata admission capacity the proxy fixture exercises. Pass an
-    explicit capacity, or 'Nothing' to resolve the shipped computed default from the
-    capability count via 'resolveServeAdmission', exactly as the composition root does. An
-    unknobbed run then measures what an operator gets by default.
+    {- ^ Process-wide metadata admission capacity the proxy fixture exercises. 'Nothing'
+    resolves the shipped computed default via 'resolveServeAdmission', as the composition root
+    does.
     -}
     , lkPublicConnectionsPerHost :: Maybe Int
-    {- ^ Public-upstream per-host connection-pool capacity. Pass an explicit override, or
-    'Nothing' to resolve the shipped computed default from the process file-descriptor
-    limit via 'resolvePublicConnections'\/'openFileSoftLimit', exactly as the composition
-    root does.
+    {- ^ Public-upstream per-host connection-pool capacity. 'Nothing' resolves the shipped
+    computed default from the file-descriptor limit via
+    'resolvePublicConnections'\/'openFileSoftLimit', as the composition root does.
     -}
     , lkPrivateConnectionsPerHost :: Maybe Int
-    {- ^ Private-upstream per-host connection-pool capacity. Pass an explicit override, or
-    'Nothing' to resolve the shipped computed default from the process file-descriptor
-    limit via 'resolvePrivateConnections'\/'openFileSoftLimit', exactly as the composition
-    root does. The private pool does not follow the admission capacity, because a trusted
-    tarball hit streams outside admission. This is therefore the knob for a private-pool
-    dose-response against the un-admitted streaming fan-out.
+    {- ^ Private-upstream per-host connection-pool capacity. 'Nothing' resolves the shipped
+    computed default from the file-descriptor limit, as the composition root does. The private
+    pool does not follow the admission capacity, because a trusted tarball hit streams outside
+    admission.
     -}
     }
     deriving stock (Eq, Show)
 
-{- | The default operating point: 100 concurrent clients for 30 seconds against an
-upstream with a 5 ms injected latency. The packument scenarios serve the real-world
-corpus, so their payloads come from the captures. The ~355 KiB payload sizes the worker
-and tarball scenarios' synthetic artifacts. It is about the median tarball of a
-popular-package mix. That sits between the sub-30 KiB utilities that dominate request
-counts and the multi-MiB toolchain artifacts that dominate bytes.
-
-The concurrency loads the tarball paths meaningfully under a realistic round trip, while
-staying within what a shared runner's generator sustains. It also puts the ceiling
-scenario's scaled 400 connections on the relay's measured knee. The cache-eviction
-scenario bounds the cache at 3 entries against the whole-corpus working set (default 64,
-capped to the corpus), so it evicts.
+{- | The default operating point. The payload is about the median tarball of a
+popular-package mix, and the concurrency loads the tarball paths under a realistic round
+trip while staying inside what a shared runner's generator sustains.
 -}
 defaultLoadKnobs :: LoadKnobs
 defaultLoadKnobs =
@@ -173,21 +148,13 @@ defaultLoadKnobs =
         , lkPrivateConnectionsPerHost = Nothing
         }
 
-{- | Read the load knobs from the environment, each falling back to its
-'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
-@BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
-delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@,
-@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@,
-@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and @BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@.
-A malformed value falls back to the default rather than failing, since the knobs only
-shape an inform-only measurement.
-
-@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@ and @BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@ are the
-exceptions to "falls back to its default value": neither has a fixed default. Set, each
-pins its value. Blank, absent, or malformed, the knob stays 'Nothing' and the fixture
-resolves the shipped computed default at use. The fixture then reads @serveMaxInFlight@
-from the capability count, and the private pool from the file-descriptor limit. The
-unknobbed bench measures the posture an operator gets.
+{- | Read the load knobs from the environment: @BENCH_LOAD_CONCURRENCY@,
+@BENCH_LOAD_DURATION_SECONDS@, @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds),
+@BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, @BENCH_LOAD_WORKING_SET@,
+@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@, @BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and
+@BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@. A malformed value falls back to the default
+rather than failing, and the three pool knobs stay 'Nothing' so the fixture resolves the
+shipped computed default at use.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -216,10 +183,8 @@ loadKnobsFromEnv = do
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
 
-{- | A per-ecosystem load-test fixture (the Handle pattern): the ecosystem it serves and
-its load scenarios. One instance exists per upstream ecosystem, and the harness consumes
-it without knowing which ecosystem it is. npm is the first and only instance
-("Ecluse.BenchLoad.Npm").
+{- | A per-ecosystem load-test fixture: the ecosystem it serves and its load scenarios.
+The harness consumes it without knowing which ecosystem it is.
 -}
 data UpstreamFixture = UpstreamFixture
     { fixtureEcosystem :: Ecosystem
@@ -228,14 +193,10 @@ data UpstreamFixture = UpstreamFixture
     -- ^ The fixture's load scenarios (npm's three mandatory traffic shapes).
     }
 
-{- | One load scenario: its identity and the ecosystem-specific __setup and teardown__
-that boots its stub upstream(s), wires the proxy, and yields a 'Driver' to the harness.
-
-'scenarioBoot' is the whole per-ecosystem surface. It takes the 'LoadKnobs' (for the
-injected latency and payload its stubs honour) and a continuation. It brackets the
-setup\/teardown around the continuation and hands it the 'Driver' that says what to
-drive. The continuation is higher-rank so the harness can run any measurement inside the
-bracket while the fixture stays up.
+{- | One load scenario: its identity and the ecosystem-specific setup and teardown that
+boots its stub upstreams, wires the proxy, and yields a 'Driver'. The 'scenarioBoot'
+continuation is higher-rank so the harness can run any measurement while the fixture stays
+up.
 -}
 data Scenario = Scenario
     { scenarioName :: Text
@@ -243,20 +204,18 @@ data Scenario = Scenario
     , scenarioDescription :: Text
     -- ^ A one-line description of the traffic shape, for the rendered report.
     , scenarioConcurrencyScale :: Int
-    {- ^ Multiplier applied to the shared 'lkConcurrency' for this scenario alone. @1@ for
-    every ordinary scenario. A ceiling-probe scenario raises it so the load generator stops
-    being the binding constraint. Client connections x RTT bound a streaming path at the
-    default concurrency, never the proxy. The scenario's description must state the factor,
-    because the operating-point line prints the shared base.
+    {- ^ Multiplier applied to 'lkConcurrency' for this scenario alone, @1@ for an ordinary
+    scenario. A ceiling probe raises it so the load generator stops being the binding
+    constraint. The scenario's description must state the factor, because the operating-point
+    line prints the shared base.
     -}
     , scenarioBoot :: forall a. LoadKnobs -> (Driver -> IO a) -> IO a
     -- ^ Bracket the ecosystem-specific setup\/teardown and yield the 'Driver'.
     }
 
 {- | What the harness drives once a scenario's fixture is up. An HTTP scenario hands back
-the proxy URL to load with @oha@. An in-process scenario (the worker mirror loop, which
-has no HTTP surface) hands back an action. That action applies the load for the configured
-duration and returns each unit's latency in seconds.
+a URL for @oha@, and an in-process scenario hands back an action returning each unit's
+latency in seconds.
 -}
 data Driver
     = {- | Drive this URL with @oha@ (the proxy is up). The harness owns the concurrency
@@ -281,13 +240,8 @@ data Driver
       DriveInProcess (IO [Double])
 
 {- | The figures one scenario yields. The report crosses the per-scenario process boundary
-as JSON, so it carries JSON instances. Each scenario runs in its own process, and the
-driver collects the reports.
-
-Latencies are milliseconds, and @Nothing@ when the run recorded no successful request.
-Allocations per request is the work-normalised, cross-runner-stable signal. Throughput and
-the percentiles are runner-dependent and read coarsely. See 'srAllocPerReqBytes' for what
-that allocation figure does and does not include.
+as JSON, so it carries JSON instances. Latencies are milliseconds, and @Nothing@ when the
+run recorded no successful request.
 -}
 data ScenarioReport = ScenarioReport
     { srName :: Text
@@ -304,25 +258,19 @@ data ScenarioReport = ScenarioReport
     , srSuccessRate :: Double
     -- ^ Fraction of requests that succeeded, in @[0, 1]@.
     , srDeadlineAborts :: Int
-    {- ^ Requests the load generator abandoned when the run's deadline arrived before they
-    completed: a backlog the proxy never drained, and the load-saturation signal. Zero for
-    the in-process scenario, which has no deadline-bounded generator.
+    {- ^ Requests the load generator abandoned at the run's deadline, the load-saturation
+    signal. Zero for the in-process scenario, which has no deadline-bounded generator.
     -}
     , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
     -- ^ Latency percentiles, in milliseconds.
     , srAllocPerReqBytes :: Double
-    {- ^ Bytes allocated per request, the machine-independent signal. The harness measures
-    the allocation delta over the whole bench process. For the HTTP scenarios that process
-    also runs the two in-process stub upstreams and the proxy. The measurement excludes
-    only @oha@, a subprocess, so it folds in the stubs' own per-request allocations. The
-    figure is therefore a consistent __over-count__, fine for trending across commits. It
-    is __not__ a pure proxy per-request cost, and not directly comparable to the
-    work-per-request micro-benches' pure per-call allocations.
+    {- ^ Bytes allocated per request, the machine-independent signal. The delta spans the
+    whole bench process, so it folds in the stub upstreams and is a consistent over-count, not
+    a pure proxy per-request cost.
     -}
     , srPeakResidencyBytes :: Word64
     {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
-    high-water mark, so it spans the warm-up as well as the measured window, a wider
-    window than the allocation and GC deltas.
+    high-water mark, so it spans the warm-up too, a wider window than the deltas.
     -}
     , srRetainedBytes :: Word64
     -- ^ Live heap retained after a major GC at the scenario's end.
@@ -340,13 +288,9 @@ data ScenarioReport = ScenarioReport
     deriving stock (Generic, Show)
     deriving anyclass (FromJSON, ToJSON)
 
-{- | Boot a scenario's fixture, apply the load, capture the runtime statistics around it,
-and return the figures. The fixture's bracket owns setup and teardown. This owns the RTS
-capture and the measurement, which is the same whatever the ecosystem.
-
-Throws on a literal failure, never on a slow or degraded result. The literal failures are
-an unavailable RTS counter (a binary built without @-T@) and a scenario that served
-nothing.
+{- | Boot a scenario's fixture, apply the load, and return the figures. Throws only on a
+literal failure: an unavailable RTS counter (a binary built without @-T@) or a scenario
+that served nothing.
 -}
 runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
 runScenario knobs scenario = do
@@ -358,13 +302,9 @@ runScenario knobs scenario = do
     let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale scenario)}
     scenarioBoot scenario scaled (measure scaled scenario)
 
--- Apply the load over a booted fixture and assemble the report. A short warm-up runs
--- first, so the JIT, the connection pool, and the metadata cache settle and the measured
--- window is steady-state. Then a major GC zeroes the residual heap, the before-snapshot
--- opens the window, the measured load runs, and the after-snapshot closes it. The
--- allocation and GC figures are before/after deltas over that window, warm-up excluded.
--- Peak residency ('max_live_bytes') is a process high-water mark, so it also spans the
--- warm-up, a wider window than the deltas, as its field notes.
+-- The measured window opens after a warm-up and a major GC, so the allocation and GC
+-- figures are deltas over the steady state alone. Peak residency is a process high-water
+-- mark, so it also spans the warm-up.
 measure :: LoadKnobs -> Scenario -> Driver -> IO ScenarioReport
 measure knobs scenario driver = do
     warmUp driver
@@ -403,9 +343,8 @@ measure knobs scenario driver = do
             , srNote = note
             }
 
--- A brief warm-up before the measured window, so the harness measures the steady state.
--- The HTTP path runs a short @oha@ pass, which also primes the metadata cache for the
--- cache-hit scenario. The in-process path needs none worth a separate run.
+-- The HTTP warm-up also primes the metadata cache for the cache-hit scenario. The
+-- in-process path needs none worth a separate run.
 warmUp :: Driver -> IO ()
 warmUp = \case
     DriveHttp url -> void (runOha 8 warmupSeconds url)
@@ -416,9 +355,8 @@ warmUp = \case
     warmupSeconds :: Int
     warmupSeconds = 3
 
--- Apply the measured load and return the figures the RTS capture pairs with: the request
--- count, throughput, success rate, the four percentiles in milliseconds, the
--- deadline-abort count, and a distribution note.
+-- Apply the measured load and return the request count, throughput, success rate, the
+-- four percentiles in milliseconds, the deadline-abort count, and a distribution note.
 drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
 drive knobs = \case
     DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
@@ -468,15 +406,9 @@ drive knobs = \case
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
 
--- The count of requests the generator abandoned at the run's deadline: a best-effort
--- saturation signal, never an exact one and never a gate. The oha label for a deadline
--- abandonment is the transport error "aborted due to deadline", distinct from a non-2xx
--- status. The count therefore sums the error-distribution entries whose label names the
--- deadline. Under load that is the backlog the proxy never drained before the window
--- closed. The pin holds oha fixed, so the substring match stays good until a deliberate
--- oha bump (a reviewed flake.lock change). The default is an explicit zero: no matching
--- label yields 0, whether there were no deadline aborts or a future oha renamed the
--- label. That is an accepted, safe default for an inform-only figure.
+-- Best-effort saturation signal, never a gate. oha labels a deadline abandonment as the
+-- transport error "aborted due to deadline", so this sums the error entries naming the
+-- deadline. No matching label yields zero, whether none occurred or a future oha renamed it.
 deadlineAbortsOf :: OhaReport -> Int
 deadlineAbortsOf report =
     sum [n | (label, n) <- Map.toList (ohaErrorCounts report), "deadline" `T.isInfixOf` T.toLower label]
@@ -503,10 +435,8 @@ distributionNote report =
         | otherwise = ["errors " <> renderCounts (ohaErrorCounts report)]
     renderCounts m = T.intercalate ", " [k <> "×" <> show v | (k, v) <- Map.toList m]
 
-{- | Render the per-scenario reports to a Markdown section: a header naming the ecosystem
-and the operating point, then one block per scenario. Each block carries the scenario's
-throughput, latency percentiles, allocations per request, residency, and GC stats. The
-same text goes to stdout and to the GitHub run summary.
+{- | Render the per-scenario reports to a Markdown section. The same text goes to stdout
+and to the GitHub run summary.
 -}
 renderReports :: LoadKnobs -> Int -> Ecosystem -> [ScenarioReport] -> Text
 renderReports knobs capabilities ecosystem reports =
@@ -623,10 +553,9 @@ renderScenario r =
     msCell :: Maybe Double -> Text
     msCell = maybe "n/a" (\v -> fmt2 v <> " ms")
 
-{- | Render the service-time attribution section (upstream vs Écluse overhead) from the
-concurrency-1 pass's reports, against the given upstream baseline. The pure split and its
-layout live in "Ecluse.BenchLoad.Normalise". This only lifts each report's p50 and p99 out
-into the row shape that module renders.
+{- | Render the service-time attribution section (upstream against Écluse overhead) from
+the concurrency-1 pass's reports, against the given baseline. The pure split and its layout
+live in "Ecluse.BenchLoad.Normalise".
 -}
 renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
 renderServiceTime source reports =
@@ -634,10 +563,9 @@ renderServiceTime source reports =
   where
     toRow r = NormalisedRow (srName r) (srP50Ms r) (srP99Ms r)
 
-{- | Render the load-saturation section (the queuing-delay flag) by pairing each loaded
-report with its concurrency-1 counterpart by name. The throughput and the deadline aborts
-come from the loaded pass, and the service p50 from the concurrency-1 pass. The queuing
-derivation and its flag live in "Ecluse.BenchLoad.Normalise".
+{- | Render the load-saturation section by pairing each loaded report with its
+concurrency-1 counterpart by name. The queuing derivation and its flag live in
+"Ecluse.BenchLoad.Normalise".
 -}
 renderLoadSaturation :: [ScenarioReport] -> [ScenarioReport] -> Text
 renderLoadSaturation c1Reports loadedReports =

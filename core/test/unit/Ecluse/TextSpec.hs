@@ -14,13 +14,9 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, renderIso8601Utc, stripTrailingSlash)
 
-{- | Tests for the shared text helpers. They pin the promises callers depend on.
-'nonBlank' treats an empty or all-whitespace value as absent and returns the surviving
-text trimmed. The URL-path helpers tolerate exactly one trailing slash on the base, so a
-join never doubles or drops the separator. 'lastPathSegment' returns the text after the
-final slash, or nothing when the string ends in one. The hot-path ISO-8601 renderer is
-byte-for-byte 'iso8601Show', pinned by a property over the whole domain, including the
-delegating edges.
+{- | Tests for the shared text helpers. They pin the promises callers depend on: absence and
+trimming in 'nonBlank', exactly one tolerated trailing slash on a URL base, 'lastPathSegment'
+after the final slash, and 'renderIso8601Utc' byte-for-byte equal to 'iso8601Show'.
 -}
 spec :: Spec
 spec = do
@@ -90,9 +86,8 @@ renderIso8601Spec :: Spec
 renderIso8601Spec = describe "renderIso8601Utc" $ do
     it "matches iso8601Show byte-for-byte across the domain" $
         hedgehog $ do
-            -- The whole fast-path domain plus the delegating edges: expanded-
-            -- representation years on either side of 0-9999, and every
-            -- picosecond fraction shape (zero, short, full-precision).
+            -- The whole fast-path domain plus the delegating edges: expanded-representation years
+            -- on either side of 0-9999, and every picosecond fraction shape.
             year <- forAll (Gen.integral (Range.linearFrom 2020 (-50) 10500))
             month <- forAll (Gen.int (Range.linear 1 12))
             day <- forAll (Gen.int (Range.linear 1 31))

@@ -37,11 +37,8 @@ import Ecluse.Runtime.Queue.Sqs (
  )
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
-{- | These cases drive the SQS 'MirrorQueue' backend against a real endpoint from a
-@ministack@ container (launched via @testcontainers@, shared through
-"Ecluse.Integration.Ministack"). The harness points @amazonka@ at the container with
-throwaway credentials, so the cases are hermetic and __gating__. They require a running
-Docker daemon and no real AWS.
+{- | These cases drive the SQS 'MirrorQueue' backend against a @ministack@ container from
+"Ecluse.Integration.Ministack". They are gating and need a Docker daemon, never real AWS.
 -}
 spec :: Spec
 spec =
@@ -70,10 +67,8 @@ spec =
                 map msgJob redelivered `shouldBe` [sampleJob]
 
             it "extendVisibility holds an un-acked job past its original window" $ \container -> do
-                -- Start with a 1s visibility timeout, then extend the in-flight
-                -- message's window well past it. The job must NOT reappear inside
-                -- the original timeout's redelivery gap, which proves the
-                -- ChangeMessageVisibility call held it.
+                -- Extend the in-flight message well past its 1s visibility timeout. No
+                -- reappearance inside the original window proves the extension held it.
                 queue <- freshQueue container "mirror-extend" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
                 unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
@@ -84,13 +79,9 @@ spec =
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
             it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
-                -- deadLetter must NOT DeleteMessage, which would silently discard the
-                -- terminal fault and lose the observability. It returns the message with
-                -- the terminal backoff, so the message stays in the queue and rides the
-                -- operator's redrive policy to the dead-letter queue. The message's
-                -- reappearance after the deadLetter proves nothing deleted it, because
-                -- an ack or delete never redelivers. The short terminal backoff keeps
-                -- that reappearance within the poll's patience.
+                -- deadLetter must NOT DeleteMessage, which would silently discard the terminal
+                -- fault. It returns the message with the terminal backoff, so the message rides
+                -- the operator's redrive policy. Reappearance proves nothing deleted it.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
                 unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
@@ -99,17 +90,12 @@ spec =
                 map msgJob redelivered `shouldBe` [sampleJob]
 
             it "carries a real ApproximateReceiveCount, rising on each redelivery (issue #935)" $ \container -> do
-                -- SQS omits this attribute unless the request asks for it. This case
-                -- proves it against the real API. A missing request parameter would
-                -- silently read as a first delivery forever, and the budget would
-                -- never fire.
+                -- SQS omits this attribute unless the request asks for it. A missing
+                -- parameter would read as a first delivery forever, so the budget never fires.
                 queue <- freshQueue container "mirror-receive-count" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
                 unwrapQ (enqueue queue sampleJob)
                 [first'] <- receiveUntil queue
                 msgReceiveCount first' `shouldBe` 1
-                -- This case leaves the message unacked on purpose. The message comes
-                -- back once its short visibility window lapses, this time on its
-                -- second delivery.
                 [second'] <- receiveUntil queue
                 msgReceiveCount second' `shouldBe` 2
 
@@ -120,9 +106,7 @@ spec =
                 deadLetterTerminus queue `shouldBe` Right TerminusAbsent
 
             it "probes an attached redrive policy, reading its maxReceiveCount (issue #935)" $ \container -> do
-                -- With a dead-letter queue attached, the boot warning must stay
-                -- silent. The capture count holds Écluse's own budget above it. This
-                -- case picks a count above the shipped floor of 5, so the raise is
+                -- The capture count 9 sits above the shipped floor of 5, so the raise is
                 -- visible. At 5 the effective budget would equal the floor either way.
                 queue <- freshQueue container "mirror-with-dlq" defaultQueueOptions{qoDeadLetterAfter = Just 9}
                 deadLetterTerminus queue `shouldBe` Right (TerminusAttached (Just (DeliveryBudget 9)))
@@ -131,10 +115,8 @@ spec =
                 deliveryBudget queue `shouldBe` DeliveryBudget 10
 
             it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
-                -- Point the backend at a loopback port with nothing listening. The
-                -- poll must come back as the typed 'Left' with the unreachable cause,
-                -- classified at the adapter edge, never as an exception through the
-                -- caller.
+                -- The poll must come back as a typed 'Left' with the unreachable cause,
+                -- classified at the adapter edge, never as an exception through the caller.
                 queue <- deadEndpointQueue
                 outcome <- receive queue
                 case outcome of

@@ -41,22 +41,9 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 
-{- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm
-our JSON decoding and protocol handling match reality.
-
-They depend on uncontrolled external services, so they are __allowed to fail by
-design__ and never gate a merge. The CI @gate@ does not depend on them. A failure
-is a prompt to investigate protocol drift or flakiness, not an automatic
-blocker.
-
-Two cases run against the public @registry.npmjs.org@. The first fetches a real
-__abbreviated__ packument and projects it through the live decoder
-("Ecluse.Core.Registry.Npm.Project", shelling out to @curl@). That pins the
-decoder the serve path actually runs to reality. The second drives the full data
-plane: 'fetchMetadataFormBounded' over real @http-client@. It projects the
-response to the domain 'PackageInfo', so a protocol or projection drift surfaces
-end-to-end. Both __pend__ rather than fail when the network (or @curl@) is
-unavailable, so a bare or offline checkout does not see a red test.
+{- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm our JSON decoding
+and protocol handling match reality. They depend on uncontrolled external services, so they never
+gate a merge, and each case __pends__ rather than fails when the network is unavailable.
 -}
 spec :: Spec
 spec = describe "live registry protocol (npm / PyPI)" $ do
@@ -104,22 +91,16 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                     Left err ->
                         expectationFailure ("live packument failed to project: " <> show err)
                     Right (info, _raw) -> do
-                        -- The data plane reached npm and the live projection round-trips:
-                        -- the package name comes back as published, and `latest` is
-                        -- always a dist-tag.
+                        -- The live projection round-trips: the name comes back as published, and
+                        -- `latest` is always a dist-tag.
                         renderPackageName (infoName info) `shouldBe` "is-odd"
                         Map.member "latest" (infoDistTags info) `shouldBe` True
 
     it "validates every real dist.shasum and dist.integrity a long-lived npm packument serves (mkHash accepts real formats)" $ do
         -- A fail-closed validator must not false-reject a digest npm actually serves: that
-        -- would silently drop a legitimate version to "no integrity". The lodash packument
-        -- spans the legacy SHA-1-only `dist.shasum` era and the modern `dist.integrity`
-        -- (sha512 SRI) era, so it exercises both formats. It also exercises any
-        -- multi-component integrity it serves, which mkHash validates
-        -- component-by-component. Every real digest must construct (a Right). This checks
-        -- WELL-FORMEDNESS, not the public floor. A real 40-hex SHA-1 shasum validates here
-        -- even though the floor would later exclude that version from a public listing.
-        -- Non-gating: pends on a network failure.
+        -- would silently drop a legitimate version to "no integrity". The lodash packument spans
+        -- the legacy `dist.shasum` (SHA-1) and modern `dist.integrity` (SRI) eras. This checks
+        -- well-formedness, not the public floor.
         (code, out, _err) <-
             readProcessWithExitCode "curl" ["-sf", registryBase <> "/lodash"] ""
         case code of
@@ -138,13 +119,9 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                         -- uses. A Left here is our validator false-rejecting a real format.
                         [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
 
-    -- The default Limits must not false-positive on CURRENT real data: each large,
-    -- widely-trusted package's full packument is admissible under the defaults
-    -- (security.md invariant 4). This validates the committed-fixture proof
-    -- ("Ecluse.SecuritySpec", express) against live registry data. The react packument
-    -- in particular runs to megabytes and thousands of versions, too big to commit. It is
-    -- the architect's headline case for "must never be refused". Non-gating: it pends on
-    -- a network failure rather than reddening the gate.
+    -- The default Limits must not false-positive on real data: each large, widely-trusted
+    -- package's full packument stays admissible under the defaults (security.md invariant 4).
+    -- The react packument is too big to commit, so only this live case covers it.
     for_ ["react", "@types/node", "lodash"] $ \pkg ->
         it ("a real large trusted packument is admissible under the default Limits (" <> toString pkg <> ")") $ do
             manager <- newManager tlsManagerSettings
@@ -153,9 +130,6 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                 Left (_ :: SomeException) ->
                     pendingWith "npm registry unreachable (offline); smoke test skipped"
                 Right (name, versionCount) -> do
-                    -- It fetched within the body bound, decoded within the nesting
-                    -- bound, projected, and cleared the version-count bound. The whole
-                    -- data-plane sequence admitted a real large package.
                     name `shouldBe` pkg
                     versionCount `shouldSatisfy` (> 0)
                     versionCount `shouldSatisfy` (<= maxVersionCount defaultLimits)
@@ -172,13 +146,9 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         Just rest | (sc, rest') <- T.breakOn "/" rest, not (T.null rest') -> Just (mkScope sc)
         _ -> Nothing
 
-{- | Run the exact response-bound sequence the data plane applies on the serve path,
-over a live full packument under the default 'Limits'. That sequence is a bounded fetch,
-then the decode, nesting, projection, and version-count steps of
-@Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest@. Returns the projected
-@(name, versionCount)@ on success. It throws if any bound or step refuses the document:
-a rendered 'Ecluse.Core.Registry.FetchFault', a decode error, or a projection error. An
-accidentally too-tight default therefore surfaces as a failure, not a silent pass.
+{- | Run the bounded fetch, decode, nesting, projection, and version-count sequence the serve path
+applies, over a live full packument under the default 'Limits'. It throws when any bound refuses
+the document, so an accidentally too-tight default surfaces as a failure, not a silent pass.
 -}
 admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
 admissibleUnderDefaults manager name = do
@@ -199,10 +169,9 @@ admissibleUnderDefaults manager name = do
     admitted <- either (\e -> throwString ("version bound refused a real package: " <> show e)) pure (checkVersionCount defaultLimits info)
     pure (renderPackageName (infoName admitted), Map.size (infoVersions admitted))
 
-{- | Every @dist.shasum@ (as a 'SHA1' digest) and @dist.integrity@ (as an 'SRI') a
-packument carries, across all of its versions. These are the raw digest strings the
-projection feeds to 'mkHash'. They come straight from the wire JSON, so the smoke test
-checks 'mkHash' against what npm genuinely serves.
+{- | Every @dist.shasum@ (as a 'SHA1' digest) and @dist.integrity@ (as an 'SRI') a packument
+carries, across all of its versions. These are the raw wire digests the projection feeds to
+'mkHash'.
 -}
 collectDistDigests :: Value -> [(HashAlg, Text)]
 collectDistDigests value =

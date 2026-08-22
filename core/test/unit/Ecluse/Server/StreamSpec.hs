@@ -32,10 +32,9 @@ waiRelayResponder respond =
         (\status headers body -> respond (responseStream status headers body))
         (\status headers -> respond (responseLBS status headers ""))
 
-{- | A chunk source over a fixed list of chunks: each pull returns the next chunk
-and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
-contract). It records the high-water mark of chunks produced but not yet consumed,
-the residency the backpressure assertion turns on.
+{- | A chunk source over a fixed list: each pull returns the next chunk, then an empty
+'ByteString' once exhausted (the @http-client@ @BodyReader@ contract). It records the
+high-water mark of chunks produced but not yet consumed.
 -}
 data Source = Source
     { srcNext :: IO ByteString
@@ -71,13 +70,8 @@ spec :: Spec
 spec = do
     describe "pumpBody -- constant memory and backpressure" $ do
         it "holds at most one chunk in flight regardless of body size (constant memory)" $ do
-            -- A 256-chunk body goes through a synchronous rendezvous. Each 'write'
-            -- blocks until the consumer takes the chunk AND acks, so the handoff
-            -- completes before the pump reads the next chunk. The producer can never
-            -- run ahead, so the outstanding high-water mark is exactly 1 no matter how
-            -- large the body. A pump that buffered the whole body would track the
-            -- 256-chunk count instead. Staying at 1 is the constant-memory property,
-            -- and the rendezvous block is the backpressure ('write' pacing the read).
+            -- Each 'write' blocks until the consumer acks, so the producer never runs ahead.
+            -- A high-water mark of 1 for a 256-chunk body is the constant-memory property.
             let chunks = replicate 256 (BS.replicate 4096 0x61)
                 total = length chunks
             sink <- newEmptyMVar -- producer -> consumer handoff
@@ -110,11 +104,8 @@ spec = do
             pumpBody (srcNext src) (const (modifyIORef' out (+ 1))) (pure ())
             readIORef out `shouldReturn` 0
         it "flushes the first chunk only, coalescing the rest in the sink's buffer" $ do
-            -- One explicit flush pushes the status, headers, and opening bytes out
-            -- promptly (time to first byte). Flushing every chunk would instead pay a
-            -- socket send per upstream read at relay byte rates. The sink sends as its
-            -- output buffer fills and flushes the tail at stream end, so later chunks
-            -- need no explicit flush to arrive.
+            -- One explicit flush pushes the status, headers, and opening bytes out promptly (time
+            -- to first byte). Flushing every chunk would pay a socket send per upstream read.
             src <- newSource ["alpha", "beta", "gamma"]
             flushes <- newIORef (0 :: Int)
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
@@ -127,10 +118,8 @@ spec = do
 
     describe "streamUpstreamWhen -- large body, end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
-            -- A 4 MiB body streamed from an in-process Warp upstream, through the
-            -- proxy's streamUpstreamWhen (a passing predicate), and pulled back by a real
-            -- client. It must arrive intact via the full http-client wiring. The pump
-            -- test above is the unit proof that this path never buffers the body whole.
+            -- A 4 MiB body must arrive intact through the full http-client wiring. The pump case
+            -- above is the proof that this path never buffers the body whole.
             let bigBody = BS.replicate (4 * 1024 * 1024) 0x7a
             manager <- newManager defaultManagerSettings
             testWithApplication (pure (upstreamApp bigBody)) $ \upPort ->
@@ -141,10 +130,8 @@ spec = do
 
     describe "streamUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
-            -- On a passing status the body streams through and the relay forwards the
-            -- upstream's content headers. The client verifies dist.integrity over the
-            -- relayed bytes and headers. The hit is observable as the upstream body and
-            -- its Content-Type reaching the real client.
+            -- The client verifies dist.integrity over the relayed bytes and headers, so the relay
+            -- must forward the upstream's content headers along with the body.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure headeredUpstream) $ \upPort ->
                 testWithApplication (pure (conditionalProxy manager upPort)) $ \proxyPort -> do
@@ -155,9 +142,8 @@ spec = do
                         `shouldBe` Just "application/octet-stream"
 
         it "returns a clean miss (the fall-through marker) when the status fails accept" $ do
-            -- A 404 fails the success predicate, so the helper commits no response, the
-            -- proxy falls through, and it answers its own marker. That proves the helper
-            -- reported the recoverable miss rather than relaying the upstream body.
+            -- A 404 fails the predicate, so the helper commits no response and the proxy answers
+            -- its own marker rather than relaying the upstream body.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure missingUpstream) $ \upPort ->
                 testWithApplication (pure (conditionalProxy manager upPort)) $ \proxyPort -> do
@@ -166,10 +152,8 @@ spec = do
                     responseBody resp `shouldBe` fellThroughMarker
 
         it "returns a clean miss when the upstream connection cannot be opened" $ do
-            -- The upstream port is bound only long enough to learn a free port, then
-            -- released, so opening the connection fails. That failure is the recoverable
-            -- phase. The helper reports a miss (Nothing) and the proxy falls through,
-            -- never committing a response from a connection it could not open.
+            -- The upstream port is bound only long enough to learn a free port, then released, so
+            -- the open fails. A failed open is a recoverable miss, never a committed response.
             manager <- newManager defaultManagerSettings
             deadPort <- testWithApplication (pure missingUpstream) pure
             testWithApplication (pure (conditionalProxy manager deadPort)) $ \proxyPort -> do
@@ -178,11 +162,8 @@ spec = do
                 responseBody resp `shouldBe` fellThroughMarker
 
         it "relays an upstream 304 as a bodiless 304, forwarding its validator (the pass-through conditional relay)" $ do
-            -- A 304 passes the artifact relay's accept predicate (a 2xx OR a 304). The
-            -- relay sends it straight back as a BODILESS 304 with the upstream's
-            -- validator (ETag) forwarded, never pumped as a streamed body. This is the
-            -- cheap conditional-GET freshness check: the client gets a 304, not the
-            -- artifact.
+            -- A 304 passes the artifact relay's accept predicate (a 2xx or a 304). The relay sends
+            -- it back bodiless with the upstream's ETag forwarded, never pumped as a streamed body.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure notModifiedUpstream) $ \upPort ->
                 testWithApplication (pure (notModifiedProxy manager upPort)) $ \proxyPort -> do
@@ -195,9 +176,8 @@ spec = do
 
     describe "probeUpstreamWhen -- bodiless relay (HEAD, no pump)" $ do
         it "relays the upstream status and content headers with no body on a hit" $ do
-            -- A HEAD probe through the helper: the client gets the upstream's status
-            -- and content headers (here a Content-Type) but an EMPTY body. The helper
-            -- never pumps the body, which is the amplification a HEAD must never trigger.
+            -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
+            -- never trigger.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure headLengthUpstream) $ \upPort ->
                 testWithApplication (pure (probeProxy manager upPort)) $ \proxyPort -> do
@@ -249,9 +229,8 @@ spec = do
     notModifiedUpstream _req respond =
         respond (responseLBS status304 [(hETag, "\"v1\"")] "")
 
-    {- The artifact relay's conditional proxy: accept a 2xx OR a 304 (the predicate the
-    serve path's artifact relay uses) and relay it through. A miss answers the
-    fall-through marker. So an upstream 304 is observable as a relayed bodiless 304. -}
+    {- The artifact relay's conditional proxy: accept a 2xx or a 304, the predicate the serve
+    path's artifact relay uses. An upstream 304 is then observable as a relayed bodiless 304. -}
     notModifiedProxy :: HTTP.Manager -> Int -> Application
     notModifiedProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
@@ -260,16 +239,13 @@ spec = do
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
-    {- An upstream that answers a content header (a Content-Type) with no body, as a
-    HEAD reply does. A case then watches the probe relay forward the content metadata a
-    GET would carry, while pumping nothing. -}
+    {- An upstream that answers a content header with no body, as a HEAD reply does. -}
     headLengthUpstream :: Application
     headLengthUpstream _req respond =
         respond (responseLBS status200 [(hContentType, "application/octet-stream")] "")
 
-    {- The probe proxy under test: mark the upstream request a HEAD and relay it
-    bodiless on a successful status, else answer the fall-through marker. So a hit is
-    observable as the relayed headers with an empty body, a miss as the marker. -}
+    {- The probe proxy under test: a hit is observable as the relayed headers with an empty
+    body, a miss as the fall-through marker. -}
     probeProxy :: HTTP.Manager -> Int -> Application
     probeProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
@@ -278,9 +254,8 @@ spec = do
             Just received -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
-    {- The proxy under test: relay only a successful upstream status, otherwise
-    answer the fall-through marker. So a hit is observable as the upstream body, and
-    a miss (rejected status, or a connection that could not be opened) as the marker. -}
+    {- The proxy under test: a hit is observable as the upstream body, a miss (rejected status,
+    or a connection that could not be opened) as the fall-through marker. -}
     conditionalProxy :: HTTP.Manager -> Int -> Application
     conditionalProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")

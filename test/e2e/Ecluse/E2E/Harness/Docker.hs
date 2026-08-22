@@ -61,9 +61,8 @@ import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (ImageRef (LocallyBuilt, PinnedExternal), mkPinnedImageRef, renderImageRef)
 import Ecluse.Test.Containers (dockerLabelArgs)
 
-{- | 'Nothing' when the suite can run. @Just reason@ when the suite must skip: no docker
-daemon, or @ECLUSE_E2E_IMAGE@ unset. The @make test-e2e@ target and the CI e2e job build
-the image and name it.
+{- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
+or @ECLUSE_E2E_IMAGE@ unset. @make test-e2e@ and the CI e2e job build and name the image.
 -}
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable = do
@@ -85,12 +84,8 @@ dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
 
-{- | Build the shared fixture tree in a unique per-run temp directory for the action,
-then remove the whole tree on every exit path. The tree holds the packument\/tarball
-HTML, the Verdaccio and nginx configs, and a fresh test CA plus server cert. The
-directory name is unique per run rather than fixed. Two worktrees running the e2e at
-once therefore never share one another's fixtures, or delete them out from under each
-other.
+{- | Build the shared fixture tree in a per-run temp directory, then remove it on every
+exit path. The name is unique per run, so two worktrees never share or delete fixtures.
 -}
 withFixtureDir :: (FilePath -> IO a) -> IO a
 withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
@@ -116,19 +111,13 @@ withGlobalDataPlane action = do
             action GlobalDataPlane{gdpNet = "", gdpStub = "upstream", gdpVerd = "verdaccio", gdpMini = "ministack", gdpVerdPort = 4873, gdpMiniPort = 4566, gdpWorkDir = ""}
         _ -> do
             sfx <- uniqueSuffix
-            -- Every container and the network carries the reaping labels, so `task
-            -- test-clean` can sweep a run that is hard-killed past the brackets below (see
-            -- "Ecluse.Test.Containers"). The nested brackets tear each resource down in
-            -- reverse order on every exit path: success, failure, or exception.
+            -- Every container and the network carries the reaping labels, so `task test-clean` can
+            -- sweep a run that is hard-killed past these brackets (see "Ecluse.Test.Containers").
             labelArgs <- dockerLabelArgs "e2e"
             withFixtureDir $ \workDir -> do
-                -- Resolve each pulled image's pinned reference up front, aborting the suite
-                -- loudly (see 'pinnedExternal') if a literal is not digest-pinned. The
-                -- 'ImageRef' these run specs then carry keeps a tag out of every 'dockerRun'.
-                -- The images are verdaccio/verdaccio:5, nginx:alpine, and ministack (tag
-                -- 1.3-full), each pinned by its multi-arch index digest. An attacker can
-                -- re-point a mutable tag at a poisoned image, but not an immutable @sha256@
-                -- digest.
+                -- Resolve each pulled image's pinned reference up front, aborting the suite if a
+                -- literal is not digest-pinned. An attacker can re-point a mutable tag at a
+                -- poisoned image, but not an immutable @sha256@ digest.
                 verdImage <- pinnedExternal "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c"
                 stubImage <- pinnedExternal "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
                 miniImage <- pinnedExternal "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
@@ -159,10 +148,9 @@ withGlobalDataPlane action = do
                             { drAliases = ["ministack"]
                             , drPorts = ["127.0.0.1:0:4566"]
                             }
-                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never
-                -- blocks (see "Ecluse.Core.Security.Host" and its spec). The real image
-                -- therefore runs unmodified, with no production escape hatch. See
-                -- docs/testing.md.
+                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never blocks (see
+                -- "Ecluse.Core.Security.Host"). The real image runs with no production escape
+                -- hatch.
                 withDockerNetwork labelArgs net ["--subnet", "203.0.113.0/24"] $ \_ ->
                     withDockerContainer labelArgs verdRun $ \_ ->
                         withDockerContainer labelArgs stubRun $ \_ ->
@@ -171,23 +159,14 @@ withGlobalDataPlane action = do
                                 verdPort <- publishedPort verd "4873/tcp"
                                 action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
 
-{- | Bring up a proxy on the shared data plane, wait for its readiness, run the action,
-then tear the proxy down on every exit path. This is the plain topology
-('defaultE2EConfig'): no collector and no extra proxy environment. It assumes
-'e2eUnavailable' returned 'Nothing'. It runs under @aroundAllWith@, so a describe
-block's cases share one proxy (see "Ecluse.E2E.SuiteSpec").
+{- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then
+tear it down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
 -}
 withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2E = withE2EWith defaultE2EConfig
 
-{- | 'withE2E' parameterised by an 'E2EConfig'. It optionally stands up an OTLP collector
-the proxy exports to, on the shared data-plane network, reached by its @otelcol@ alias.
-It also layers extra proxy environment over the base 'proxyEnv'. A collector comes up
-__before__ the proxy and waits until ready, so it is already receiving on the proxy's
-first export. It goes down with the proxy. The proxy and collector are per-invocation, a
-describe block's own under @aroundAllWith@. The network and the
-Verdaccio\/nginx\/ministack data plane underneath are the suite-shared ones from
-'withGlobalDataPlane'.
+{- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may
+stand up an OTLP collector at @otelcol@, up before the proxy so no export is missed.
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2EWith cfg action gdp = do
@@ -215,30 +194,19 @@ withE2EWith cfg action gdp = do
                 prox = "ecluse-e2e-proxy-" <> sfx
                 coll = "ecluse-e2e-otelcol-" <> sfx
                 certsDir = gdpWorkDir gdp </> "certs"
-            -- The OTLP collector comes up and waits ready BEFORE the proxy, so it is
-            -- already accepting when the proxy first exports. It goes down after the body.
-            -- Only a scenario that asks for one gets a collector, and the rest see
-            -- 'Nothing'.
             withOptionalCollector cfg labelArgs net coll $ \collectorName -> do
                 manager <- newManager defaultManagerSettings
-                -- Create the mirror queue in ministack and learn its URL. The proxy routes to
-                -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
-                -- URL's host (here ministack's own `localhost:4566`) is immaterial.
+                -- The proxy routes to ministack via AWS_ENDPOINT_URL_SQS and matches the queue by
+                -- its path, so this URL's host (ministack's own `localhost:4566`) is immaterial.
                 let queueName = "ecluse-e2e-queue-" <> T.pack sfx
                 queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
-                -- Pick the host port up front, so ECLUSE_SERVER__PUBLIC_URL is known before
-                -- the container starts. That variable makes the proxy rewrite dist.tarball to
-                -- an absolute, npm-fetchable URL. The harness can read the assigned port only
-                -- after the container starts.
+                -- Pick the host port up front: ECLUSE_SERVER__PUBLIC_URL must be known before the
+                -- container starts, and it makes the proxy rewrite dist.tarball to an absolute URL.
                 proxyPort <- freeHostPort
-                -- The real proxy image: server ‖ worker over the real SQS backend, pointed at
-                -- ministack through the production AWS_ENDPOINT_URL_SQS override. The test CA
-                -- bundle it trusts (SSL_CERT_FILE in 'proxyEnv') comes from the shared certs
-                -- dir as a bind mount. That is the documented "extend the image with your
-                -- cert chain" workflow. This run builds the product image (`make test-e2e` or
-                -- the CI e2e job) and never pulls it. It is therefore 'LocallyBuilt' and
-                -- carries no digest: the pin invariant covers only images pulled from a
-                -- registry.
+                -- The product image is built by `make test-e2e` or the CI e2e job, never pulled, so
+                -- it is 'LocallyBuilt' and unpinned: the pin invariant covers only registry pulls.
+                -- The test CA bundle it trusts (SSL_CERT_FILE in 'proxyEnv') is bind-mounted from
+                -- the certs dir.
                 let proxRun =
                         (dockerRun prox net (LocallyBuilt (toText image)))
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
@@ -262,13 +230,8 @@ withE2EWith cfg action gdp = do
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
 
-{- | The proxy's environment, given the host port docker publishes it on and the mirror
-queue URL created in ministack. The production @AWS_ENDPOINT_URL_SQS@ override points the
-real SQS backend at ministack, and it signs with the standard
-@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
-legs and the mirror target point at the stub containers by their network aliases. The
-@ECLUSE_SERVER__PUBLIC_URL@ value is the host-loopback address npm reaches the proxy on.
-The proxy therefore rewrites each served @dist.tarball@ to an absolute URL npm can fetch.
+{- | The proxy's environment, given the published host port and the ministack mirror queue
+URL. @ECLUSE_SERVER__PUBLIC_URL@ is the host-loopback address npm reaches the proxy on.
 -}
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
@@ -299,10 +262,8 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
-{- | A detached test container's @docker run@ specification: everything that varies
-between the harness's containers. The creation sites therefore share one builder
-('dockerRun') and one bracket ('withDockerContainer'), rather than each re-spelling the
-whole invocation.
+{- | A detached test container's @docker run@ specification: everything that varies between
+the harness's containers, so every creation site shares one builder and one bracket.
 -}
 data DockerRun = DockerRun
     { drName :: String
@@ -323,18 +284,14 @@ data DockerRun = DockerRun
     -- ^ Arguments after the image, overriding the default CMD. Usually empty.
     }
 
-{- | Resolve a raw external-image reference to a pinned 'ImageRef', failing the suite
-loudly (the harness's IO idiom, 'fail') if the literal is not digest-pinned. The
-'ImageRef' type keeps a tag out of 'dockerRun'. This is where a bad literal is caught, at
-harness startup rather than at the pull.
+{- | Resolve a raw external-image reference to a pinned 'ImageRef', failing the suite at
+harness startup rather than at the pull if the literal is not digest-pinned.
 -}
 pinnedExternal :: Text -> IO ImageRef
 pinnedExternal raw = PinnedExternal <$> either (fail . toString) pure (mkPinnedImageRef raw)
 
-{- | The base 'DockerRun' for a named container on a network: no ports, mounts, env, or
-cmd. The image is an 'ImageRef', so a pulled image is digest-pinned by construction, and
-only the run's own 'LocallyBuilt' product image may be unpinned. This is the single
-boundary to @docker@, so the reference renders to a plain string here.
+{- | The base 'DockerRun' for a named container on a network. The image is an 'ImageRef', so
+a pulled image is digest-pinned by construction and only 'LocallyBuilt' may be unpinned.
 -}
 dockerRun :: String -> String -> ImageRef -> DockerRun
 dockerRun name net image =
@@ -363,28 +320,22 @@ runDetached labelArgs spec =
             <> labelArgs
             <> (drImage spec : drCmd spec)
 
-{- | Run a detached container for the duration of the action, force-removing it
-(@docker rm -f@) on every exit path: success, failure, or exception. Yields the
-container's name, which the caller chose and the log\/pause helpers reuse.
+{- | Run a detached container for the duration of the action, force-removing it on every
+exit path. It yields the container name the caller chose.
 -}
 withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
 withDockerContainer labelArgs spec =
     bracket (runDetached labelArgs spec >> pure (drName spec)) removeContainer
 
-{- | Create a labelled docker network for the action, removing it on every exit path
-(after any containers on it, since the brackets nest). The @createArgs@ argument carries
-extra @network create@ flags, such as @--subnet@. Yields the network name.
+{- | Create a labelled docker network for the action, removing it on every exit path after
+any containers on it. @createArgs@ carries extra @network create@ flags such as @--subnet@.
 -}
 withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
 withDockerNetwork labelArgs name createArgs =
     bracket (dockerOk (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
 
 {- | Bring up the OTLP collector for a scenario that asks for one, waited ready and torn
-down around the action. It is an OTLP\/HTTP receiver into a @debug@ exporter at detailed
-verbosity, so it writes each received span and metric to its logs. The proxy reaches it as
-@otelcol@. For any other scenario this is a no-op yielding 'Nothing'. The inline config
-arrives through the @env:@ provider, so the distroless image needs no shell, file, or bind
-mount.
+down around the action. Any other scenario is a no-op yielding 'Nothing'.
 -}
 withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
 withOptionalCollector cfg labelArgs net coll body
@@ -415,16 +366,14 @@ removeNetwork net = void (readProcess (proc "docker" ["network", "rm", net]))
 collectorAlias :: Text
 collectorAlias = "otelcol"
 
-{- | The in-cluster OTLP endpoint the proxy exports to: the collector reached by its
-network alias on the TEST-NET. A scenario names it through 'otlpCollectorEnv' (vanilla
-OpenTelemetry), or has the resolver derive it from @DD_AGENT_HOST@ ('datadogCollectorEnv').
+{- | The in-cluster OTLP endpoint the proxy exports to, reached by the collector's network
+alias. A scenario names it through 'otlpCollectorEnv' or derives it from @DD_AGENT_HOST@.
 -}
 collectorOtlpEndpoint :: Text
 collectorOtlpEndpoint = "http://" <> collectorAlias <> ":4318"
 
-{- Fast-flush export knobs: standard @OTEL_*@ configuration the SDK reads, not a
-test-only path. A span and a metric therefore reach the collector well within a
-scenario's patience window, rather than on the SDK's minute-scale batch defaults. -}
+{- Standard @OTEL_*@ configuration the SDK reads, not a test-only path. A span and a metric
+reach the collector within a scenario's patience window, not on minute-scale defaults. -}
 telemetryExportTuning :: [(Text, Text)]
 telemetryExportTuning =
     [ ("OTEL_TRACES_EXPORTER", "otlp")
@@ -433,12 +382,8 @@ telemetryExportTuning =
     , ("OTEL_BSP_SCHEDULE_DELAY", "1000")
     ]
 
-{- | Proxy environment for the vanilla-OpenTelemetry dialect: telemetry __on__, with the
-OTLP endpoint named by @OTEL_EXPORTER_OTLP_ENDPOINT@. Paired with @ecCollector = True@,
-the collector is up and receives: the healthy-publication path. Paired with
-@ecCollector = False@, the named endpoint resolves to nothing, which exercises the
-missing-collector graceful-degradation path. The proxy configuration is the same in both,
-and only the collector's presence differs.
+{- | Proxy environment for the vanilla-OpenTelemetry dialect: telemetry on, endpoint in
+@OTEL_EXPORTER_OTLP_ENDPOINT@. With @ecCollector = False@ it exercises graceful degradation.
 -}
 otlpCollectorEnv :: [(Text, Text)]
 otlpCollectorEnv =
@@ -447,19 +392,16 @@ otlpCollectorEnv =
     ]
         <> telemetryExportTuning
 
-{- | The Datadog unified-service-tag identity the Datadog scenario configures __and__
-asserts on. The proxy exports it as resource attributes and stamps it onto the @dd@ log
-object. Named constants, so the proxy environment and the assertions cannot drift apart.
+{- | The Datadog unified-service-tag identity the Datadog scenario configures and asserts
+on. Named constants, so the proxy environment and the assertions cannot drift apart.
 -}
 ddTagService, ddTagEnv, ddTagVersion :: Text
 ddTagService = "ecluse-e2e-dd"
 ddTagEnv = "e2e-staging"
 ddTagVersion = "9.9.9-e2e"
 
-{- | Proxy environment for the Datadog dialect: @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@ (the
-unified-service tags) plus @DD_AGENT_HOST@ pointing the self-aligning resolver at the
-collector. The resolver projects these onto @service.name@\/@deployment.environment@\/
-@service.version@ resource attributes and the @dd@ log object. Pair with @ecCollector = True@.
+{- | Proxy environment for the Datadog dialect: @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@ plus
+@DD_AGENT_HOST@ pointing the resolver at the collector. Pair with @ecCollector = True@.
 -}
 datadogCollectorEnv :: [(Text, Text)]
 datadogCollectorEnv =
@@ -471,21 +413,14 @@ datadogCollectorEnv =
     ]
         <> telemetryExportTuning
 
--- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by
--- its multi-arch manifest-list digest like the ministack pin above. The scenarios assert
--- on this image's exact `debug`-exporter output and its readiness line, so its surface
--- must be immutable rather than a movable tag. 'pinnedExternal' resolves it to a
--- 'PinnedImageRef' at collector startup, so an unpinned literal aborts the suite there.
--- The core distribution carries the OTLP receiver and the `debug` exporter the assertions
--- read.
+-- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by its
+-- multi-arch manifest-list digest. The scenarios assert on this image's exact `debug`
+-- exporter output and readiness line, so its surface must be immutable, not a movable tag.
 collectorImage :: Text
 collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
-{- The whole collector configuration as a single-line (flow-style) YAML document. It goes
-through the @env:@ config provider, so the distroless image needs no shell, file, or bind
-mount. It is an OTLP/HTTP receiver feeding a `debug` exporter at detailed verbosity,
-through __both__ a traces and a metrics pipeline. The collector therefore writes every
-received span and metric to the container logs. -}
+{- The collector configuration as a single-line flow-style YAML document. It arrives through
+the @env:@ provider, so the distroless image needs no shell, file, or bind mount. -}
 collectorConfig :: Text
 collectorConfig =
     "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
@@ -502,10 +437,7 @@ dockerOk args = do
         fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
 {- | Generate a test CA and a server certificate into @dir@ (SANs: @upstream@, @mirror@,
-@localhost@, @127.0.0.1@). Also write a @bundle.pem@ trust bundle of the system CAs and
-the test CA, for the proxy's @SSL_CERT_FILE@. This stands in for an operator extending
-the image with their own cert chain. That documented internal-CA workflow makes the
-https-only egress reachable in the sealed test network.
+@localhost@, @127.0.0.1@), plus a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
 -}
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
@@ -521,9 +453,8 @@ generateCerts dir = do
     opensslOk ["genrsa", "-out", srvKey, "2048"]
     opensslOk ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
     opensslOk ["x509", "-req", "-in", srvCsr, "-CA", caCrt, "-CAkey", caKey, "-CAcreateserial", "-out", srvCrt, "-days", "2", "-extfile", ext]
-    -- The proxy's trust bundle: the system CAs plus the test CA, exactly the operator's
-    -- "system store + my CA" extension. The system CAs keep an unmodified deployment
-    -- trusting public TLS.
+    -- The system CAs plus the test CA, exactly the operator's "system store + my CA"
+    -- extension. The system CAs keep an unmodified deployment trusting public TLS.
     systemCas <- lookupEnv "NIX_SSL_CERT_FILE" >>= maybe (pure "") readBytesOrEmpty
     testCa <- readFileBS caCrt
     writeFileBS (dir </> "bundle.pem") (systemCas <> "\n" <> testCa)
@@ -551,13 +482,9 @@ publishedPort cname containerPort = do
         pure
         (readMaybe (toString portText))
 
-{- | Create the mirror queue in the ministack SQS emulator on its host-published port,
-and return the queue URL. It uses the plain SQS query API, since the emulator needs no
-signed request, and retries while the emulator's SQS service warms up. The @CreateQueue@
-call is idempotent (a repeat returns the existing URL), so the retry is safe. The returned URL's
-host is the emulator's own (@localhost:4566@). The proxy routes to ministack through
-@AWS_ENDPOINT_URL_SQS@ and matches the queue by its path, so nothing ever dials that
-host.
+{- | Create the mirror queue in the ministack SQS emulator and return its queue URL.
+@CreateQueue@ is idempotent, so retrying while the emulator warms up is safe. The URL names the
+emulator's own host, which nothing dials because the proxy routes by @AWS_ENDPOINT_URL_SQS@.
 -}
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
 createMinistackQueue manager hostPort queueName = go (60 :: Int)
@@ -624,17 +551,10 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config, served over __TLS__ with the generated test cert. One nginx
-terminates TLS for both registry stubs, routed by SNI\/@server_name@. The @upstream@
-public stub serves static packuments\/tarballs from the file root. A package's packument
-comes from @\<pkg\>\/packument.json@ at @\/\<pkg\>@, and its tarball from
-@\/\<pkg\>\/-\/\<file\>.tgz@ by the default root. So @\<pkg\>@ is both the packument path
-and the tarball prefix, without a file\/directory clash. The @mirror@ stub reverse-proxies
-to the Verdaccio container over plain HTTP on the internal network. This is what makes the
-proxy dial https-only registry endpoints. Only the proxy validates the cert, so the
-harness's own probes stay plain HTTP. The @client_max_body_size 0@ setting lets a published
-tarball through the mirror leg, and the forwarded @X-Forwarded-Proto https@ keeps Verdaccio
-generating https URLs.
+{- | The nginx stub config. One nginx terminates TLS for both registry stubs by @server_name@, so
+the proxy dials https-only registry endpoints. Only the proxy validates the cert, so the harness's
+own probes stay plain HTTP. @client_max_body_size 0@ admits a published tarball, and
+@X-Forwarded-Proto https@ keeps Verdaccio generating https URLs.
 -}
 nginxStubConfig :: Text
 nginxStubConfig =
@@ -693,10 +613,8 @@ verdaccioConfig =
         , "log: { type: stdout, format: pretty, level: warn }"
         ]
 
-{- | Pause the public-upstream stub for the duration of an action, then resume it
-(@docker pause@ / @docker unpause@). It proves the proxy serves an install from the
-private mirror while the public registry is unreachable. With the stub frozen, only the
-mirror can answer. The stub resumes on every exit path, so later cases see it again.
+{- | Pause the public-upstream stub for the duration of an action, then resume it on every exit
+path. With the stub frozen, only the private mirror can answer an install.
 -}
 withUpstreamPaused :: E2E -> IO a -> IO a
 withUpstreamPaused e2e =

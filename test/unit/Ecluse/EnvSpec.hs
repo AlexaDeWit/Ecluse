@@ -25,9 +25,8 @@ import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (newTestLogEnv, testServeAdmission)
 
-{- | The npm front door the split-ready server test drives: a single npm mount with
-inert packument-serve dependencies and no publish target. The public binding resolver
-assembles it exactly as the composition root would ('mountBindingFor' over npm).
+{- | A single npm mount with inert packument-serve dependencies and no publish target,
+resolved the way the composition root resolves it.
 -}
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
@@ -66,35 +65,29 @@ spec = do
             fmap (map msgJob) msgs `shouldBe` Right [sampleJob]
 
         it "exposes the shared HTTP manager it was built with" $ do
-            -- A 'Manager' is opaque: no 'Eq'\/'Show' and no network-free observable.
-            -- The assertion is therefore that the accessor yields the wired resource
-            -- rather than a bottom. Reaching 'envManager' and forcing it to weak-head
-            -- normal form succeeds without throwing.
+            -- A 'Manager' has no 'Eq'\/'Show' and no network-free observable, so forcing
+            -- 'envManager' to weak-head normal form without a bottom is the assertion.
             env <- newTestEnv
             _ <- evaluate (envManager env)
             pure ()
 
         it "exposes the trusted private-origin manager it was built with" $ do
-            -- The second data-plane manager (the trusted private origin) is likewise
-            -- opaque. Forcing the accessor to weak-head normal form is the assertion
-            -- that the 'Env' holds it.
+            -- The trusted private-origin manager is likewise opaque, so forcing the accessor
+            -- to weak-head normal form is the assertion.
             env <- newTestEnv
             _ <- evaluate (envPrivateManager env)
             pure ()
 
         it "exposes the LogEnv it was built with" $ do
-            -- A 'LogEnv' is likewise opaque. Reaching 'envLogEnv' and forcing it to
-            -- weak-head normal form is the assertion that the 'Env' stores the wired
-            -- logging environment.
+            -- A 'LogEnv' is likewise opaque, so forcing 'envLogEnv' to weak-head normal form
+            -- is the assertion.
             env <- newTestEnv
             _ <- evaluate (envLogEnv env)
             pure ()
 
         it "wires the telemetry handle through (the off-by-default no-op)" $ do
-            -- The default substrate is off, so the handle stored in the 'Env' exposes
-            -- no providers. Telemetry is inert, not unsampled. A 'TracerProvider' has
-            -- no 'Show', so each check goes through 'isNothing' rather than a printing
-            -- matcher.
+            -- The default substrate is off, so the handle exposes no providers: telemetry is
+            -- inert, not unsampled. A 'TracerProvider' has no 'Show', hence 'isNothing'.
             env <- newTestEnv
             isNothing (telemetryTracerProvider (envTelemetry env)) `shouldBe` True
             isNothing (telemetryMeterProvider (envTelemetry env)) `shouldBe` True
@@ -125,19 +118,14 @@ spec = do
 
     describe "split-ready services" $ do
         it "runServer over a ServerConfig and Env serves (blocks) rather than returning" $ do
-            -- The server is a real blocking listener: started under a short timeout it
-            -- keeps serving until cancelled, so 'timeout' yields 'Nothing'.
-            -- "Ecluse.ServerSpec" asserts the routing, meta-route, and middleware
-            -- behaviour socket-free. 'scPort = 0' binds an OS-assigned ephemeral port,
-            -- so the test never races a fixed port already in use.
+            -- The listener blocks until cancelled, so 'timeout' yields 'Nothing'. 'scPort = 0'
+            -- binds an OS-assigned ephemeral port, so the test never races a fixed port in use.
             env <- newTestEnv
             timeout 100000 (runServer (npmTestConfig{scPort = 0}) env) `shouldReturn` Nothing
 
         it "runWorker over an Env serves (blocks polling) rather than returning" $ do
-            -- The worker is a continuous consume loop: started under a short timeout
-            -- it keeps long-polling the (empty in-memory) queue until cancelled, so
-            -- 'timeout' yields 'Nothing'. "Ecluse.WorkerSpec" asserts the loop logic
-            -- socket-free.
+            -- The consume loop long-polls the empty in-memory queue until cancelled, so
+            -- 'timeout' yields 'Nothing'.
             env <- newTestEnv
             -- The empty queue needs no re-evaluation policies: the loop only ever
             -- long-polls, with no job to re-evaluate, which is what this asserts.

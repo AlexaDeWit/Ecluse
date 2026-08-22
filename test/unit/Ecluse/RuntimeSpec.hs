@@ -124,9 +124,8 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
 derivationSpec :: Spec
 derivationSpec = describe "deriveMaxHeapBytes" $ do
     it "subtracts the nursery budget and ten percent slack, aligned to the RTS's 4 KiB blocks" $ do
-        -- 512 MiB - (2 x 64 MiB nursery) - 51.2 MiB slack = 332.8 MiB. The result
-        -- rounds down to a whole block, so the ceiling reads back exactly after the
-        -- re-exec.
+        -- The result rounds down to a whole 4 KiB block, so the ceiling reads back exactly
+        -- after the re-exec.
         let raw = 512 * mib - 2 * 64 * mib - (512 * mib) `div` 10
         deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
             `shouldBe` (raw - raw `mod` 4096)

@@ -57,9 +57,8 @@ withSyncEnv use =
                     }
         use dir slot envWith
 
-{- | A typed stand-in for an exception escaping the fetch's typed contract: a broken
-harness premise, or a simulated invariant break. No test double in this spec throws a
-stringly exception.
+{- | A typed stand-in for an exception that escapes the fetch's typed contract.
+No test double in this spec throws a stringly exception.
 -}
 newtype SyncSpecEscape = SyncSpecEscape Text
     deriving stock (Eq, Show)
@@ -86,9 +85,8 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
 
-{- | Poll a condition (bounded, ~5s) and fail the case naming what never happened. This
-is the one wait shape the asynchronous cases share. The sync task runs on its own
-schedule, so every assertion about it is a wait rather than a synchronous read.
+{- | Poll a condition for about 5 seconds and fail the case naming what never happened.
+The sync task runs on its own schedule, so every assertion about it is a wait.
 -}
 waitFor :: Text -> IO Bool -> IO ()
 waitFor what ready = go (200 :: Int)
@@ -110,23 +108,17 @@ runQuiet action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
 
-{- | The sync task over inert observation ports, for the scheduling cases. Telemetry is
-observation only, so these cases assert the loop's behaviour with nothing recording.
--}
+-- | The sync task over inert observation ports, for the scheduling cases.
 runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
 runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
 
-{- | A schedule that yields exactly __one__ attempt. An empty boot backoff spends the
-burst budget on the first attempt, whatever that attempt concludes. The steady poll's
-first interval outlasts any test. That determinism lets the observation cases assert an
-exact count rather than a lower bound.
+{- | A schedule that yields exactly one attempt. An empty boot backoff spends the burst
+budget on the first attempt, and the steady poll's first interval outlasts any test.
 -}
 oneAttempt :: SyncSchedule
 oneAttempt = SyncSchedule{schedBootBackoff = [], schedPollDelay = 600_000_000}
 
-{- | What one run of the sync loop recorded: the spans, the attempt counts, and the
-latency samples, each in record order.
--}
+-- | What one run of the sync loop recorded, each list in record order.
 data Observed = Observed
     { obsSpans :: [(Ecosystem, AdvisorySyncResult)]
     , obsAttempts :: [(Ecosystem, AdvisorySyncResult)]
@@ -134,9 +126,7 @@ data Observed = Observed
     }
 
 {- | Drive the sync loop over recording ports until it brackets @wanted@ attempts, then
-read back everything the three recorders saw. The wait reads the __span__ reader, which
-the bracket records after the body. The metric readers are therefore settled for every
-attempt the span reader already shows.
+read back the three recorders. The bracket records the span last, so the metrics settle first.
 -}
 observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
@@ -246,9 +236,8 @@ spec = do
 
         it "residue: a download that throws past its typed contract still discards the partial temp file" $
             withSyncEnv $ \_ _ envWith -> do
-                -- The fetch contract reports every failure as a value, so a throw
-                -- here is an invariant break. The onException guard must still
-                -- discard the partial download on its way up.
+                -- The fetch contract reports every failure as a value, so a throw here is an
+                -- invariant break. The onException guard must still discard the partial download.
                 let fetch =
                         CveFetch
                             { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
@@ -367,10 +356,9 @@ spec = do
                     probesFor slot "pkg" `shouldReturn` Nothing
 
     describe "advisory sync observation" $ do
-        -- One span, one counter increment, and one latency sample per attempt, each
-        -- labelled by the ecosystem and the attempt's own result. The five cases below
-        -- are the five outcomes 'observedStep' folds, so they cover the result
-        -- vocabulary end to end.
+        -- One span, one counter increment, and one latency sample per attempt, each labelled
+        -- by the ecosystem and the attempt's result. The five cases below are the five
+        -- outcomes 'observedStep' folds.
         it "observes a swapped-in artifact as one attempt" $
             withSyncEnv $ \_ _ envWith -> do
                 observed <- observeAttempts 1 oneAttempt (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))

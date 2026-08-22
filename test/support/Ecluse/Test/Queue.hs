@@ -32,9 +32,8 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig (..), newBoundedInMemoryQueue)
 
-{- | A cap-overflow drop from the test queue, carrying the backend's running drop
-total. It is a broken test premise: some spec outgrew the cap. The typed value
-fails the test loudly, instead of silently losing a job the spec meant to observe.
+{- | A cap-overflow drop from the test queue, carrying the backend's running drop total. It is a
+broken test premise, so the typed value fails the test loudly instead of silently losing a job.
 -}
 newtype UnexpectedTestQueueDrop = UnexpectedTestQueueDrop Int
     deriving stock (Show)

@@ -95,9 +95,8 @@ import Ecluse.Test.Package (validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
-{- | A size\/shape tier for a corpus entry. It orders the corpus small-to-heavy and
-labels the rendered benchmark groups, so a reader can see where on the distribution a
-figure sits.
+{- | A size and shape tier for a corpus entry. It orders the corpus small-to-heavy and
+labels the rendered benchmark groups.
 -}
 data CorpusTier = Medium | Large | Heavy
     deriving stock (Eq, Show)
@@ -123,9 +122,8 @@ corpusRoot :: FilePath
 corpusRoot = "bench/corpus/npm/"
 
 {- | The curated corpus, ordered small-to-heavy. Every entry but @express@ is a pinned
-capture under @bench\/corpus\/npm\/@, refreshed by @make gen-bench-corpus@. The
-@express@ entry is the pre-existing untrimmed anchor under
-@core\/test\/unit\/fixtures\/npm\/@, reused in place and shared with the unit suite.
+capture under @bench\/corpus\/npm\/@, refreshed by @make gen-bench-corpus@. The @express@
+entry reuses the unit suite's untrimmed fixture in place.
 -}
 corpus :: [CorpusEntry]
 corpus =
@@ -147,13 +145,9 @@ corpus =
 -- | A corpus entry paired with its loaded raw bytes and decoded JSON 'Value'.
 type LoadedEntry = (CorpusEntry, ByteString, Value)
 
-{- | Load every corpus capture as its raw bytes and decoded 'Value', in 'corpus'
-order, for use as a benchmark @env@. Fails loudly when a capture is missing, does not
-decode, projects to zero versions, or self-reports a name that does not match its
-'cePackage'. A corrupt or mis-pinned corpus then stops the run rather than benching
-nothing. Returns only the loaded pairs, so the @env@ value needs no @NFData@ beyond the
-bytes and the value. The entry metadata is the pure 'corpus', which 'withLoaded' zips
-back on.
+{- | Load every corpus capture as raw bytes and a decoded 'Value', in 'corpus' order, for a
+benchmark @env@. It fails loudly on a missing, undecodable, empty, or mis-named capture, so a
+corrupt corpus stops the run rather than benching nothing.
 -}
 loadCorpus :: IO [(ByteString, Value)]
 loadCorpus = traverse loadOne corpus
@@ -198,10 +192,8 @@ entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> 
 fixtureBytes :: FilePath -> IO ByteString
 fixtureBytes = readFileBS
 
-{- | The package name the synthetic generator labels its document with. Every
-structural component is safe to interpolate into a rewritten tarball path (see
-"Ecluse.Core.Registry.Npm.Filter"). The serve-time rewrite therefore exercises the real
-path rather than bailing out.
+{- | The name the synthetic generator labels its document with. It is safe to interpolate
+into a rewritten tarball path (see "Ecluse.Core.Registry.Npm.Filter"), so the rewrite runs.
 -}
 benchPackageText :: Text
 benchPackageText = "bench-pkg"
@@ -210,21 +202,14 @@ benchPackageText = "bench-pkg"
 benchPackageName :: PackageName
 benchPackageName = mkPackageName Npm Nothing benchPackageText
 
-{- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto. It
-stands in for a deployment's own public origin.
--}
+-- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto.
 syntheticProxyBase :: Text
 syntheticProxyBase = "https://ecluse.example"
 
-{- | Build a synthetic npm packument 'Value' carrying @versionCount@ versions
-(@1.0.0@ .. @1.0.{n-1}@). Each version has a rewritable @dist.tarball@, a well-formed
-integrity digest, a small dependency set, and an install script: the fields the hot
-paths touch. The document is a faithful npm shape, so it decodes, projects, filters,
-and re-serialises exactly as a real packument would. Its versions are structurally
-identical, which makes it the complexity-scaling stress input rather than a realistic
-one. The real distribution is 'corpus'.
-
-@versionCount@ must be positive. The benches only ever pass positive sizes.
+{- | Build a synthetic npm packument 'Value' with @versionCount@ versions (@1.0.0@ ..
+@1.0.{n-1}@), each carrying the fields the hot paths touch. Its versions are structurally
+identical, so it is the complexity-scaling stress input and 'corpus' is the realistic one.
+@versionCount@ must be positive.
 -}
 syntheticPackumentValue :: Int -> Value
 syntheticPackumentValue versionCount =
@@ -299,10 +284,8 @@ versionKeysOf = \case
 syntheticPackumentBytes :: Int -> ByteString
 syntheticPackumentBytes = encodeStrict . syntheticPackumentValue
 
-{- | Project a packument 'Value' into the agnostic 'PackageInfo' for the named
-package. A value that does not project yields the empty document for that name, so the
-function stays total without a partial 'error'. The benchmark's own generator tests and
-'loadCorpus' guarantee a real projection, so that case cannot arise for this corpus.
+{- | Project a packument 'Value' into 'PackageInfo' for the named package. A value that does
+not project yields the empty document, which keeps the function total without a partial 'error'.
 -}
 projectInfo :: PackageName -> Value -> PackageInfo
 projectInfo name value = case parsePackageInfoFromValue name value of
@@ -325,9 +308,8 @@ the age-based rule is deterministic across runs.
 benchEvalContext :: EvalContext
 benchEvalContext = EvalContext (UTCTime (fromGregorian 2026 6 27) (secondsToDiffTime 0)) Nothing
 
-{- | A representative rule set spanning all three pure rule types: an allow-list, an
-install-time-execution deny, and an age quarantine. The rule sweep then exercises every
-evaluation arm rather than one.
+{- | A representative rule set spanning all three pure rule types, so the rule sweep
+exercises every evaluation arm rather than one.
 -}
 benchRules :: [PrecededRule]
 benchRules =

@@ -55,16 +55,12 @@ spec = do
             pkgBaseName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
                 `shouldBe` "code-frame"
         it "does not enter identity: two names differing only in base are still equatable by identity" $
-            -- 'nameKey' excludes the base name, like the display form. Equality stays
-            -- on (ecosystem, namespace, canonical), so a name equals itself however the
-            -- base is read back.
+            -- Identity is (ecosystem, namespace, canonical). 'nameKey' excludes the base name,
+            -- so the base name alone cannot make two names differ.
             mkPackageName Npm (Just (mkScope "babel")) "code-frame"
                 `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "code-frame"
 
     describe "PackageInfo" $ do
-        -- A packument-level fixture: one package, one published version "1.0.0"
-        -- tagged "latest", carrying its own publish time on the version snapshot. The
-        -- map key is the raw version string, as the type documents.
         let name = mkPackageName Npm Nothing "thing"
             version = mkVersion Npm "1.0.0"
             publishedAt = UTCTime (fromGregorian 2026 6 21) 0
@@ -89,8 +85,6 @@ spec = do
             -- map. Serialisation rebuilds the npm wire @time@ object from it.
             (pkgPublishedAt <$> Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Just (Just publishedAt)
         it "is equal exactly when every field agrees" $ do
-            -- Equality is structural over every field: an identically-built document is
-            -- equal, and changing one field (here the version a dist-tag resolves to)
-            -- makes it unequal.
+            -- Equality is structural over every field of 'PackageInfo'.
             info `shouldBe` info{infoDistTags = Map.singleton "latest" version}
             info `shouldNotBe` info{infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")}

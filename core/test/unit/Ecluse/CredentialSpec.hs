@@ -37,9 +37,8 @@ spec = do
             mkSecret "x" `shouldNotBe` mkSecret "y"
 
         it "is unequal for equal-length tokens that differ" $
-            -- 'Secret' equality is constant-time, with no content-dependent early
-            -- out. This same-length, differing-content case is the shape that would
-            -- otherwise leak under a short-circuiting compare.
+            -- 'Secret' equality is constant-time, with no content-dependent early out. Same-length,
+            -- differing content is the shape that would leak under a short-circuiting compare.
             mkSecret "abcdef" `shouldNotBe` mkSecret "abcxef"
 
         it "is unequal when one token is a strict prefix of the other" $ do

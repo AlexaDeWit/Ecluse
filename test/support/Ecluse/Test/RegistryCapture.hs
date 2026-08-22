@@ -89,9 +89,8 @@ instance FromJSON Catalogue where
             Just eco -> pure (eco, vs)
             Nothing -> fail ("RegistryCapture: unknown ecosystem key in smokeNames: " <> toString k)
 
-{- | The committed catalogue's path, relative to the package root the test suites
-run from. It is the same file the Node corpus-capture script reads, so both sides
-share one curated source.
+{- | The committed catalogue's path, relative to the package root the test suites run from. The
+Node corpus-capture script reads the same file, so both sides share one curated source.
 -}
 cataloguePath :: FilePath
 cataloguePath = "bench/corpus/pins.json"
@@ -100,9 +99,8 @@ cataloguePath = "bench/corpus/pins.json"
 decodeCatalogue :: LByteString -> Either String Catalogue
 decodeCatalogue = eitherDecode
 
-{- | Read and decode the committed catalogue from 'cataloguePath'. A missing or
-malformed file fails loudly: that is a committed-data defect, not a runtime condition a
-caller decides on.
+{- | Read and decode the committed catalogue from 'cataloguePath'. A missing or malformed file
+fails loudly because that is a committed-data defect, not a runtime condition a caller decides on.
 -}
 loadCatalogue :: IO Catalogue
 loadCatalogue = do
@@ -115,9 +113,8 @@ is the shape the version-oracle differential iterates.
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]
 smokeRegistryPackages = Map.toList . catSmokeNames
 
-{- | The registry endpoint that lists a package's published versions. It percent-encodes
-a scoped npm name (@\@types\/node@ → @\@types%2Fnode@). The other ecosystems take a bare
-name.
+{- | The registry endpoint that lists a package's published versions. It percent-encodes a scoped
+npm name (@\@types\/node@ → @\@types%2Fnode@).
 -}
 registryUrl :: Ecosystem -> Text -> Text
 registryUrl eco pkg = case eco of
@@ -129,9 +126,8 @@ registryUrl eco pkg = case eco of
 captureUserAgent :: ByteString
 captureUserAgent = "ecluse-registry-capture"
 
-{- | Fetch a package's raw version-listing body from its registry. The result is
-'Nothing' on any network failure, a non-2xx status ('parseUrlThrow' throws on a 404), or
-a missing endpoint. A live tier therefore pends on absence instead of failing.
+{- | Fetch a package's raw version-listing body from its registry. The result is 'Nothing' on any
+network failure or non-2xx status, so a live tier pends on absence instead of failing.
 -}
 fetchPackumentBody :: Manager -> Ecosystem -> Text -> IO (Maybe LByteString)
 fetchPackumentBody manager eco pkg = do
@@ -147,23 +143,18 @@ fetchPackumentBody manager eco pkg = do
         Left (_ :: SomeException) -> Nothing
         Right body -> Just body
 
-{- | Fetch a package's published version strings from its registry: the fetch layered
-with each ecosystem's canonical decode. The result is 'Nothing' when the fetch fails or
-the body does not decode for that ecosystem. It keeps every published version,
-prereleases included. Trimming, where wanted, is the caller's job.
+{- | Fetch a package's published version strings from its registry. The result is 'Nothing' when
+the fetch fails or the body does not decode. It keeps every published version, prereleases
+included, so trimming is the caller's job.
 -}
 fetchVersions :: Manager -> Ecosystem -> Text -> IO (Maybe [Text])
 fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
-{- | Extract a registry response's published version strings through each ecosystem's
-__canonical__ wire decoder, not a re-parse of the JSON here. The npm path goes through
-the production version-list extractor
-('Ecluse.Core.Registry.Npm.Project.parseVersionList'), PyPI through the project JSON
-('Ecluse.Test.Registry.Pypi.Wire.ProjectJson'), and RubyGems through the versions array
-('Ecluse.Test.Registry.Rubygems.Wire.VersionListing'). Routing npm through the
-production decoder keeps the version-oracle differential honest: it compares what the
-serve path decodes, not a parallel decoder. The result is 'Nothing' if the body does not
+{- | Extract a registry response's published version strings through each ecosystem's __canonical__
+wire decoder, never a re-parse here. Routing npm through the production
+'Ecluse.Core.Registry.Npm.Project.parseVersionList' keeps the version-oracle differential honest,
+because it compares what the serve path decodes. The result is 'Nothing' if the body does not
 decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]

@@ -90,9 +90,8 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
-{- | A job body carrying every required field and __no @traceContext@ key at all__, as
-a job enqueued with tracing off does. This is the shape the optional-carrier decode
-must accept, decoding it to a 'Nothing' carrier.
+{- | A job body with every required field and no @traceContext@ key at all, as a job
+enqueued with tracing off carries. The decode must accept it as a 'Nothing' carrier.
 -}
 noTraceContextBody :: Text
 noTraceContextBody =
@@ -125,10 +124,8 @@ spec = do
                     jobTraceContext job `shouldBe` jobTraceContext npmJob
 
         it "decodes a job body with no traceContext key to a Nothing carrier" $
-            -- A job enqueued with tracing off carries no "traceContext" key at all
-            -- (not even a null). It must decode to a valid job with no carrier, the
-            -- '.:?'-absent path, rather than fail. An absent carrier then costs
-            -- nothing but the span link.
+            -- A job enqueued with tracing off carries no "traceContext" key, not even a null. It
+            -- must decode to a job with no carrier through the '.:?'-absent path, rather than fail.
             case decodeJob mkRegistryUrl noTraceContextBody of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
@@ -234,9 +231,8 @@ spec = do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
-            -- Only the well-formed message is delivered. The three poison ones are
-            -- dropped, omitted from the result and left un-acked for redelivery or
-            -- dead-lettering.
+            -- Only the well-formed message is delivered. The three poison ones are dropped and
+            -- left un-acked for redelivery or dead-lettering.
             map msgJob delivered `shouldBe` [npmJob]
 
         it "logs each drop at Debug with its reason and message id, never the body" $ do
@@ -262,17 +258,14 @@ spec = do
             map msgReceiveCount delivered `shouldBe` [1, 3, 17]
 
         it "reads a missing or unusable count as a first delivery" $ do
-            -- Only evidence ever puts a message past its budget. SQS omits the
-            -- attribute unless a request asks for it. A value that is not a usable
-            -- count says nothing. Neither may retire a job tried only once.
+            -- Only evidence may put a message past its budget. SQS omits the attribute unless a
+            -- request asks for it, and an unusable value says nothing, so neither retires a job.
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
-{- | One well-formed message and one of each drop cause: missing body, missing
-receipt, undecodable body. Each carries a distinct message id, so the drop log's id
-field is assertable. The well-formed and the missing-receipt entries carry valid
-bodies, isolating the receipt check from the decode.
+{- | One well-formed message and one of each drop cause: missing body, missing receipt,
+undecodable body. Distinct message ids make the drop log's id field assertable.
 -}
 poisonBatch :: [ReceivedMessage]
 poisonBatch =
@@ -302,9 +295,8 @@ jsonLogEnv = do
     base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     registerScribe "stdout" scribe defaultScribeSettings base
 
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning what
-was written, and restore 'stdout' on every exit path. A test then captures what a
-scribe emits without leaking it into the run.
+{- | Run an 'IO' action with 'stdout' redirected to a temporary file and return what was
+written. The original 'stdout' is restored on every exit path.
 -}
 captureStdout :: IO () -> IO Text
 captureStdout act =

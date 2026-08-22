@@ -20,11 +20,8 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Rules (inertRuleDeps)
 
-{- | Tests for the composition root's worker bundle construction. In go the served
-mounts, the resolved publish targets, and the adapter registry. Out come the
-per-ecosystem 'Ecluse.Core.Worker.WorkerPolicies'. Construction only, no network:
-every bundle field is a closure the worker applies later. These pins assert what is
-wired, and what deliberately is not, never a live fetch or publish.
+{- | Tests for the composition root's worker bundle construction. Construction only, no network:
+every bundle field is a closure the worker applies later.
 -}
 spec :: Spec
 spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)" $ do
@@ -33,9 +30,8 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         Map.keys (workerPoliciesFor env bindings targets testArtifactCap) `shouldBe` [Npm]
 
     it "reuses the mount's own serve-side policy inputs on the bundle" $ do
-        -- The floor (and every sibling input) is the mount's own 'PackumentDeps'
-        -- value, so the ingest decision cannot diverge from the serve decision. The
-        -- injected clock rides through likewise.
+        -- The floor and every sibling input is the mount's own 'PackumentDeps' value, so the
+        -- ingest decision cannot diverge from the serve decision.
         (env, bindings, targets) <- composedFixtures
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
@@ -55,21 +51,16 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
 
     it "sizes the bundle's artifact fetch cap from the supplied plan value" $ do
-        -- The worker's per-artifact byte cap comes from the memory plan's
-        -- mirror-artifact tenant, not a hard-coded constant. The value the composition
-        -- root passes is the fetch bound each bundle carries.
+        -- The per-artifact byte cap comes from the memory plan's mirror-artifact tenant, not a
+        -- hard-coded constant.
         (env, bindings, targets) <- composedFixtures
         case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> maxBodyBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
     it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ do
-        -- The probe must honour the same boot-computed, operator-overridable response
-        -- bound every other metadata read on the mount does ('pdLimits'). A mirror
-        -- packument larger than the shipped default then cannot silently defeat
-        -- duplicate suppression. A distinctive plan bound, below the default, pins that
-        -- the wired transport tracks the plan value rather than the shipped constant.
-        -- Were the probe re-pinned to 'defaultLimits', 'shouldNotBe' would catch it.
+        -- The probe honours the same plan-resolved response bound as every other metadata read on
+        -- the mount, so an oversized mirror packument cannot silently defeat duplicate suppression.
         (env, bindings, targets) <- composedFixturesWith probeLimits
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
@@ -91,15 +82,12 @@ testArtifactCap = 40 * 1024 * 1024
 probeLimits :: Limits
 probeLimits = defaultLimits{maxBodyBytes = 3 * 1024 * 1024}
 
--- The composed inputs the production boot path derives: the served bindings and
--- publish targets from the static single-mount environment, and an Env over
--- no-network doubles.
+-- The composed inputs the production boot path derives, over no-network doubles.
 composedFixtures :: IO (Env, [MountBinding], [PublishTarget])
 composedFixtures = composedFixturesWith testLimits
 
--- 'composedFixtures' with an explicit resolved 'Limits', so a test can pin that a
--- distinctive plan-resolved bound (not the shipped default) reaches the wiring it
--- exercises.
+-- 'composedFixtures' with an explicit resolved 'Limits', so a test can pin that a plan-resolved
+-- bound, not the shipped default, reaches the wiring.
 composedFixturesWith :: Limits -> IO (Env, [MountBinding], [PublishTarget])
 composedFixturesWith limits = do
     config <- expectConfig staticEnvVars Nothing

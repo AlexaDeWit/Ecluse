@@ -83,10 +83,8 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             outcome `shouldSatisfy` isLeft
 
     it "reports a transport failure as a PublishTransport value, never thrown" $ do
-        -- No server listens on this port, so the write throws a connection failure. The
-        -- transport must fold it into a PublishTransport value, a retryable fault. That
-        -- honours its total, never-thrown contract, so the worker's retry-vs-drop match
-        -- stays exhaustive.
+        -- No server listens on this port, so the write throws a connection failure. The transport
+        -- must fold it into a retryable PublishTransport value, never throw.
         publish <- publishAt "http://127.0.0.1:1"
         outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport

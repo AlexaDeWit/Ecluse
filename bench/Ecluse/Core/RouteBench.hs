@@ -50,9 +50,8 @@ requests = concat (replicate 1000 sample)
         , (methodPut, ["express", "-", "express-4.18.2.tgz"]) -- a PUT to a non-publish path
         ]
 
-{- | Route every request, summing the length of the matched route's identifier so the
-fold forces each result (an unmatched request contributes nothing). The route's action is
-a closure, so its identifier is what the bench forces the match down to.
+{- | Route every request, summing the matched route's identifier length so the fold forces
+each result. The route's action is a closure, so the identifier is what the bench forces.
 -}
 classifyDepth :: [(Method, [Text])] -> Int
 classifyDepth = foldl' (\acc (method, segments) -> acc + matchDepth method segments) 0

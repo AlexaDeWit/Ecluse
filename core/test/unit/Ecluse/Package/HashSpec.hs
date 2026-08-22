@@ -32,10 +32,9 @@ spec = do
                 `shouldBe` Right SRI
 
         it "rejects a multi-component integrity (one Hash holds exactly one component)" $
-            -- npm may serve "sha512-… sha256-…" on the wire. mkSriHashes splits that
-            -- shape into one Hash per component, so the floor ranking and the worker's
-            -- byte verification read the same component. A joined string does not
-            -- construct a single Hash.
+            -- npm may serve "sha512-… sha256-…" on the wire. mkSriHashes splits it into one Hash
+            -- per component, so the floor ranking and the worker's verification read the same
+            -- component.
             mkHash
                 SRI
                 "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="

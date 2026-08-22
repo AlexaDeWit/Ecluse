@@ -56,9 +56,8 @@ benchmarks loaded =
                ]
         )
 
-{- | Drain a chunked body through 'boundedRead', forcing the assembled length (or an
-error code). Each run builds a fresh cursor, so every measured iteration reads the whole
-body from the start.
+{- | Drain a chunked body through 'boundedRead', forcing the assembled length. Each run
+builds a fresh cursor, so every measured iteration reads the whole body from the start.
 -}
 boundedReadDepth :: [ByteString] -> IO Int
 boundedReadDepth chunks = do

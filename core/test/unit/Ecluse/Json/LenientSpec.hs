@@ -11,12 +11,8 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 
-{- | Direct tests for the shared lenient-decode primitives hoisted out of the npm wire
-module. 'lenientOptional' must read a well-formed value, distinguish absence, and degrade
-a present-but-undecodable value to 'Nothing' rather than fail the whole decode.
-'typeMismatchOneOf' must render a message naming the accepted shapes and the JSON kind
-found, over every 'Value' kind. "Ecluse.Registry.Npm.WireSpec" covers the npm consumers
-end to end. These cases pin the primitives in isolation.
+{- | Direct tests for the shared lenient-decode primitives, pinning them in isolation.
+"Ecluse.Registry.Npm.WireSpec" covers the npm consumers end to end.
 -}
 spec :: Spec
 spec = do
@@ -52,9 +48,8 @@ typeMismatchOneOfSpec = describe "typeMismatchOneOf" $ do
     it "names a boolean" $ messageFor (Bool True) `shouldBe` expected "a boolean"
     it "names null" $ messageFor Null `shouldBe` expected "null"
 
-{- | Run 'lenientOptional' for an 'Int' field @n@ over an object, exposing the two-layer
-'Maybe'. The outer layer is the parser, which always succeeds because 'lenientOptional'
-never fails. The inner layer is the field's lenient presence.
+{- | Run 'lenientOptional' for an 'Int' field @n@, exposing the two-layer 'Maybe'. The outer
+layer is the parser, which always succeeds, and the inner layer is the field's lenient presence.
 -}
 readLenientInt :: Object -> Maybe (Maybe Int)
 readLenientInt = parseMaybe (`lenientOptional` "n")

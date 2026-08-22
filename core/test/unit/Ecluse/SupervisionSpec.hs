@@ -67,10 +67,9 @@ spec = do
             attempts `shouldSatisfy` (>= 3)
 
         it "a completed step resets the backoff (alternating fault and success stays at the base delay)" $ do
-            -- Alternate fault and success. Without a reset on the successful steps,
-            -- about 15 faults would pace at 1ms, 2ms, 4ms ... 8ms (the cap) and would
-            -- not fit the window. With the reset, every retry waits only the 1ms base,
-            -- so the window fits comfortably.
+            -- Without a reset on the successful steps, about 15 faults would pace at 1ms, 2ms, 4ms
+            -- up to the 8ms cap and miss the window. With the reset every retry waits only the 1ms
+            -- base.
             calls <- newIORef (0 :: Int)
             let step = do
                     n <- atomicModifyIORef' calls (\k -> (k + 1, k + 1))

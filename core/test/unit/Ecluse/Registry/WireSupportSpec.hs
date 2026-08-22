@@ -23,14 +23,8 @@ import Ecluse.Core.Registry.WireSupport (
     partitionLenient,
  )
 
-{- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection
-builds on. 'partitionLenient' keeps the entries that decode and drops the ones that do
-not, recording each with its kind, key, and raw offending value. It orders the dropped
-list by ascending key, so the result is deterministic. 'checkNameAgreement' agrees only
-when the reported name matches the request under ecosystem-aware equality, scope
-included. On a disagreement it carries the reported name verbatim.
-"Ecluse.Registry.Npm.ProjectSpec" covers the npm projection end to end. These examples
-pin the helpers in isolation.
+{- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection builds on.
+"Ecluse.Registry.Npm.ProjectSpec" covers the npm projection end to end.
 -}
 spec :: Spec
 spec = do

@@ -85,21 +85,14 @@ main =
         [name] -> runChild (toText name)
         _ -> benchFail "usage: bench-load [<scenario-name>]"
 
--- The driver: probe the public-registry round trip, then for each fixture's scenarios
--- drive the loaded pass and the concurrency-1 service pass. Each scenario runs in its own
--- child process, and both passes inject the probed round trip. The driver renders the
--- per-scenario table, the service-time attribution, and the load-saturation flag to
--- stdout and (when set) the GitHub run summary.
 runDriver :: IO ()
 runDriver = do
     knobs <- loadKnobsFromEnv
     baseline <- probePublicRtt knobs
     self <- getExecutablePath
-    -- Scenario children must run with the driver's capability count. A command-line
-    -- @+RTS -N3@ does not survive the re-exec, because the parent's runtime consumes the
-    -- argv RTS flags. Without this the children fall back to the baked bare @-N@, claim
-    -- every core, and overlap the core the harness pins oha to. The child's RTS reads
-    -- GHCRTS at startup, so the driver's count propagates.
+    -- A command-line @+RTS -N3@ does not survive the re-exec, because the parent's runtime
+    -- consumes the argv RTS flags. Without this the children fall back to the baked bare @-N@,
+    -- claim every core, and overlap the core the harness pins oha to. The child reads GHCRTS.
     capabilities <- getNumCapabilities
     let pinChildren = ("GHCRTS", "-N" <> show capabilities)
         injMs = baselineInjectedMs baseline
@@ -133,9 +126,8 @@ baselineInjectedMs = \case
     MeasuredRtt rtt _ -> round rtt
     InjectedFallback ms -> round ms
 
--- Run one scenario in a child process with the given environment overrides layered onto
--- the driver's environment, and decode its report. The child prints exactly one JSON line
--- (its report), so the captured stdout decodes directly.
+-- The child prints exactly one JSON line, its report, so the captured stdout decodes
+-- directly.
 runScenarioChild :: FilePath -> [(String, String)] -> Text -> IO ScenarioReport
 runScenarioChild self overrides name = do
     base <- getEnvironment
@@ -150,12 +142,9 @@ overrideEnv overrides base =
   where
     overriddenKeys = map fst overrides
 
-{- Probe the live public registry for each corpus package and take the mean round trip as
-the upstream baseline. A first fetch warms the keep-alive connection, which keeps the
-handshake out of the samples. The probe then times each package's fetch and averages the
-successful samples. Yields the configured injected latency as a labelled fallback when
-probing is off, the catalogue is empty, or every fetch fails. An offline run therefore
-still produces both passes. -}
+{- A first fetch warms the keep-alive connection, which keeps the handshake out of the
+samples. Falls back to the configured injected latency when probing is off, the catalogue
+is empty, or every fetch fails, so an offline run still produces both passes. -}
 probePublicRtt :: LoadKnobs -> IO BaselineSource
 probePublicRtt knobs = do
     enabled <- probeEnabled

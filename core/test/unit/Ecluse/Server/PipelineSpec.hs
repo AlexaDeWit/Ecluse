@@ -111,10 +111,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "admits exactly the credential presentation the mount's ecosystem declares" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
-        -- Both origins point at a closed port, so a request the edge admits degrades to
-        -- 503. The 401 is the edge gate's own refusal. The two mounts differ only in the
-        -- presentation their ecosystem declares, so the pair shows the pipeline holds no
-        -- presentation of its own.
+        -- Both origins point at a closed port, so a 503 means the edge admitted the request and a
+        -- 401 is the gate's own refusal. The mounts differ only in credential presentation.
         gated <- gatedDeps
         let serveUnder mapping headers =
                 statusCode . responseStatus
@@ -144,9 +142,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        -- A tuned handle with no waiting room, so admission refuses the saturated
-        -- attempt outright. These pipeline tests own the rendering of a refusal (503 plus
-        -- Retry-After), and AdmissionSpec owns the wait semantics.
+        -- No waiting room, so admission refuses the saturated attempt outright. These cases own the
+        -- refusal rendering (503 plus Retry-After), and AdmissionSpec owns the wait semantics.
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
@@ -198,10 +195,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
-{- | Run a serve handler over a request runtime and mount, capturing the 'Response' it
-hands its continuation. The handler runs through the core 'runHandler' against a
-scribe-less @katip@ environment. Its warnings have nowhere to go, which is what these
-tests want. The initial context is empty: no active span, so no @dd@.
+{- | Run a serve handler over a request runtime and mount, capturing the 'Response' it hands its
+continuation. The @katip@ environment has no scribe and no active span, so warnings go nowhere
+and no @dd@ object is attached.
 -}
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
@@ -211,15 +207,13 @@ captureServe contract rt binding mkHandler = do
     _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)
     maybe (throwString "the handler produced no response") pure =<< readIORef captured
 
-{- | A request runtime over the recording metrics port and the pass-through tracing port.
-It also carries a real (no-TLS) manager shared by both legs, a fresh cache, and an
-in-memory queue.
+{- | A request runtime over the recording metrics port, sharing one no-TLS manager across both
+legs.
 -}
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
-    -- A generously-bounded admission the runtime carries but these tests never gate on.
-    -- The admission-specific cases wrap 'withServeAdmission' with their own tuned handle,
-    -- and the high capacity keeps this one from ever interfering.
+    -- Capacity high enough that this handle never gates. The admission cases wrap
+    -- 'withServeAdmission' with their own tuned handle.
     admission <- newServeAdmission 1_000_000
     mkRuntimeWith admission metricsPort
 
@@ -237,9 +231,7 @@ leftpad = mkPackageName Npm Nothing "leftpad"
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential
 
-{- | An npm mount carrying the given credential presentation. A test can drive a serve
-under an ecosystem that presents its credential differently from npm's.
--}
+-- | An npm mount carrying the given credential presentation.
 mountUnder :: CredentialMapping -> PackumentDeps -> MountBinding
 mountUnder mapping deps =
     MountBinding
@@ -250,9 +242,8 @@ mountUnder mapping deps =
         , bindingPublishDeps = Nothing
         }
 
-{- | A presentation that carries a raw token on @X-Api-Key@, a form npm does not present.
-A mount that declares it accepts what an npm mount refuses, and refuses what an npm
-mount accepts.
+{- | A presentation that carries a raw token on @X-Api-Key@, a form npm does not present. A mount
+declaring it accepts what an npm mount refuses, and refuses what an npm mount accepts.
 -}
 apiKeyCredential :: CredentialMapping
 apiKeyCredential = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecret)
@@ -275,11 +266,9 @@ gatedDeps = do
 requestWith :: RequestHeaders -> Request
 requestWith headers = defaultRequest{requestHeaders = headers}
 
-{- | Serve dependencies pointing the public origin at the in-process upstream on
-@publicPort@, and the private origin at a closed port. The trusted leg therefore always
-degrades, and the merge serves the public contribution. The loopback stubs use the
-@localhost@ DNS name rather than a bare IP literal. The internal-range block only
-recognises a literal, so it never fires on the artifact leg. No opt-in is needed.
+{- | Serve dependencies pointing the public origin at the in-process upstream on @publicPort@ and
+the private origin at a closed port. The stubs use the @localhost@ DNS name, because the
+internal-range block recognises only a literal address and must not fire on the artifact leg.
 -}
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
@@ -290,10 +279,9 @@ depsFor publicPort = do
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
-{- | A pure rule policy that admits the fixture version: the rules engine is
-deny-by-default, so an empty policy denies every version ("no rule allowed it"). The
-quarantine rule admits a version published more than a week before @now@, which the
-fixture (published 2019, @now@ 2020) clears.
+{- | A pure rule policy that admits the fixture version. The engine is deny-by-default, so an
+empty policy denies everything, and this quarantine rule admits the 2019 fixture against a 2020
+@now@.
 -}
 allowPolicy :: [PrecededRule]
 allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
@@ -302,11 +290,9 @@ allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
-{- | A minimal npm upstream. It answers @GET \/leftpad@ with a one-version packument whose
-@dist.tarball@ self-hosts on this upstream. It takes the host from the request, so the
-tarball URL carries the ephemeral test port. That packument carries a real SHA-512
-@integrity@ over the served artifact bytes. The upstream answers the tarball path with
-those bytes.
+{- | A minimal npm upstream serving @leftpad@ and its self-hosted tarball. It takes the host from
+the request, so the tarball URL carries the ephemeral test port, and its @integrity@ is a real
+SHA-512 over the bytes it serves.
 -}
 upstreamApp :: Application
 upstreamApp req respond =
@@ -351,10 +337,9 @@ packumentFor host = packumentWithIntegrity host (sha512Integrity artifactBytes)
 sha512Integrity :: ByteString -> Text
 sha512Integrity = sriSha512Of
 
-{- | A private (trusted) upstream serving @leftpad@ 1.0.0 with an integrity that
-contradicts the public copy on the shared SHA-512 algorithm, over different bytes. This is
-the private side of a cross-upstream divergence. It serves only the packument route,
-because the merge decides the divergence on metadata and never fetches a tarball.
+{- | A private (trusted) upstream whose @leftpad@ 1.0.0 integrity contradicts the public copy on
+the shared SHA-512 algorithm. It serves only the packument route, because the merge decides the
+divergence on metadata and never fetches a tarball.
 -}
 divergentPrivateApp :: Application
 divergentPrivateApp req respond =

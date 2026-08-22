@@ -21,9 +21,8 @@ import Ecluse.Core.Queue (MirrorJob (..), QueueFault)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
-{- | Some backends have no fault to report: the bounded in-memory backend, the
-buffered hand-off. A 'Left' escaping one of them is a broken test premise, so
-re-raise it loudly and typed.
+{- | A 'Left' from a backend with no fault to report (bounded in-memory, buffered hand-off)
+is a broken test premise, so re-raise it loudly and typed.
 -}
 newtype UnexpectedQueueFault = UnexpectedQueueFault QueueFault
     deriving stock (Show)
@@ -34,9 +33,8 @@ instance Exception UnexpectedQueueFault
 unwrap :: IO (Either QueueFault a) -> IO a
 unwrap act = act >>= either (throwIO . UnexpectedQueueFault) pure
 
-{- | A sample mirror job. The in-memory queue under test does not inspect a job's
-contents. It only carries the job from 'enqueue' to 'receive', so one fixed job
-serves the FIFO, cap, and drop-reporting assertions.
+{- | A sample mirror job. The in-memory queue never inspects a job's contents, so one fixed
+job serves the FIFO, cap, and drop-reporting assertions.
 -}
 sampleJob :: MirrorJob
 sampleJob =
@@ -48,9 +46,8 @@ sampleJob =
         , jobTraceContext = Nothing
         }
 
-{- | A second, distinct job for the FIFO-ordering assertion across two enqueues. It
-differs from 'sampleJob' only in its version, which is enough to tell the two apart on
-receive.
+{- | A second job for the FIFO-ordering assertion. It differs from 'sampleJob' only in its
+version, which is enough to tell the two apart on receive.
 -}
 otherJob :: MirrorJob
 otherJob = sampleJob{jobVersion = mkVersion Npm "2.0.0"}

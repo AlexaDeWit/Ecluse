@@ -41,10 +41,9 @@ spec = do
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
         it "pins the shipped redelivery budget to the one a directly-built backend holds" $
-            -- Two places state the same policy default: the operator-visible YAML, and
-            -- the value a backend built without config falls back to. They must agree.
-            -- If they drift, a deployment and a test double retire poison messages at
-            -- different delivery counts.
+            -- The operator-visible YAML and the fallback a config-free backend holds state the same
+            -- policy default. If they drift, a deployment and a test double retire poison messages
+            -- at different counts.
             case (loadConfig [] Nothing, defaultDeliveryBudget) of
                 (Right cfg, DeliveryBudget budget) ->
                     qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
@@ -176,10 +175,8 @@ shouldWarnOnce doc phrases = do
         [warning] -> traverse_ (\phrase -> warning `shouldSatisfy` T.isInfixOf phrase) phrases
         warnings -> expectationFailure ("expected exactly one collision warning, got " <> show warnings)
 
-{- | An npm mount document with the given string fields. The shipped npm template
-supplies the rest: the public upstream and the tarball-host posture. The document
-carries a static @mirrorTargetToken@, so the non-CodeArtifact mirror targets these
-collision cases use derive a valid write credential and the config loads.
+{- | An npm mount document with the given string fields, over the shipped npm template. It carries
+a static @mirrorTargetToken@, so a non-CodeArtifact mirror target derives a valid write credential.
 -}
 npmMountDoc :: [(Text, Text)] -> ByteString
 npmMountDoc fields = bareNpmMountDoc (fields <> [("mirrorTargetToken", "t")])

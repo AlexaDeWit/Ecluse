@@ -37,9 +37,8 @@ allMetricNames = universe
 allLabelKeys :: [LabelKey]
 allLabelKeys = universe
 
-{- | The high-cardinality identifiers that must __never__ be metric labels: they live on
-spans and the structured log line instead. The label-domain guard asserts none of these is
-a 'LabelKey' wire name. By construction, no @Label@ produces one.
+{- | The high-cardinality identifiers that must __never__ be metric labels. They belong on spans and
+the structured log line, and the label-domain guard asserts no 'LabelKey' wire name is one of these.
 -}
 highCardinalityKeys :: [Text]
 highCardinalityKeys = ["package", "version", "scope", "message"]

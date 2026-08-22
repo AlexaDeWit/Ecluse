@@ -8,10 +8,8 @@ import Test.Hspec
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
-{- | A throwaway enum standing in for the real wire vocabularies, exercising the
-class in isolation from any one call site. Its 'wireTable' is intentionally in
-neither constructor nor alphabetical order, so the order-sensitive assertions
-below are about the /table/, not the type.
+{- | A throwaway enum standing in for the real wire vocabularies. Its 'wireTable' is in neither
+constructor nor alphabetical order, so the assertions below are about the table, not the type.
 -}
 data Direction
     = North
@@ -38,8 +36,7 @@ spec = describe "parseWire" $ do
         parseWire "west" `shouldBe` Right West
 
     it "rejects an unknown name, naming the accepted set in table order" $
-        -- The message lists the accepted set in table order (east, west, north,
-        -- south). That is neither constructor order (north, south, east, west) nor
-        -- alphabetical: the message follows the table.
+        -- east, west, north, south is table order, neither constructor order (north, south, east,
+        -- west) nor alphabetical. The message follows the table.
         (parseWire "up" :: Either Text Direction)
             `shouldBe` Left "unknown direction \"up\" (expected one of: east, west, north, south)"

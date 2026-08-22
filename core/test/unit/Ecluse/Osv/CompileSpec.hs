@@ -64,9 +64,8 @@ spec = describe "SQLite OSV Compilation" $ do
         close conn
         catchIOError (removeFile dbFile) (const $ pure ())
 
-        -- The file-name literal and the meta keys below pin the artifact's wire
-        -- contract, the forms a reader depends on, not the constants that
-        -- produced them.
+        -- The file-name literal and the meta keys below pin the artifact's wire contract, the forms
+        -- a reader depends on, not the constants that produced them.
         takeFileName dbFile `shouldBe` "npm-osv-schema3.db"
         -- The sample carries a CVSS 3.1 vector (5.9). The writer stores the computed
         -- base score in preference to the "MODERATE" label.
@@ -91,9 +90,8 @@ spec = describe "SQLite OSV Compilation" $ do
 
     it "aborts the compile without publishing when the drop rate is systemic" $ do
         le <- initLogEnv "test" (Environment "test")
-        -- A feed that is almost entirely unusable: 20 malformed entries to one good
-        -- one trips the systemic-drop breaker. The breaker must abandon the run rather
-        -- than finalise a fresh-looking artifact that silently omits most advisories.
+        -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
+        -- abandon the run rather than finalise an artifact that silently omits most advisories.
         zipData <-
             osvZipOf
                 ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]

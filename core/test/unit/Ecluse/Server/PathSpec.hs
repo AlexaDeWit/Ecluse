@@ -8,20 +8,15 @@ import Test.Hspec
 
 import Ecluse.Core.Server.Path (Filename (Filename), encodeComponent, isSafeComponent)
 
-{- | The shared URL-path vocabulary: the artifact-name type, and the
-ecosystem-independent component-safety gate.
-
-No ecosystem's routes live here. Each declares its own table (npm's is
-"Ecluse.Core.Registry.Npm.Route"). What every registry shares is the /threat/: a decoded
-path component interpolated into an upstream URL. These specs pin that boundary.
+{- | The shared URL-path vocabulary: the artifact-name type, and the ecosystem-independent
+component-safety gate. No ecosystem's routes live here. Every registry shares the /threat/ of a
+decoded path component interpolated into an upstream URL, and these specs pin that boundary.
 -}
 spec :: Spec
 spec = do
     describe "Filename -- the artifact name an artifact route carries" $ do
-        -- A distinct type, not a bare 'Text', holds the verbatim on-the-wire name,
-        -- because that name is authoritative for fetching the bytes. Equality is by
-        -- the wrapped name, so two routes naming the same artifact compare equal and
-        -- two different files do not.
+        -- A distinct type, not a bare 'Text', holds the verbatim on-the-wire name, because that
+        -- name is authoritative for fetching the bytes.
         it "compares equal for the same preserved file name" $
             Filename "is-odd-3.0.1.tgz" `shouldBe` Filename "is-odd-3.0.1.tgz"
         it "compares unequal for different preserved file names" $
@@ -61,9 +56,8 @@ spec = do
         it "percent-encodes the URL-reserved query, fragment, and sub-delimiter characters" $
             encodeComponent "a?b#c;d" `shouldBe` "a%3Fb%23c%3Bd"
         it "percent-encodes the RFC 3986 sub-delimiters !'()* (guarding against any widening of the query-safe set)" $
-            -- A widening of http-types' unreserved set could silently start passing
-            -- these bytes through. Pinning them keeps the module's "percent-encodes
-            -- every other byte" contract honest.
+            -- A widening of http-types' unreserved set could silently pass these bytes through.
+            -- Pinning them keeps the "percent-encodes every other byte" contract honest.
             encodeComponent "a!b'c(d)e*f" `shouldBe` "a%21b%27c%28d%29e%2Af"
         it "percent-encodes a space" $
             encodeComponent "a b" `shouldBe` "a%20b"

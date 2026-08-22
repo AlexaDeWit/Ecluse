@@ -60,9 +60,8 @@ lastCaptured stub =
     readIORef (stubCaptured stub)
         >>= maybe (fail "stub served no request") pure
 
-{- | Run an action against a stub that records each request and answers every one with
-a fixed status and body. The @testWithApplication@ helper binds a free port for the
-action's duration, so a test never collides on a fixed port.
+{- | Run an action against a stub that records each request and answers every one with a fixed
+status and body. It binds a free port for the action's duration, so tests never collide on a port.
 -}
 withStub :: Status -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []

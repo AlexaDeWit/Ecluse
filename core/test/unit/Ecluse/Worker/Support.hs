@@ -90,20 +90,9 @@ import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 
-{- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__
-over a 'WorkerRuntime' of test doubles, with no application 'Ecluse.Env.Env' and no
-OpenTelemetry SDK.
-
-This is the partition's proof that the worker is genuinely core. It builds the worker
-runtime from a recording publish double on every bundle and the production in-memory
-queue, test-configured through "Ecluse.Test.Queue". It adds a real HTTP manager, a fresh
-heartbeat, and the worker metric and tracing port doubles. It then runs the loop and the
-per-job processing through the core 'runWorkerM' against a scribe-less @katip@
-environment. These cases drive the integrity gate, the publish outcomes, the heartbeat,
-and the loop's catch-log-backoff supervision over those doubles. They observe the worker's
-ack decisions at the handle, through 'recordingAckQueue'. The integration suite's
-@Ecluse.WorkerSpec@ covers the same paths through a __real SQS queue__. These cases pin
-that the loop runs over the ports.
+{- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__ over a
+'WorkerRuntime' of test doubles, with no application 'Ecluse.Env.Env' and no OpenTelemetry SDK.
+This is the partition's proof that the worker is genuinely core.
 -}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────────
@@ -176,10 +165,8 @@ from a malformed one.
 wrongSha1 :: Text
 wrongSha1 = validSha1
 
--- The canonical empty-input digest fixtures ('Ecluse.Test.Package'), used here as
--- well-formed digests that do not match 'tarballBytes'. 'someMd5' feeds the uncomputable
--- MD5 arm (fail-closed). The others are the computable algorithms' tamper fixtures, which
--- the worker recomputes and finds do not match.
+-- Canonical empty-input digests ('Ecluse.Test.Package') that do not match 'tarballBytes'.
+-- 'someMd5' drives the uncomputable MD5 arm (fail-closed). The worker recomputes the rest.
 someBlake2b, someSha256, someMd5, someSha256Sri :: Text
 someBlake2b = validBlake2b
 someSha256 = validSha256
@@ -202,10 +189,8 @@ to prove the worker judges presence per version, never per package.
 otherVer :: Version
 otherVer = mkVersion Npm "0.9.0"
 
-{- | A mirror job for the conventional @thing-1.0.0.tgz@ artifact at the given stub
-upstream. The payload names the artifact by filename only. The digests the worker
-verifies against live on the policies' resolved snapshot (see 'admitPoliciesWithDigests'),
-never on the job.
+{- | A mirror job for the conventional @thing-1.0.0.tgz@ artifact at the given stub upstream.
+The digests the worker verifies against live on the policies' resolved snapshot, never on the job.
 -}
 jobWith :: Text -> MirrorJob
 jobWith url =
@@ -221,19 +206,16 @@ jobWith url =
 
 -- ── a recording publish capability ──────────────────────────────────────────────
 
-{- | What a publish captured: the raw verified bytes it received, and the artifact
-descriptor whose digests the real codec assembles its publish document from. The
-descriptor-sourcing case pins that descriptor to the re-admitted artifact's exactly.
+{- | What a publish captured: the raw verified bytes it received, and the artifact descriptor whose
+digests the real codec assembles its publish document from.
 -}
 data PublishLog = PublishLog
     { plDocuments :: [ByteString]
     , plArtifacts :: [MirrorArtifact]
     }
 
-{- | A publish-capability double whose 'mpPublishArtifact' records each call and returns
-the given fixed outcome. The mirror-presence probe (the worker's first step) answers
-__absent__ with an unparseable metadata body. That is the same shape a production mirror
-gives a package it does not hold. So every test drives the full pipeline unless it swaps in
+{- | A publish double that records each call and returns the given fixed outcome. Its
+mirror-presence probe answers absent, so a test drives the full pipeline unless it swaps in
 'mirrorListingPublish'.
 -}
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
@@ -265,50 +247,38 @@ probeUnreachablePublish logRef outcome =
         { mpProbeMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
         }
 
-{- | Give every bundle in the map the same publish capability. The runtime builders below
-inject their recording double this way, mirroring how the composition root gives each
-mount its own married capability.
--}
+-- | Give every bundle in the map the same publish capability.
 withPublish :: MirrorPublish -> WorkerPolicies -> WorkerPolicies
 withPublish publish = Map.map (\p -> p{wpPublish = publish})
 
 -- ── building a worker runtime over doubles ──────────────────────────────────────
 
-{- | Build a 'WorkerRuntime' and run the body against it. Every bundle carries the
-caller-supplied publish double, given the publish log so its publishes still record. The
-runtime uses a real no-TLS manager (for the stub upstream) and a fresh queue and
-heartbeat. It also takes the given worker metrics port and per-ecosystem policies. It
-returns the queue
-and the publish log, so a test can drive and inspect them. The probe tests use this
-directly to swap in 'mirrorListingPublish' or 'probeUnreachablePublish'.
-'withRuntimePolicies' is this over 'recordingPublish'.
+{- | Build a 'WorkerRuntime' over the caller's publish double and run the body against it. It hands
+back the queue and the publish log, so a test can drive and inspect them.
 -}
 withRuntimeRegistry :: (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimeRegistry mkPublish policies metricsPort body = do
     queue <- newTestMemoryQueue
     withRuntimeQueue queue mkPublish policies metricsPort (`body` queue)
 
-{- | 'withRuntimeRegistry' over a __caller-supplied__ queue. A test then observes the
-worker's queue-side decisions on a wrapped handle (see 'recordingAckQueue'), or drives
-the loop against a misbehaving one.
+{- | 'withRuntimeRegistry' over a __caller-supplied__ queue, so a test observes the worker's
+queue-side decisions or drives the loop against a misbehaving queue.
 -}
 withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
 withRuntimeQueue queue mkPublish policies metricsPort body = do
     logRef <- newIORef (PublishLog [] [])
     withWiredRuntime queue (withPublish (mkPublish logRef) policies) metricsPort (`body` logRef)
 
-{- | The base runtime builder over bundles that already carry their own publish
-capabilities, with nothing injected. A test wiring distinct capabilities per ecosystem,
-such as the foreign-bundle decoy pins, then observes exactly what it wired.
+{- | The base runtime builder over bundles that already carry their own publish capabilities, with
+nothing injected, so a test observes exactly what it wired.
 -}
 withWiredRuntime :: MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
 withWiredRuntime queue policies metricsPort body = do
     heartbeat <- newWorkerHeartbeat
     withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body
 
-{- | 'withWiredRuntime' over a __caller-supplied__ heartbeat, so a test can observe
-the heartbeat a mid-batch step (a publish, an ack) reads while the loop runs. The
-plain 'withWiredRuntime' is this over a fresh one.
+{- | 'withWiredRuntime' over a __caller-supplied__ heartbeat, so a test observes the heartbeat a
+mid-batch step reads while the loop runs.
 -}
 withWiredRuntimeHeartbeat :: WorkerHeartbeat -> MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
 withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body = do
@@ -324,16 +294,13 @@ withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body = do
             , wrPolicies = policies
             }
 
-{- | 'withRuntimeRegistry' with the recording publish double answering the given publish
-outcome. This is the common case.
--}
+-- | 'withRuntimeRegistry' with the recording publish double answering the given publish outcome.
 withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimePolicies policies metricsPort outcome =
     withRuntimeRegistry (`recordingPublish` outcome) policies metricsPort
 
-{- | 'withRuntimePolicies' with the default admitting policy ('admitPolicies'), so the
-integrity-gate and publish tests exercise their own path while ingest re-evaluation always
-admits. The re-evaluation tests pass their own policies through 'withRuntimePolicies'.
+{- | 'withRuntimePolicies' with the default admitting policy ('admitPolicies'), so ingest
+re-evaluation always admits.
 -}
 withRuntimeWith :: WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntimeWith = withRuntimePolicies admitPolicies
@@ -342,9 +309,8 @@ withRuntimeWith = withRuntimePolicies admitPolicies
 withRuntime :: Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
 withRuntime = withRuntimeWith noopWorkerMetricsPort
 
-{- | Build a 'WorkerRuntime' over a caller-supplied queue (the publish double is the
-never-consulted recording one) and run the body against it. A test then drives the
-supervised loop against a queue whose @receive@ misbehaves.
+{- | Build a 'WorkerRuntime' over a caller-supplied queue, so a test drives the supervised loop
+against a queue whose @receive@ misbehaves.
 -}
 withQueueRuntime :: MirrorQueue -> (WorkerRuntime -> IO a) -> IO a
 withQueueRuntime queue body =
@@ -352,9 +318,8 @@ withQueueRuntime queue body =
 
 -- ── ingest re-evaluation fixtures ───────────────────────────────────────────────
 
-{- | A prepared rule with a fixed verdict, built directly through the engine's injection
-point. A re-evaluation then reaches a chosen decision, independent of the version's
-details.
+{- | A prepared rule with a fixed verdict, so a re-evaluation reaches a chosen decision independent
+of the version's details.
 -}
 constRule :: Text -> RuleVerdict -> PreparedRule
 constRule name result =
@@ -382,9 +347,8 @@ worker's leave-for-redelivery.
 cannotVetRule :: PreparedRule
 cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
 
-{- | A resolver whose resolved snapshot carries the given artifact, for the ingest-gate
-cases where current metadata changed shape after the job was enqueued. Such a change is a
-digest stripped or downgraded below the floor, or a file renamed away.
+{- | A resolver whose resolved snapshot carries the given artifact, for the ingest-gate cases where
+current metadata changed shape after the job was enqueued.
 -}
 resolverWithArtifact :: Artifact -> PackageName -> Version -> IO VersionEvaluation
 resolverWithArtifact art rName rVersion =
@@ -403,13 +367,9 @@ rides.
 withArtifactRequest :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
 withArtifactRequest builder = Map.map (\p -> p{wpBuildArtifactRequest = builder})
 
-{- | The artifact of a projected version snapshot. The injected rules never inspect it,
-but the shared admission oracle does. Its filename must match the job fixture's
-'Ecluse.Core.Queue.jobArtifactFilename' (file selection), and it carries the
-floor-clearing sha512 SRI of 'tarballBytes'. The tamper gate verifies the fetched bytes
-against the re-admitted artifact's digests. So the current-metadata double must carry the
-true digest of the bytes the stub upstream serves: the faithful, immutable-version
-posture. A tamper case swaps this set through 'admitPoliciesWithDigests'.
+{- | The artifact of a projected version snapshot. Its filename must match the job fixture's
+'Ecluse.Core.Queue.jobArtifactFilename', and it carries the floor-clearing sha512 SRI of
+'tarballBytes', because the tamper gate verifies fetched bytes against the re-admitted artifact.
 -}
 sampleArtifact :: Artifact
 sampleArtifact =
@@ -431,16 +391,14 @@ rules over its 'PackageDetails'.
 presentResolver :: PackageName -> Version -> IO VersionEvaluation
 presentResolver name version = pure (VersionPresent (sampleDetails name version))
 
-{- | A worker-policies map for the npm ecosystem with the given single-version resolver
-and prepared rules, clocked at the fixed 'epoch'. The injected rules are not
+{- | Worker policies for npm, clocked at the fixed 'epoch'. The injected rules are not
 time-sensitive.
 -}
 npmPolicies :: (PackageName -> Version -> IO VersionEvaluation) -> [PreparedRule] -> WorkerPolicies
 npmPolicies resolve rules = Map.singleton Npm (npmPolicy resolve rules)
 
-{- | One npm re-evaluation bundle (the entry 'npmPolicies' keys under npm), for a test
-that assembles its own multi-ecosystem map. The request formation is npm's real
-by-URL builder, so the fetch path forms requests exactly as production does.
+{- | One npm re-evaluation bundle. It forms artifact requests with npm's real by-URL
+builder, so the fetch path matches production.
 -}
 npmPolicy :: (PackageName -> Version -> IO VersionEvaluation) -> [PreparedRule] -> WorkerPolicy
 npmPolicy resolve rules =
@@ -458,8 +416,7 @@ npmPolicy resolve rules =
         }
 
 {- | The publish placeholder 'npmPolicy' carries. The runtime builders swap in the
-recording double ('withPublish'), so an effectful use of this one is a broken test
-premise. It fails loudly rather than fabricating an outcome.
+recording double ('withPublish'), so any effectful use here fails loudly.
 -}
 unwiredPublish :: MirrorPublish
 unwiredPublish =
@@ -469,18 +426,15 @@ unwiredPublish =
         , mpPublishArtifact = \_ _ _ _ -> throwIO (SimulatedContractEscape "unwiredPublish: publish consulted")
         }
 
-{- | The default admitting policy the integrity-gate and publish tests run under. The
-version resolves present and an always-admit rule clears it, so re-evaluation never
-blocks. Those tests exercise the integrity gate and the publish outcomes alone.
+{- | The default admitting policy. The version resolves present and an always-admit rule
+clears it, so re-evaluation never blocks.
 -}
 admitPolicies :: WorkerPolicies
 admitPolicies = npmPolicies presentResolver [admitRule]
 
-{- | 'admitPolicies' with the resolved artifact's digest set replaced: the
-current-metadata double for the verification-source cases. The tamper gate verifies
-fetched bytes against the re-admitted artifact's digests. A test chooses here whether
-current metadata matches the stub upstream's bytes (a faithful mirror) or deliberately
-mismatches them (a tamper). The choice is independent of what the job payload carries.
+{- | 'admitPolicies' with the resolved artifact's digests replaced. The tamper gate verifies
+fetched bytes against these digests, so a test chooses a faithful mirror or a tamper here,
+independent of what the job payload carries.
 -}
 admitPoliciesWithDigests :: [Hash] -> WorkerPolicies
 admitPoliciesWithDigests hashes =
@@ -507,9 +461,8 @@ throwingVersionClient =
         , fetchVersionMetadata = \_ _ -> throwIO (SimulatedContractEscape "simulated contract escape")
         }
 
-{- | The loop tests' supervision policy: everything transient, retried at a fixed
-one-second pace. It is the composition root's worker policy shape without the shell's
-wiring-fault classifications, which live with the shell's types.
+{- | The loop tests' supervision policy. It drops the shell's wiring-fault classifications,
+which live with the shell's types.
 -}
 testSupervision :: SupervisionPolicy
 testSupervision =
@@ -519,28 +472,24 @@ testSupervision =
         , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 1_000_000}
         }
 
-{- | Discharge a 'WorkerM' to 'IO' over the worker runtime. It runs against a scribe-less
-@katip@ environment, so its log lines have nowhere to go, which is what these tests want.
-The initial context is empty (no @dd@). This is the core 'runWorkerM' boundary the
-application entry point uses.
+{- | Discharge a 'WorkerM' to 'IO' over the worker runtime. The @katip@ environment has no
+scribe, so log lines are discarded.
 -}
 runWM :: WorkerRuntime -> WorkerM a -> IO a
 runWM runtime action = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     runWorkerM logEnv mempty runtime action
 
-{- | A typed stand-in for an exception escaping a dependency's typed contract, an
-invariant break. The residue-supervision cases pin the escape channel with it, rather
-than a stringly exception.
+{- | A typed stand-in for an exception escaping a dependency's typed contract, an invariant
+break.
 -}
 newtype SimulatedContractEscape = SimulatedContractEscape Text
     deriving stock (Eq, Show)
 
 instance Exception SimulatedContractEscape
 
-{- | A queue whose @receive@ always reports the handle's typed fault, counting each call.
-It stands in for a persistently-failing backend, so a case can drive the loop's typed
-log-and-back-off arm. The loop must survive a faulted poll and poll again, not die.
+{- | A queue whose @receive@ always reports the handle's typed fault, counting each call. The
+loop must survive a faulted poll and poll again, not die.
 -}
 faultingReceiveQueue :: IORef Int -> IO MirrorQueue
 faultingReceiveQueue calls = do
@@ -552,10 +501,8 @@ faultingReceiveQueue calls = do
                 pure (Left (queueTransportFault (transportFault TransportUnreachable "receive: simulated queue outage")))
             }
 
-{- | A queue whose @receive@ always __throws__, counting each call: the handle's typed
-contract broken rather than honoured. It stands in for residue, an invariant break
-escaping the value channel, so a test keeps the loop's residual catch-log-backoff arm
-pinned.
+{- | A queue whose @receive@ always throws, counting each call. The throw breaks the handle's
+typed contract, so it drives the loop's residual catch-log-backoff arm.
 -}
 throwingReceiveQueue :: IORef Int -> IO MirrorQueue
 throwingReceiveQueue calls = do
@@ -583,17 +530,15 @@ genuine transient fault. Port 1 is in the privileged range and never bound.
 unreachableUrl :: Text
 unreachableUrl = "http://127.0.0.1:1/thing/-/thing-1.0.0.tgz"
 
-{- | 'unreachableUrl' dressed as a hostile artifact location: userinfo before the host
-and a signed query string. Those are the two places a @dist.tarball@ can hide a
-credential. The fetch fails at connect exactly as it does for 'unreachableUrl'. A test
-can therefore assert the fault text of a failed fetch with no network.
+{- | 'unreachableUrl' dressed as a hostile artifact location: userinfo and a signed query, the
+two places a @dist.tarball@ can hide a credential. The fetch still fails at connect, so a test
+asserts the fault text with no network.
 -}
 credentialBearingUnreachableUrl :: Text
 credentialBearingUnreachableUrl = "http://deploy:hunter2@127.0.0.1:1/x?sig=abc"
 
-{- | A job artifact URL that cannot be parsed into a request at all: a space and no
-scheme. The worker's by-URL request build therefore fails before any fetch. This is the
-unformable-URL arm, distinct from a reachable-but-failing fetch.
+{- | A job artifact URL that cannot be parsed into a request, so the by-URL build fails before
+any fetch.
 -}
 unformableUrl :: Text
 unformableUrl = "not a url"
@@ -622,11 +567,9 @@ enqueueAndReceive queue job = do
         [message] -> pure (msgReceipt message, job)
         other -> fail ("expected exactly one message, got " <> show other)
 
-{- | The test queue with its 'ack' field wrapped to record each acked receipt, so a test
-asserts the worker's retire-vs-retry decision directly at the handle. The production
-memory backend removes a job at delivery and never redelivers, so the queue's own state
-does not show the decision. The integration suite's @Ecluse.WorkerSpec@ pins, against real
-SQS, the redelivery consequence of an un-acked message over a redelivering backend.
+{- | The test queue with 'ack' wrapped to record each acked receipt. The memory backend removes
+a job at delivery and never redelivers, so the queue's own state does not show the worker's
+retire-vs-retry decision.
 -}
 recordingAckQueue :: IO (MirrorQueue, IO [ReceiptHandle])
 recordingAckQueue = do
@@ -635,11 +578,9 @@ recordingAckQueue = do
     let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
     pure (recording, reverse <$> readIORef acked)
 
-{- | The test queue with its 'deadLetter' field wrapped to record each dead-lettered
-receipt. A test then asserts the worker routed a terminal fault to the backend's
-dead-letter terminus, never 'ack'. The in-memory backend's 'deadLetter' is a no-op drop,
-so the recorded receipts are the only observable signal here. The @Ecluse.MirrorQueueSpec@
-suite pins the not-deleted redelivery consequence over a durable backend, against real SQS.
+{- | The test queue with 'deadLetter' wrapped to record each dead-lettered receipt. The
+in-memory 'deadLetter' is a no-op drop, so the recorded receipts are the only signal that a
+terminal fault went to the terminus rather than 'ack'.
 -}
 recordingDeadLetterQueue :: IO (MirrorQueue, IO [ReceiptHandle])
 recordingDeadLetterQueue = do

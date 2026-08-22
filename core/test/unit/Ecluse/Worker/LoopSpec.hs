@@ -16,11 +16,9 @@ spec :: Spec
 spec = do
     describe "workerLoop -- supervision (one bad iteration must not kill the loop)" $ do
         it "survives a faulting receive: logs the typed fault, backs off, and polls again" $ do
-            -- A persistently-failing backend: every poll reports the handle's typed
-            -- 'QueueFault'. The loop's value branch must log it and retry after a backoff,
-            -- never escape and tear the worker thread down. The witness is the receive
-            -- count. More than one call across the window proves the loop recovered and
-            -- polled AGAIN after the first fault, rather than dying.
+            -- Every poll reports the handle's typed 'QueueFault'. The loop must log it and retry
+            -- after a backoff, never escape and tear the worker thread down. More than one receive
+            -- proves it retried.
             calls <- newIORef (0 :: Int)
             queue <- faultingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do
@@ -31,10 +29,9 @@ spec = do
                 attempts `shouldSatisfy` (>= 2)
 
         it "survives residue: a receive that throws past its typed contract is caught, backed off, and retried" $ do
-            -- The handle contract reports every backend failure as a value, so a throwing
-            -- receive is an invariant break. The loop's residual tryAny must still contain
-            -- it: caught, logged, backed off, polled again. One broken invariant cannot
-            -- kill the worker thread.
+            -- The handle contract reports every backend failure as a value, so a throwing receive
+            -- is an invariant break. The residual tryAny must contain it: one broken invariant
+            -- cannot kill the worker.
             calls <- newIORef (0 :: Int)
             queue <- throwingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do
@@ -44,11 +41,9 @@ spec = do
 
     describe "workerLoop -- liveness (a fully-dead worker must fail the heartbeat)" $
         it "a persistently faulting receive never advances the heartbeat" $ do
-            -- The heartbeat advances only on progress: a successful poll or a completed
-            -- job. A worker that cannot poll at all keeps retrying (proven above) yet never
-            -- advances it, so lastPoll stays Nothing across the window. The /livez endpoint
-            -- folds this heartbeat in, so a fully-dead worker eventually reads unhealthy and
-            -- the orchestrator restarts the pod.
+            -- The heartbeat advances only on progress, so a worker that cannot poll at all leaves
+            -- lastPoll at 'Nothing'. /livez folds it in, so a fully-dead worker reads unhealthy and
+            -- the pod restarts.
             calls <- newIORef (0 :: Int)
             queue <- faultingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do

@@ -28,10 +28,8 @@ module Ecluse.Test.Containers (
 
 -- 'lookupEnv', 'Text', 'toText', 'toString', and '<&>' all come from the relude prelude.
 
-{- | The reaping scope for the current run. It is @ECLUSE_TEST_SCOPE@ when a
-container-running @task@ target pins that variable to this worktree's id: the @test-*@
-suites and the @coverage@ tier @task check@ runs. Otherwise it is @local@, for a bare
-@cabal test@ invocation.
+{- | The reaping scope for the current run. It is @ECLUSE_TEST_SCOPE@ when a container-running
+@task@ target pins that variable to this worktree's id, and @local@ otherwise.
 -}
 testScope :: IO Text
 testScope =
@@ -39,9 +37,8 @@ testScope =
         Just s | not (null s) -> toText s
         _ -> "local"
 
-{- | The label pairs every test container carries: the suite marker keyed by
-@com.ecluse.test@ and the reaping scope keyed by @com.ecluse.test.scope@. Shaped for
-testcontainers' 'TestContainers.Docker.withLabels'.
+{- | The label pairs every test container carries: the suite marker keyed by @com.ecluse.test@ and
+the reaping scope keyed by @com.ecluse.test.scope@.
 -}
 testContainerLabels :: Text -> IO [(Text, Text)]
 testContainerLabels suite = do

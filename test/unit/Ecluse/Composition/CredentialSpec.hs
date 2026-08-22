@@ -42,10 +42,9 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
                 tok <- currentToken provider
                 unSecret (authSecret tok) `shouldBe` "mirror-write-token"
 
-{- | The domain-scoped sharing decision, pinned on its pure surface. CodeArtifact
-mints a token per domain, so mounts whose resolved identities coincide share one
-provider group: one boot mint, one refresh schedule, one breaker. A differing
-identity, another domain or another requested duration, keeps its own group.
+{- | The domain-scoped sharing decision, pinned on its pure surface. CodeArtifact mints a token per
+domain, so mounts whose resolved identities coincide share one provider group, and a differing
+domain or requested duration keeps its own.
 -}
 identityGroupsSpec :: Spec
 identityGroupsSpec = describe "codeArtifactIdentityGroups (per-domain provider sharing)" $ do

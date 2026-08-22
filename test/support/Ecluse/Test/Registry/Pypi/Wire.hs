@@ -28,9 +28,8 @@ module Ecluse.Test.Registry.Pypi.Wire (
 import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.!=), (.:?))
 import Data.Map.Strict qualified as Map
 
-{- | A PyPI project's @\/pypi\/{project}\/json@ document, modelled only as far as its
-@releases@ map. Each key is a published version string. Each value is the unmodelled
-array of release files for that version.
+{- | A PyPI project's @\/pypi\/{project}\/json@ document, modelled only as far as its @releases@
+map.
 -}
 newtype ProjectJson = ProjectJson
     { pjReleases :: Map Text Value

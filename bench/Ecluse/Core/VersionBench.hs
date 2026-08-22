@@ -38,10 +38,8 @@ benchmarks loaded =
         | le@(_, _, value) <- loaded
         ]
 
-{- | The version read pipeline over a packument's raw version keys: parse every key into
-its ordering key, order the parsed versions by the semantic comparator, and resolve
-@latest@. The three results sum to a forced 'Int', so the bench evaluates the whole
-pipeline.
+{- | The version read pipeline over a packument's raw version keys: parse, order, and
+resolve @latest@. The three results sum, so the bench forces the whole pipeline.
 -}
 versionPipelineDepth :: [Text] -> Int
 versionPipelineDepth raws =

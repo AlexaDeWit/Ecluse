@@ -64,9 +64,8 @@ noopMetricsPort =
         , mpMirrorEnqueueFailure = pass
         }
 
-{- | A 'MetricsPort' that captures the serve decisions it records, with a reader for the
-decisions seen so far in record order. Every other field is inert. A spec asserts through
-it that the pipeline recorded the expected admit\/deny\/unavailable.
+{- | A 'MetricsPort' that captures the serve decisions it records, with a reader for them in record
+order. Every other field is inert.
 -}
 recordingMetricsPort :: IO (MetricsPort, IO [Decision])
 recordingMetricsPort = do
@@ -107,9 +106,8 @@ noopWorkerMetricsPort =
         , wmpMirrorPublishDuration = const pass
         }
 
-{- | A 'WorkerMetricsPort' that captures the per-job results it records, with a reader
-for the results seen so far in record order. The publish-duration field is inert. A spec
-asserts through it that the worker recorded the expected processed-job result.
+{- | A 'WorkerMetricsPort' that captures the per-job results it records, with a reader for them in
+record order. The publish-duration field is inert.
 -}
 recordingWorkerMetricsPort :: IO (WorkerMetricsPort, IO [MirrorResult])
 recordingWorkerMetricsPort = do
@@ -137,11 +135,8 @@ noopAdvisorySyncMetricsPort =
         , asmpSyncDuration = \_ _ _ -> pass
         }
 
-{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it
-receives, in record order, with a reader for each. A spec asserts that one sync attempt
-recorded exactly one attempt and one duration under the expected ecosystem and result.
-The latency reader carries the seconds, so a spec can check the sample is a real
-measurement, not a placeholder.
+{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it receives,
+in record order, with a reader for each.
 -}
 recordingAdvisorySyncMetricsPort ::
     IO
@@ -168,10 +163,9 @@ passthroughAdvisorySyncTracingPort =
         { astpSyncAttemptSpan = \_ _ action -> action
         }
 
-{- | An 'AdvisorySyncTracingPort' that records one entry per bracketed attempt: the
-ecosystem and the result the attempt projected. A reader returns the entries seen so far,
-in record order. It records __after__ the body returns, as the real bracket closes its
-span. A spec that waits on this reader therefore also sees the attempt's metrics settled.
+{- | An 'AdvisorySyncTracingPort' that records the ecosystem and projected result of each bracketed
+attempt, with a reader for them in record order. It records __after__ the body returns, as the real
+bracket closes its span, so a spec waiting on the reader also sees the attempt's metrics settled.
 -}
 recordingAdvisorySyncTracingPort :: IO (AdvisorySyncTracingPort, IO [(Ecosystem, AdvisorySyncResult)])
 recordingAdvisorySyncTracingPort = do

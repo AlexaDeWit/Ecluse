@@ -50,11 +50,8 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 main :: IO ()
 main = do
-    -- Load and decode the curated real-world corpus once, up front, before the measured
-    -- window. That keeps the decode cost out of every bench's timing, and a corrupt or
-    -- mis-pinned capture stops the run before any benching (loadCorpus fails loudly).
-    -- The load is eager rather than a tasty 'env' resource, which the tasty-bench
-    -- reporters do not handle when mixed with the HUnit generator tests.
+    -- Decode the curated corpus once, before the measured window, so no bench times it.
+    -- Eager, not a tasty 'env' resource, which the bench reporters mishandle mixed with HUnit.
     corpusEntries <- withLoaded <$> loadCorpus
     defaultMain
         [ bgroup
@@ -72,11 +69,8 @@ main = do
         , generatorTests
         ]
 
-{- | Correctness tests for the synthetic packument generator. They run as part of the
-benchmark, so a broken corpus stops the run rather than silently benching a degenerate
-input. They pin the invariants the scaled benches rely on: the generator yields the
-requested version count, that count survives a wire decode and a projection intact, and
-the serve rewrite puts every tarball URL onto the proxy origin.
+{- | Correctness tests for the synthetic packument generator. They run inside the
+benchmark, so a broken corpus stops the run rather than benching a degenerate input.
 -}
 generatorTests :: TestTree
 generatorTests =
@@ -117,9 +111,7 @@ generatorTests =
     rewrittenPrefix :: Text
     rewrittenPrefix = syntheticProxyBase <> "/" <> benchPackageText <> "/-/"
 
-{- | Every @dist.tarball@ URL in a packument value, in @versions@-object order. The tests
-use it to confirm the serve-time rewrite reached each version.
--}
+-- | Every @dist.tarball@ URL in a packument value, in @versions@-object order.
 tarballUrlsOf :: Value -> [Text]
 tarballUrlsOf value =
     [ url

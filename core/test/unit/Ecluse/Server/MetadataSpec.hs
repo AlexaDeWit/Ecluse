@@ -39,18 +39,10 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 
-{- | Tests for the serve-path read handle's wiring: the full-manifest op resolving through
-the shared cache, and the single-version op's __hybrid__ topology. That topology reads the
-small @(package, version)@ cache first. Then it reads the warm full-packument cache,
-read-only, so a @GET@ and its tarball gate stay one upstream call. Then it leads a cold
-selective fetch that populates the version cache without writing the whole packument back
-to the shared one. These cases also cover an uncached handle re-fetching, and a failure
-propagating and caching nothing.
-
-These cases drive the handle over __injected counting fetches__, not real HTTP, one per
-leg, so they assert the cache-sharing and failure semantics directly. The two fetches share
-one call counter, so an assertion on it is the total number of upstream calls across both
-legs.
+{- | Tests for the serve-path read handle, whose single-version op is hybrid. It reads the
+@(package, version)@ cache, then the warm full-packument cache read-only, then leads a cold
+selective fetch that never writes the whole packument back. The injected full and version fetches
+share one call counter, so an assertion on it is the total upstream calls across both legs.
 -}
 spec :: Spec
 spec = do
@@ -156,9 +148,8 @@ spec = do
             readIORef causes `shouldReturn` [Metric.Connection]
 
         it "logs a failure once per real fetch: coalesced followers never re-log" $ do
-            -- Eight concurrent resolutions coalesce onto one failing leader. Every
-            -- caller receives the same typed Left, the fetch ran once, and the failure
-            -- log fired once inside the leader, never per follower.
+            -- Coalesced followers share the failing leader's typed Left, and the failure log fires
+            -- once inside the leader, never per follower.
             fetches <- newIORef (0 :: Int)
             failureLogs <- newIORef (0 :: Int)
             started <- newEmptyMVar

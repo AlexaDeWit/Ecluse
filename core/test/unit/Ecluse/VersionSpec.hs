@@ -61,10 +61,8 @@ spec = do
                     v <- forAll genGem
                     assert (isRight (parseVersionKey RubyGems v))
 
-    -- Strictness: the PEP 440 and Gem parsers must reject these inputs (Left). The
-    -- ordering fixture can only express ranking, so these cases assert rejection
-    -- explicitly. They pin the valid spellings that must keep parsing alongside, as
-    -- Right.
+    -- Strictness: the ordering fixture can only rank, so these cases assert rejection (Left)
+    -- explicitly and pin the valid spellings that must keep parsing (Right).
     describe "parser strictness (#279, #280)" $ do
         let mustReject eco raw =
                 it (show eco <> " rejects " <> show raw) $
@@ -86,11 +84,9 @@ spec = do
             mustParse PyPI "1.0."
 
         describe "PEP 440 'r' post-release spelling" $ do
-            -- PEP 440 spells the post-release label post | rev | r, and its
-            -- reference implementation (packaging) normalises all three to post.
-            -- The 'r' spelling must parse and rank as a post-release. A rejection
-            -- would abstain from ordering and let selectLatest repoint
-            -- dist-tags.latest past it.
+            -- PEP 440 spells the post-release label post, rev, or r, and packaging normalises all
+            -- three to post. A rejection would abstain from ordering and let selectLatest repoint
+            -- dist-tags.latest past the version.
             mustParse PyPI "1.0.r1"
             mustParse PyPI "1.0r1"
             mustParse PyPI "1.0-r1"
@@ -98,9 +94,8 @@ spec = do
             mustParse PyPI "1.0.r"
 
         describe "non-ASCII alphanumerics (#280)" $ do
-            -- Python's packaging and Ruby's Gem::Version are ASCII-only. A
-            -- Unicode-aware gate over-accepts, and for "digits" outside ASCII it
-            -- mis-classifies them as text, corrupting the order.
+            -- Python's packaging and Ruby's Gem::Version are ASCII-only. A Unicode-aware gate
+            -- over-accepts and mis-classifies non-ASCII digits as text, corrupting the order.
             mustReject PyPI "1.0+café" -- Latin-1 letter in a local segment
             mustReject PyPI "１.２.３" -- fullwidth digits
             mustReject PyPI "١.٢.٣" -- Arabic-Indic digits
@@ -108,20 +103,17 @@ spec = do
             mustReject RubyGems "１.２.３" -- fullwidth digits
             mustReject RubyGems "١.٢.٣" -- Arabic-Indic digits
         describe "numeric run length bound (DoS)" $ do
-            -- 'readMaybe' reads a numeric segment into an 'Integer', which is quadratic
-            -- in the digit count. An unbounded run in hostile registry metadata would
-            -- then be an algorithmic-complexity DoS. The parser refuses an over-long
-            -- version, so it is served raw, without an ordering key. A long-but-sane
-            -- numeric segment still parses.
+            -- 'readMaybe' reads a numeric segment into an 'Integer', which is quadratic in the
+            -- digit count, so an unbounded run in hostile registry metadata is an algorithmic-
+            -- complexity DoS. The parser refuses an over-long version and it is served raw, without
+            -- an ordering key.
             mustReject PyPI ("1." <> T.replicate 5000 "9")
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
             mustParse RubyGems ("1." <> T.replicate 100 "9")
-            -- The @versions@ library parses npm/semver, and its numeric components
-            -- are fixed-width words, not unbounded 'Integer'. Beyond the shared length
-            -- bound the parser refuses an over-long numeric run. A silent word overflow
-            -- (say a 25-digit major wrapping mod 2^64) then cannot key a huge version as
-            -- a small one and corrupt ordering.
+            -- The @versions@ library keys npm numeric components as fixed-width words, not
+            -- 'Integer'. Beyond the shared length bound the parser refuses, so a silent overflow (a
+            -- 25-digit major wrapping mod 2^64) cannot key a huge version as a small one.
             mustReject Npm ("1.0." <> T.replicate 5000 "9")
             mustReject Npm (T.replicate 25 "9" <> ".0.0")
             mustParse Npm "1.2.3"
@@ -156,18 +148,16 @@ spec = do
             cmp RubyGems "1.0.0.beta1" "1.0.0" `shouldBe` Just LT
         it "RubyGems orders numeric segments numerically" $
             cmp RubyGems "1.10.0" "1.9.0" `shouldBe` Just GT
-        -- Gem::Version#canonical_segments drops a release trailing zero before the
-        -- prerelease, so 2.0.a keys as [2,"a"]: 2.t > 2.0.a (a live-oracle
-        -- differential counterexample), and 2.0.a == 2.a.
+        -- Gem::Version#canonical_segments drops a release trailing zero before the prerelease, so
+        -- 2.0.a keys as [2,"a"].
         it "RubyGems canonicalises a release trailing zero before a prerelease (2.t > 2.0.a)" $
             cmp RubyGems "2.t" "2.0.a" `shouldBe` Just GT
         it "RubyGems equates versions that canonicalise alike (2.0.a == 2.a)" $
             cmp RubyGems "2.0.a" "2.a" `shouldBe` Just EQ
         it "RubyGems strips a release trailing zero (2.0 == 2)" $
             cmp RubyGems "2.0" "2" `shouldBe` Just EQ
-        -- Gem::Version canonicalises hyphens to a prerelease marker (a global
-        -- gsub("-", ".pre.")), so "1.0.0-1" parses as "1.0.0.pre.1". It ranks below
-        -- "1.0.0" and equates with the explicit .pre. spelling.
+        -- Gem::Version canonicalises hyphens to a prerelease marker (a global gsub("-", ".pre.")),
+        -- so "1.0.0-1" parses as "1.0.0.pre.1".
         it "RubyGems accepts a hyphenated version (1.0.0-1 parses)" $
             parseVersionKey RubyGems "1.0.0-1" `shouldSatisfy` isRight
         it "RubyGems ranks a hyphenated version below its release (1.0.0-1 < 1.0.0)" $
@@ -188,12 +178,8 @@ spec = do
                 let x = mkVersion eco ver
                 compareVersions x x === (EQ <$ versionKey x)
 
-    -- The total-order laws on 'compareVersions', proved generatively over
-    -- structurally valid version strings (so each side parses to a key). The
-    -- reflexivity case above is not repeated here. The pair and triple draws inject
-    -- equal cases explicitly: 'versionPair' and 'versionTriple' reuse one raw across
-    -- positions, which compares EQ. The EQ class then stays covered whatever the
-    -- generator's width, rather than through a narrow, collision-dense space.
+    -- The total-order laws on 'compareVersions', over structurally valid version strings so each
+    -- side parses. 'versionPair' and 'versionTriple' reuse one raw to keep the EQ class covered.
     describe "compareVersions total-order laws" $
         modifyMaxSuccess (const 400) $
             for_ ecosystemGens $ \(eco, gen) -> describe (show eco) $ do
@@ -232,9 +218,8 @@ spec = do
                         when (le x y && le y z) (H.assert (le x z))
 
     describe "isStable" $ do
-        -- isStable takes the parsed key. The helper stableOf parses a
-        -- known-good version, then applies the predicate. It answers Just True or Just
-        -- False, never Nothing, because these fixtures all parse.
+        -- stableOf parses a known-good version, then applies the predicate. These fixtures all
+        -- parse, so it answers Just True or Just False, never Nothing.
         let stableOf eco raw = fmap isStable (rightToMaybe (parseVersionKey eco raw))
 
         describe "semver (npm)" $ do
@@ -272,10 +257,8 @@ spec = do
                 stableOf RubyGems "1.2.0.rc1" `shouldBe` Just False
 
     describe "selectLatest" $ do
-        -- All survivors here are npm versions. The selectLatest function is
-        -- ecosystem-agnostic: it calls compareVersions and isStable on the keys. The
-        -- helper selRaw resolves and reports the chosen tag's raw text, the value the
-        -- caller uses.
+        -- All survivors here are npm versions. selectLatest is ecosystem-agnostic: it calls
+        -- compareVersions and isStable on the keys.
         let v = mkVersion Npm
             raws = map unVersion
             selRaw :: Maybe Text -> [Text] -> Maybe Text
@@ -337,10 +320,8 @@ invertOrdering = \case
     EQ -> EQ
     GT -> LT
 
-{- | Draw a pair of raw version strings, with a deterministic share of equal pairs: the
-same raw on both sides, which compares 'EQ'. That keeps the @EQ@ class of an ordering
-law populated however often two independent draws happen to collide. The 'H.cover' floor then holds at any generator width,
-rather than through a narrow, collision-dense space.
+{- | Draw a pair of raw version strings, with a deterministic share of equal pairs, so the
+@EQ@ class of an ordering law stays populated at any generator width.
 -}
 versionPair :: Gen Text -> Gen (Text, Text)
 versionPair gen =
@@ -349,9 +330,8 @@ versionPair gen =
         , (1, (\v -> (v, v)) <$> gen)
         ]
 
-{- | Draw a triple of raw version strings, sometimes reusing one draw across two
-positions so an adjacent pair compares 'EQ'. The draw then exercises the transitivity
-antecedent (@x ≤ y@ and @y ≤ z@) across equal as well as strict steps.
+{- | Draw a triple of raw version strings, sometimes reusing one draw across two positions so
+an adjacent pair compares 'EQ', which exercises the transitivity antecedent across equal steps.
 -}
 versionTriple :: Gen Text -> Gen (Text, Text, Text)
 versionTriple gen =
@@ -362,9 +342,7 @@ versionTriple gen =
         ]
 
 -- The shared per-ecosystem generators of structurally valid version strings
--- ('Ecluse.Test.Version'), paired with their ecosystem. Each emits a string
--- 'versionKey' parses (the totality law guards this), while ranging widely enough
--- that 'H.cover' sees a mix of LT/EQ/GT across pairs.
+-- ('Ecluse.Test.Version'), paired with their ecosystem.
 ecosystemGens :: [(Ecosystem, Gen Text)]
 ecosystemGens =
     [ (Npm, genNpm)

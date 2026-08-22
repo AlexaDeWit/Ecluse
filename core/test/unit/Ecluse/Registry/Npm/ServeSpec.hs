@@ -13,10 +13,8 @@ import Ecluse.Core.Registry.Npm.Serve (npmError, npmErrorCodec)
 import Ecluse.Core.Server.Contract (encodeBody)
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 
-{- | Decode a denial body and read its @error@ string. Return 'Right' with the string
-when the body is a JSON object carrying a string @error@. Return 'Left' for any other
-shape, which fails the @`shouldBe` Right …@ assertion. This pins the npm
-@{"error": …}@ contract without a partial decode.
+{- | Read the @error@ string out of a denial body. Any other shape returns 'Left', which
+pins the npm @{"error": …}@ contract without a partial decode.
 -}
 errorField :: LByteString -> Either Text Text
 errorField raw =
