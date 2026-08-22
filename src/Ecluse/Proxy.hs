@@ -35,26 +35,24 @@ import Ecluse.Composition (
     planMounts,
     planPublishTargets,
  )
-import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
+import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
     mirrorArtifactBytesCap,
     planCacheConfig,
  )
-import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
-import Ecluse.Composition.Plan (resolveMemoryPlanFor)
+import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
+import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections))
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgRuntime, cfgServer),
+    AppConfig (cfgCache, cfgLimits, cfgServer),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
-    RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
-    mountPostureLines,
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (generationInstalledAt)
@@ -108,6 +106,11 @@ runProxy bootEnv = do
     let config = beConfigFull bootEnv
     let logEnv = beLogEnv bootEnv
     let telemetry = beTelemetry bootEnv
+    -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
+    -- role only applies it.
+    let bootPlan = beBootPlan bootEnv
+    let runtimePlan = bpMirrorRuntime bootPlan
+    let plan = bpMemoryPlan bootPlan
 
     -- The metric instruments do not exist until the telemetry substrate is built well below. The
     -- credential provider built here records through reporters that 'installMetrics' makes live.
@@ -124,17 +127,6 @@ runProxy bootEnv = do
     -- another. Without a bucket the map is empty, rules abstain, and readiness is ungated.
     cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
-    -- Whether a mirror runtime exists, and which queue backend it rides, decides whether the
-    -- memory plan allocates a queue tenant at all. Only the memory backend spends heap.
-    runtimePlan <-
-        orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
-    -- Shed-ladder steps warn loudly and the process boots regardless. Only an explicit
-    -- override that breaks the combined CPU and material-share invariant refuses.
-    let (plan, planLines) = resolveMemoryPlanFor env (beRuntimePlan bootEnv) runtimePlan
-    traverse_ (logBootInfo logEnv) planLines
-    traverse_ (logBootWarning logEnv) (mpDegradations plan)
-    unless (null (mpOverrideViolations plan)) $
-        orExit (T.unlines . map renderBootError) (Left [MemoryPlanOverrideUnsafe (mpOverrideViolations plan)])
     -- Where the plan shed the capability count (the nursery was the pressure),
     -- apply it in-process before the parallel machinery spins up.
     whenJust (mpShedCapabilities plan) setNumCapabilities
@@ -152,15 +144,6 @@ runProxy bootEnv = do
                 }
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
-    -- The file-descriptor limit is the pool's real ceiling, one descriptor per pooled connection.
-    -- Size it for the un-admitted private-hit streaming fan-out, not admission capacity.
-    fdLimit <- Composition.openFileSoftLimit
-    let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (rtPrivateConnectionsPerHost (cfgRuntime env)) fdLimit
-    logBootInfo logEnv privateConnectionsLine
-    -- Half the private share off the same file-descriptor datapoint. Onboarding fail-over and
-    -- worker back-fill streams ride this manager without coalescing, so retention must cover them.
-    let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (rtPublicConnectionsPerHost (cfgRuntime env)) fdLimit
-    logBootInfo logEnv publicConnectionsLine
     heartbeat <- newWorkerHeartbeat
     let serverConfig =
             (mkServerConfig bindings)
@@ -177,9 +160,6 @@ runProxy bootEnv = do
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
-    -- Écluse derives a mount's mirroring mode from its declared endpoints, so this posture
-    -- line is the loud surface a dropped mirrorTarget shows up on.
-    traverse_ (logBootInfo logEnv) (mountPostureLines config)
     -- The buffered hand-off keeps the serve path off the backend's enqueue latency. The drain
     -- loop below delivers off the request path. Under NoMirroring the inert queue is unreachable.
     (queue, mirrorDrain) <- case runtimePlan of
@@ -188,9 +168,7 @@ runProxy bootEnv = do
             (q, drainEnqueueBuffer) <-
                 bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
             pure (q, Just drainEnqueueBuffer)
-        NoMirroring -> do
-            logBootInfo logEnv "mirror runtime disabled: no mount mirrors, so no queue is built and no worker starts"
-            pure (noMirrorQueue, Nothing)
+        NoMirroring -> pure (noMirrorQueue, Nothing)
     metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
 
     -- Registry egress is https-only by construction, and certificate validation authenticates the
@@ -199,8 +177,8 @@ runProxy bootEnv = do
     -- because public reads are anonymous and private reads forward the client's credential.
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    manager <- newManager (connectionPoolSettings publicConnections publicSettings)
-    privateManager <- newManager (connectionPoolSettings privateConnections privateSettings)
+    manager <- newManager (connectionPoolSettings (bpPublicConnections bootPlan) publicSettings)
+    privateManager <- newManager (connectionPoolSettings (bpPrivateConnections bootPlan) privateSettings)
     withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.

@@ -117,24 +117,26 @@ import Ecluse.Proxy
 run :: IO ()
 run = do
     cmd <- execCLI
-    case cmd of
-        -- check-config validates and prints without booting anything, and owns
-        -- its own exit codes (0 valid, 2 refused): no services, no supervision.
-        RunCheckConfig -> runCheckConfig
-        serviceCmd -> do
-            outcome <- superviseProcess (withBootEnv (dispatch serviceCmd))
-            case outcome of
-                ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
-                RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
-                _ -> pass
-            exitWith (exitCodeFor outcome)
-  where
-    dispatch cmd bootEnv = case cmd of
-        RunProxy -> runProxy bootEnv
-        RunPilot -> runPilot bootEnv
-        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
-        RunDredger -> runDredger bootEnv
-        RunCheckConfig -> pass
+    outcome <- superviseProcess (runCommand cmd)
+    case outcome of
+        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
+        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
+        _ -> pass
+    exitWith (exitCodeFor outcome)
+
+{- Dispatch one subcommand under the process perimeter. check-config validates and prints
+without booting anything, so it runs outside 'withBootEnv': no logger, no telemetry, no
+services. It refuses through the same 'BootAborted' every boot phase raises, which
+'exitCodeFor' maps to exit 2. -}
+runCommand :: AppCommand -> IO ()
+runCommand = \case
+    RunCheckConfig -> runCheckConfig
+    RunProxy -> withBootEnv runProxy
+    RunPilot -> withBootEnv runPilot
+    RunPilotCompile opts ->
+        withBootEnv $ \bootEnv ->
+            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
+    RunDredger -> withBootEnv runDredger
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.
