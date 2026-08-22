@@ -34,6 +34,7 @@ import Ecluse.Core.Osv.Stream (
     streamOsvUrl,
     systemicDrop,
  )
+import Ecluse.Core.Security.Authority (authorityLabel)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace.Core (SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
@@ -60,7 +61,7 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
         $ \mSpan -> do
             forM_ mSpan $ \sp -> do
                 addAttribute sp "ecluse.osv.ecosystem" ecosystem
-                addAttribute sp "ecluse.osv.source_url" (toText urlStr)
+                addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
 
             bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
                 liftIO $ initSchema conn

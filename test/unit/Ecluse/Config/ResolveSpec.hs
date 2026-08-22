@@ -147,6 +147,7 @@ spec = do
                     , ("ECLUSE_LIMITS__MAX_VERSION_COUNT", "100000")
                     , ("ECLUSE_LIMITS__MAX_NESTING_DEPTH", "64")
                     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
+                    , ("ECLUSE_OBSERVABILITY__LOG_LEVEL", "warn")
                     , ("ECLUSE_OBSERVABILITY__TELEMETRY", "off")
                     , ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.com")
                     , ("ECLUSE_INTEGRITY__MIN_PUBLIC", "sha256")
@@ -233,6 +234,7 @@ spec = do
                                 , Object $
                                     KeyMap.fromList
                                         [ ("logFormat", String "json")
+                                        , ("logLevel", String "warn")
                                         , ("telemetry", String "off")
                                         ]
                                 )

@@ -47,7 +47,7 @@ import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
-import Ecluse.Runtime.Log (LogFormat)
+import Ecluse.Runtime.Log (LogFormat, LogLevel)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
 newtype Url = Url Text
@@ -210,9 +210,10 @@ data RuntimeSettings = RuntimeSettings
     }
     deriving stock (Eq, Show)
 
--- | The @observability@ group: log shape and telemetry switch.
+-- | The @observability@ group: log shape, log level, and telemetry switch.
 data ObservabilitySettings = ObservabilitySettings
     { obsLogFormat :: LogFormat
+    , obsLogLevel :: LogLevel
     , obsTelemetry :: TelemetrySwitch
     }
     deriving stock (Eq, Show)

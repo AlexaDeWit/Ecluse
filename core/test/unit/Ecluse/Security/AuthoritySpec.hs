@@ -12,6 +12,7 @@ import Ecluse.Core.Security (
     AllowedHostPorts,
     HostPort (HostPort),
     allowedHostPorts,
+    authorityLabel,
     hostAddress,
     hostPortAddress,
     isAllowedUpstreamHost,
@@ -37,6 +38,7 @@ spec :: Spec
 spec = do
     hostAddressSpec
     hostPortAddressSpec
+    authorityLabelSpec
     splitHostPortSpec
 
 hostAddressSpec :: Spec
@@ -153,6 +155,36 @@ hostPortAddressSpec = describe "hostPortAddress" $ do
     it "yields Nothing for a value with no host" $ do
         hostPortAddress "" `shouldBe` Nothing
         hostPortAddress ":8443" `shouldBe` Nothing
+
+{- The log-safe reduction every log line and span attribute applies to a URL. What it
+must never emit is the point: userinfo and the query string can carry a credential, and
+a malformed authority must yield no host at all rather than a fragment of the input. -}
+authorityLabelSpec :: Spec
+authorityLabelSpec = describe "authorityLabel" $ do
+    it "drops userinfo, path, query, and fragment, keeping host and port" $
+        authorityLabel "https://deploy:hunter2@registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz?token=abc#frag"
+            `shouldBe` "registry.npmjs.org:443"
+    it "drops a pre-signed query string whole" $
+        -- An S3-style pre-signed URL carries its credential in the query.
+        authorityLabel "https://bucket.s3.amazonaws.com/all.zip?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA"
+            `shouldBe` "bucket.s3.amazonaws.com:443"
+    it "folds the https default port: a written :443 and no port render alike" $
+        authorityLabel "https://registry.npmjs.org:443/x" `shouldBe` authorityLabel "https://registry.npmjs.org/x"
+    it "keeps an explicit non-default port" $
+        authorityLabel "https://registry.internal:9443/x" `shouldBe` "registry.internal:9443"
+    it "re-brackets an IPv6 literal so the label reads back as one authority" $
+        authorityLabel "https://[2606:4700::1111]:8443/thing" `shouldBe` "[2606:4700::1111]:8443"
+    it "lower-cases the host, as the gate does" $
+        authorityLabel "https://Registry.NPMJS.org/x" `shouldBe` "registry.npmjs.org:443"
+    it "labels the authority actually dialled, not one hidden in the query" $
+        authorityLabel "https://169.254.169.254/x?u=https://registry.npmjs.org"
+            `shouldBe` "169.254.169.254:443"
+    it "yields no host for a value carrying no dialable authority" $ do
+        authorityLabel "" `shouldBe` "<unresolved>"
+        authorityLabel "https://[::1/thing" `shouldBe` "<unresolved>"
+        authorityLabel "https://deploy@/thing" `shouldBe` "<unresolved>"
+        authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
+        authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
 
 -- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS
 -- endpoint parser. These assert host/port extraction only -- the split is purely

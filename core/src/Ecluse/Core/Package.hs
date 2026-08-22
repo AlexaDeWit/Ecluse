@@ -422,11 +422,14 @@ data InvalidEntry = InvalidEntry
     version manifest or publish time, the tag name for a dist-tag.
     -}
     , invalidValue :: Value
-    {- ^ The __raw offending value__, preserved verbatim ('Value' is lossless), so an
-    operator can see exactly what the upstream sent rather than only a reason string. A
-    dropped publish time keeps its raw bad date here even though the version's
-    'pkgPublishedAt' folds to 'Nothing'; the gating value (absent) and the diagnostic
-    (the raw bytes) are kept separate. Render it (truncating if large) at log time.
+    {- ^ The __offending value__ ('Value' is lossless), so an operator can see what the
+    upstream sent rather than only a reason string. A dropped publish time keeps its raw
+    bad date here even though the version's 'pkgPublishedAt' folds to 'Nothing'; the
+    gating value (absent) and the diagnostic (the raw bytes) are kept separate. Render it
+    (truncating if large) at log time. A value that is a __URL__ is reduced to its
+    authority before it is recorded ('Ecluse.Core.Security.Authority.authorityLabel'):
+    this record reaches a log line, and an upstream-supplied @dist.tarball@ can carry a
+    credential in its userinfo or query string.
     -}
     , invalidReason :: Text
     -- ^ Why the entry could not be projected (the decode error), for the operator log.

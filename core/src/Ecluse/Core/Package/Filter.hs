@@ -81,7 +81,7 @@ import Ecluse.Core.Package (
     pkgVersion,
  )
 import Ecluse.Core.Rules.Types (Decision (Admitted))
-import Ecluse.Core.Security (hostAddress)
+import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
@@ -180,7 +180,7 @@ policy ('Ecluse.Core.Security.Egress.resolveTarballUrl'), given the @upstreamBas
 packument was served from. An https artifact URL is kept, a same-host @http@ URL is
 __upgraded__ to https, and a version whose artifact is @http@ on a foreign host (or any
 non-http(s) URL) is __dropped__ from the served set and recorded as an
-'Ecluse.Core.Package.InvalidVersionManifest' carrying the offending URL (the #486
+'Ecluse.Core.Package.InvalidVersionManifest' carrying the offending authority (the #486
 drop-and-record contract), so the version is never dialled in plaintext and the drop is
 observable.
 
@@ -202,7 +202,10 @@ enforceArtifactScheme upstreamBaseUrl info =
         case resolveDetails upstreamHost details of
             Right ok -> (Map.insert rawVersion ok keptAcc, dropAcc)
             Left (reason, badUrl) ->
-                (keptAcc, InvalidEntry InvalidVersionManifest rawVersion (String badUrl) reason : dropAcc)
+                -- The offending value is an upstream-supplied dist.tarball URL and this
+                -- record is rendered onto a log line, so only its authority is kept
+                -- ('authorityLabel'); the reason already names why the URL was refused.
+                (keptAcc, InvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel badUrl)) reason : dropAcc)
 
 {- | The single-version form of 'enforceArtifactScheme' for the selective decode path:
 'Nothing' drops the version (its artifact URL is non-https and not upgradeable), a 'Just'

@@ -87,6 +87,7 @@ spec = do
     scrubSpec
     crossAsyncLinkSpec
     enqueueStatusSpec
+    enqueueAuthoritySpec
     traceparentInjectionSpec
 
 -- A distinctive secret that must never surface on a span; the scrub assertions search
@@ -294,6 +295,30 @@ enqueueStatusSpec = describe "enqueue span status on a swallowed failure" $ do
         enqueueSpan <- findSpan ref "ecluse.mirror.enqueue"
         hot <- readIORef (spanHot enqueueSpan)
         hotStatus hot `shouldBe` Unset
+
+{- The enqueue span names the artifact's __authority__, never its URL. The location is
+upstream-supplied and its userinfo or query string can carry a credential, and a span
+attribute is exported off the node, so the URL never reaches one. -}
+enqueueAuthoritySpec :: Spec
+enqueueAuthoritySpec = describe "enqueue span artifact authority" $
+    it "records the artifact host and port, dropping userinfo, path, and query" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        withMirrorEnqueueSpan
+            telemetry
+            samplePackage
+            sampleVersion
+            "https://deploy:hunter2@registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz?sig=abc"
+            (const Nothing)
+            (const pass)
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        dump <- attributeDump ref
+        dump `shouldSatisfy` T.isInfixOf "ecluse.mirror.artifact_host"
+        dump `shouldSatisfy` T.isInfixOf "registry.npmjs.org:443"
+        dump `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        dump `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+        dump `shouldSatisfy` (not . T.isInfixOf "left-pad-1.3.0.tgz")
 
 {- The data-plane instrumentation must inject a W3C @traceparent@ on each outbound
 request, so a downstream service continues the trace. Drive a request through the very

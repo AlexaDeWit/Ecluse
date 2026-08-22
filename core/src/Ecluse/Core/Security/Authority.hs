@@ -12,6 +12,9 @@ with the SQS endpoint parser). These are __not__ a full RFC 3986 parser: a value
 with no recognisable authority yields the empty string or 'Nothing', which every
 guard treats as not-allowed. The SSRF policy gates in "Ecluse.Core.Security.Host"
 consume 'HostPort'; the parsing here carries no policy of its own.
+
+'authorityLabel' is the same extraction rendered back to text, the single reduction
+every log line and span attribute applies to a URL before it names one.
 -}
 module Ecluse.Core.Security.Authority (
     -- * The dialled authority
@@ -21,6 +24,9 @@ module Ecluse.Core.Security.Authority (
     hostAddress,
     hostPortAddress,
     splitHostPort,
+
+    -- * Log-safe rendering
+    authorityLabel,
 ) where
 
 import Data.Text qualified as T
@@ -102,6 +108,41 @@ hostPortAddress raw = do
     guard (not (T.null host))
     port <- effectivePort authority rest
     pure (HostPort (T.toLower host) port)
+
+{- | The __log-safe__ label for a URL: its validated host and effective port, with the
+scheme, any userinfo, and the whole path\/query\/fragment tail dropped.
+
+An artifact URL is attacker-influenced and an advisory export URL is operator-supplied;
+either can carry a credential in its userinfo or a pre-signed query string. No log line
+and no span attribute may render one, so every site that wants to name a URL names this
+instead. A value 'hostPortAddress' cannot resolve to a dialable authority renders as
+@\<unresolved\>@, never as a truncated piece of the input, and an IPv6 literal is
+re-bracketed so the label reads back as the same authority.
+
+>>> authorityLabel "https://deploy:hunter2@registry.npmjs.org/thing/-/thing-1.0.0.tgz?sig=abc"
+"registry.npmjs.org:443"
+
+>>> authorityLabel "https://[2606:4700::1111]:8443/thing"
+"[2606:4700::1111]:8443"
+
+>>> authorityLabel "https://[::1/thing"
+"<unresolved>"
+-}
+authorityLabel :: Text -> Text
+authorityLabel = maybe unresolvedAuthority renderHostPort . hostPortAddress
+
+-- What a value carrying no dialable authority renders as, matching the angle-bracket
+-- convention the resolved-configuration provenance lines use for a withheld value.
+unresolvedAuthority :: Text
+unresolvedAuthority = "<unresolved>"
+
+{- Render a 'HostPort' back to a @host:port@ authority. An IPv6 literal is re-bracketed:
+'HostPort' holds the host unbracketed, and @2606:4700::1111:8443@ would be neither the
+host nor a parseable authority. -}
+renderHostPort :: HostPort -> Text
+renderHostPort (HostPort host port)
+    | ":" `T.isInfixOf` host = "[" <> host <> "]:" <> show port
+    | otherwise = host <> ":" <> show port
 
 {- The effective port an authority dials, given the raw @rest@ 'splitHostPort' left
 after the host: the parsed digits of an explicit @":port"@, 443 for a genuinely

@@ -99,6 +99,7 @@ import UnliftIO (MonadUnliftIO, withRunInIO)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (rejectionMessage, rejectionReason),
@@ -179,8 +180,12 @@ withRuleEvalSpan telemetry name version action =
         pure result
 
 {- | Run a mirror-enqueue domain span around the serve-time hand-off to the
-asynchronous mirror, carrying the package, version, and the artifact's authoritative
-URL. A 'Producer' span, since it produces the work the worker later consumes.
+asynchronous mirror, carrying the package, version, and the authority the artifact is
+fetched from. A 'Producer' span, since it produces the work the worker later consumes.
+
+The artifact URL arrives whole and is recorded as @ecluse.mirror.artifact_host@, the
+host and port alone ('authorityLabel'): the location is upstream-supplied and its
+userinfo or query string can carry a credential, so the URL itself never reaches a span.
 
 The body is handed this span's own W3C trace context ('RemoteSpanContext') -- or
 'Nothing' when telemetry is disabled -- to stamp onto the mirror job, so the worker's
@@ -203,7 +208,7 @@ withMirrorEnqueueSpan ::
     m a
 withMirrorEnqueueSpan telemetry name version artifactUrl project body =
     withDomainSpan telemetry Producer [] "ecluse.mirror.enqueue" $ \mSpan -> do
-        recordFields mSpan (coordinateFields name version <> [("ecluse.mirror.artifact_url", artifactUrl)])
+        recordFields mSpan (coordinateFields name version <> [("ecluse.mirror.artifact_host", authorityLabel artifactUrl)])
         carrier <- traverse captureRemoteContext mSpan
         result <- body carrier
         whenJust mSpan $ \theSpan -> whenJust (project result) (setStatus theSpan . Error)
