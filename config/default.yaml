@@ -21,9 +21,15 @@ server:
 # topic resource (projects/{p}/topics/{t}) names the GCP backend (not yet built).
 # Unset, mirroring runs on the bounded in-memory queue: non-durable, best-effort,
 # warned loudly at boot; fine for a single node or a trial.
-# queue:
-#   url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
-#   memoryMaxDepth: 50000   # unset, computed from the runtime posture
+queue:
+  # How many deliveries one mirror job gets before the worker retires it outright,
+  # alarming and counting it. A queue with a dead-letter terminus attached runs one
+  # delivery above that terminus's own maxReceiveCount, so the dead-letter queue
+  # always captures first; this is the floor, and the only terminus a queue without
+  # one has.
+  maxReceiveCount: 5
+  # url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
+  # memoryMaxDepth: 50000   # unset, computed from the runtime posture
 
 limits:
   # Structural hostile-input bounds: they bound document shape, not bytes, so they

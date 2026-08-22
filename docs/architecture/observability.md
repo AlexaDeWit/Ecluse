@@ -53,6 +53,11 @@ collector and is planned.
   [threat model](https://ecluse-proxy.com/threat-model.html).
 - `ecluse.credential.token.ttl.seconds` alarms a stuck refresh; `ecluse.credential.refresh` carries
   (result, provider).
+- `ecluse.mirror.jobs.processed` carries (result), one of `published`, `failed`, or `discarded`.
+  `discarded` is alarm-worthy on its own: it means the worker retired a mirror job that had been
+  redelivered past the queue's budget, which only happens when no dead-letter queue captured it
+  first (see [cloud backends](cloud-backends.md#the-terminus-for-a-job-that-can-never-succeed)).
+  The job and the reason stay on the paired `ERROR` line, never a label.
 - `ecluse.advisory.sync.attempts` (a counter) and `ecluse.advisory.sync.duration` (a histogram, in
   seconds) both carry (ecosystem, result), where result is one of `swapped`, `unchanged`,
   `none_published`, `fetch_failed`, or `refused`. A run of `fetch_failed` or `refused` means that

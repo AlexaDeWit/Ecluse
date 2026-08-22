@@ -13,6 +13,14 @@ Maps the handle's receive → process → ack shape onto SQS:
 * 'deadLetter' → @ChangeMessageVisibility@ with the 'sqsTerminalBackoff' window and
   __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the DLQ).
 
+'newSqsQueue' also __probes the queue's redrive configuration once__
+(@GetQueueAttributes@ for @RedrivePolicy@, which SQS never delivers with a message),
+so the composition root can warn when nothing captures a poison message, and holds the
+handle's redelivery budget one delivery above an attached policy's own
+@maxReceiveCount@ -- the dead-letter queue always captures first. @ReceiveMessage@
+likewise asks for @ApproximateReceiveCount@ explicitly, since SQS omits it by default;
+it is the delivery count every 'Ecluse.Core.Queue.QueueMessage' carries.
+
 The provider differences SQS embodies -- the visibility timeout, the long-poll
 window, the batch limit -- are 'SqsConfig' knobs with sane defaults, and the SQS
 receipt handle is carried opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'),
@@ -21,8 +29,10 @@ processing fails transiently is simply not 'ack'ed, and SQS redelivers it once t
 visibility timeout lapses; persistent failures fall to the queue's native dead-letter
 (max-receive-count), so there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__
 fault ('deadLetter') is returned with a backoff window and never deleted, so it too
-falls to the operator's dead-letter queue rather than being discarded; this assumes
-the operator's redrive policy exists (the no-DLQ case is issue #935). Every
+falls to the operator's dead-letter queue rather than being discarded. A deployment
+with no dead-letter queue has nothing to fall to, so the worker's redelivery budget
+retires such a message instead ("Ecluse.Core.Queue"), rather than letting it cycle
+until the retention window discards it unseen. Every
 operation reports its AWS failure as the handle's typed
 'Ecluse.Core.Queue.QueueFault' value, classified into the core transport
 vocabulary at this edge ("Ecluse.Runtime.Aws.Fault"), so a queue outage never
@@ -58,6 +68,9 @@ module Ecluse.Runtime.Queue.Sqs (
     ReceivedMessage (..),
     liftReceivedMessages,
 
+    -- * Dead-letter probe
+    deadLetterTerminusOf,
+
     -- * Job wire mapping
     encodeJob,
     decodeJob,
@@ -67,6 +80,7 @@ import Amazonka qualified as AWS
 
 import Amazonka.SQS.ChangeMessageVisibility qualified as SQS
 import Amazonka.SQS.DeleteMessage qualified as SQS
+import Amazonka.SQS.GetQueueAttributes qualified as SQS
 import Amazonka.SQS.ReceiveMessage qualified as SQS
 import Amazonka.SQS.SendMessage qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
@@ -80,7 +94,7 @@ import Data.Aeson (
     (.=),
  )
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Katip (LogEnv, Severity (DebugS), logFM, ls, sl)
 import Katip.Monadic (runKatipContextT)
 import Lens.Micro ((?~), (^.))
@@ -95,17 +109,22 @@ import Ecluse.Core.Package (
     unscopedName,
  )
 import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
     MirrorJob (..),
     MirrorQueue (..),
     QueueFault,
     QueueMessage (..),
     RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate),
     Seconds (..),
+    defaultDeliveryBudget,
+    effectiveDeliveryBudget,
     mkReceiptHandle,
     queueTransportFault,
     unReceiptHandle,
  )
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Text (nonBlank)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Log (moduleField)
@@ -156,9 +175,15 @@ data SqsConfig = SqsConfig
     (@ChangeMessageVisibility@, never @DeleteMessage@): larger than the normal
     processing window so a permanently-unmirrorable artifact is not re-fetched in a
     hot loop, while it rides the operator's redrive policy to the dead-letter queue.
-    A per-attempt incremental backoff would need the @ApproximateReceiveCount@
-    attribute (deferred with the receive-count work in issue #935); this fixed
-    backoff is the conservative default.
+    A fixed backoff rather than a per-attempt one: the delivery count now available
+    bounds the cycling instead, by retiring the message outright once
+    'sqsMaxReceiveCount' is spent.
+    -}
+    , sqsMaxReceiveCount :: DeliveryBudget
+    {- ^ The configured __floor__ on how many deliveries one message gets before the
+    worker retires it (@ECLUSE_QUEUE__MAX_RECEIVE_COUNT@). 'newSqsQueue' raises the
+    handle's effective budget past an attached redrive policy's own @maxReceiveCount@,
+    so this floor never pre-empts a dead-letter queue's capture.
     -}
     }
     deriving stock (Eq, Show)
@@ -178,6 +203,7 @@ defaultSqsConfig queueUrl region =
         , sqsWaitSeconds = 20
         , sqsVisibilityTimeout = Seconds 30
         , sqsTerminalBackoff = Seconds 300
+        , sqsMaxReceiveCount = defaultDeliveryBudget
         }
 
 {- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is constructed
@@ -195,6 +221,11 @@ newSqsQueue logEnv egressUrl cfg = do
         run = fmap (first (queueTransportFault . classifyAwsTransport)) . runResourceT . AWS.sendEither env
         queueUrl = sqsQueueUrl cfg
         Seconds terminalBackoffSecs = sqsTerminalBackoff cfg
+    -- One boot-time round trip: SQS carries the redrive configuration on the queue,
+    -- never on a message. A probe that faults leaves the configured floor standing,
+    -- so an inaccessible attribute degrades the budget rather than blocking boot.
+    terminus <- fmap terminusOfResponse <$> run (terminusRequest queueUrl)
+    let budget = either (const (sqsMaxReceiveCount cfg)) (effectiveDeliveryBudget (sqsMaxReceiveCount cfg)) terminus
     pure
         MirrorQueue
             { enqueue = fmap void . run . SQS.newSendMessage queueUrl . encodeJob
@@ -212,6 +243,8 @@ newSqsQueue logEnv egressUrl cfg = do
               deadLetter = \receipt ->
                 fmap void . run $
                     SQS.newChangeMessageVisibility queueUrl (unReceiptHandle receipt) terminalBackoffSecs
+            , deliveryBudget = budget
+            , deadLetterTerminus = terminus
             }
 
 -- Build the region-scoped, optionally endpoint-overridden amazonka environment.
@@ -249,8 +282,58 @@ receiveRequest cfg =
         ?~ sqsWaitSeconds cfg
             & SQS.receiveMessage_visibilityTimeout
         ?~ visibilitySeconds
+            & SQS.receiveMessage_attributeNames
+        -- Asked for explicitly: SQS omits the delivery count unless it is named, and
+        -- it is what the redelivery budget judges a delivery by.
+        ?~ [SQS.MessageAttribute_ApproximateReceiveCount]
   where
     Seconds visibilitySeconds = sqsVisibilityTimeout cfg
+
+-- The boot-time redrive probe.
+terminusRequest :: Text -> SQS.GetQueueAttributes
+terminusRequest queueUrl =
+    SQS.newGetQueueAttributes queueUrl
+        & SQS.getQueueAttributes_attributeNames
+        ?~ [SQS.QueueAttributeName_RedrivePolicy]
+
+terminusOfResponse :: SQS.GetQueueAttributesResponse -> DeadLetterTerminus
+terminusOfResponse response =
+    deadLetterTerminusOf (soleValue =<< (response ^. SQS.getQueueAttributesResponse_attributes))
+
+-- The one value in an attribute map. Every request here names exactly one attribute,
+-- and SQS returns only what was named and only what is set, so an empty map is that
+-- attribute being unset rather than an ambiguous pick.
+soleValue :: (Foldable t) => t Text -> Maybe Text
+soleValue = listToMaybe . toList
+
+{- | Classify a queue's raw @RedrivePolicy@ attribute into the dead-letter terminus it
+describes: 'TerminusAbsent' when no policy is set (or the attribute is blank), and
+'TerminusAttached' otherwise, carrying the policy's @maxReceiveCount@ -- the delivery
+at which the dead-letter queue takes the message -- when it is readable.
+
+A policy whose JSON does not yield a count is still __attached__ (an operator with a
+dead-letter queue is not warned that they have none), but it contributes no capture
+count, so the configured floor stands alone.
+-}
+deadLetterTerminusOf :: Maybe Text -> DeadLetterTerminus
+deadLetterTerminusOf raw =
+    maybe TerminusAbsent (TerminusAttached . captureCountOf) (nonBlank =<< raw)
+
+-- The @maxReceiveCount@ an attached redrive policy declares. AWS renders the policy
+-- as embedded JSON and the count as either a string or a number depending on the
+-- path, so both are read; anything else yields no count.
+captureCountOf :: Text -> Maybe DeliveryBudget
+captureCountOf policy = do
+    value <- rightToMaybe (eitherDecodeStrict' (encodeUtf8 policy))
+    raw <- parseMaybe (withObject "RedrivePolicy" (.: "maxReceiveCount")) value
+    DeliveryBudget <$> countOf raw
+
+countOf :: Aeson.Value -> Maybe Int
+countOf = \case
+    Aeson.String text -> readMaybe (toString text)
+    other -> case Aeson.fromJSON other of
+        Aeson.Success count -> Just count
+        Aeson.Error _ -> Nothing
 
 {- | The fields of a received SQS message the backend reads. Lifting them out of
 the @amazonka@ 'SQS.Message' keeps the 'QueueMessage' mapping (and its drop
@@ -264,6 +347,10 @@ data ReceivedMessage = ReceivedMessage
     -- ^ The receipt handle a later 'ack' deletes the message by (SQS always supplies one).
     , rmMessageId :: Maybe Text
     -- ^ The SQS-assigned message id, for the drop log; not part of the untrusted body.
+    , rmReceiveCount :: Maybe Text
+    {- ^ The raw @ApproximateReceiveCount@ system attribute, requested explicitly on
+    the poll. 'Nothing' when SQS did not supply one, which reads as a first delivery.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -274,6 +361,7 @@ receivedFields message =
         { rmBody = message ^. SQS.message_body
         , rmReceipt = message ^. SQS.message_receiptHandle
         , rmMessageId = message ^. SQS.message_messageId
+        , rmReceiveCount = soleValue =<< (message ^. SQS.message_attributes)
         }
 
 -- The received batch's messages, each reduced to the fields the backend reads.
@@ -296,7 +384,18 @@ toQueueMessage egressUrl received = do
     body <- maybeToRight MissingBody (rmBody received)
     receipt <- maybeToRight MissingReceipt (rmReceipt received)
     job <- first (const UndecodableBody) (decodeJob egressUrl body)
-    pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle receipt}
+    pure
+        QueueMessage
+            { msgJob = job
+            , msgReceipt = mkReceiptHandle receipt
+            , msgReceiveCount = receiveCountOf (rmReceiveCount received)
+            }
+
+-- The delivery count SQS reported, or a first delivery when it reported none (or an
+-- unreadable one): a message is only ever judged past its budget on evidence. A count
+-- below one is likewise read as a first delivery, since SQS counts this delivery in.
+receiveCountOf :: Maybe Text -> Int
+receiveCountOf raw = max 1 (fromMaybe 1 (readMaybe . toString =<< raw))
 
 {- | Lift a received batch into deliverable 'QueueMessage's, logging each dropped
 message (a missing body or receipt, or an undecodable body) at 'DebugS' so a poison

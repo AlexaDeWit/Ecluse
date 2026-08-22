@@ -45,6 +45,14 @@ handle's contract reflects that:
   dead-letter queue for forensic retention rather than being silently discarded. This
   is not a @nack@ (a retry) and not an 'ack' (a clean retire); it is the third,
   terminal outcome.
+* __The 'deliveryBudget' is the backstop terminus.__ Returning a message only has a
+  terminus if something captures it. A deployment whose queue has no dead-letter
+  terminus would otherwise cycle a poison message until the retention window silently
+  discarded it, re-fetching on every delivery. So every delivery carries its
+  'msgReceiveCount', and a delivery that has spent the budget
+  ('deliveryBudgetSpent') is retired by the worker instead: killed with an alarm
+  rather than churned. The budget is raised past an attached terminus's own capture
+  count ('effectiveDeliveryBudget'), so a dead-letter queue always captures first.
 * __'extendVisibility'__ lets the worker hold a long publish (a large artifact)
   past the visibility window. It is an /optimization/, not correctness-critical,
   since idempotency already makes redelivery harmless.
@@ -80,6 +88,13 @@ module Ecluse.Core.Queue (
 
     -- * Durations
     Seconds (..),
+
+    -- * Dead-letter terminus and the redelivery budget
+    DeadLetterTerminus (..),
+    DeliveryBudget (..),
+    defaultDeliveryBudget,
+    effectiveDeliveryBudget,
+    deliveryBudgetSpent,
 
     -- * Backend building blocks
     writeOrDrop,
@@ -189,6 +204,12 @@ data QueueMessage = QueueMessage
     -- ^ The job to process.
     , msgReceipt :: ReceiptHandle
     -- ^ The handle identifying this delivery, for 'ack' \/ 'extendVisibility'.
+    , msgReceiveCount :: Int
+    {- ^ How many times this message has been delivered, counting this one: @1@ on a
+    first delivery. A backend that cannot report a count reports @1@, so a delivery is
+    only ever judged past the 'deliveryBudget' on evidence. Backends supply the count;
+    the verdict is 'deliveryBudgetSpent''s alone.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -232,11 +253,66 @@ to the shared log-line budget, so the two vocabularies cannot drift on what
 queueTransportFault :: TransportFault -> QueueFault
 queueTransportFault (TransportFault cause detail) = QueueFault cause detail
 
+{- | How many deliveries of one message a queue grants before the worker retires it
+itself. A 'newtype' so a count of receives is never confused with some other 'Int'.
+-}
+newtype DeliveryBudget = DeliveryBudget Int
+    deriving stock (Eq, Ord, Show)
+
+{- | The redelivery budget a backend built without operator configuration holds:
+five deliveries, SQS's own redrive convention. The operator's
+@ECLUSE_QUEUE__MAX_RECEIVE_COUNT@ (pinned to this same value in
+@config\/default.yaml@) is what a configured deployment runs on.
+-}
+defaultDeliveryBudget :: DeliveryBudget
+defaultDeliveryBudget = DeliveryBudget 5
+
+{- | Whether a queue has a __dead-letter terminus__: somewhere a message that can
+never be mirrored is captured for inspection, rather than cycling until the queue's
+retention window discards it unseen. Probed once when the backend is built (the SQS
+backend reads its @RedrivePolicy@; the in-memory backend has none by construction).
+
+An attached terminus carries its own __capture count__ when the backend could read
+one -- the delivery at which it takes the message -- so the worker's own budget can
+be held above it and never pre-empt that capture.
+-}
+data DeadLetterTerminus
+    = -- | A terminus captures poison messages, at this capture count when it is known.
+      TerminusAttached (Maybe DeliveryBudget)
+    | -- | Nothing captures poison messages: the worker's budget is the only terminus.
+      TerminusAbsent
+    deriving stock (Eq, Show)
+
+{- | The budget the worker actually enforces: the configured floor, raised past an
+attached terminus's own capture count so the dead-letter queue always captures a
+poison message first and the worker only retires what the terminus did not take.
+With no terminus, or one whose capture count the backend could not read, the
+configured value stands alone.
+-}
+effectiveDeliveryBudget :: DeliveryBudget -> DeadLetterTerminus -> DeliveryBudget
+effectiveDeliveryBudget configured = \case
+    TerminusAttached (Just (DeliveryBudget captureAt)) -> max configured (DeliveryBudget (captureAt + 1))
+    TerminusAttached Nothing -> configured
+    TerminusAbsent -> configured
+
+{- | Whether this delivery has spent the queue's redelivery budget, so the worker
+retires the message through its terminal path rather than letting it cycle. The
+single decision every backend's deliveries are judged by: a backend supplies the
+count ('msgReceiveCount'), never the verdict.
+
+A first delivery is never spent, whatever the budget says: retiring a job that has
+not been tried once would be a bug rather than a policy, so the floor is two.
+-}
+deliveryBudgetSpent :: DeliveryBudget -> QueueMessage -> Bool
+deliveryBudgetSpent (DeliveryBudget budget) message = msgReceiveCount message >= max 2 budget
+
 {- | The mirror-queue handle -- a record of functions over a backend whose private
 state the closures capture. See the module header for the @enqueue@ /
-don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO', and each
-reports its backend failures as a 'QueueFault' __value__, so no queue outage
-ever rides the exception channel through a caller.
+don't-@ack@-to-retry / no-@nack@ conventions; every __operation__ is 'IO' and
+reports its backend failures as a 'QueueFault' __value__, so no queue outage ever
+rides the exception channel through a caller. The two remaining fields are what the
+backend settled once at construction: the redelivery budget it grants, and what its
+dead-letter probe found.
 -}
 data MirrorQueue = MirrorQueue
     { enqueue :: MirrorJob -> IO (Either QueueFault ())
@@ -273,6 +349,18 @@ data MirrorQueue = MirrorQueue
     from not-acking (a transient redelivery); see the header's terminus convention. A
     'Left' is absorbed after logging, like 'ack'.
     -}
+    , deliveryBudget :: DeliveryBudget
+    {- ^ How many deliveries of one message this queue grants before the worker
+    retires it ('deliveryBudgetSpent'). Settled once when the backend is built -- the
+    configured floor, raised past an attached terminus's capture count
+    ('effectiveDeliveryBudget') -- so judging a delivery costs no per-message work.
+    -}
+    , deadLetterTerminus :: Either QueueFault DeadLetterTerminus
+    {- ^ What this backend's dead-letter probe found when it was built: whether
+    anything captures a message the worker can never mirror, or the fault that stopped
+    the probe. The composition root reads it once to decide its boot warning; a 'Left'
+    leaves the configured budget standing and never blocks boot.
+    -}
     }
 
 {- | The inert queue a deployment with zero mirroring mounts carries, so the
@@ -289,6 +377,8 @@ noMirrorQueue =
         , ack = \_ -> pure (Right ())
         , extendVisibility = \_ _ -> pure (Right ())
         , deadLetter = \_ -> pure (Right ())
+        , deliveryBudget = defaultDeliveryBudget
+        , deadLetterTerminus = Right TerminusAbsent
         }
   where
     inertFault =

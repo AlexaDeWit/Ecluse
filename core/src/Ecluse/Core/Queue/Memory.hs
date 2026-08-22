@@ -24,9 +24,11 @@ import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, readTBQueue, tryRe
 import System.Timeout (timeout)
 
 import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent),
     MirrorJob,
     MirrorQueue (..),
     QueueMessage (..),
+    defaultDeliveryBudget,
     mkReceiptHandle,
     reportWorthy,
     writeOrDrop,
@@ -108,7 +110,11 @@ That admits two deliberate departures from the cloud backends' contract:
   bounds memory hardest (nothing is retained after delivery) and is admissible
   precisely because a lost job is safe. A __terminal__ fault ('deadLetter') is the
   same drop, since this backend has no dead-letter queue to route to; its
-  observability is the worker's error log and metric, not a retained message.
+  observability is the worker's error log and metric, not a retained message. It
+  reports that absent terminus honestly ('Ecluse.Core.Queue.deadLetterTerminus'), and
+  every delivery it makes is a first delivery, so the worker's redelivery budget --
+  the backstop for a queue nothing captures poison messages for -- can never bite
+  here: this backend does not redeliver at all.
 
 'receive' is a __bounded long-poll__: it waits up to 'memQueuePollWaitMicros' for a
 job, then drains up to 'memoryQueueBatchSize' without blocking, or returns @[]@ when
@@ -158,6 +164,10 @@ newBoundedInMemoryQueue cfg onDrop = do
               -- error log and metric). A future demand re-enqueues, which re-fails and
               -- re-alarms -- accepted, since a durable dead-letter needs a durable backend.
               deadLetter = const (pure (Right ()))
+            , -- Nothing here captures a poison message, and nothing redelivers one, so
+              -- the budget is inert and held at the shipped default.
+              deliveryBudget = defaultDeliveryBudget
+            , deadLetterTerminus = Right TerminusAbsent
             }
 
 -- Report the first drop, then every interval-th, so the first shed is always
@@ -189,4 +199,6 @@ receiveBatch queue nextReceipt = do
     assignReceipt job = do
         n <- readTVar nextReceipt
         writeTVar nextReceipt (n + 1)
-        pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n)}
+        -- Every delivery is a first delivery: a received job leaves the queue for
+        -- good, so this backend never redelivers one.
+        pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n), msgReceiveCount = 1}

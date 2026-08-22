@@ -10,6 +10,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
     MirrorJob (..),
     MirrorQueue (..),
     QueueFault (qfCause),
@@ -19,7 +21,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (
-    QueueOptions (qoTerminalBackoff, qoVisibilityTimeout),
+    QueueOptions (qoDeadLetterAfter, qoTerminalBackoff, qoVisibilityTimeout),
     defaultQueueOptions,
     freshQueue,
     quietLogEnv,
@@ -95,6 +97,36 @@ spec =
                 unwrapQ (deadLetter queue (msgReceipt message))
                 redelivered <- receiveUntil queue
                 map msgJob redelivered `shouldBe` [sampleJob]
+
+            it "carries a real ApproximateReceiveCount, rising on each redelivery (issue #935)" $ \container -> do
+                -- The attribute SQS omits unless it is asked for. Proved against the
+                -- real API, since a missing request parameter would silently read as a
+                -- first delivery forever and the budget would never fire.
+                queue <- freshQueue container "mirror-receive-count" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+                unwrapQ (enqueue queue sampleJob)
+                [first'] <- receiveUntil queue
+                msgReceiveCount first' `shouldBe` 1
+                -- Deliberately not acked, so the message comes back once its (short)
+                -- visibility window lapses, this time on its second delivery.
+                [second'] <- receiveUntil queue
+                msgReceiveCount second' `shouldBe` 2
+
+            it "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)" $ \container -> do
+                -- The gap this closes: a plain CreateQueue leaves nothing to capture a
+                -- poison message, and the operator must be told at boot.
+                queue <- freshQueue container "mirror-no-dlq" defaultQueueOptions
+                deadLetterTerminus queue `shouldBe` Right TerminusAbsent
+
+            it "probes an attached redrive policy, reading its maxReceiveCount (issue #935)" $ \container -> do
+                -- With a dead-letter queue attached the boot warning must stay silent,
+                -- and the capture count is what holds Écluse's own budget above it.
+                -- A capture count above the shipped floor of 5, so the raise is
+                -- visible: at 5 the effective budget would equal the floor either way.
+                queue <- freshQueue container "mirror-with-dlq" defaultQueueOptions{qoDeadLetterAfter = Just 9}
+                deadLetterTerminus queue `shouldBe` Right (TerminusAttached (Just (DeliveryBudget 9)))
+                -- The budget the handle runs on is one past the policy's capture count,
+                -- so the dead-letter queue always takes the message first.
+                deliveryBudget queue `shouldBe` DeliveryBudget 10
 
             it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
                 -- Point the backend at a loopback port with nothing listening: the

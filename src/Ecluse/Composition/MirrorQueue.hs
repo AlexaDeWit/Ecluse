@@ -8,7 +8,9 @@ which queue this binary builds and the boot warnings the choice warrants.
 'planMirrorQueue' is the single place that knows which backends this binary can
 build; the composition root pattern-matches its 'MirrorQueuePlan' to make the one
 constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is
-due. Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run
+due. Once the queue exists, 'deadLetterTerminusWarning' turns what its dead-letter
+probe found into the second boot warning, so the decision stays here and only the
+call sits at the effectful build. Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run
 reports every missing input. The SQS endpoint override is parsed by the shared
 'Ecluse.Config.Ambient.parseEndpointUrl'.
 -}
@@ -20,6 +22,7 @@ module Ecluse.Composition.MirrorQueue (
     mirrorQueuePlanWarning,
     memoryQueueBootWarning,
     memoryQueueDropWarning,
+    deadLetterTerminusWarning,
 ) where
 
 import Data.Text qualified as T
@@ -29,14 +32,19 @@ import Ecluse.Config (
     AppConfig (..),
     Config (..),
     Mount (mountRegistries),
-    QueueSettings (qsUrl),
+    QueueSettings (qsMaxReceiveCount, qsUrl),
     regMirrorTarget,
     unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
+import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
+    QueueFault (qfDetail),
+ )
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount), SqsEndpoint (..), defaultSqsConfig)
 
 {- | Whether this deployment runs a mirror runtime at all: with zero mirroring
 mounts there is no queue to build and no worker to start ('NoMirroring'), and the
@@ -127,13 +135,21 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
          in case nonBlank =<< ambientAwsEndpointUrlSqs ambient of
                 Just override -> case (regionE, endpointE override) of
                     (Right region, Right endpoint) ->
-                        Right (SqsBackend (defaultSqsConfig url region){sqsEndpoint = Just endpoint})
+                        Right (SqsBackend (sqsConfigFor url region){sqsEndpoint = Just endpoint})
                     (r, e) -> Left (lefts [void r, void e])
                 Nothing -> case parseQueueTarget url of
-                    Just (SqsTarget region) -> Right (SqsBackend (defaultSqsConfig url region))
+                    Just (SqsTarget region) -> Right (SqsBackend (sqsConfigFor url region))
                     Just (PubSubTarget _project _topic) -> Left [QueueProviderUnavailable "pubsub"]
                     Nothing -> Left [QueueUrlUnrecognised url]
   where
+    -- The provider knobs at their defaults, with the operator's redelivery budget
+    -- carried in as the floor the built backend raises past any attached terminus.
+    sqsConfigFor :: Text -> Text -> SqsConfig
+    sqsConfigFor url region =
+        (defaultSqsConfig url region)
+            { sqsMaxReceiveCount = DeliveryBudget (qsMaxReceiveCount (cfgQueue env))
+            }
+
     -- AWS_REGION, required only under the endpoint override (a real SQS URL carries
     -- its region in its host); a blank value is treated as absent.
     regionE :: Either BootError Text
@@ -169,6 +185,48 @@ memoryQueueBootWarning =
         <> "Jobs are dropped on cap overflow and lost on restart or redeploy; each is re-mirrored on the next "
         <> "demand (no data loss, only deferred mirroring). Point ECLUSE_QUEUE__URL at a durable queue (SQS) "
         <> "for a production mirror that must not shed under load."
+
+{- | The boot warning a built queue's dead-letter probe warrants, or 'Nothing' when
+none is due. The composition root logs the 'Just' at @WarningS@ once, right after the
+queue is built.
+
+A durable queue with no redrive policy attached is the case worth shouting about: a
+mirror job it can never publish is captured nowhere, so the worker's own delivery
+budget is the only terminus it has. A probe that could not be made is warned about
+too, since the budget may then retire a job a dead-letter queue would have captured.
+The in-memory backend is silent here: 'memoryQueueBootWarning' has already said that
+mirror is non-durable and sheds jobs, and a second line on the same fact would only
+dilute it.
+-}
+deadLetterTerminusWarning :: MirrorQueuePlan -> Either QueueFault DeadLetterTerminus -> Maybe Text
+deadLetterTerminusWarning plan probed = case plan of
+    MemoryBackend -> Nothing
+    SqsBackend cfg -> case probed of
+        Right TerminusAttached{} -> Nothing
+        Right TerminusAbsent -> Just (noDeadLetterTerminusWarning (sqsMaxReceiveCount cfg))
+        Left fault -> Just (terminusUnprobedWarning (qfDetail fault))
+
+-- The no-terminus warning, naming the budget that now stands in for the missing
+-- dead-letter queue so an operator can see what will happen to a poison message.
+noDeadLetterTerminusWarning :: DeliveryBudget -> Text
+noDeadLetterTerminusWarning (DeliveryBudget budget) =
+    "the mirror queue has NO DEAD-LETTER TERMINUS: no redrive policy is attached, so nothing captures a "
+        <> "mirror job that can never be published. Écluse retires such a job itself once it has been "
+        <> "delivered "
+        <> show budget
+        <> " times, alarming and counting it, rather than letting it cycle until the queue's "
+        <> "retention window discards it unseen. Attach a redrive policy with a dead-letter queue to keep "
+        <> "poison messages for inspection."
+
+-- The unreadable-policy warning: boot continues on the configured budget, but that
+-- budget is no longer known to sit above an attached terminus's capture count.
+terminusUnprobedWarning :: Text -> Text
+terminusUnprobedWarning detail =
+    "could not read the mirror queue's redrive policy, so whether poison messages have a dead-letter "
+        <> "terminus is unknown; grant sqs:GetQueueAttributes on the queue to let Écluse check. The "
+        <> "configured ECLUSE_QUEUE__MAX_RECEIVE_COUNT stands as the delivery budget, and may retire a job "
+        <> "before a dead-letter queue would have captured it: "
+        <> detail
 
 {- | The cap-overflow drop warning for the in-memory backend, carrying the running
 total of dropped jobs (this report is rate-limited at the queue, so it does not fire

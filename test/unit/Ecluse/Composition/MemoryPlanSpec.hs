@@ -346,7 +346,7 @@ spec = describe "resolveMemoryPlan" $ do
     bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
 
     bareQueue :: QueueSettings
-    bareQueue = QueueSettings{qsUrl = Nothing, qsMemoryMaxDepth = Nothing}
+    bareQueue = QueueSettings{qsUrl = Nothing, qsMemoryMaxDepth = Nothing, qsMaxReceiveCount = 5}
 
     enforcedAxis :: Int -> EffectiveAxis Int
     enforcedAxis n = EffectiveAxis{axDesired = n, axObserved = n, axProvenance = FromRts}

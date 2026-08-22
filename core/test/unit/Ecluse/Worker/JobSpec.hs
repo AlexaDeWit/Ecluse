@@ -17,7 +17,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
-import Ecluse.Core.Queue (QueueMessage (msgReceipt))
+import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount))
 import Ecluse.Core.Registry (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishError (PublishError),
@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
-import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
+import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
@@ -529,6 +529,44 @@ spec = do
                     -- ...and the job was acked: retired at the handle.
                     acked <- ackedReceipts
                     acked `shouldBe` map msgReceipt messages
+    describe "processBatch -- the redelivery budget, the terminus a queue without a DLQ has (issue #935)" $ do
+        it "retires a delivery that has spent the budget, without ever running the job" $
+            withUpstream $ \url -> do
+                (metricsPort, readResults) <- recordingWorkerMetricsPort
+                (base, ackedReceipts) <- recordingAckQueue
+                let queue = base{deliveryBudget = DeliveryBudget 3}
+                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies metricsPort $ \runtime logRef -> do
+                    enqueue_ queue (jobWith url)
+                    [message] <- receive_ queue
+                    runWM runtime (processBatch [message{msgReceiveCount = 3}])
+                    -- The job never ran, so the artifact was not re-fetched: checking
+                    -- the budget before processing is what spares that repeated cost.
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+                    -- The message was acked, so it is killed rather than left to cycle
+                    -- until the queue's retention window drops it unseen...
+                    acked <- ackedReceipts
+                    acked `shouldBe` [msgReceipt message]
+                    -- ...and counted as a discard: the signal an operator alerts on,
+                    -- distinct from an ordinary failure.
+                    readResults >>= (`shouldBe` [Discarded])
+
+        it "still runs the job on the delivery one below the budget" $
+            withUpstream $ \url -> do
+                (metricsPort, readResults) <- recordingWorkerMetricsPort
+                (base, ackedReceipts) <- recordingAckQueue
+                let queue = base{deliveryBudget = DeliveryBudget 3}
+                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies metricsPort $ \runtime logRef -> do
+                    enqueue_ queue (jobWith url)
+                    [message] <- receive_ queue
+                    runWM runtime (processBatch [message{msgReceiveCount = 2}])
+                    -- Unchanged from today: the job mirrors and is acked on success.
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+                    acked <- ackedReceipts
+                    acked `shouldBe` [msgReceipt message]
+                    readResults >>= (`shouldBe` [Published])
+
     describe "the worker metrics port" $ do
         it "records a Published result for a successfully-mirrored job, through the port" $
             -- Drive the recording 'WorkerMetricsPort' and assert the worker classified the

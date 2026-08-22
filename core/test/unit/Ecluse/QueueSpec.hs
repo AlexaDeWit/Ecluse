@@ -10,7 +10,19 @@ import UnliftIO (withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
-import Ecluse.Core.Queue (MirrorJob, MirrorQueue (..), newEnqueueBuffer, queueTransportFault)
+import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
+    MirrorJob,
+    MirrorQueue (..),
+    QueueMessage (QueueMessage, msgJob, msgReceipt, msgReceiveCount),
+    defaultDeliveryBudget,
+    deliveryBudgetSpent,
+    effectiveDeliveryBudget,
+    mkReceiptHandle,
+    newEnqueueBuffer,
+    queueTransportFault,
+ )
 import Ecluse.Queue.Support (otherJob, sampleJob, thirdJob, unwrap)
 
 {- | Tests for the contract module's buffered producer hand-off. The in-memory
@@ -58,7 +70,50 @@ spec = do
             -- The typed fault's detail arrives verbatim on the failure callback.
             readIORef failures `shouldReturn` [(1, "backend unavailable")]
             readIORef delivered `shouldReturn` [otherJob] -- the loop survived the failure
+    describe "deliveryBudgetSpent -- the shared redelivery verdict" $ do
+        it "grants every delivery below the budget" $
+            map (deliveryBudgetSpent (DeliveryBudget 5) . deliveredTimes) [1, 2, 3, 4]
+                `shouldBe` [False, False, False, False]
+
+        it "is spent at the budget, and stays spent past it" $
+            map (deliveryBudgetSpent (DeliveryBudget 5) . deliveredTimes) [5, 6, 50]
+                `shouldBe` [True, True, True]
+
+        it "still grants a first delivery under any budget, however small" $
+            -- A budget of one (or zero, or below) would otherwise retire a job that has
+            -- never run; no message is retired before it has been tried at least once.
+            map (\budget -> deliveryBudgetSpent budget (deliveredTimes 1)) [DeliveryBudget 1, DeliveryBudget 0, DeliveryBudget (-3)]
+                `shouldBe` [False, False, False]
+
+        it "retires on the second delivery under a budget too small to reach" $
+            map (\budget -> deliveryBudgetSpent budget (deliveredTimes 2)) [DeliveryBudget 1, DeliveryBudget 0]
+                `shouldBe` [True, True]
+
+    describe "effectiveDeliveryBudget -- the dead-letter queue captures first" $ do
+        it "raises the configured floor one delivery past an attached terminus's capture count" $
+            -- The operator's redrive policy takes the message at 10, so Écluse must not
+            -- retire it at the configured 5 and rob the dead-letter queue of the capture.
+            effectiveDeliveryBudget (DeliveryBudget 5) (TerminusAttached (Just (DeliveryBudget 10)))
+                `shouldBe` DeliveryBudget 11
+
+        it "keeps the configured floor when it already sits above the capture count" $
+            effectiveDeliveryBudget (DeliveryBudget 20) (TerminusAttached (Just (DeliveryBudget 3)))
+                `shouldBe` DeliveryBudget 20
+
+        it "keeps the configured floor when a terminus declares no capture count" $
+            effectiveDeliveryBudget (DeliveryBudget 5) (TerminusAttached Nothing)
+                `shouldBe` DeliveryBudget 5
+
+        it "keeps the configured floor when nothing captures poison messages" $
+            -- The no-terminus case the budget exists for: it is the only terminus there is.
+            effectiveDeliveryBudget (DeliveryBudget 5) TerminusAbsent `shouldBe` DeliveryBudget 5
   where
+    -- A delivery of the sample job on its n-th receive: the count is all these
+    -- verdicts read, so the rest of the message is fixed.
+    deliveredTimes :: Int -> QueueMessage
+    deliveredTimes n =
+        QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n}
+
     -- A backend stub whose 'enqueue' appends to the given ref, so a test can
     -- observe exactly what the buffer's drain loop delivered and in what order.
     -- The consumer fields are inert (the buffer passes them through untouched).
@@ -70,6 +125,8 @@ spec = do
             , ack = const (pure (Right ()))
             , extendVisibility = \_ _ -> pure (Right ())
             , deadLetter = const (pure (Right ()))
+            , deliveryBudget = defaultDeliveryBudget
+            , deadLetterTerminus = Right TerminusAbsent
             }
 
     -- Poll (1ms cadence) until the condition holds, bounded at 2s so a broken

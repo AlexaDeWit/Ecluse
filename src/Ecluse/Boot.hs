@@ -35,6 +35,7 @@ import UnliftIO (throwIO, tryIO)
 
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
+    deadLetterTerminusWarning,
     memoryQueueDropWarning,
     mirrorQueuePlanWarning,
  )
@@ -50,7 +51,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Config.Resolve (secretEnvSpellings)
-import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
@@ -234,14 +235,20 @@ this build (the SQS arm never spends it). The in-memory arm first emits the loud
 warning ('mirrorQueuePlanWarning' -- it is non-durable / best-effort) through the
 composition-root logger, then constructs the bounded queue with a drop callback that
 logs each rate-limited cap-overflow drop at a warning. (A drop /metric/ hooks in
-alongside the log once the @ecluse.mirror.*@ catalogue lands.) -}
+alongside the log once the @ecluse.mirror.*@ catalogue lands.)
+
+The built queue reports what its dead-letter probe found, so a second warning follows
+when a durable queue has nothing to capture a mirror job that can never be published
+('deadLetterTerminusWarning' decides; this is only the call). -}
 buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
-    case plan of
+    queue <- case plan of
         SqsBackend sqsConfig -> newSqsQueue logEnv mkRegistryUrl sqsConfig
         MemoryBackend ->
             newBoundedInMemoryQueue (defaultMemoryQueueConfig memoryDepth) (logBootWarning logEnv . memoryQueueDropWarning)
+    whenJust (deadLetterTerminusWarning plan (deadLetterTerminus queue)) (logBootWarning logEnv)
+    pure queue
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
 module -- the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),

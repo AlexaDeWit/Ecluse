@@ -26,12 +26,21 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkPackageName, mkScope)
-import Ecluse.Core.Queue (MirrorJob (..), QueueMessage (..), RemoteSpanContext (..), Seconds (..))
+import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
+    MirrorJob (..),
+    QueueMessage (..),
+    RemoteSpanContext (..),
+    Seconds (..),
+    defaultDeliveryBudget,
+ )
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Queue.Sqs (
     ReceivedMessage (..),
     SqsConfig (..),
+    deadLetterTerminusOf,
     decodeJob,
     defaultSqsConfig,
     encodeJob,
@@ -190,6 +199,36 @@ spec = do
             sqsWaitSeconds cfg `shouldBe` 20
         it "defaults the visibility timeout to 30 seconds" $
             sqsVisibilityTimeout cfg `shouldBe` Seconds 30
+        it "defaults the redelivery budget to the shared shipped value" $
+            -- The floor an unconfigured backend runs on; a configured deployment gets
+            -- the operator's ECLUSE_QUEUE__MAX_RECEIVE_COUNT here instead.
+            sqsMaxReceiveCount cfg `shouldBe` defaultDeliveryBudget
+
+    describe "deadLetterTerminusOf -- reading the queue's redrive policy (issue #935)" $ do
+        it "reports no terminus when the queue carries no redrive policy" $
+            -- SQS omits an unset attribute entirely, so an absent value is the
+            -- no-dead-letter-queue case the boot warning exists for.
+            deadLetterTerminusOf Nothing `shouldBe` TerminusAbsent
+
+        it "reports no terminus for a blank policy value" $
+            deadLetterTerminusOf (Just "   ") `shouldBe` TerminusAbsent
+
+        it "reads the capture count from a policy that states it as a string" $
+            -- The spelling AWS itself returns: the embedded JSON quotes the count.
+            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\"10\"}")
+                `shouldBe` TerminusAttached (Just (DeliveryBudget 10))
+
+        it "reads the capture count from a policy that states it as a number" $
+            -- Emulators and some SDK paths render it unquoted; both are the same policy.
+            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":4}")
+                `shouldBe` TerminusAttached (Just (DeliveryBudget 4))
+
+        it "still reports a terminus when the policy's count cannot be read" $ do
+            -- An operator who has a dead-letter queue must never be warned that they
+            -- have none; only the capture count is lost, so the configured floor stands.
+            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\"}")
+                `shouldBe` TerminusAttached Nothing
+            deadLetterTerminusOf (Just "not json at all") `shouldBe` TerminusAttached Nothing
 
     describe "liftReceivedMessages -- delivering a batch and logging poison drops" $ do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
@@ -216,6 +255,19 @@ spec = do
             -- The untrusted body of the undecodable message never reaches the log.
             logged `shouldNotSatisfy` T.isInfixOf "not-a-valid-body"
 
+        it "carries the ApproximateReceiveCount through as the delivery count" $ do
+            logEnv <- newTestLogEnv
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Just "1", Just "3", Just "17"])
+            map msgReceiveCount delivered `shouldBe` [1, 3, 17]
+
+        it "reads a missing or unusable count as a first delivery" $ do
+            -- A message is only ever judged past its budget on evidence: an absent
+            -- attribute (SQS omits it unless asked for), or one that is not a usable
+            -- count, must never retire a job that may only have been tried once.
+            logEnv <- newTestLogEnv
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
+            map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
+
 {- | One well-formed message and one of each drop cause (missing body, missing
 receipt, undecodable body), each with a distinct message id so the drop log's id
 field is assertable. The well-formed and the missing-receipt entries carry valid
@@ -223,11 +275,22 @@ bodies, isolating the receipt check from the decode.
 -}
 poisonBatch :: [ReceivedMessage]
 poisonBatch =
-    [ ReceivedMessage{rmBody = Just (encodeJob npmJob), rmReceipt = Just "receipt-good", rmMessageId = Just "m-good"}
-    , ReceivedMessage{rmBody = Nothing, rmReceipt = Just "receipt-1", rmMessageId = Just "m-no-body"}
-    , ReceivedMessage{rmBody = Just (encodeJob scopedJob), rmReceipt = Nothing, rmMessageId = Just "m-no-receipt"}
-    , ReceivedMessage{rmBody = Just "not-a-valid-body", rmReceipt = Just "receipt-3", rmMessageId = Just "m-bad-body"}
+    [ ReceivedMessage{rmBody = Just (encodeJob npmJob), rmReceipt = Just "receipt-good", rmMessageId = Just "m-good", rmReceiveCount = Nothing}
+    , ReceivedMessage{rmBody = Nothing, rmReceipt = Just "receipt-1", rmMessageId = Just "m-no-body", rmReceiveCount = Nothing}
+    , ReceivedMessage{rmBody = Just (encodeJob scopedJob), rmReceipt = Nothing, rmMessageId = Just "m-no-receipt", rmReceiveCount = Nothing}
+    , ReceivedMessage{rmBody = Just "not-a-valid-body", rmReceipt = Just "receipt-3", rmMessageId = Just "m-bad-body", rmReceiveCount = Nothing}
     ]
+
+-- A well-formed received message carrying the given raw @ApproximateReceiveCount@,
+-- so the delivery-count lift is exercised without the AWS types.
+deliveredWithCount :: Maybe Text -> ReceivedMessage
+deliveredWithCount raw =
+    ReceivedMessage
+        { rmBody = Just (encodeJob npmJob)
+        , rmReceipt = Just "receipt-good"
+        , rmMessageId = Just "m-good"
+        , rmReceiveCount = raw
+        }
 
 {- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
 severity admitted, so a drop line's serialised bytes are assertable through

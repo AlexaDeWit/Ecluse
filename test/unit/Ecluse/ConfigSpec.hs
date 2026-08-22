@@ -10,11 +10,13 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config (
-    Config (configMounts),
+    AppConfig (cfgQueue),
+    Config (configApp, configMounts),
     ConfigError (MirrorSettingWithoutWrite, MountMissingPrivateUpstream, PublicUrlRequired),
     Mount (mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
+    QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
     defaultPolicy,
     loadConfig,
@@ -24,6 +26,7 @@ import Ecluse.Config (
     resolvedKeyProvenance,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 
 spec :: Spec
@@ -36,6 +39,16 @@ spec = do
             case defaultPolicy of
                 RulePolicy rules ->
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
+
+        it "pins the shipped redelivery budget to the one a directly-built backend holds" $
+            -- Two statements of the same policy default (the operator-visible YAML and
+            -- the value a backend built without config falls back to) must agree, or a
+            -- deployment and a test double would retire poison messages at different
+            -- delivery counts.
+            case (loadConfig [] Nothing, defaultDeliveryBudget) of
+                (Right cfg, DeliveryBudget budget) ->
+                    qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
+                (Left errs, _) -> expectationFailure ("the embedded defaults failed to load: " <> show errs)
 
     describe "mount modes (mirroring derived from the declared target)" $ do
         it "resolves a declared mirrorTarget to a mirrored mount" $ do

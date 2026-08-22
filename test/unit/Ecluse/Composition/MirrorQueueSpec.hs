@@ -11,6 +11,7 @@ import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (..),
     MirrorRuntimePlan (..),
+    deadLetterTerminusWarning,
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
     planMirrorQueue,
@@ -19,12 +20,19 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Composition.Support (expectConfig, expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
 import Ecluse.Config (AppConfig)
 import Ecluse.Config.Ambient (AmbientAws (..))
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent, TerminusAttached),
+    DeliveryBudget (DeliveryBudget),
+    queueTransportFault,
+ )
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure), defaultSqsConfig)
 
 spec :: Spec
 spec = do
     mirrorRuntimeSpec
     mirrorQueueSpec
+    deadLetterTerminusSpec
 
 mirrorRuntimeSpec :: Spec
 mirrorRuntimeSpec = describe "planMirrorRuntime" $ do
@@ -128,6 +136,18 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         env <- expectEnv staticEnvVars
         planMirrorQueue noAmbient{ambientAwsEndpointUrlSqs = Just "not-a-url"} env
             `shouldBe` Left [QueueRegionMissing, QueueEndpointMalformed "not-a-url"]
+
+    it "carries the configured redelivery budget into the SQS backend's config" $ do
+        -- The operator's floor reaches the backend through the plan; the backend then
+        -- raises it past any attached terminus when it probes the queue.
+        env <- expectEnv (overrideEnv "ECLUSE_QUEUE__MAX_RECEIVE_COUNT" "9" staticEnvVars)
+        cfg <- expectSqsBackend noAmbient env
+        sqsMaxReceiveCount cfg `shouldBe` DeliveryBudget 9
+
+    it "carries the pinned default budget when the operator sets none" $ do
+        env <- expectEnv staticEnvVars
+        cfg <- expectSqsBackend noAmbient env
+        sqsMaxReceiveCount cfg `shouldBe` DeliveryBudget 5
   where
     -- Resolve the SQS config from a plan that must select the SQS backend, failing
     -- the example with the actual plan / boot errors otherwise.
@@ -141,3 +161,44 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
 
     withRegion :: Text -> AmbientAws
     withRegion r = noAmbient{ambientAwsRegion = Just r}
+
+deadLetterTerminusSpec :: Spec
+deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
+    it "warns loudly when a durable queue has nothing to capture a poison message" $ do
+        -- The gap this closes: with no redrive policy the message would cycle until
+        -- the retention window discarded it unseen, so the operator must be told.
+        case deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right TerminusAbsent) of
+            Nothing -> expectationFailure "expected a no-terminus warning on the durable backend"
+            Just warning -> do
+                warning `shouldSatisfy` ("NO DEAD-LETTER TERMINUS" `T.isInfixOf`)
+                -- It names what will happen instead, with the budget that governs it.
+                warning `shouldSatisfy` ("delivered 7 times" `T.isInfixOf`)
+                warning `shouldSatisfy` ("redrive policy" `T.isInfixOf`)
+
+    it "stays silent when a terminus is attached" $ do
+        deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right (TerminusAttached (Just (DeliveryBudget 3))))
+            `shouldBe` Nothing
+        deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right (TerminusAttached Nothing))
+            `shouldBe` Nothing
+
+    it "warns when the redrive policy could not be read, carrying the fault detail" $
+        -- Boot continues on the configured budget, but that budget is no longer known
+        -- to sit above a terminus's capture count, so the operator is told why.
+        case deadLetterTerminusWarning (SqsBackend budgetedConfig) (Left probeFault) of
+            Nothing -> expectationFailure "expected a warning when the probe faulted"
+            Just warning -> do
+                warning `shouldSatisfy` ("sqs:GetQueueAttributes" `T.isInfixOf`)
+                warning `shouldSatisfy` ("access denied by the emulator" `T.isInfixOf`)
+
+    it "stays silent for the in-memory backend, whose own boot warning already covers it" $
+        -- It genuinely has no terminus, but 'memoryQueueBootWarning' has already said
+        -- the mirror is non-durable and sheds jobs; a second line would dilute it.
+        deadLetterTerminusWarning MemoryBackend (Right TerminusAbsent) `shouldBe` Nothing
+  where
+    budgetedConfig :: SqsConfig
+    budgetedConfig =
+        (defaultSqsConfig "https://sqs.us-east-1.amazonaws.com/123456789012/mirror" "us-east-1")
+            { sqsMaxReceiveCount = DeliveryBudget 7
+            }
+
+    probeFault = queueTransportFault (transportFault TransportUnreachable "access denied by the emulator")

@@ -8,6 +8,7 @@ import System.Timeout (timeout)
 import Test.Hspec
 
 import Ecluse.Core.Queue (
+    DeadLetterTerminus (TerminusAbsent),
     MirrorJob (..),
     MirrorQueue (..),
     QueueMessage (..),
@@ -51,6 +52,22 @@ spec = do
             unwrap (deadLetter q (msgReceipt msg))
             afterDeadLetter <- unwrap (receive q)
             afterDeadLetter `shouldBe` []
+
+        it "reports every delivery as a first delivery, so the redelivery budget never bites" $ do
+            -- This backend removes a job at delivery and never redelivers it, so no
+            -- delivery it makes can ever have been seen before. Reporting a truthful
+            -- count of one is what keeps the worker's budget inert here.
+            (q, _drops) <- boundedQueue 10
+            unwrap (enqueue q sampleJob)
+            unwrap (enqueue q otherJob)
+            delivered <- unwrap (receive q)
+            map msgReceiveCount delivered `shouldBe` [1, 1]
+
+        it "reports that it has no dead-letter terminus" $ do
+            -- Honest, and load-bearing: the composition root reads this to decide its
+            -- boot warning, and the memory backend genuinely captures nothing.
+            (q, _drops) <- boundedQueue 10
+            deadLetterTerminus q `shouldBe` Right TerminusAbsent
 
         it "carries every job field through unchanged from enqueue to receive" $ do
             -- The queue is a transparent carrier: each field the producer set must
