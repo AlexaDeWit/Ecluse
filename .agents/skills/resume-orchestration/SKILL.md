@@ -22,6 +22,8 @@ retrievable from repository files.
    - recent commits relevant to active work
    - the worktrees or agents the checkpoint names
    - open PRs and their draft/check state
+   - the issues of PRs merged since the checkpoint. GitHub auto-close is not configured on this
+     repository, so a merged PR's issue stays open until the team lead closes it by hand.
    - the `status:` and acceptance criteria of active or next-dispatchable slice files
 3. **Retrieve by decision:** read only the sections the next orchestration action needs:
    - per-PR loop, fix routing, evaluation, gate, or guardrails from
@@ -32,8 +34,11 @@ retrievable from repository files.
    depends on it, read `MEMORY.md` and the relevant linked file. Verify its volatile claims before
    updating or deleting it.
 5. **Report and wait:** summarise what has merged, what is in review, and what is still draft, plus
-   blockers or conflicts and the next dispatchable action. Wait for explicit architect kickoff
-   before dispatching an implementation build.
+   blockers or conflicts and the next dispatchable action. List the merged PRs whose issues still
+   need closing by hand. Close only an issue whose acceptance criteria the merged PR met, never one
+   it merely cross-references. The inter-wave pass in
+   [`.agents/orchestration-strategy.md`](../../orchestration-strategy.md) owns that housekeeping.
+   Wait for explicit architect kickoff before dispatching an implementation build.
 
 Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/style.md`,
 `docs/haddock.md`, all of `docs/testing.md`, or the architecture set. Retrieve one when the next

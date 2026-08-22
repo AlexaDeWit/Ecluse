@@ -211,11 +211,13 @@ architect as a new slice or issue.
 
 The pass also does housekeeping. Prune the spent worktrees and merged branches so
 `git worktree list` stays an accurate map. Surface a worktree that carries uncommitted or unmerged
-work to the architect, and never force-remove one. The pass also closes out the tracker. A
-squash-merge can drop a `Closes #N` keyword. As each PR lands, confirm that its issue closed, and
-close it by hand if the keyword did not fire. As a backstop, scan the open issues against the wave's
-merged PRs and close any whose fix shipped, with a `Resolved by #PR` note. An issue left open for a
-real reason (partly addressed, or a follow-on tracked separately) keeps a note on what remains. The
+work to the architect, and never force-remove one. The pass also closes out the tracker. GitHub's
+issue auto-close is not configured on this repository, so a `Closes #N` keyword never closes
+anything. It is a cross-reference only. As each PR lands, the team lead closes its issue by hand
+with a `Resolved by #PR` note, and only after checking that the PR met that issue's acceptance
+criteria. Never close an issue a PR merely cross-references. As a backstop, scan the open issues
+against the wave's merged PRs and close any whose fix shipped. An issue left open for a real reason
+(partly addressed, or a follow-on tracked separately) keeps a note on what remains. The
 pass gates the next wave: make the integrated base coherent first, and record that in the milestone
 sequence.
 
@@ -319,8 +321,9 @@ A PR reaches the architect only when **all** hold:
 - [ ] Docs updated in the same PR. Changes limited to the slice's file scope (another file only with
       strong justification).
 - [ ] The slice-completing PR names the issue it resolves (`Closes #N`). It folds the as-built delta
-      (design decisions, discoveries, deviations from the acceptance criteria) into the same PR. An
-      issue left open after its PR merged is a hand-off defect, caught at GATE.
+      (design decisions, discoveries, deviations from the acceptance criteria) into the same PR. The
+      keyword does not close the issue here (auto-close is off), so the team lead closes it by hand
+      after the merge, in the inter-wave pass.
 - [ ] Commits GPG-signed and DCO `Signed-off-by` (`git commit -s`), Conventional Commits, AI help
       disclosed with `Assisted-by:`. The
       [`open-pull-request`](skills/open-pull-request/SKILL.md) skill is the recipe.
