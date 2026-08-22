@@ -12,30 +12,11 @@ Enter the shell with `nix develop` (or let `direnv` do it), then run everything 
 entry point shared by local development and CI. Running `task` from outside the shell works, but it
 re-enters the shell per target, so keep that for one-offs.
 
-| Task | Command |
-|------|---------|
-| Build | `task build` |
-| Test (fast loop) | `task test` |
-| Format (write) | `task format` |
-| Lint | `task lint` |
-| Static analysis (SAST) | `task sast` |
-| Coverage (combined, matches Codecov; needs Docker) | `task coverage` |
-| Coverage (fast, unit-only, Docker-free; partial) | `task coverage-unit` |
-| Pre-push checks (subset of the gate) | `task check` |
-| Full CI-gate mirror (needs Docker) | `task gate` |
-
-Run `task --list` for the full set. The underlying commands live in
+Run `task --list` for the targets. The underlying commands live in
 [`Taskfile.yml`](../Taskfile.yml), so local and CI never drift.
 
-**Before you push,** run `task check` clean. It runs the build (`-Werror`), units, doctest over the
-Haddock `>>>` examples, `fourmolu --mode check`, `hlint`, and Semgrep (zero findings). It also runs
-the two analysis tiers `weeder` (dead code) and `stan`. A finding in either tier fails `check`. It
-is a full `-Werror` build of every component plus two `-fwrite-ide-info` builds, so cold it runs
-well over 10 minutes. `task gate` adds the two tiers `check` lacks: the Docker-bound integration
-suite and the Haddock build. The CI gate expects all of that, plus end-to-end (`task test-e2e`) and
-a live-registry smoke suite (`task test-smoke`). The e2e suite gates every PR, but its weight keeps
-it out of local `check` and `gate`. Smoke is allowed to fail and never gates. Performance tests run
-server-side, not at push. See [Testing Strategy](testing.md).
+**Before you push,** run `task check` clean. What it runs, what `task gate` adds, and what only
+CI runs are in [Testing Strategy](testing.md).
 
 ### Reproducible build and checks (Nix)
 

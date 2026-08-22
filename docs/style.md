@@ -51,9 +51,8 @@ binaries. The rest of this guide covers what a tool can't decide.
 - Mild conveniences (`RecordWildCards`, `TupleSections`, `MultiWayIf`, `DerivingVia`) are fine
   when they simplify. The advanced extensions are opt-in per case, justified in a comment and
   the PR. When two designs work, pick the one needing fewer extensions.
-- **`TemplateHaskell` has two sanctioned uses**, no justification needed: deriving `aeson`
-  instances (plain `DeriveGeneric` is still the default) and generating optics/lenses
-  (`makeLenses`, kept shallow). Any other TH use needs justification.
+- **`TemplateHaskell` is limited to `embedFile`** for the embedded default config. Any other use
+  needs repo-owner approval, justified in a comment and the PR.
 - **`relude` is the prelude**, via cabal mixins. Use `Text`, not `String`: literals are `Text`,
   concatenate with `<>`, print with `putTextLn`. Partial functions are hidden by default, so keep
   them that way (§10). `containers`, `text`, `bytestring`, and `stm` are re-exported.
@@ -67,22 +66,7 @@ binaries. The rest of this guide covers what a tool can't decide.
 ## 3. Compiler flags
 
 The warning set lives in the `common` stanza of `ecluse.cabal`. **Warnings are errors** (`-Werror`
-in [`cabal.project`](../cabal.project)), so a clean build is a hard requirement. On top of `-Wall`,
-each flag reinforces a rule here:
-
-| Flag | Guards |
-|------|--------|
-| `-Wcompat` | Upcoming breaking changes. Fix them early. |
-| `-Widentities` | Redundant numeric/`id` conversions. |
-| `-Wincomplete-record-selectors` | A partial record selector at the *use* site. Catches dependency-defined ones `-Wpartial-fields` cannot see. |
-| `-Wincomplete-record-updates` | Record updates that could fail. |
-| `-Wincomplete-uni-patterns` | Partial patterns in lambdas/`let` (totality). |
-| `-Wmissing-deriving-strategies` | Forces the `deriving stock` style of §7. |
-| `-Wmissing-export-lists` | Forces explicit export lists (§4.7). |
-| `-Wname-shadowing` | A local binding that shadows a name already in scope. |
-| `-Wpartial-fields` | Partial record selectors on sum types, at the *definition* site. |
-| `-Wredundant-bang-patterns` | A `!` pattern that forces nothing. |
-| `-Wredundant-constraints` | Constraints a signature does not use. |
+in [`cabal.project`](../cabal.project)), so a clean build is a hard requirement.
 
 `-Werror` makes *every* warning fatal, not these alone: the full `-Wall` set and relude's own
 `WARNING` pragmas count too. So `undefined` and the `trace*` functions fail to compile in committed
@@ -159,17 +143,8 @@ the live composition root.
 
 ## 5. Documentation (Haddock) and comments
 
-Documentation is not optional, and it is the rule agents most often skip.
-**[`docs/haddock.md`](haddock.md)** holds the conventions. Read it before writing doc comments.
-Every module opens with a prose header, and every exported type and function gets a Haddock comment.
-A non-exported helper gets a plain `--` at most. `task doctest` runs the `>>>` examples in the CI
-gate, so they can't drift.
-
-Keep every comment lean. A comment states only what the code cannot say: the goal, a constraint, a
-gotcha, or the security rationale behind a rule. It never restates the implementation and never
-narrates the body. A function comment is one or two lines, or nothing. The module header is the one
-comment that may run longer, because it carries the module's contract. A long comment confuses or
-exhausts the reader. Justify its length by the confusion it prevents, not by the effort behind it.
+[`docs/haddock.md`](haddock.md) holds the conventions: what to document, how much, and how lean.
+Read it before writing a doc comment.
 
 ---
 
@@ -312,20 +287,15 @@ someone adds a constructor.
 
 ## 10. Totality: no partial functions
 
-A policy proxy must not crash on hostile input, so Écluse **bans partial functions**. `.hlint.yaml`
-enforces the ban, and relude already hides most. Don't reach for `head`, `tail`, `fromJust`, `read`,
-`(!!)`, `error`, `undefined`, or `unsafePerformIO`. Pattern-match the empty or missing case, or use
-the total alternative (`fromMaybe`, `listToMaybe`, `readMaybe`, `viaNonEmpty head`, `Map.lookup`,
-`(!!?)`). Represent "might not exist" in the type. `Decision` and `RuleOutcome` carry a human reason
-for every branch, so a failure is explainable rather than thrown.
+A policy proxy must not crash on hostile input, so Écluse **bans partial functions**.
+[`.hlint.yaml`](../.hlint.yaml) carries the list and fails the lint on any use, and relude hides
+most. Pattern-match the empty or missing case, or use the total alternative. Represent "might not
+exist" in the type. `Decision` and `RuleOutcome` carry a human reason for every branch, so a
+failure is explainable rather than thrown.
 
-**Partial record selectors and updates fall under the same ban**, and the compiler catches them. A
-field absent from some constructor of a sum type yields a selector, and an update, that throw on the
-other constructors. `-Wpartial-fields` rejects *defining* one, `-Wincomplete-record-selectors`
-rejects a *use* site that could fail (including dependency-defined selectors), and
-`-Wincomplete-record-updates` rejects the update. All three are fatal under `-Werror` (§3). Keep
-selectors total: give each constructor its own nested record, or hoist the shared fields out of the
-sum.
+**Partial record selectors and updates fall under the same ban.** `-Wpartial-fields`,
+`-Wincomplete-record-selectors`, and `-Wincomplete-record-updates` reject them under `-Werror`.
+Give each constructor its own nested record, or hoist the shared fields out of the sum.
 
 ### `error` and the unreachable-branch escape hatch
 
@@ -413,32 +383,7 @@ FailUp, or Graceful for the process. Then pick the matching shape:
 
 ## 12. Tests
 
-Tests are documentation too, so keep them as readable as the code. [`docs/testing.md`](testing.md)
-holds the layout and tier strategy. This section is style.
-
-- **Structure with `hspec`**: `describe` per function/area, `it` with a full-sentence
-  expectation.
-
-  ```haskell
-  describe "evalRule" $ do
-      it "AllowScope allows a matching scope" $
-          evalRule ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
-              `shouldSatisfy` isAllow
-  ```
-
-- **Name fixtures and helpers, and give them signatures** (`now :: UTCTime`,
-  `pkg :: Maybe Text -> Integer -> PackageDetails`). A small builder that fills defaults and
-  exposes only the axis under test keeps each case to one line.
-- **Add small predicate/extractor helpers** (`isAllow`, `approvedBy`) instead of inlining
-  pattern matches in assertions.
-- **Express invariants as `hedgehog` properties** under `describe "properties"` with `forAll`
-  and `(===)`: an invariant that must hold for *every* input (order-independence, a round-trip
-  law) belongs here.
-- **Share cross-suite helpers through `ecluse-test-support`** (`test/support/`). A helper more
-  than one suite needs lives there, never copied per suite. Its modules mirror the main-library
-  namespace, so a helper for `Ecluse.X` lives in `Ecluse.Test.X`: the digest fixtures and
-  `unsafeHash` for `Ecluse.Core.Package` live in `Ecluse.Test.Package`. Cross-cutting helpers
-  live in `Ecluse.Test.Support`. A helper only one suite uses stays local.
+Test style lives beside the tier strategy: [`docs/testing.md` → Style](testing.md#style).
 
 ---
 
@@ -451,20 +396,6 @@ passage a maintainer writes in Swedish. No em-dashes, en-dashes, or emoji, with 
 
 ## 14. Licence headers
 
-Every tracked `.hs` file opens with a machine-readable licence header. Write it as line comments
-above any pragmas and the module Haddock block, so it disturbs neither the module documentation nor
-the `-Werror` build:
-
-```haskell
--- SPDX-FileCopyrightText: 2026 Alexandra de Wit
---
--- SPDX-License-Identifier: MIT
-
-```
-
-The header attaches the licence to the unit that travels: a source file vendored or forked away from
-the repository-root `LICENSE` keeps its licensing. SBOM tooling parses the tags deterministically.
-The referenced text lives in `LICENSES/MIT.txt`. Don't type the header by hand. `task spdx-fix`
-stamps every tracked `.hs` file that lacks it, idempotently, discovering files via `git ls-files`.
-`task lint-spdx` gates it in `task static-checks`. The format is REUSE-native, but the gate covers
-Haskell sources only. There is no repo-wide REUSE regime.
+Every tracked `.hs` file opens with an SPDX header (`SPDX-FileCopyrightText`,
+`SPDX-License-Identifier: MIT`) above any pragma, so the licence travels with the file. Never type
+it: `task spdx-fix` stamps it and `task lint-spdx` gates it.
