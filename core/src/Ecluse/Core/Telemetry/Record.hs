@@ -5,20 +5,22 @@
 {- | The metric-recording ports: the abstract interfaces the core serve path and
 mirror worker record through, decoupled from any telemetry backend.
 
-"Ecluse.Core.Telemetry.Metrics" defines /what/ the @ecluse.*@ catalogue is (the names
-and the closed set of bounded labels). This module defines the __recording interfaces__
-over that catalogue as records of @IO@ functions (the Handle pattern, as
-"Ecluse.Core.Registry" and "Ecluse.Core.Queue" use): one field per signal a consumer
-emits, each taking only the bounded label values its metric carries. A consumer records
-through its port and never names an OpenTelemetry instrument; the application supplies
-the OTel-backed implementations behind them (see @Ecluse.Runtime.Telemetry.Instruments@). A test
-supplies an inert or recording double.
+"Ecluse.Core.Telemetry.Metrics" defines /what/ the @ecluse.*@ catalogue is: the names
+and the closed set of bounded labels. This module defines the recording interfaces over
+that catalogue as records of @IO@ functions (the Handle pattern, as
+"Ecluse.Core.Registry" and "Ecluse.Core.Queue" use it). There is one field per signal a
+consumer emits, each taking only the bounded label values its metric carries. A consumer
+records through its port and never names an OpenTelemetry instrument. The application
+supplies the OTel-backed implementations behind them (see
+@Ecluse.Runtime.Telemetry.Instruments@), and a test supplies an inert or recording
+double.
 
-Three ports are defined: 'MetricsPort' for the serve path (serve decisions, the rule gate,
-the data-plane upstream fetch, the metadata cache, and mirror enqueue), 'WorkerMetricsPort'
-for the mirror worker (jobs processed, publish latency), and 'AdvisorySyncMetricsPort' for
-the advisory sync task (attempts and their latency). The credential signals stay in the
-application instrument set; each port carries exactly the signals its consumer emits.
+There are three ports. 'MetricsPort' serves the serve path: serve decisions, the rule
+gate, the data-plane upstream fetch, the metadata cache, and mirror enqueue.
+'WorkerMetricsPort' serves the mirror worker: jobs processed, publish latency.
+'AdvisorySyncMetricsPort' serves the advisory sync task: attempts and their latency. The
+credential signals stay in the application instrument set. Each port carries exactly the
+signals its consumer emits.
 -}
 module Ecluse.Core.Telemetry.Record (
     -- * The serve-path recording port
@@ -51,20 +53,24 @@ import Ecluse.Core.Telemetry.Metrics (
     Upstream,
  )
 
-{- | The metric-recording port -- a record of functions over a backend whose closure
+{- | The metric-recording port: a record of functions over a backend whose closure
 captures its instruments. Each field records one @ecluse.*@ signal under exactly the
-bounded labels that signal carries; the closed label vocabularies come from
-"Ecluse.Core.Telemetry.Metrics", so the bounded-cardinality discipline is enforced at
-the call site by the types. All fields return 'IO', so a backend (and the core code
-recording through it) stays decoupled from the application's effect stack.
+bounded labels that signal carries. The closed label vocabularies come from
+"Ecluse.Core.Telemetry.Metrics", so the types enforce the bounded-cardinality discipline
+at the call site. All fields return 'IO', so a backend, and the core code recording
+through it, stays decoupled from the application's effect stack.
 -}
 data MetricsPort = MetricsPort
     { mpServeDecision :: Decision -> IO ()
     -- ^ Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
     , mpServeAdmissionInFlight :: Int -> IO ()
-    -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
+    {- ^ Record a change (+1 or -1) to in-flight metadata parses
+    (@ecluse.serve.admission.in_flight@).
+    -}
     , mpServeAdmissionQueued :: IO ()
-    -- ^ Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+    {- ^ Record one admission that waited for a slot before proceeding
+    (@ecluse.serve.admission.queued@).
+    -}
     , mpPublishBodyInFlightBytes :: Int -> IO ()
     {- ^ Record a change (the reserved weight, positive or negative) in bytes held
     for buffered publish bodies (@ecluse.publish.body.in_flight_bytes@).
@@ -72,9 +78,9 @@ data MetricsPort = MetricsPort
     , mpPublishBodyShed :: IO ()
     -- ^ Record one publish shed at the body-byte budget (@ecluse.publish.body.shed@).
     , mpMergeDivergence :: IO ()
-    {- ^ Record one cross-upstream integrity divergence detected in the packument merge
-    (@ecluse.registry.merge.divergence@) -- incremented once per contradicting version.
-    The high-cardinality identifiers (package, version, the digest bodies) go on the
+    {- ^ Record one cross-upstream integrity divergence found in the packument merge
+    (@ecluse.registry.merge.divergence@), once per contradicting version. The
+    high-cardinality identifiers (package, version, the digest bodies) go on the
     'WARNING' log line, never a metric label.
     -}
     , mpRuleDenial :: Maybe Text -> ReasonClass -> IO ()
@@ -112,7 +118,7 @@ data MetricsPort = MetricsPort
     (@ecluse.metadata_cache.assembled.resident_bytes@).
     -}
     , mpPublicRelayAnomaly :: RelayAnomaly -> IO ()
-    {- ^ Record one public artifact relay that was not the admitted artifact
+    {- ^ Record one public artifact relay that did not carry the admitted artifact
     (@ecluse.serve.relay.anomalies@) by its bounded class. Steady state is zero.
     -}
     , mpRequestPerimeterFault :: RequestFaultCause -> IO ()
@@ -120,21 +126,21 @@ data MetricsPort = MetricsPort
     (@ecluse.serve.perimeter.faults@) by its bounded classified cause.
     -}
     , mpMirrorEnqueued :: IO ()
-    {- ^ Record one mirror job accepted for enqueue (@ecluse.mirror.enqueued@) -- the
+    {- ^ Record one mirror job accepted for enqueue (@ecluse.mirror.enqueued@): the
     serve path's hand-off to the enqueue buffer, not the backend write.
     -}
     , mpMirrorEnqueueFailure :: IO ()
-    {- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@) -- a
+    {- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@): a
     refused hand-off or a failed backend delivery.
     -}
     }
 
-{- | The mirror worker's metric-recording port -- the worker analogue of 'MetricsPort',
-kept a separate record so the worker records exactly its own signals and the serve path
-exactly its own (the two consumers share no field). Both fields return 'IO', so the
-worker loop records through the port without naming a telemetry backend; the application
-supplies the OTel-backed implementation (see @Ecluse.Runtime.Telemetry.Instruments@) and a test
-an inert or recording double.
+{- | The mirror worker's metric-recording port: the worker analogue of 'MetricsPort'.
+It stays a separate record, so the worker records exactly its own signals and the serve
+path exactly its own. The two consumers share no field. Both fields return 'IO', so the
+worker loop records through the port without naming a telemetry backend. The application
+supplies the OTel-backed implementation (see @Ecluse.Runtime.Telemetry.Instruments@),
+and a test an inert or recording double.
 -}
 data WorkerMetricsPort = WorkerMetricsPort
     { wmpMirrorJobProcessed :: MirrorResult -> IO ()
@@ -145,12 +151,12 @@ data WorkerMetricsPort = WorkerMetricsPort
     -- ^ Record one mirror publish-latency sample (@ecluse.mirror.publish.duration@).
     }
 
-{- | The advisory sync task's metric-recording port, the third consumer's analogue of
-'MetricsPort' and 'WorkerMetricsPort'. The sync loop (@Ecluse.Runtime.Cve.Sync@) records one
-attempt and one latency sample per attempt, each under the ecosystem it synced and the
-bounded result it reached, so an operator sees both the rate and the shape of the advisory
-refresh per ecosystem without a high-cardinality label. Both fields return 'IO', so the
-loop records through the port without naming a telemetry backend.
+{- | The advisory sync task's metric-recording port: the third consumer's analogue of
+'MetricsPort' and 'WorkerMetricsPort'. The sync loop (@Ecluse.Runtime.Cve.Sync@) records
+one attempt and one latency sample per attempt. Each carries the ecosystem it synced and
+the bounded result it reached. An operator therefore sees both the rate and the shape of
+the advisory refresh per ecosystem, with no high-cardinality label. Both fields return
+'IO', so the loop records through the port without naming a telemetry backend.
 -}
 data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
     { asmpSyncAttempt :: Ecosystem -> AdvisorySyncResult -> IO ()
@@ -161,8 +167,8 @@ data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
     -}
     }
 
-{- | Run an action and return its result alongside the wall-clock seconds it took,
-measured on the monotonic clock so a system-clock step never yields a negative or
+{- | Run an action and return its result alongside the wall-clock seconds it took. It
+measures on the monotonic clock, so a system-clock step never yields a negative or
 absurd duration. The seconds are what the latency histograms record (through
 'mpRuleEvalDuration' \/ 'mpUpstreamFetch' \/ 'asmpSyncDuration'). Pure of any backend, so it
 lives beside the port the durations feed.

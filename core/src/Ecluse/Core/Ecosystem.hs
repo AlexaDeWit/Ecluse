@@ -4,17 +4,17 @@
 
 {- | The ecosystem tag.
 
-'Ecosystem' is the shared vocabulary the rest of the system dispatches on: the
-package vocabulary ("Ecluse.Core.Package") records it in a @PackageName@, the version
-engine ("Ecluse.Core.Version") selects a per-ecosystem parser by it, the registry
-adapters ("Ecluse.Core.Registry.Adapter") are chosen by it, and configuration both
-__keys a mount__ by it and __derives that mount's path prefix__ from it ('prefixFor').
+'Ecosystem' is the shared vocabulary the rest of the system dispatches on. The package
+vocabulary ("Ecluse.Core.Package") records it in a @PackageName@. The version engine
+("Ecluse.Core.Version") selects a per-ecosystem parser by it. The registry adapters
+("Ecluse.Core.Registry.Adapter") dispatch on it. Configuration keys a mount by it, and
+derives that mount's path prefix from it ('prefixFor').
 
-It lives in its own small module on purpose. It is a stable shared type imported
-by several areas, and keeping it here breaks what would otherwise be an import
-cycle between "Ecluse.Core.Package" (whose @PackageDetails@ holds a @Version@) and
-"Ecluse.Core.Version" (whose parsers dispatch on the ecosystem) -- exactly the
-@.Types@-style extraction sanctioned by STYLE.md → "Module organization".
+It lives in its own small module on purpose. It is a stable shared type several areas
+import. Keeping it here prevents an import cycle between "Ecluse.Core.Package" (whose
+@PackageDetails@ holds a @Version@) and "Ecluse.Core.Version" (whose parsers dispatch
+on the ecosystem). That is exactly the @.Types@-style extraction STYLE.md → "Module
+organization" sanctions.
 -}
 module Ecluse.Core.Ecosystem (
     Ecosystem (..),
@@ -30,8 +30,8 @@ data Ecosystem
     | RubyGems
     deriving stock (Eq, Ord, Show)
 
-{- | The canonical wire\/config name of an ecosystem -- the key a @mounts@ object
-is written under and the inverse of 'parseEcosystem'.
+{- | The canonical wire\/config name of an ecosystem: the key an operator writes a
+@mounts@ object under, and the inverse of 'parseEcosystem'.
 
 >>> ecosystemName Npm
 "npm"
@@ -43,8 +43,8 @@ ecosystemName = \case
     RubyGems -> "rubygems"
 
 {- | Parse an 'Ecosystem' from its wire name, 'Nothing' for one the build does not
-serve. Used to decode the config document's @mounts@ keys, where an unknown key is
-rejected loudly rather than skipped (see "Ecluse.Config").
+serve. The config decoder reads the document's @mounts@ keys with it, and rejects an
+unknown key loudly rather than skipping it (see "Ecluse.Config").
 
 >>> parseEcosystem "npm"
 Just Npm
@@ -59,12 +59,11 @@ parseEcosystem = \case
     "rubygems" -> Just RubyGems
     _ -> Nothing
 
-{- | The path prefix a mount serves under, __derived__ from its ecosystem (npm →
-@\/npm@, PyPI → @\/pypi@) and never operator-configured, so a prefix can neither
-collide nor be mistyped (see @docs\/architecture\/web-layer.md@ → "Multi-ecosystem
-mounts"). A
-'NonEmpty' list of path segments: every registry is path-mounted, so a root mount
-is unrepresentable.
+{- | The path prefix a mount serves under, derived from its ecosystem (npm →
+@\/npm@, PyPI → @\/pypi@) and never operator-configured. A prefix can therefore
+neither collide nor be mistyped (see @docs\/architecture\/web-layer.md@ →
+"Multi-ecosystem mounts"). A 'NonEmpty' list of path segments: every registry is
+path-mounted, so a root mount is unrepresentable.
 
 >>> prefixFor Npm
 "npm" :| []

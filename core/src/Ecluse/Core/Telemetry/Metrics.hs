@@ -2,25 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @ecluse.*@ metric catalogue and its __bounded-label discipline__.
+{- | The @ecluse.*@ metric catalogue and its bounded-label discipline.
 
-An inline proxy sees thousands of distinct packages, so the failure mode for metrics
-is a __series explosion__: a single high-cardinality label (a package name, a version,
-a denial message) multiplied across every package turns a handful of series into
-millions. This module is the structural defence. It defines the catalogue of metric
-__names__ and, crucially, the __closed set of label types__ a metric may carry -- every
-one a small, fixed-domain enum.
+An inline proxy sees thousands of distinct packages, so the failure mode for metrics is
+a series explosion. A single high-cardinality label (a package name, a version, a denial
+message), multiplied across every package, turns a handful of series into millions. This
+module is the structural defence. It defines the catalogue of metric names and,
+crucially, the closed set of label types a metric may carry, every one a small,
+fixed-domain enum.
 
 == Bounded labels
 
 The label vocabulary is a closed sum, 'Label', whose every constructor pairs a
-bounded-domain key with a bounded value. High-cardinality identifiers -- @package@,
-@version@, @scope@, and a denial @message@ -- have __no constructor here at all__, so
-they cannot be made into a metric label: the type system forbids it. They live on
-spans and the structured log line ("Ecluse.Log") instead, which is where a specific
-decision is debugged. The one operator-bounded label is @rule@ (a rule's configured
-name): a deployment defines a small, fixed set of rules, so it is bounded by
-configuration rather than by an enum, and is the sole label carrying free text.
+bounded-domain key with a bounded value. The high-cardinality identifiers (@package@,
+@version@, @scope@, and a denial @message@) have no constructor here at all. Nothing can
+make them a metric label, because the type system forbids it. They live on spans and the
+structured log line ("Ecluse.Log") instead, which is where an operator debugs a specific
+decision. The one operator-bounded label is @rule@, a rule's configured name. A
+deployment defines a small, fixed set of rules, so configuration bounds that label
+rather than an enum. It is the sole label carrying free text.
 
 'renderLabel' projects a 'Label' to its @(key, value)@ wire pair, and 'metricAttributes'
 materialises a label list into the OpenTelemetry 'Attributes' an instrument is recorded
@@ -66,7 +66,7 @@ module Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
 ) where
 
--- relude's prelude exports a Bounded/Enum-based `universe`; hide it so the
+-- relude's prelude exports a Bounded/Enum-based `universe`. Hide it so the
 -- Generic-derived `Data.Universe.Class.universe` is the one in scope here.
 import Prelude hiding (universe)
 
@@ -85,42 +85,42 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | The catalogue of metric instruments Écluse emits: the @ecluse.*@ domain signals
 plus the OpenTelemetry HTTP server semantic convention. Each maps to its wire name
-through 'metricName'; a typed enum so the catalogue is enumerable (and asserted whole
-in the tests) rather than a scatter of string literals.
+through 'metricName'. It is a typed enum, so the catalogue is enumerable (and asserted
+whole in the tests) rather than a scatter of string literals.
 
-Queue backlog and DLQ depth are deliberately absent -- those are cloud-native metrics
+Queue backlog and DLQ depth are deliberately absent: those are cloud-native metrics
 (CloudWatch, Cloud Monitoring), not signals Écluse re-emits.
 -}
 data MetricName
-    = -- | @http.server.request.duration@ -- server request latency (histogram).
+    = -- | @http.server.request.duration@: server request latency (histogram).
       HttpServerRequestDuration
-    | -- | @ecluse.serve.decision@ -- admit\/deny\/unavailable (counter).
+    | -- | @ecluse.serve.decision@: admit\/deny\/unavailable (counter).
       ServeDecision
-    | -- | @ecluse.rule.denials@ -- rule denials by rule and reason class (counter).
+    | -- | @ecluse.rule.denials@: rule denials by rule and reason class (counter).
       RuleDenials
-    | -- | @ecluse.rule.eval.duration@ -- rule-evaluation latency by tier (histogram).
+    | -- | @ecluse.rule.eval.duration@: rule-evaluation latency by tier (histogram).
       RuleEvalDuration
-    | -- | @ecluse.rule.effectful.failures@ -- effectful-rule failures (counter).
+    | -- | @ecluse.rule.effectful.failures@: effectful-rule failures (counter).
       RuleEffectfulFailures
-    | -- | @ecluse.rule.breaker.state@ -- effectful\/mint breaker state by source (gauge).
+    | -- | @ecluse.rule.breaker.state@: effectful\/mint breaker state by source (gauge).
       RuleBreakerState
-    | -- | @ecluse.serve.admission.in_flight@ -- in-flight metadata parses (up-down counter).
+    | -- | @ecluse.serve.admission.in_flight@: in-flight metadata parses (up-down counter).
       ServeAdmissionInFlight
-    | -- | @ecluse.serve.admission.queued@ -- admissions that waited for a slot (counter).
+    | -- | @ecluse.serve.admission.queued@: admissions that waited for a slot (counter).
       ServeAdmissionQueued
-    | -- | @ecluse.publish.body.in_flight_bytes@ -- bytes reserved for buffered publish bodies (up-down counter).
+    | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
       PublishBodyInFlightBytes
-    | -- | @ecluse.publish.body.shed@ -- publishes shed at the body-byte budget (counter).
+    | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
       PublishBodyShed
-    | -- | @ecluse.registry.merge.divergence@ -- cross-upstream integrity divergences detected in the packument merge (counter).
+    | -- | @ecluse.registry.merge.divergence@: cross-upstream integrity divergences detected in the packument merge (counter).
       MergeDivergence
-    | -- | @ecluse.upstream.fetch.duration@ -- upstream fetch latency (histogram).
+    | -- | @ecluse.upstream.fetch.duration@: upstream fetch latency (histogram).
       UpstreamFetchDuration
-    | -- | @ecluse.upstream.fetch.errors@ -- upstream fetch errors (counter).
+    | -- | @ecluse.upstream.fetch.errors@: upstream fetch errors (counter).
       UpstreamFetchErrors
-    | -- | @ecluse.metadata_cache.requests@ -- metadata-cache hit\/miss (counter).
+    | -- | @ecluse.metadata_cache.requests@: metadata-cache hit\/miss (counter).
       MetadataCacheRequests
-    | -- | @ecluse.metadata_cache.entries@ -- metadata-cache occupancy (gauge).
+    | -- | @ecluse.metadata_cache.entries@: metadata-cache occupancy (gauge).
       MetadataCacheEntries
     | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes (gauge).
       MetadataCacheResidentBytes
@@ -128,25 +128,25 @@ data MetricName
       SingleVersionCacheResidentBytes
     | -- | @ecluse.metadata_cache.assembled.resident_bytes@: assembled-representation store resident bytes (gauge).
       AssembledCacheResidentBytes
-    | -- | @ecluse.serve.perimeter.faults@ -- pre-commit handler escapes the request perimeter answered (counter).
+    | -- | @ecluse.serve.perimeter.faults@: pre-commit handler escapes the request perimeter answered (counter).
       ServePerimeterFaults
-    | -- | @ecluse.serve.relay.anomalies@ -- public relays that were not the admitted artifact (counter).
+    | -- | @ecluse.serve.relay.anomalies@: public relays that were not the admitted artifact (counter).
       ServeRelayAnomalies
-    | -- | @ecluse.mirror.enqueued@ -- mirror jobs enqueued (counter).
+    | -- | @ecluse.mirror.enqueued@: mirror jobs enqueued (counter).
       MirrorEnqueued
-    | -- | @ecluse.mirror.enqueue.failures@ -- mirror enqueue failures (counter).
+    | -- | @ecluse.mirror.enqueue.failures@: mirror enqueue failures (counter).
       MirrorEnqueueFailures
-    | -- | @ecluse.mirror.jobs.processed@ -- mirror jobs processed by result (counter).
+    | -- | @ecluse.mirror.jobs.processed@: mirror jobs processed by result (counter).
       MirrorJobsProcessed
-    | -- | @ecluse.mirror.publish.duration@ -- mirror publish latency (histogram).
+    | -- | @ecluse.mirror.publish.duration@: mirror publish latency (histogram).
       MirrorPublishDuration
-    | -- | @ecluse.credential.refresh@ -- credential refreshes by result and provider (counter).
+    | -- | @ecluse.credential.refresh@: credential refreshes by result and provider (counter).
       CredentialRefresh
-    | -- | @ecluse.credential.token.ttl.seconds@ -- remaining token lifetime by provider (gauge).
+    | -- | @ecluse.credential.token.ttl.seconds@: remaining token lifetime by provider (gauge).
       CredentialTokenTtlSeconds
-    | -- | @ecluse.advisory.sync.attempts@ -- advisory sync attempts by ecosystem and result (counter).
+    | -- | @ecluse.advisory.sync.attempts@: advisory sync attempts by ecosystem and result (counter).
       AdvisorySyncAttempts
-    | -- | @ecluse.advisory.sync.duration@ -- advisory sync attempt latency by ecosystem and result (histogram).
+    | -- | @ecluse.advisory.sync.duration@: advisory sync attempt latency by ecosystem and result (histogram).
       AdvisorySyncDuration
     deriving stock (Eq, Generic, Ord, Show)
 
@@ -185,8 +185,8 @@ metricName = \case
     AdvisorySyncDuration -> "ecluse.advisory.sync.duration"
 
 {- | The closed set of metric label keys. Every label Écluse attaches is one of these
-bounded-domain keys. High-cardinality identifiers (@package@, @version@, @scope@, a
-denial @message@) are deliberately __absent__, so they can never become a metric label.
+bounded-domain keys. The high-cardinality identifiers (@package@, @version@, @scope@, a
+denial @message@) are deliberately absent, so they can never become a metric label.
 -}
 data LabelKey
     = KeyDecision
@@ -227,9 +227,9 @@ data Decision = Admit | Deny | Unavailable
 
 instance Universe Decision where universe = universeGeneric
 
-{- | The bucketed class of a denial reason -- a bounded summary of
-"Ecluse.Core.Server.Response.RejectReason", __not__ the rule name or the message (those are
-high-cardinality and stay on the log line).
+{- | The bucketed class of a denial reason: a bounded summary of
+"Ecluse.Core.Server.Response.RejectReason". It is not the rule name or the message,
+which are high-cardinality and stay on the log line.
 -}
 data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonUnavailable | ReasonLimit
     deriving stock (Eq, Generic, Show)
@@ -267,19 +267,19 @@ data Tier = Structural | Effectful
 instance Universe Tier where universe = universeGeneric
 
 {- | Why the request perimeter had to answer for an escaped fault
-(@ecluse.serve.perimeter.faults@): a recognised wiring\/contract fault on the
-gate path, an escape from the response-assembly leg, or anything else. The
-unbounded detail rides the perimeter's log line, never a label.
+(@ecluse.serve.perimeter.faults@). The causes are a recognised wiring\/contract fault on
+the gate path, an escape from the response-assembly leg, or anything else. The unbounded
+detail rides the perimeter's log line, never a label.
 -}
 data RequestFaultCause = GateFault | RenderFault | UnclassifiedFault
     deriving stock (Eq, Generic, Show)
 
 instance Universe RequestFaultCause where universe = universeGeneric
 
-{- | What a public artifact relay passed through when it was not the admitted
-artifact (@ecluse.serve.relay.anomalies@): a 2xx whose headers do not look like
-an artifact, or a non-success relayed verbatim. The unbounded detail rides the
-paired WARNING log line, never a label.
+{- | What a public artifact relay passed through when it did not carry the admitted
+artifact (@ecluse.serve.relay.anomalies@). It is a 2xx whose headers do not look like an
+artifact, or a non-success relayed verbatim. The unbounded detail rides the paired
+WARNING log line, never a label.
 -}
 data RelayAnomaly = RelayOddShape | RelayNonSuccess
     deriving stock (Eq, Generic, Show)
@@ -293,18 +293,18 @@ data CacheResult = Hit | Miss
 instance Universe CacheResult where universe = universeGeneric
 
 {- | A processed mirror job's result. The idempotent "already present" outcome (a
-registry @409@) is __not__ a distinct value: the worker treats it as a success, so it is
-counted as 'Published' -- a series that could never emit is not published.
+registry @409@) is not a distinct value. The worker treats it as a success and counts it
+as 'Published'. A series that could never emit is not published.
 -}
 data MirrorResult
     = -- | The artifact reached the mirror target (an already-present version included).
       Published
     | -- | The job did not publish, and its message stays in the queue's own hands.
       Failed
-    | {- | The worker retired the message itself, having spent the queue's redelivery
+    | {- | The worker retired the message itself, after it spent the queue's redelivery
       budget ('Ecluse.Core.Queue.deliveryBudgetSpent'). Distinct from 'Failed' because
-      it is the terminus a deployment with no dead-letter queue has: an operator alerts
-      on it, since every discarded job is one nothing else captured.
+      this is the terminus a deployment with no dead-letter queue has. An operator
+      alerts on it, since nothing else captured a discarded job.
       -}
       Discarded
     deriving stock (Eq, Generic, Show)
@@ -317,13 +317,13 @@ data CredentialResult = Refreshed | RefreshFailed
 
 instance Universe CredentialResult where universe = universeGeneric
 
-{- | What one advisory sync attempt concluded, the closed result vocabulary the
-@ecluse.advisory.sync.*@ signals are labelled by and the advisory sync span records.
-It mirrors the sync step's own outcomes (@Ecluse.Runtime.Cve.Sync@), one bounded value
-each, so the series count per ecosystem is five.
+{- | What one advisory sync attempt concluded: the closed result vocabulary that labels
+the @ecluse.advisory.sync.*@ signals and that the advisory sync span records. It mirrors
+the sync step's own outcomes (@Ecluse.Runtime.Cve.Sync@), one bounded value each, so
+each ecosystem emits five series.
 -}
 data AdvisorySyncResult
-    = -- | A new artifact verified and swapped into the read path.
+    = -- | The sync verified a new artifact and swapped it into the read path.
       AdvisorySwapped
     | -- | The remote artifact matches the last seen one.
       AdvisoryUnchanged
@@ -331,15 +331,15 @@ data AdvisorySyncResult
       AdvisoryNonePublished
     | -- | The fetch itself did not deliver the object.
       AdvisoryFetchFailed
-    | -- | The artifact was downloaded and refused by verification.
+    | -- | Verification refused the downloaded artifact.
       AdvisoryRefused
     deriving stock (Eq, Generic, Show)
 
 instance Universe AdvisorySyncResult where universe = universeGeneric
 
-{- | The wire value of an advisory sync result. Named rather than inlined because the
-metric label and the sync span's result attribute must read identically for the two
-signals to join on it.
+{- | The wire value of an advisory sync result. The metric label and the sync span's
+result attribute must read identically for the two signals to join on it. It is
+therefore a named function, not an inlined case.
 -}
 advisorySyncResultName :: AdvisorySyncResult -> Text
 advisorySyncResultName = \case
@@ -363,8 +363,9 @@ data BreakerState = Closed | HalfOpen | Open
 
 instance Universe BreakerState where universe = universeGeneric
 
-{- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open -- a small
-ordinal so a dashboard can alarm on "not closed" without a high-cardinality label.
+{- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open. It is a
+small ordinal, so a dashboard can alarm on "not closed" without a high-cardinality
+label.
 -}
 breakerStateCode :: BreakerState -> Int64
 breakerStateCode = \case
@@ -373,9 +374,9 @@ breakerStateCode = \case
     Open -> 2
 
 {- | A single metric label: a bounded key paired with its bounded value. There is no
-constructor for a package, version, scope, or message, so a high-cardinality identifier
-cannot be turned into a label. 'LRule' carries a rule's configured name -- the one
-operator-bounded label (a deployment defines a small, fixed rule set).
+constructor for a package, version, scope, or message, so nothing can turn a
+high-cardinality identifier into a label. 'LRule' carries a rule's configured name, the
+one operator-bounded label: a deployment defines a small, fixed rule set.
 -}
 data Label
     = LDecision Decision
@@ -481,9 +482,9 @@ labelValue = \case
         RelayNonSuccess -> "non_success"
 
 {- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument is
-recorded with. Every value is bounded, so the attribute set an instrument ever sees is
-drawn from a small fixed product of the label domains -- never the unbounded space of
-package identifiers.
+recorded with. Every value is bounded. The attribute set an instrument ever sees
+therefore comes from a small fixed product of the label domains, never the unbounded
+space of package identifiers.
 -}
 metricAttributes :: [Label] -> Attributes
 metricAttributes labels =
