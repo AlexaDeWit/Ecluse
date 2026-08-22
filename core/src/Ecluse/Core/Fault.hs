@@ -23,6 +23,7 @@ module Ecluse.Core.Fault (
     TransportFault (..),
     transportFault,
     TransportCause (..),
+    transportRetryable,
 
     -- * The shared detail budget
     boundedDetail,
@@ -61,6 +62,16 @@ data TransportCause
       -}
       TransportProtocol
     deriving stock (Eq, Show)
+
+{- | Is a fault with this cause worth another attempt? A timeout and an unreachable peer
+can clear on their own. A TLS refusal and a protocol fault need an operator or a fix.
+-}
+transportRetryable :: TransportCause -> Bool
+transportRetryable = \case
+    TransportTimeout -> True
+    TransportUnreachable -> True
+    TransportTls -> False
+    TransportProtocol -> False
 
 {- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
 pathological rendered exception cannot bloat a log line or a held error value.

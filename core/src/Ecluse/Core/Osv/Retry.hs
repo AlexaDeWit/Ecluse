@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- |
-Module      : Ecluse.Core.Osv.Retry
-
-Backoff for Pilot's periodic osv.dev fetch.
+{- | Backoff for Pilot's periodic osv.dev fetch.
 
 Pilot pulls the npm advisory export from osv.dev on a schedule. That upstream can be
 unreachable, throttle the caller, or return 5xx. A naive retry-immediately loop would
@@ -17,9 +14,11 @@ the interval @[0, cap]@ keeps many Pilots from resynchronising onto the upstream
 once. A bound on the number of retries makes the loop terminate and hand control back
 to the outer sync-interval loop rather than spinning.
 
-Only /transient/ faults retry: connection failures, timeouts, 5xx responses, and the
-throttling 408 and 429 codes. A clean 4xx is a permanent client-side error and a
-corrupt archive is a parse fault. Retrying neither helps, so both fail fast.
+Only /transient/ faults retry. A response that carries a status code decides on the
+code: 5xx and the throttling 408 and 429 retry. Every other 'HttpException' folds into
+the shared transport vocabulary ("Ecluse.Core.Fault"), and 'transportRetryable' decides
+it. A clean 4xx is a permanent client-side error and a corrupt archive is a parse
+fault. Retrying neither helps, so both fail fast.
 -}
 module Ecluse.Core.Osv.Retry (
     -- * Policy
@@ -47,11 +46,14 @@ import Control.Retry (
  )
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
 import Network.HTTP.Client (
-    HttpException (..),
-    HttpExceptionContent (..),
+    HttpException (HttpExceptionRequest),
+    HttpExceptionContent (StatusCodeException),
     responseStatus,
  )
 import Network.HTTP.Types.Status (statusCode)
+
+import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
+import Ecluse.Core.Fault.Http (classifyTransport)
 
 {- | The shipped osv.dev fetch backoff: full jitter from a 1s base to a 60s ceiling, over
 five retries (six attempts at most). The loop is finite, and the worst case waits under
@@ -66,21 +68,15 @@ defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
-{- | Should a fetch that threw this 'HttpException' retry? Anything not positively known
-to be transient counts as permanent, so Pilot fails fast rather than hammering the
-upstream on a guess.
+{- | Should a fetch that threw this 'HttpException' retry? A status-code failure asks
+'isRetryableStatusCode'. Every other exception folds into the shared transport
+vocabulary, where 'transportRetryable' owns the decision for every caller.
 -}
 isRetryableHttpException :: HttpException -> Bool
 isRetryableHttpException = \case
-    InvalidUrlException{} -> False
-    HttpExceptionRequest _ content -> case content of
-        StatusCodeException response _ -> isRetryableStatusCode (statusCode (responseStatus response))
-        ConnectionFailure{} -> True
-        ConnectionTimeout -> True
-        ResponseTimeout -> True
-        NoResponseDataReceived -> True
-        ConnectionClosed -> True
-        _ -> False
+    HttpExceptionRequest _ (StatusCodeException response _) ->
+        isRetryableStatusCode (statusCode (responseStatus response))
+    other -> transportRetryable (tfCause (classifyTransport other))
 
 {- | Run an osv.dev fetch under a "Control.Retry" policy. A transient 'HttpException'
 retries until the budget is spent, then the original exception is re-thrown to the

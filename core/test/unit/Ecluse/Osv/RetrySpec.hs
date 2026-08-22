@@ -27,12 +27,15 @@ import Network.HTTP.Client (
     throwErrorStatusCodes,
  )
 import Network.HTTP.Types.Status (Status, status404, status502)
+import Network.TLS qualified as TLS
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
 import Katip (Environment (..), initLogEnv)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 
+import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
+import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Retry
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
@@ -60,6 +63,12 @@ data StubCause = StubCause
     deriving stock (Show)
 
 instance Exception StubCause
+
+{- | A TLS handshake refusal, in the shape @http-client@ delivers it: wrapped in an
+'InternalException'.
+-}
+tlsRefusal :: SomeException
+tlsRefusal = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
 
 {- | Drive a real (in-process) request against a stub answering with the given
 status under @throwErrorStatusCodes@, and return the 'HttpException' it throws.
@@ -131,6 +140,25 @@ spec = do
             isRetryableHttpException
                 (HttpExceptionRequest defaultRequest (InternalException (toException StubCause)))
                 `shouldBe` False
+
+        it "does not retry a TLS refusal" $
+            -- A rejected handshake is a TransportTls fault, and no retry mends it.
+            isRetryableHttpException (HttpExceptionRequest defaultRequest (InternalException tlsRefusal))
+                `shouldBe` False
+
+        it "reads every fault outside the status arm off the shared transport table" $ do
+            -- The retry decision has one home. This example fails the day this caller
+            -- re-derives transience from the http-client constructors.
+            let faults =
+                    [ HttpExceptionRequest defaultRequest ConnectionTimeout
+                    , HttpExceptionRequest defaultRequest NoResponseDataReceived
+                    , HttpExceptionRequest defaultRequest (InternalException tlsRefusal)
+                    , HttpExceptionRequest defaultRequest (InternalException (toException StubCause))
+                    , permanentFailure
+                    ]
+            map isRetryableHttpException faults `shouldBe` [True, True, False, False, False]
+            map isRetryableHttpException faults
+                `shouldBe` map (transportRetryable . tfCause . classifyTransport) faults
 
         it "classifies a real 502 as retryable and a real 404 as permanent" $ do
             e502 <- statusException status502

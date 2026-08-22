@@ -23,6 +23,7 @@ import Network.HTTP.Client (
         ConnectionFailure,
         ConnectionTimeout,
         InternalException,
+        NoResponseDataReceived,
         ResponseTimeout
     ),
  )
@@ -48,6 +49,9 @@ classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
             ResponseTimeout -> TransportTimeout
             ConnectionFailure _ -> TransportUnreachable
             ConnectionClosed -> TransportUnreachable
+            -- The peer hung up before the first response byte, so the request never
+            -- reached a protocol exchange.
+            NoResponseDataReceived -> TransportUnreachable
             InternalException inner
                 | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
                 | otherwise -> TransportProtocol
