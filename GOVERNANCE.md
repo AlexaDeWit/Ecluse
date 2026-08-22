@@ -38,11 +38,3 @@ path to a healthier bus factor.
 without permission. Reducing the project's reliance on one person is an explicit goal as the
 project matures. That means adding a co-maintainer and distributing access to the repository,
 the release pipeline, and the signing keys.
-
-## Code of Conduct
-
-I handle conduct reports. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-
-## Changing this document
-
-The maintainer changes governance by pull request, like any other change to the repository.
