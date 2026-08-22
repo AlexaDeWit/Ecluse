@@ -15,6 +15,7 @@ import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (mask_, throwIO)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
@@ -90,8 +91,8 @@ probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l 
 pollInterval :: Int
 pollInterval = 25_000
 
-{- | The budget every polled wait in this spec spends, in microseconds. One artifact build
-under coverage has taken five seconds, so only a condition that never arrives spends this.
+{- | The ceiling on every wait in this spec, in microseconds. One artifact build under
+coverage has taken five seconds, so only a condition that never arrives reaches it.
 -}
 pollBudget :: Int
 pollBudget = 60_000_000
@@ -108,9 +109,13 @@ waitFor what ready = go (pollBudget `div` pollInterval)
             True -> pass
             False -> threadDelay pollInterval >> go (n - 1)
 
--- | Block until a counter that another thread advances reaches @wanted@.
-awaitCount :: TVar Int -> Int -> IO ()
-awaitCount counter wanted = atomically (readTVar counter >>= check . (>= wanted))
+{- | Block until a counter that another thread advances reaches @wanted@, or fail the case
+naming what never happened once the budget runs out, so a dead task cannot hang the suite.
+-}
+awaitCount :: Text -> TVar Int -> Int -> IO ()
+awaitCount what counter wanted =
+    timeout pollBudget (atomically (readTVar counter >>= check . (>= wanted)))
+        >>= maybe (expectationFailure ("timed out waiting for " <> toString what)) (const pass)
 
 {- | A counter over the sync task's swap notifications, with the action to hand
 'runCveSync'. The task notifies after the swap publishes, so a counted swap already serves.
@@ -337,7 +342,7 @@ spec = do
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
                 withAsync (runQuiet (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
-                    awaitCount swaps 1
+                    awaitCount "the first swap to publish" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
                     readTVarIO swaps `shouldReturn` 1
 
@@ -358,14 +363,15 @@ spec = do
                     -- A short burst that finds nothing published, then a fast poll
                     -- that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
+                    -- Mirrors bootBurstPolicy in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
                     burstAttempts = length (schedBootBackoff schedule) + 1
                 withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
                     -- Each attempt reads the flag in one transaction with the counter, so
                     -- the burst spends its whole budget before the publication below.
-                    awaitCount attempted burstAttempts
+                    awaitCount "the boot burst to spend every attempt" attempted burstAttempts
                     probesFor slot "pkg-a" `shouldReturn` Nothing
                     atomically (writeTVar published True)
-                    awaitCount swaps 1
+                    awaitCount "the poll to swap the artifact in" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
 
         it "the boot burst concedes on a rejected artifact and its remembered ETag stops re-downloads" $
@@ -436,7 +442,7 @@ spec = do
                 (swaps, onSwap) <- newSwapCounter
                 let env = envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))
                 withAsync (runQuiet (runUnobserved env oneAttempt onSwap)) $ \_ -> do
-                    awaitCount swaps 1
+                    awaitCount "the first swap to publish" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
                     readTVarIO swaps `shouldReturn` 1
 
