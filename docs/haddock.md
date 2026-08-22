@@ -261,19 +261,7 @@ lands, it is project narration. Cut it.
 
 ---
 
-## 12. Tooling and workflow
-
-- **`task docs`** builds the hyperlinked, searchable Haddock site and opens it.
-- **`task doctest`** runs every `>>>` example as a test (also in the CI gate).
-- **`task check`** is the full local gate and includes both.
-
-**Read the rendered page as well as the source.** A markup slip is invisible in the source. After
-reworking a header, run `task docs`. Check that every link resolves, that code spans close, that no
-stray `@` or backslash leaks into prose, and that headings nest as intended.
-
----
-
-## 13. Checklist (before you open a PR)
+## 12. Checklist (before you open a PR)
 
 - [ ] Every new module has a prose `{- | … -}` header.
 - [ ] Every exported type and function has a Haddock comment (≥ 1 line), with sum constructors and
@@ -283,4 +271,4 @@ stray `@` or backslash leaks into prose, and that headings nest as intended.
       (§11).
 - [ ] Markup is minimal and unescaped in prose (§8).
 - [ ] Non-obvious behaviour has a runnable `>>>` example, and `task doctest` passes.
-- [ ] `task docs` builds clean, and you read the rendered page (§12).
+- [ ] `task docs` builds clean, and you read the rendered page.

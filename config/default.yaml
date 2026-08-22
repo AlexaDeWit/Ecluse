@@ -13,12 +13,13 @@ server:
   # authToken:
   # A note Écluse appends to client-facing error bodies, e.g. where to ask for access.
   # helpMessage: Contact platform engineering for access
+  # Seconds the graceful shutdown waits for in-flight requests and artifact streams.
   shutdownDrainTimeout: 30
 
 # The mirror queue, read only when a mount mirrors. The shape of url picks the
 # backend. An SQS queue URL (https://sqs.{region}.amazonaws.com/...) selects the
 # durable SQS backend and takes its region from the host. A Pub/Sub topic resource
-# (projects/{p}/topics/{t}) names the GCP backend, which is not yet built. Unset,
+# (projects/{p}/topics/{t}) names the GCP backend, which Écluse refuses at boot. Unset,
 # mirroring runs on the bounded in-memory queue: non-durable, best-effort, and warned
 # loudly at boot. That is fine for a single node or a trial.
 queue:
@@ -76,10 +77,12 @@ advisories:
   pollInterval: 60
   # Pilot only: how often it recompiles and re-exports the advisory artifacts.
   compileInterval: 3600
+  # Where Pilot compiles the advisory databases and where the proxy lands synced ones.
   dataDir: "data/osv"
   # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
   # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it.
-  # A new URL must never require a new Écluse binary.
+  # A new URL must never require a new Écluse binary. Allowlist this host for Pilot's
+  # egress, not osv.dev.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
   # Refuse to download an advisory database larger than this many bytes (512 MiB).
   maxDatabaseBytes: 536870912
@@ -91,10 +94,18 @@ advisories:
 # limits, the RTS posture, and the file-descriptor budget. The boot log records each
 # decision with its provenance. Set a key only to override the computed value.
 # runtime:
+#   # Cores the process claims: the cgroup CPU quota floored, at least 1, clamped to
+#   # the visible processors. Give the container whole cores.
 #   cores: 4
+#   # Heap ceiling in bytes: the cgroup memory limit less the nursery budget and 10%
+#   # slack, floored at half the limit. Enforcing it re-executes the binary once.
 #   maxHeapBytes: 1073741824
+#   # Concurrent metadata materialisations: max(8, 10 x cores). Over it a request
+#   # waits up to 1 s for a slot, then gets 503 with Retry-After: 1.
 #   serveMaxInFlight: 128
+#   # Pooled connections per public upstream host: clamp(32, 1024, nofile / 8).
 #   publicConnectionsPerHost: 64
+#   # Pooled connections to the private upstream host: nofile / 4, clamped to 64..4096.
 #   privateConnectionsPerHost: 256
 
 observability:
@@ -112,6 +123,36 @@ mounts:
   # mirror.
   npm:
     publicUpstream: https://registry.npmjs.org
+    # The only key the serve-only pure public gate needs. false switches off a mount
+    # whose other keys remain.
+    # enabled: true
+    # The read authority. Required on a mirrored mount, so the mirror reads back.
+    # Optional on a serve-only mount, where it still merges with the gated public set.
+    # privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    # Declaring it makes the mount mirrored. The write credential derives from this
+    # URL: a CodeArtifact host mints a short-lived token scoped to its domain, and any
+    # other host needs mirrorTargetToken.
+    # mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
+    # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
+    # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
+    # mirrorTargetToken:
+    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200.
+    # mirrorCodeArtifactTokenDuration: 3600
+    # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
+    # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    # Set via ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN (a secret). Forwarded only
+    # when the publishing client sends none. Requires server.authToken, or the boot
+    # refuses (PublishStaticCredentialNeedsEdge).
+    # publicationTargetToken:
+    # Names a client may publish, as npm scopes. Required with a publication target.
+    # It limits names, not callers, and an empty or malformed list is a boot error.
+    # publishAllow: "@acme,@beta"
+    # Per-mount refinements of integrity.minTrusted and integrity.divergencePolicy.
+    # minTrustedIntegrity: sha256
+    # divergencePolicy: warn
+    # Per-mount rule refinement, merged over the shared policy with the same schema
+    # as the top-level rules.
+    # rules: {}
   pypi:
     publicUpstream: https://pypi.org
   rubygems:

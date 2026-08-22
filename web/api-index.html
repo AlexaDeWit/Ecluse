@@ -18,11 +18,9 @@
     <header class="site-header">
       <a class="brand" href="../index.html"><img src="../logo.svg" alt="" height="28" /> Écluse</a>
       <nav>
-        <a href="../motivation.html">Why</a>
-        <a href="../alternatives.html">Alternatives</a>
-        <a href="../architecture.html">Design</a>
+        <a href="../index.html">Home</a>
         <a href="../usage.html">Operating</a>
-        <a href="../security.html">Security</a>
+        <a href="../threat-model.html">Threat model</a>
         <a href="index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
       </nav>
@@ -31,9 +29,9 @@
       <section class="hero">
         <h1>API reference</h1>
         <p class="lead">
-          Écluse is built as two libraries: a pure capability core and a thin
-          application layer that wires it to the outside world. Each publishes its
-          own Haddock, auto-generated from <code>main</code>.
+          Écluse is built as three libraries: a pure capability core, an effectful
+          runtime edge, and a thin composition shell. Each publishes its own
+          Haddock, generated from <code>main</code>.
         </p>
       </section>
       <div class="cards">

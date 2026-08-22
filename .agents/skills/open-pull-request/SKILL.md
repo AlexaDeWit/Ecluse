@@ -39,8 +39,7 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Ag
   identity. Git here carries the identity Alexandra DeWit, so `-s` produces the correct sign-off.
   **Do not hand-write a `Signed-off-by:` line**. That is how the wrong name slips in.
 - **Conventional Commits** subject: `type(scope): summary`, imperative, lower-case, no trailing
-  period. Examples: `fix(egress): …`, `feat(server): …`, `docs(threat-model): …`,
-  `refactor(core): …`.
+  period. The type list is in [CONTRIBUTING.md](../../../CONTRIBUTING.md#repository-requirements).
 - **`Assisted-by: <Agent Name> (<Vendor>)`** discloses AI help. It is not `Co-Authored-By`. Do not
   use that trailer.
 - **This machine's git has no `--trailer` flag**. Put trailers in literal `-m` lines, or in a `-F`
@@ -53,27 +52,10 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Ag
 Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · AI assistance). Keep it
 short, and write it so a reader who has not opened the diff understands it on its own.
 
-```markdown
-## Summary
-
-<Two to five sentences: what changed and why, in words a sharp colleague on another team follows
- without the diff. For a security or behaviour change, say who could do what before and what holds
- now. Name a deliberate trade-off in one sentence if there was one. Closes #NNN.>
-
-## Checklist
-- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep, weeder, stan)
-- [ ] Docs updated in this PR (README / `docs/` / AGENTS.md) where behaviour, interfaces, or config changed
-- [ ] Conventional Commit subjects; commits are GPG-signed
-- [ ] Every commit is signed off, DCO (`git commit -s`), as the author
-- [ ] Tests added or updated for the change
-
-## Sign-off (DCO)
-Signed off on every commit as the author.
-
-## AI assistance
-- [x] Disclosed: assisted by AI; `Assisted-by:` trailer on the relevant commits.
-      Author reviewed and is responsible for every line.
-```
+The Summary is the part worth effort. Two to five sentences: what changed and why, in words a
+sharp colleague on another team follows without the diff. For a security or behaviour change, say
+who could do what before and what holds now. Name a deliberate trade-off in one sentence if there
+was one. End with `Closes #NNN` where a slice completes.
 
 Rules for the Summary:
 

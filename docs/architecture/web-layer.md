@@ -29,18 +29,10 @@ consumer's URLs. Each mount also carries an optional per-ecosystem
 [rule refinement](configuration.md#rule-policy) merged over the shared policy. A single-npm setup is
 the degenerate case, under its own derived prefix.
 
-A mount also carries its ecosystem's credential presentation. The presentation names the form the
-ecosystem's clients put a credential in. It also names the header the credential rides on when
-Écluse reads an upstream. The npm client sends an opaque token as `Authorization: Bearer`. So an npm
-mount accepts that form and no other, and it presents the same form upstream when it forwards the
-credential.
-
-The web layer owns the check, not the form. It compares whatever the mount recovered against the
-configured edge token in constant time. It refuses a request that presents nothing it recognises. So
-each mount's accepted surface is exactly its ecosystem's, while the deny-by-default refusal stays
-one decision shared by every route. The same presentation attaches an outbound credential, on the
-one path that also disables redirect-following. No credentialed request can reach the wire without
-that pin.
+A mount also carries its ecosystem's credential presentation: the form its clients put a
+credential in (npm: `Authorization: Bearer`), which Écluse also uses when it forwards the
+credential upstream. The web layer compares what the mount recovered against the configured edge
+token in constant time and refuses anything else.
 
 URL rewriting is load-bearing. Registry responses embed absolute artifact locations: npm's
 `dist.tarball`, and on public PyPI, file URLs on a separate host. Forwarded unchanged, those URLs let
@@ -64,7 +56,7 @@ upstream blip must not pull a healthy pod from rotation. `/-/ping` answers local
 
 ## Capability manifest
 
-Écluse speaks package-registry protocols (npm at launch, PyPI planned), not a bespoke HTTP API.
+Écluse speaks package-registry protocols (npm today), not a bespoke HTTP API.
 Clients (`npm`, `pnpm`, `yarn`) hardcode the protocol and never read an API description, so the
 published OpenAPI document is not a client-integration contract. It is a **capability manifest**: a
 human-facing statement of which protocols this server speaks, and what each ecosystem does and does
@@ -127,9 +119,12 @@ On-disk artifact caching is out of scope, and the mirror stays the durable store
 
 The cache holds the anonymous public (gated) origin only. It never holds the private origin: the
 serve path fetches that origin per request and never hands it to the cache. No caller's private view
-can leak to another inside the TTL, because Écluse [forbids a shared private
-cache](access-model.md#caching). The anonymous public origin crosses no trust boundary, so the cache
+can leak to another inside the TTL, because Écluse forbids a shared private cache. The anonymous public origin crosses no trust boundary, so the cache
 holds it freely.
+
+The assembled-representation store beside it memoises the encoded merged document under a content
+fingerprint of every input, including the digest of the private document this request's own
+authorised fetch returned. No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 

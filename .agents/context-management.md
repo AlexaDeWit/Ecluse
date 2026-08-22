@@ -15,16 +15,9 @@ Layers 2-4 are replaceable. Do not copy layer 1 or a whole design document into 
 
 ## Startup procedure
 
-1. Read `README.md` and classify the task.
-2. Read the task contract. For slice work, that is the one active slice file.
-3. Route through the `AGENTS.md` table to select further sources.
-4. Inspect live git or GitHub state only when it affects the task.
-5. Read targeted sections: heading searches or bounded ranges, not a whole large document.
-6. State the objective, applicable invariants, evidence sources, open questions, and next action.
-
-Do not read `AGENTS.md` again in a session: the harness injects it at startup. Do not read
-`CONTRIBUTING.md`, all of `docs/style.md`, every architecture document, or every memory file just
-because it exists.
+The `orientation` skill is the procedure. Do not read `AGENTS.md` again in a session: the harness
+injects it at startup. Do not read `CONTRIBUTING.md`, all of `docs/style.md`, every architecture
+document, or every memory file just because it exists.
 
 ## Phase-specific retrieval
 

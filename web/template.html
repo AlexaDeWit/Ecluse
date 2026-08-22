@@ -37,11 +37,7 @@ $endif$
       <a class="brand" href="$prefix$index.html"><img src="$prefix$logo.svg" alt="" height="28" /> Écluse</a>
       <nav>
         <a href="$prefix$index.html">Home</a>
-        <a href="$prefix$motivation.html">Why</a>
-        <a href="$prefix$alternatives.html">Alternatives</a>
-        <a href="$prefix$architecture.html">Design</a>
         <a href="$prefix$usage.html">Operating</a>
-        <a href="$prefix$security.html">Security</a>
         <a href="$prefix$threat-model.html">Threat model</a>
         <a href="$prefix$api/index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
@@ -60,12 +56,5 @@ $body$
       <p>Écluse is free and open source &middot; pre-launch, under active development.</p>
       <p class="made-in">Proudly built in Québec&nbsp;⚜</p>
     </footer>
-    <!--
-      Mermaid renders the diagrams client-side from a vendored, hash-pinned bundle
-      (the flake's `mermaidJs`, copied to _site/vendor by `make site`). No external
-      runtime dependency.
-    -->
-    <script src="$prefix$vendor/mermaid.min.js"></script>
-    <script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
   </body>
 </html>

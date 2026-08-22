@@ -19,8 +19,7 @@ filter owns:
 
 * __Survivors.__ A version key survives iff the rules engine 'Admitted' it. Every
   other verdict drops it: a denial, deny-by-default, or an undecidable outcome.
-  Presence in the served packument /is/ availability (see
-  @docs\/research\/reverse-engineering\/npm.md@ §8), so the filter removes a
+  Presence in the served packument /is/ availability, so the filter removes a
   non-approved version rather than flagging it.
 
 * __Resolved @latest@.__ The surviving @dist-tags.latest@ under the shared

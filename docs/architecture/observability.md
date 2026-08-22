@@ -17,7 +17,7 @@ measurement rather than a branch.
 Datadog is a first-class, tested target and what the maintainer runs. It is never required and
 never a lock-in: nothing in the core depends on it, and switching backends is a config change. The
 Datadog-specific pieces are optional add-ons on the OTLP baseline: the `dd` trace-correlation object
-on a log line, Agent-side sampling, and the [Operator recipe](../../USAGE.md#datadog-on-kubernetes).
+on a log line, Agent-side sampling.
 
 ## What gets traced
 
@@ -39,8 +39,7 @@ Hand-added domain spans carry the decisions operators care about:
 
 Sampling is head-based and always-on by default, so Écluse never drops a rare denial or error
 trace. `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code
-change. Against Datadog the node-local Agent resamples, so always-on is not wasteful. Tail sampling
-needs a collector and is planned.
+change. Against Datadog the node-local Agent resamples, so always-on is not wasteful.
 
 ## Metrics
 
@@ -51,7 +50,7 @@ needs a collector and is planned.
 - `ecluse.serve.perimeter.faults` (gate/render/unclassified) and `ecluse.serve.relay.anomalies`
   (odd_shape/non_success) are steady-state zero. Any movement is an invariant break: a pre-commit
   handler escape answered with the neutral 500, or a public relay that was not the admitted
-  artifact. The [fault model](fault-model.md) maps the fault channels.
+  artifact.
 - `ecluse.registry.merge.divergence` is the cross-upstream integrity alarm. It increments per
   contradicting version, and the package and version go on the paired `WARNING` line, never on a
   label. See the [threat model](https://ecluse-proxy.com/threat-model.html).
@@ -70,9 +69,7 @@ needs a collector and is planned.
   own identifiers stay on the sync log line, never a label.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate
-dashboards, and all export over the same OTLP push pipeline as traces. A Prometheus scrape
-endpoint (`OTEL_METRICS_EXPORTER=prometheus`) is deferred: the SDK honours the selection, but no
-scrape renderer ships yet.
+dashboards, and all export over the same OTLP push pipeline as traces.
 
 ### Cardinality and attributes
 
@@ -89,36 +86,9 @@ explosion. Two guarantees keep it and the telemetry safe:
 
 ## Logs
 
-Logs stay structured JSON through `katip`, stitched to traces by trace-ID injection. The production
-format is one compact JSON object per line to stdout (JSONL), which the Datadog Agent's stdout
-autodiscovery consumes. Set the shape with `ECLUSE_OBSERVABILITY__LOG_FORMAT`: `json`, the
-in-container default, or `console`, human-readable for development.
-
-Every JSON line carries the reserved attribute names a log backend reads:
-
-```json
-{"timestamp":"2026-06-22T09:14:03.118Z","status":"warn","message":"denied","service":"ecluse","env":"prod","version":"0.1.0","dd":{"trace_id":"…","span_id":"…"},"data":{"module":"Ecluse.Server.Pipeline.Internal","package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"},"katip":{"ns":["ecluse","serve"],"app":["ecluse"],"host":"…","pid":"1","thread":"…","loc":null}}
-```
-
-`timestamp`, `status`, `message`, and `service` are Datadog's reserved log attributes. Datadog's
-JSON preprocessing reads them unmodified. `env` and `version` are ordinary attributes any backend
-indexes. On Datadog the matching unified-service tags normally come from `DD_ENV` and `DD_VERSION`
-on the Agent, not from the line. `status` folds `katip`'s eight syslog severities onto the four an
-operator acts on: `debug`, `info`, `warn`, `error`.
-
-`service`, `env`, and `version` come from the same resolved identity as the traces, so a log-to-trace
-pivot lines up. The formatter stamps that identity, so a line raised outside any request scope
-carries it too. With no `DD_ENV` or `deployment.environment` set, `env` falls back to the deployment
-label the process boots under. `version` falls back to the binary's own build version.
-
-The `dd` object appears only while a span is in scope. Datadog needs those ids as low-64-bit decimal
-for OTLP-ingested traces to match. The emitting call's own fields sit under `data`, and the `katip`
-emitter fields under `katip`. The emitting process's hostname is `katip.host`, so a collector's own
-host attribution (the Datadog Agent supplies it) governs the line's `host`.
-
-`ECLUSE_OBSERVABILITY__LOG_LEVEL` sets the severity floor: `debug`, `info` (the default), `warn`, or
-`error`. The scribe drops anything below the floor before rendering it, so `debug` instrumentation
-costs nothing at `info`. An unrecognised value is a boot error, like every other configuration enum.
+Logs are structured JSON lines through `katip`, stitched to traces by trace-ID injection. The
+operator manual's [Logs bullet](../../USAGE.md#operating-écluse) states the line shape, the
+reserved Datadog attributes, the level floor, and the redaction.
 
 ### URL minimisation
 
@@ -150,24 +120,17 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 ## Configuration and deployment
 
-Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator surface
-lives in the operator manual: the `OTEL_*` and `DD_*`
-[variables](../../USAGE.md#observability-observability) and the
-[Datadog recipe](../../USAGE.md#datadog-on-kubernetes). Logs sit outside that switch. They go to
-stdout on every run and reach a backend through the collector's container log collection, never
-through OTLP export. So telemetry off costs no logs. The design facts here:
+Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
+[Telemetry bullet](../../USAGE.md#operating-écluse) owns the variables and the wiring. Three
+design facts hold regardless:
 
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
-  Collector or Agent, never to a vendor's cloud. Telemetry data leaves your network only if you
-  point the collector outward. The OTLP endpoint is an operator-declared destination, so it is
-  deliberately not SSRF-classified: that classifier guards the untrusted package-download path.
-  Authenticate a remote collector out of band with `OTEL_EXPORTER_OTLP_HEADERS`.
-- **Export never touches the request path.** The batch exporter runs asynchronously, so an
-  unreachable collector never blocks a request. A failed OTLP export is not silent: Écluse logs it
-  through `katip` under a throttle, so a broken collector surfaces without flooding logs.
-- **Threaded RTS required.** Telemetry needs the threaded runtime the image runs, because the OTel
-  SDK's batch span processor aborts under the non-threaded runtime. Core and heap sizing are in the
-  [runtime-sizing appendix](../../USAGE.md#appendix-runtime-sizing-arithmetic).
+  Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared
+  destination, so it is deliberately not SSRF-classified.
+- **Export never touches the request path.** The batch exporter runs asynchronously, and Écluse
+  logs a failed export under a throttle.
+- **Threaded RTS required.** The OTel SDK's batch span processor aborts under the non-threaded
+  runtime, so telemetry needs the threaded runtime the image runs.
 
 A Dockerised, Datadog-free [integration tier](../testing.md) verifies telemetry against a real
-Agent or Collector, not by compiling it alone. It asserts that the spans and metrics arrive.
+Agent or Collector. It asserts that the spans and metrics arrive.

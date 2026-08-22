@@ -62,38 +62,6 @@ conjures up, its fetches still cross the network, and only the chokepoint answer
 operator concern: see
 [`USAGE.md` → Locking down CI egress](USAGE.md#locking-down-ci-egress-recommended).
 
-## You can buy it, at a price
-
-The commercial repository-firewall and curation platforms sell an age-based quarantine at
-the proxy, off the shelf. If that fits and you can fund it, it's a working answer. The catch
-is cost and shape, not capability.
-
-The managed cloud registry you may already run has the chokepoint, storage, and
-authentication but no freshness policy. The platforms that add one tend to sit behind upper
-licensing tiers, readily into five figures a year. They bundle it in a full artifact-hosting
-product: a second registry to adopt, operate, and pay for, which mostly duplicates the one
-you run. Hosted inspection services avoid the migration but bill by usage, which scales
-badly for many CI jobs a day. They also route your dependency requests, and your
-private-package metadata, through a third party.
-
-For a team that can absorb the licence, buying is the right call. The friction is
-proportion. [`ALTERNATIVES.md`](ALTERNATIVES.md) names these tools.
-
-## Why it's open
-
-The safeguard is small, and the off-the-shelf way to get it is large. For a big organisation
-the licence rounds to nothing. For a small or early-stage one it's a real budget line, argued
-for against hiring and the rest of the toolchain. That argument is often lost until an
-incident makes the case in hindsight. The effect is regressive: the protection costs
-relatively the most for the people least able to absorb it. Those are often the same people
-a breach would hurt most.
-
-Building it in-house answers the cost but not the durability: a private tool is one team's
-burden forever. Open changes that. A shared, openly-developed tool spreads its upkeep across
-everyone who relies on it, on an engineering-time budget rather than a licensing one. That
-is why I build Écluse to be maintainable, and harden and attest its own supply chain rather
-than leaving it a private script.
-
 ## Why you can't naively build it either
 
 Self-hosting doesn't make this simple. The naive constructions all fail, and their failures
@@ -168,11 +136,5 @@ the *how*: packument merging, the rules engine, mirroring, and credentials.
   world. I'm confident in the strategy. The software hasn't earned that confidence yet.
 - **Not novel, or the only option.** Several people have independently reached the
   freshness-quarantine idea. [`ALTERNATIVES.md`](ALTERNATIVES.md) maps them.
-
-## Offered, not sold
-
-Écluse is free and permissively licensed, with no commercial agenda. I'm putting it forward in
-good faith: take what's useful, adapt it, or apply the reasoning with some other tool
-entirely.
 
 [^publish-target]: The architecture carries a fourth registry role, a *publication target* for first-party `npm publish`, the write counterpart to the private read. It's an opt-in convenience for internal publishing, not part of the resilience argument. See [Registry Model → Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).

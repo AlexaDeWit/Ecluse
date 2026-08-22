@@ -11,128 +11,46 @@ description: >-
 # Orchestrate implementation
 
 The team lead's procedure for turning a frozen architecture into merged PRs.
-[`.agents/orchestration-strategy.md`](../../orchestration-strategy.md) is the reference: the why and
-the full detail. This skill is the procedure to run. Read the doc's linked section when a step needs
-depth.
+[`.agents/orchestration-strategy.md`](../../orchestration-strategy.md) is the reference and holds
+every rationale. This skill is the checklist. Read the linked section when a step needs depth.
 
-Dispatch implementation only after explicit architect kickoff. Never merge and, during
-implementation, never push to `main`: all code lands through PRs the architect reviews.
-
-## The hand-off gate: two gates, not one
-
-A PR flips **ready for review** only when both hold:
-
-1. **Independent evaluation passed**. A fresh-context reviewer, with no exposure to the
-   implementer's reasoning, ran the mandatory Stage A + Stage B evaluation. It cleared with no open
-   critical findings.
-2. **CI `gate` green**. Every job the terminal `gate` needs is green on the PR.
-
-A green gate is necessary but not sufficient. It verifies build and test. It does not judge
-requirements, quality, or security, which the evaluation does. Neither substitutes for the other. Do
-not flip a PR ready on a green gate alone. This is the failure the procedure exists to prevent.
-
-**The flip is the hand-off**. Marking a PR ready for review is how the team lead hands work to the
-architect, and nothing else is. Verify that the commit the reviewer passed is the one the gate ran
-on. Verify that every context the ruleset requires passes, today `CI gate` and `codecov/project`.
-Then run `gh pr ready`, then report. Never report a draft to the architect as done, green, or
-reviewed. `codecov/patch` is informational and does not hold a flip.
+Dispatch implementation only after explicit architect kickoff. Never merge and never push to
+`main`: all code lands through PRs the architect reviews.
 
 ## Per-PR loop
 
-Run this for each DAG node once its dependencies merge. Detail: [The per-PR
-loop](../../orchestration-strategy.md#the-per-pr-loop).
+Run this for each DAG node once its dependencies merge
+([The per-PR loop](../../orchestration-strategy.md#the-per-pr-loop)).
 
 1. **Pick** a slice once every dependency has merged.
-2. **Build**. Brief an implementer subagent in its own worktree. Carry the architect's full
-   acceptance criteria into the brief verbatim, not a paraphrase. A too-terse brief invites a guess.
-   Pin the `model` for design-bearing or security-sensitive work. The implementer runs a fast local
-   check, not the full gate.
+2. **Build**. Brief an implementer subagent in its own worktree. Carry the architect's acceptance
+   criteria into the brief verbatim. Pin the `model` for design-bearing or security-sensitive work.
+   Pick the verification mode for the host
+   ([Verification](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test)):
+   an idle host runs `task check` before pushing, a shared host runs `task format` only and lets
+   the PR's CI verify. Disjoint file sets, one owner per file across every open PR.
 3. **Evaluate (mandatory)**. Dispatch a fresh-context reviewer with no exposure to the implementer's
-   reasoning, read-and-verify only. It runs both passes below. Read the diff yourself as well.
-4. **Gate**. Open the draft PR and watch the CI `gate` to green.
-5. **Hand off**. Flip the PR ready for review only when both hand-off gates hold on the same head
-   commit. Check the gate and the ruleset's required contexts with `gh pr checks`, then run
-   `gh pr ready`. Report it to the architect only after the flip. Until then it stays a draft, and
-   nobody reports it as done.
+   reasoning. It runs Stage A (requirements, gating-test evidence, scope) and Stage B (quality and
+   security) ([Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes)).
+   Critical findings block. Route the fix as a distinct commit: resume the implementer, apply a
+   small reviewer-specified fix directly, or brief a fresh agent. Then re-evaluate.
+4. **Gate**. Open the draft PR and watch the CI `gate` to green. Before every push, run
+   `gh run list --branch <branch>`: a push cancels an in-flight run.
+5. **Hand off**. Flip the PR ready only when the evaluation passed and the gate is green on the
+   same head commit, and every required context passes (`gh pr checks`). Then `gh pr ready`, then
+   report. A draft is never reported as done. `codecov/patch` is informational
+   ([Definition of done](../../orchestration-strategy.md#definition-of-done)).
 
-## Evaluation: the two mandatory passes
+## Always on
 
-Independent evaluation is mandatory for every PR. The implementer's own "it works" is not evidence.
-Detail: [Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes).
+[Guardrails](../../orchestration-strategy.md#guardrails-always-on) and
+[Escalation](../../orchestration-strategy.md#escalation) in full. The ones that bite:
 
-- **Stage A, requirements**. Every acceptance criterion met and backed by a deterministic, gating
-  (unit or integration) test. A non-gating smoke test never stands in for a criterion. Nothing in
-  the slice's architecture scope silently dropped. Changes stay within the slice's file scope.
-  Documentation updated in the same PR.
-- **Stage B, quality and security**. Idiomatic, total, `-Werror`-clean Haskell, with no unsafe or
-  partial functions. A security review appropriate to a supply-chain tool: input parsing,
-  deny-by-default invariants, injection-free workflows. Non-tautological tests, with the foreseeable
-  branches covered. Haddock documents the contract and the why only.
-
-Critical findings block. Route the fix, then re-evaluate.
-
-## Fix routing
-
-A reviewer's "changes required" routes one of three ways, landing as a distinct,
-separately-reviewable commit:
-
-- **Resume** a background implementer (`SendMessage` to its agent ID) with its build context intact:
-  the first choice for a fix continuing what it just built.
-- **Apply directly** a small, reviewer-specified fix, then re-run the gate.
-- **Brief a fresh** build agent for a larger rework.
-
-## Verification mode
-
-Match the mode to how many agents share the host. Detail: [Verification](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test).
-
-- **Single-slice on an idle host:** the fast floor is `task check` before pushing. Semgrep clean and
-  a clean weeder/stan floor are hard stops. Then push and watch the real run to green.
-- **CI-verified batch (default for parallel work):** the floor shrinks to `env -u IN_NIX_SHELL nix
-  develop --command task format` as the last edit before each commit. No local `task check`, builds,
-  test tiers, Docker, or HLS. The PR's own CI run is the verification loop. The invariant that makes
-  the width safe is **disjoint file sets, one owner per file across every open PR**. A colliding
-  issue waits for the merge and restarts from the new base.
-
-Reproduce a tier locally only to debug a red. Map the failing CI job to its `task` target and run
-that one target, never the whole gate. Before every push, run `gh run list --branch <branch>` first:
-a push cancels an in-flight run.
-
-## Definition of done
-
-A PR reaches the architect only when every box in [Definition of
-done](../../orchestration-strategy.md#definition-of-done) holds. The load-bearing gates:
-
-- Every acceptance criterion met with gating-test evidence.
-- Independent Stage A + Stage B evaluation passed, no open critical findings (a green gate does not
-  substitute).
-- CI `gate` and every job it needs green on the PR.
-- Docs updated in the same PR. Changes limited to the slice's file scope.
-- The slice-completing PR names its issue (`Closes #N`) and folds in the as-built delta.
-- Commits GPG-signed, DCO-signed off as the author, Conventional Commit, AI help disclosed with
-  `Assisted-by:`. Use the [`open-pull-request`](../open-pull-request/SKILL.md) skill.
-- PR flipped out of draft to ready, done only once every box holds.
-
-## Always-on guardrails
-
-Detail: [Guardrails](../../orchestration-strategy.md#guardrails-always-on) and [Escalation](../../orchestration-strategy.md#escalation).
-
-- **Escalate, don't guess**. On an ambiguous, missing, or contradictory spec, stop and surface it
-  decision-ready. Give the question, what you tried, 2-3 options with a recommendation, and the
-  blast radius. Make a bounded attempt first. Never fabricate a value, weaken a test, or leave a
-  stub.
-- **PRs only**. The team lead never merges and never pushes to `main`.
-- **Cross-cutting invariants live in one shared helper**, called by each slice, never duplicated.
-- **Surface decisions one at a time, paced by a task list**. When the architect must answer a series
-  of questions, put the series on the task list first, one entry per question. Use the harness task
-  list where available, otherwise a short-lived `.agents/design-queue.md`. Then ask the first
-  question alone: the decision, two or three options, a recommendation, and nothing the answer does
-  not need. Record the ruling and act on it before you ask the next. Never stack several questions
-  in one message.
-- **Reference work by PR or issue number**, never an internal task-tracker ID the architect cannot
-  see.
-- After every merge, rebase the dependent worktrees onto the new base and re-run their gate. Between
-  waves, run the [inter-wave quality and alignment
-  pass](../../orchestration-strategy.md#inter-wave-quality-and-alignment-pass) before dispatching the
-  next wave.
-
-This skill drives dispatch and hand-off. It does not merge or push to `main`.
+- Escalate, don't guess: a bounded attempt, then a decision-ready question with options and a
+  recommendation.
+- Surface decisions one at a time, paced by a task list. Record each ruling before the next
+  question.
+- Reference work by PR or issue number, never an internal task ID.
+- After every merge, rebase the dependent worktrees and re-run their gate. Between waves, run the
+  [inter-wave pass](../../orchestration-strategy.md#inter-wave-quality-and-alignment-pass).
+- Commit and PR mechanics: the [`open-pull-request`](../open-pull-request/SKILL.md) skill.

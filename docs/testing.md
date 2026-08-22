@@ -229,3 +229,31 @@ patch bar treats as accepted partials.
 **References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) ·
 [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image
 `ministackorg/ministack`, port 4566).
+
+## Style
+
+Tests are documentation too, so keep them as readable as the code.
+
+- **Structure with `hspec`**: `describe` per function/area, `it` with a full-sentence
+  expectation.
+
+  ```haskell
+  describe "evalRule" $ do
+      it "AllowScope allows a matching scope" $
+          evalRule ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
+              `shouldSatisfy` isAllow
+  ```
+
+- **Name fixtures and helpers, and give them signatures** (`now :: UTCTime`,
+  `pkg :: Maybe Text -> Integer -> PackageDetails`). A small builder that fills defaults and
+  exposes only the axis under test keeps each case to one line.
+- **Add small predicate/extractor helpers** (`isAllow`, `approvedBy`) instead of inlining
+  pattern matches in assertions.
+- **Express invariants as `hedgehog` properties** under `describe "properties"` with `forAll`
+  and `(===)`: an invariant that must hold for *every* input (order-independence, a round-trip
+  law) belongs here.
+- **Share cross-suite helpers through `ecluse-test-support`** (`test/support/`). A helper more
+  than one suite needs lives there, never copied per suite. Its modules mirror the main-library
+  namespace, so a helper for `Ecluse.X` lives in `Ecluse.Test.X`: the digest fixtures and
+  `unsafeHash` for `Ecluse.Core.Package` live in `Ecluse.Test.Package`. Cross-cutting helpers
+  live in `Ecluse.Test.Support`. A helper only one suite uses stays local.

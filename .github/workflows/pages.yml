@@ -103,7 +103,7 @@ jobs:
           restore-keys: |
             cabal-store-docs-${{ runner.os }}-
 
-      # The doc-variant build products of the project's two libraries (the published
+      # The doc-variant build products of the project's three libraries (the published
       # Haddock HTML) and the openapi-gen executable, in their own builddir
       # (DOCS_BUILDDIR). Kept distinct from the gate's regular-variant dist-newstyle.
       # Small and fast-moving next to the store above. Same dep-plan key.

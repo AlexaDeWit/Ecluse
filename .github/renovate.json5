@@ -53,8 +53,7 @@
   // auto-bumped; test/oracles pins the node-semver differential-test oracle,
   // refreshed by hand so an auto-bump can never silently change what the suite
   // tests against. (The defaults from config:recommended are restated so this
-  // override does not drop them.) See docs/architecture/performance.md and
-  // docs/testing.md.
+  // override does not drop them.) See docs/testing.md.
   ignorePaths: [
     "**/node_modules/**",
     "**/bower_components/**",

@@ -13,9 +13,7 @@ types into the ecosystem-agnostic domain model ("Ecluse.Core.Package":
 the lenient\/faithful handle clean.
 
 The shapes here are reverse-engineered from live captures of @registry.npmjs.org@. The
-authoritative reference (with real bodies) is
-@docs\/research\/reverse-engineering\/npm.md@ (§6 manifest, §7 @dist@, §11 type model,
-§3 errors).
+fixtures under @core\/test\/unit\/fixtures\/npm\/@ are those captures.
 
 == Lenient on input
 

@@ -466,20 +466,11 @@
           pkgs.pandoc
         ];
 
-        # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
-        # by hash. `task site` copies it into the published site, so diagrams render
-        # with no external CDN dependency. Bump the version and hash together.
-        mermaidJs = pkgs.fetchurl {
-          url = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
-          hash = "sha256-cBN+d7snO7LvlyuG6LBADMqL5TyyW/xFkRoYbcmGZd4=";
-        };
-
         # Vendored Redoc bundle for the capability-manifest page: the self-contained
         # standalone UMD build, pinned by hash. `task site` copies it into the
         # published site, so the OpenAPI manifest renders client-side, with no
-        # external CDN dependency and no Node needed to render it. Mirrors
-        # `mermaidJs`. Bump the version and hash together. See
-        # docs/architecture/api-surface.md → "How it's built and published".
+        # external CDN dependency and no Node needed to render it. Bump the version
+        # and hash together.
         redocJs = pkgs.fetchurl {
           url = "https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js";
           hash = "sha256-EyD0QhUcV8RH07cMf/xsT4bQhGQCD+NMjMXTFk6ZRPA=";
@@ -705,9 +696,7 @@
         ci = pkgs.mkShell (shellEnv // {
           name = "ecluse-ci";
           buildInputs = ciShellInputs;
-          # Paths to the pinned vendored bundles. `task site` copies them into
-          # _site/vendor (Mermaid for the rendered docs, Redoc for the manifest page).
-          MERMAID_JS = "${mermaidJs}";
+          # Path to the pinned Redoc bundle. `task site` copies it into _site/vendor.
           REDOC_JS = "${redocJs}";
         });
 
@@ -719,7 +708,6 @@
         default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
           buildInputs = ciShellInputs ++ ideInputs;
-          MERMAID_JS = "${mermaidJs}";
           REDOC_JS = "${redocJs}";
         });
 

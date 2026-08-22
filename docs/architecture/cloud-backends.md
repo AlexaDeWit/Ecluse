@@ -124,9 +124,7 @@ abstraction](registry-model.md#registry-abstraction):
 
 One npm data plane, publish included, serves every cloud, because a managed registry is an npm
 endpoint plus a token. There is no per-cloud publish path. The mirror and publish paths need no
-object-store handle, and only the advisory-database sync uses S3. AWS ships today. GCP and Azure
-slot into these same two handles, but neither is built and neither carries a committed date. A
-queue-client de-risking spike gates each one.
+object-store handle, and only the advisory-database sync uses S3. AWS ships today.
 
 ### Service mapping
 
@@ -143,17 +141,11 @@ cloud.
 
 Outbound auth (proxy to registry) is its own handle. A `CredentialProvider` yields the current
 bearer token for a registry endpoint, refreshing before expiry. Only the mirror-target write uses
-it today. Private-upstream reads forward the caller's own credential, the shipped
-passthrough posture, and the public upstream is anonymous. The per-mount strategies live in
-[Access & credential model](access-model.md#the-shipped-model-passthrough) and [Credential flow and
-authority](registry-model.md#credential-flow-and-authority).
+it: reads forward the caller's own credential and the public upstream is anonymous
+([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
+credential is derived from the mirror-target URL, see
+[Outbound registry credentials](configuration.md#outbound-registry-credentials).
 
-The mirror-write credential is **derived from the mirror-target URL**, so Écluse can never pair a
-token with an endpoint it was not minted for. See [Configuration → outbound registry
-credentials](configuration.md#outbound-registry-credentials). A mount naming an uninitialised
-provider fails at boot with the other config errors, never at runtime (see [Configuration →
-validation](configuration.md#validation-fail-fast-reject-the-unknown)).
-
-The token is mirror-write only, so its blast radius stays bounded. Only an expired token *and* a
-still-failing mint fail the dependent operation, the mirror publish. The worker leaves that job
-un-acked, and it retries or dead-letters. This never touches the client serve path.
+Only an expired token *and* a still-failing mint fail the dependent operation, the mirror
+publish. The worker leaves that job un-acked, and it retries or dead-letters. This never touches
+the client serve path.

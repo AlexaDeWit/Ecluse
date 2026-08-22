@@ -22,8 +22,8 @@ It reads its mount's serve dependencies and the request runtime
 
 == Credential authority
 
-This handler applies the default @passthrough@ credential posture (see
-@docs\/architecture\/access-model.md@). The invariant that holds under __every__ strategy
+This handler applies the @passthrough@ credential posture (see
+@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). The invariant that holds under __every__ strategy
 is the __public strip__: the client's credential is __stripped before any public-upstream
 fetch__, which is always anonymous. Sending an internal token to the public registry
 would be a credential disclosure, so the public-upstream fetch carries no token at all.
@@ -38,9 +38,7 @@ with that client's own credential, so the upstream re-authorises each client its
 the anonymous public origin is cached: one shared document, with no per-client authority
 to preserve. A private-origin cache keyed by base URL alone would let one client's entry
 serve another client's private document within the TTL, bypassing the upstream's
-authorisation. That is a cross-client disclosure. Other strategies make the private origin
-shareable by authorising each serve differently, and the metadata cache itself stays
-credential-free either way: see @docs\/architecture\/access-model.md@ → "Caching".
+authorisation. That is a cross-client disclosure.
 
 == Merge, not fallback
 

@@ -26,8 +26,7 @@ A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the mat
 the same path fetches the packument. Those three methods are the only ones the front
 door answers. Any other (@POST@, @DELETE@, …) matches no route and denies.
 
-The model is __deny by default__. Three npm-specific facts shape the matching, all from
-the protocol research (see @docs\/research\/reverse-engineering\/npm.md@ §2 and §7):
+The model is __deny by default__. Three npm-specific facts shape the matching:
 
 * __The table matches reserved meta-routes (@\/-\/…@) first__. A real package name can
   never begin with @\'-\'@, so a leading @"-"@ segment is unambiguously a meta-route.

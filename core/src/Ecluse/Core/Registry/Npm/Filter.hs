@@ -9,8 +9,7 @@ documents.
 
 Both transforms operate __structurally over the raw @aeson@ 'Value'__, never by
 re-serialising a typed model. This is load-bearing. The served packument is an __open__
-document: its schema is @additionalProperties: true@ (see
-@docs\/architecture\/api-surface.md@ → "The synthesized-packument schema"). The proxy
+document: its schema is @additionalProperties: true@. The proxy
 must __relay unchanged__ any field Écluse does not model: author keys, registry
 bookkeeping, per-version extras. Building the served body from the raw @Value@s keeps
 every unmodelled key. Rebuilding it from "Ecluse.Core.Package" would silently drop them.
@@ -53,8 +52,7 @@ It rebuilds @dist-tags@ and @time@ from the plan's reconciled decisions: the tim
 normalised ISO-8601, keeping the base document's @created@\/@modified@ bookkeeping.
 Every other top-level key comes from the base document. A version not in the plan's
 survivors is never taken, so a client's resolver only ever sees admitted versions.
-Presence in the packument /is/ availability (see
-@docs\/research\/reverse-engineering\/npm.md@ §8).
+Presence in the packument /is/ availability.
 
 The fused single pass is deliberate. Restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times

@@ -25,20 +25,18 @@
     <header class="site-header">
       <a class="brand" href="../../index.html"><img src="../../logo.svg" alt="" height="28" /> Écluse</a>
       <nav>
-        <a href="../../motivation.html">Why</a>
-        <a href="../../alternatives.html">Alternatives</a>
-        <a href="../../architecture.html">Design</a>
+        <a href="../../index.html">Home</a>
         <a href="../../usage.html">Operating</a>
-        <a href="../../security.html">Security</a>
+        <a href="../../threat-model.html">Threat model</a>
         <a href="../index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
       </nav>
     </header>
 
     <!--
-      `make site` generates the capability manifest at publish time by running
+      `task site` generates the capability manifest at publish time by running
       `cabal run openapi-gen`. A vendored, hash-pinned Redoc bundle renders it
-      client-side (the flake's `redocJs`, copied to _site/vendor by `make site`).
+      client-side (the flake's `redocJs`, copied to _site/vendor by `task site`).
       No Node, no external runtime dependency. The spec sits one level up at
       _site/api/openapi.json.
     -->

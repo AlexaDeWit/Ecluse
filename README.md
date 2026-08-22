@@ -10,8 +10,6 @@ A supply-chain policy proxy for package registries, written in Haskell. The name
 **Écluse** (*Quebec French:* "ayy-cluze", [e.klyz]) is French for a canal lock: the
 controlled passage every dependency clears before it reaches your build.
 
-Start with [Why Écluse? (`MOTIVATION.md`)](MOTIVATION.md) for the problem and the design
-reasoning, and [`ALTERNATIVES.md`](ALTERNATIVES.md) for other tools in this space.
 [Verifying the image](#verifying-the-image) covers how to verify a release instead of
 trusting it: the keyless provenance and SBOM attestations, and the bit-for-bit reproducible
 rebuild.
@@ -20,7 +18,7 @@ rebuild.
 > run today. An AWS-backed deployment is wired end to end: an SQS mirror queue, a
 > demand-driven worker, and writes under a container-role credential. The GCP backends and
 > the deployment runbook are still to come. The release workflow publishes and attests
-> release candidates. Expect breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the
+> release candidates. Expect breaking changes before `v1.0.0`. [`USAGE.md`](USAGE.md) is the
 > deployment contract.
 
 [Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
@@ -98,11 +96,9 @@ See [Release and supply-chain operations](docs/architecture/release-supply-chain
 
 ## Versioning
 
-Écluse follows [semantic versioning](https://semver.org) against the operator-facing
-contract (the `ECLUSE_*` configuration and the proxy's behaviour), not the Haskell module
-API. The version lives in `ecluse.cabal`'s `version:` field. The image, git, and release
-tags derive from it. While it's `0.y.z` the contract is unstable: pin an exact version by
-digest and expect breaking changes. [`VERSIONING.md`](VERSIONING.md) is the full policy.
+The version lives in `ecluse.cabal`'s `version:` field, and the image, git, and release tags
+derive from it. [`VERSIONING.md`](VERSIONING.md) is the policy: what the numbers promise, and
+what `0.y.z` does not.
 
 ## Development
 
@@ -118,7 +114,8 @@ task gate          # the full CI-gate mirror (adds the Docker integration + Hadd
 
 [Getting Started](docs/getting-started.md) covers full setup, the `task` workflow, and
 dependency locking. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers the contribution process and
-DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation.
+DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, and
+[`GOVERNANCE.md`](GOVERNANCE.md) says who decides.
 
 ## Project structure
 

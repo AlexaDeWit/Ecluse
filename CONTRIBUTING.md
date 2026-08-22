@@ -30,12 +30,6 @@ Use another language only when the tool forces it, and say why in review. The pa
 [`web/`](web/) are Lua, because pandoc's filter API is Lua. A new build-time dependency on
 Python, Node, or similar needs a strong, stated reason. "It reads a little cleaner" is not one.
 
-## Coverage
-
-`task coverage` reproduces the Codecov dashboard and needs Docker. `task coverage-unit` is the
-fast, unit-only, Docker-free partial view. The strategy lives in
-[Testing Strategy](docs/testing.md) under "Coverage".
-
 ## Releases
 
 Releases are maintainer territory. The procedure lives in
@@ -94,7 +88,7 @@ Signed-off-by: Your Name <you@example.com>
   comment. Renovate bumps them.
 - **Keep workflows injection-free**. Never interpolate untrusted `${{ github.event.* }}` or
   `${{ github.head_ref }}` into `run:` blocks. Pass them through `env:` or intermediate files.
-- **Semgrep ignores require the repo owner's approval**. Do not add `.semgrepignore` entries or
-  `nosemgrep` comments on your own.
+- **Semgrep and Stan ignores require the repo owner's approval**. Do not add `.semgrepignore`
+  entries, `nosemgrep` comments, or Stan `[[ignore]]` entries on your own.
 - **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
   characters.
