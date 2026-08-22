@@ -88,7 +88,7 @@ Signed-off-by: Your Name <you@example.com>
   comment. Renovate bumps them.
 - **Keep workflows injection-free**. Never interpolate untrusted `${{ github.event.* }}` or
   `${{ github.head_ref }}` into `run:` blocks. Pass them through `env:` or intermediate files.
-- **Semgrep ignores require the repo owner's approval**. Do not add `.semgrepignore` entries or
-  `nosemgrep` comments on your own.
+- **Semgrep and Stan ignores require the repo owner's approval**. Do not add `.semgrepignore`
+  entries, `nosemgrep` comments, or Stan `[[ignore]]` entries on your own.
 - **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
   characters.

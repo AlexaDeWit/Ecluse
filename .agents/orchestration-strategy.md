@@ -151,12 +151,9 @@ blast radius, go-to-definition across re-exports, and type-at-point to confirm a
 three are more precise than `grep` over this codebase's qualified imports. Confirm that the agent's
 environment provides the MCP. An instruction to use a tool the agent cannot reach is decoration.
 
-**Invoke the toolchain through the current flake, never the ambient shell**. A long-lived agent
-session enters `nix develop` once. If a flake upgrade merges mid-session (a new GHC, fourmolu, or
-dependency pin), that ambient shell goes stale while the code on disk moves on. Run every command as
-`env -u IN_NIX_SHELL nix develop --command task <target>`, which rebuilds the shell from the on-disk
-flake. This is an agent-workflow rule, not a repo rule. CI enters the shell fresh per run, and a
-human's direnv re-evaluates on pull, so the Taskfile stays as it is.
+**Invoke the toolchain through the current flake, never the ambient shell** (the `env -u
+IN_NIX_SHELL` form in [AGENTS.md → Build and tooling](../AGENTS.md#build-and-tooling)). A
+long-lived session's `nix develop` shell goes stale when a flake upgrade merges mid-session.
 
 ## Evaluation: two independent passes
 
@@ -386,7 +383,7 @@ checklist. These are the standing rules it does not capture:
 
 ## What lives under `.agents/`
 
-Everything agent-facing: this strategy, the context-management and remote-execution guides, the
-compaction prompt, and the skills. When design questions accumulate, a short-lived `design-queue.md`
+Everything agent-facing: this strategy, the context-management guide, the compaction prompt, and
+the skills. When design questions accumulate, a short-lived `design-queue.md`
 holding area joins them. Work it one question at a time, drain it into `docs/` and issues, and
 remove it once it is empty. Design lives in `docs/`. Process lives here.
