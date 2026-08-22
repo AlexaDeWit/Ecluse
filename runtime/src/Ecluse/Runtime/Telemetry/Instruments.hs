@@ -120,15 +120,10 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
-{- | The live metric instruments, one per @ecluse.*@ signal, created against a single
-meter. Opaque: built with 'newMetrics' and recorded through the @record*@ helpers.
-Held in the composition root ("Ecluse.Runtime.Env") so every layer records through the same
-instruments.
+{- | The live metric instruments, one per @ecluse.*@ signal, built by 'newMetrics' on one meter.
 
-@http.server.request.duration@ is __not__ here: the WAI instrumentation emits it from
-the server-span meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would
-double the series. The breaker instrument the catalogue names is present. Its wiring is
-layered on as the subsystem that owns it is built.
+@http.server.request.duration@ is not here. The WAI instrumentation emits it from the server-span
+meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would double the series.
 -}
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
@@ -160,13 +155,10 @@ data Metrics = Metrics
     , mAdvisorySyncDuration :: Histogram
     }
 
-{- | Build the metric instruments from a 'Telemetry' handle. When telemetry is enabled
-the instruments are created on the handle's meter provider. When it is disabled they
-are created on the SDK's no-op meter provider, so every recorded measurement is
-discarded and the @record*@ helpers are inert.
+{- | Build the metric instruments from a 'Telemetry' handle.
 
-Instruments are created once here (at composition) rather than per measurement, so the
-hot path only records.
+When telemetry is disabled the instruments are created on the SDK's no-op meter provider, so every
+@record*@ helper is inert.
 -}
 newMetrics :: Telemetry -> IO Metrics
 newMetrics telemetry = do
@@ -218,19 +210,13 @@ gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
 gauge meter name description =
     meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
 
--- The instrumentation scope the instruments are created under: this service's name,
--- so the metrics are attributed to Écluse (the same scope the hand-added spans use).
--- Kept polymorphic over 'IsString' so the @InstrumentationLibrary@ type need not be
--- named (it is not exported from the metric API surface).
+-- The instrumentation scope for these instruments, matching the hand-added spans.
+-- Polymorphic over 'IsString' because the metric API does not export @InstrumentationLibrary@.
 ecluseScope :: (IsString s) => s
 ecluseScope = "ecluse"
 
-{- | Project the OpenTelemetry-backed instruments onto the core 'MetricsPort' the
-serve path ("Ecluse.Core.Server.Pipeline") records through. Each field is the matching
-@record*@ helper partially applied to the instrument handle. The port is exactly this
-module's recording behaviour behind the core interface: inert when telemetry is off,
-since the instruments are. ('timedSeconds' is re-exported from the port module, so
-the data-plane timing util has one home beside the durations it feeds.)
+{- | Project the instruments onto the core 'MetricsPort' that "Ecluse.Core.Server.Pipeline" records
+through. It is inert when telemetry is off, since the instruments are.
 -}
 metricsPortOf :: Metrics -> MetricsPort
 metricsPortOf m =
@@ -257,11 +243,8 @@ metricsPortOf m =
         , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
         }
 
-{- | Project the OpenTelemetry-backed instruments onto the core 'WorkerMetricsPort' the
-mirror worker ("Ecluse.Core.Worker") records through. Each field is the matching
-@record*@ helper partially applied to the instrument handle. The port is exactly this
-module's recording behaviour behind the core interface: inert when telemetry is off,
-since the instruments are.
+{- | Project the instruments onto the core 'WorkerMetricsPort' that "Ecluse.Core.Worker" records
+through. It is inert when telemetry is off, since the instruments are.
 -}
 workerMetricsPortOf :: Metrics -> WorkerMetricsPort
 workerMetricsPortOf m =
@@ -270,11 +253,8 @@ workerMetricsPortOf m =
         , wmpMirrorPublishDuration = recordMirrorPublishDuration m
         }
 
-{- | Project the OpenTelemetry-backed instruments onto the core 'AdvisorySyncMetricsPort'
-the advisory sync task ("Ecluse.Runtime.Cve.Sync") records through. Each field is the
-matching @record*@ helper partially applied to the instrument handle. The port is exactly
-this module's recording behaviour behind the core interface: inert when telemetry is off,
-since the instruments are.
+{- | Project the instruments onto the core 'AdvisorySyncMetricsPort' that "Ecluse.Runtime.Cve.Sync"
+records through. It is inert when telemetry is off, since the instruments are.
 -}
 advisorySyncMetricsPortOf :: Metrics -> AdvisorySyncMetricsPort
 advisorySyncMetricsPortOf m =
@@ -306,9 +286,8 @@ recordMergeDivergence :: (MonadIO m) => Metrics -> m ()
 recordMergeDivergence m =
     addOne (mMergeDivergence m) []
 
-{- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
-denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)
-carries the reason class alone: no rule attributed it, so none is labelled.
+{- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy denial, the
+deciding rule. A non-policy refusal has no rule to attribute, so none is labelled.
 -}
 recordRuleDenial :: (MonadIO m) => Metrics -> Maybe Text -> ReasonClass -> m ()
 recordRuleDenial m rule reasonClass =
@@ -331,16 +310,12 @@ recordBreakerState :: (MonadIO m) => Metrics -> BreakerSource -> BreakerState ->
 recordBreakerState m source breakerState =
     set (mRuleBreakerState m) (breakerStateCode breakerState) [LBreakerSource source]
 
-{- | Record an upstream metadata-fetch latency sample (@ecluse.upstream.fetch.duration@)
-by which upstream was fetched and the response's status class.
--}
+-- | Record an upstream metadata-fetch latency sample to @ecluse.upstream.fetch.duration@.
 recordUpstreamFetch :: (MonadIO m) => Metrics -> Upstream -> StatusClass -> Double -> m ()
 recordUpstreamFetch m upstream statusClass seconds =
     record (mUpstreamFetchDuration m) seconds [LUpstream upstream, LStatusClass statusClass]
 
-{- | Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@) by
-which upstream and the bounded cause.
--}
+-- | Record one upstream metadata-fetch error to @ecluse.upstream.fetch.errors@.
 recordUpstreamFetchError :: (MonadIO m) => Metrics -> Upstream -> Cause -> m ()
 recordUpstreamFetchError m upstream cause =
     addOne (mUpstreamFetchErrors m) [LUpstream upstream, LCause cause]
@@ -408,23 +383,18 @@ recordCredentialRefresh m provider result =
     addOne (mCredentialRefresh m) [LProvider provider, LCredentialResult result]
 
 {- | Record an outbound token's remaining lifetime in whole seconds
-(@ecluse.credential.token.ttl.seconds@) by provider, so a stuck refresh alarms as the
-gauge decays towards zero.
+(@ecluse.credential.token.ttl.seconds@). A stuck refresh alarms as the gauge decays towards zero.
 -}
 recordCredentialTokenTtl :: (MonadIO m) => Metrics -> Provider -> Int -> m ()
 recordCredentialTokenTtl m provider seconds =
     set (mCredentialTokenTtlSeconds m) (fromIntegral seconds) [LProvider provider]
 
-{- | Record one advisory sync attempt (@ecluse.advisory.sync.attempts@) by the ecosystem
-synced and the attempt's bounded result.
--}
+-- | Record one advisory sync attempt to @ecluse.advisory.sync.attempts@.
 recordAdvisorySyncAttempt :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> m ()
 recordAdvisorySyncAttempt m eco result =
     addOne (mAdvisorySyncAttempts m) [LEcosystem eco, LAdvisorySyncResult result]
 
-{- | Record one advisory sync attempt's latency in seconds
-(@ecluse.advisory.sync.duration@) by ecosystem and result.
--}
+-- | Record one advisory sync attempt's latency in seconds (@ecluse.advisory.sync.duration@).
 recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> Double -> m ()
 recordAdvisorySyncDuration m eco result seconds =
     record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]

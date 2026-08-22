@@ -38,10 +38,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter.Types
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 
-{- | Resolve an ecosystem to its registered 'RegistryAdapter', or 'Nothing' for
-one this build carries no adapter for. Total over the closed 'Ecosystem' sum,
-every arm explicit, so an added ecosystem is a compiler-visible arm here rather
-than a fall-through.
+{- | Resolve an ecosystem to its registered 'RegistryAdapter', or 'Nothing' when this build
+carries none. Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error.
 -}
 adapterFor :: Ecosystem -> Maybe RegistryAdapter
 adapterFor = \case

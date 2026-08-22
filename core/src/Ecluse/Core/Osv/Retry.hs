@@ -53,30 +53,22 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Types.Status (statusCode)
 
-{- | The shipped osv.dev fetch backoff: full-jitter exponential backoff, capped per
-attempt and bounded in count. The knobs (microseconds, the unit "Control.Retry"
-speaks) are a 1s base doubling to a 60s ceiling, over five retries (at most six
-attempts). 'limitRetries' supplies the stop, and the policy monoid short-circuits to
-@Nothing@ once the budget is spent. The loop is therefore finite, and the worst case
-adds under two minutes of waiting before the fetch gives up to the outer sync loop.
-Inspect the schedule without sleeping using 'Control.Retry.simulatePolicy'.
+{- | The shipped osv.dev fetch backoff: full jitter from a 1s base to a 60s ceiling, over
+five retries (six attempts at most). The loop is finite, and the worst case waits under
+two minutes before the fetch gives up to the outer sync loop.
 -}
 defaultOsvRetryPolicy :: (MonadIO m) => RetryPolicyM m
 defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
 
-{- | Is this HTTP status worth retrying? A 5xx is a server-side fault that may clear.
-The 408 (request timeout) and 429 (too many requests) codes are explicit "back off and
-come back" signals. Every other code, in particular a 4xx that is not
-408\/429, is a permanent client-side error a retry cannot fix.
+{- | Is this HTTP status worth retrying? A 5xx may clear, and 408 and 429 are explicit
+"back off and come back" signals. Every other code is permanent, so a retry cannot fix it.
 -}
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
-{- | Should a fetch that threw this 'HttpException' retry? Connection failures
-and timeouts are transient by nature. A status-code rejection defers to
-'isRetryableStatusCode'. A malformed URL is a configuration fault no retry can mend.
-Anything not positively known to be transient counts as permanent, so Pilot fails fast
-rather than hammering the upstream on a guess.
+{- | Should a fetch that threw this 'HttpException' retry? Anything not positively known
+to be transient counts as permanent, so Pilot fails fast rather than hammering the
+upstream on a guess.
 -}
 isRetryableHttpException :: HttpException -> Bool
 isRetryableHttpException = \case
@@ -91,30 +83,22 @@ isRetryableHttpException = \case
         _ -> False
 
 {- | Run an osv.dev fetch under a "Control.Retry" policy. A transient 'HttpException'
-(see 'isRetryableHttpException') retries with backoff until it either succeeds or the
-retry budget is spent. A permanent one does not retry. 'recovering' re-throws the
-original exception on exhaustion or when the handler declines. The caller's own
-handler still sees it: the export loop, which logs and then waits the full sync
-interval. A non-'HttpException' fault, for example a corrupt-archive parse error, is
-not caught here and propagates unretried.
+retries until the budget is spent, then the original exception is re-thrown to the
+caller. Any other fault, a corrupt-archive parse error for example, propagates unretried.
 -}
 withOsvRetry :: (MonadMask m, KatipContext m) => RetryPolicyM m -> m a -> m a
 withOsvRetry policy fetch =
     recovering policy [retryHandler] (const fetch)
 
--- Log-and-retry a transient 'HttpException', and decline a permanent one so
--- 'recovering' re-throws it. It closes over nothing in 'withOsvRetry', so it is a
--- top-level binding rather than a 'where' helper (STYLE section 9.5).
+-- Declining a permanent 'HttpException' makes 'recovering' re-throw it.
 retryHandler :: (KatipContext m) => RetryStatus -> Handler m Bool
 retryHandler status = Handler $ \e ->
     if isRetryableHttpException e
         then logFM WarningS (ls (transientMessage status e)) >> pure True
         else pure False
 
-{- | The warning logged before a retry of a transient fetch failure. It reports the
-1-based attempt number ('rsIterNumber' counts retries from zero) and the cause, so an
-operator reading the logs can watch the backoff engage. It depends only on its
-arguments, so a test can exercise it in isolation.
+{- | The warning logged before a retry of a transient fetch failure. The attempt number is
+1-based, because 'rsIterNumber' counts retries from zero.
 -}
 transientMessage :: RetryStatus -> HttpException -> String
 transientMessage status err =

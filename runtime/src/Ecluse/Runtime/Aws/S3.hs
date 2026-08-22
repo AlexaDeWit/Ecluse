@@ -20,9 +20,8 @@ module Ecluse.Runtime.Aws.S3 (
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 
-{- | Build an @amazonka@ env for S3, applying an optional custom endpoint override
-(the pre-parsed @(secure, host, port)@). With 'Nothing' the env uses @amazonka@'s
-default endpoint and credential resolution.
+{- | Build an @amazonka@ env for S3, applying an optional endpoint override as a pre-parsed
+@(secure, host, port)@. 'Nothing' keeps @amazonka@'s default endpoint and credential resolution.
 -}
 buildS3Env :: Maybe (Bool, Text, Int) -> IO AWS.Env
 buildS3Env mEndpoint = do

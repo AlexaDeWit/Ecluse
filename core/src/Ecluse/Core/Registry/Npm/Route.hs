@@ -129,27 +129,21 @@ import Ecluse.Core.Server.Route (
 import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Param), RouteSpec (RouteSpec), specsOf)
 import Ecluse.Core.Version (Version, mkVersion)
 
-{- | npm's mount router: the route table folded into the whole routing decision. The
-first route that claims the request decides what happens to it. A request no route
-claims is the deny-by-default @404@ ('npmNotFound') in npm's own error surface.
+{- | npm's mount router. The first route that claims the request decides it, and a request no
+route claims takes the deny-by-default @404@ ('npmNotFound').
 -}
 npmRouter :: MountRouter
 npmRouter = routerOf npmNotFound npmRoutes
 
-{- | The deny-by-default @404@ action for a path no route claims. Its local value and
-manifest entry are two interpretations of 'unsupportedContract'.
--}
+-- | The deny-by-default @404@ action for a path no route claims.
 npmNotFound :: RouteAction
 npmNotFound =
     RouteAction
         unsupportedContract
         (AnswerLocally (responseValue [] (NpmError "not found")))
 
-{- | npm's routes, in matching order: one named value each, aggregated here. The
-__structure__ of each is in its own definition. The security-critical __leaf__ parsing
-stays in the named functions the captures and builders reference ('takePackage',
-'tarballCoordinate'). Ordering follows npm's conventions: the reserved meta-routes are
-literal and tried first.
+{- | npm's routes, in matching order: the reserved literal meta-routes are tried first. The
+security-critical leaf parsing stays in 'takePackage' and 'tarballCoordinate'.
 -}
 npmRoutes :: [Route NpmCap]
 npmRoutes = [pingRoute, searchRoute, tarballRoute, packumentRoute, publishRoute]
@@ -256,9 +250,8 @@ searchContract = jsonContract status501 "Not implemented: search is not supporte
 unsupportedContract :: ResponseContract (ResponseValue NpmError)
 unsupportedContract = jsonContract status404 "Unrecognised path; deny by default." npmErrorCodec
 
-{- | The closed packument response sum. The matching leaf in 'npmPackumentContract'
-introduces every constructor. 'npmPackumentReplies' is the only interface the pipeline
-receives for selecting one.
+{- | The closed packument response sum. 'npmPackumentReplies' is the only interface the pipeline
+receives for selecting one of its constructors.
 -}
 type NpmPackumentResponse =
     ResponseChoice
@@ -409,11 +402,8 @@ data NpmCap
     | NpmFilename Text
 
 {- | The package capture: one npm package unit, both scoped wire encodings handled by
-'takePackage' (which may consume one or two segments).
-
-The capture refuses a bare leading @"-"@ __on every method__: @\/-\/…@ is the
-reserved meta-route prefix, and a lone @"-"@ is never a package name. Every other
-component-safety rejection is 'takePackage''s.
+'takePackage'. It refuses a bare leading @"-"@ on every method, because @\/-\/…@ is the reserved
+meta-route prefix and a lone @"-"@ is never a package name.
 -}
 capPackage :: Capture NpmCap
 capPackage =
@@ -439,16 +429,10 @@ capFilename =
             _ -> Nothing
         )
 
-{- Peel the leading package unit off a path, returning its 'PackageName' and
-the remaining segments. A leading segment beginning with @\'\@\'@ is a scoped
-name, peeled by 'takeScoped' (which handles both wire encodings).
-
-Returns 'Nothing' (so the caller denies it) for anything without a usable package: an
-empty path, or a name with an __unsafe component__. An unsafe component is a scope or
-base name 'isSafeComponent' rejects: empty, @"."@\/@".."@, or carrying a @\'\/\'@,
-@\'\\\\\'@, or control character. 'mkScope'\/'mkPackageName' do no validation, so this
-boundary rejects such names rather than passing them downstream into an interpolated
-upstream URL.
+{- Peel the leading package unit off a path, returning its 'PackageName' and the remaining
+segments. Returns 'Nothing' for an empty path or a name whose scope or base 'isSafeComponent'
+rejects, because 'mkScope' and 'mkPackageName' do no validation and an unsafe name would
+otherwise reach an interpolated upstream URL.
 -}
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
@@ -457,11 +441,8 @@ takePackage (seg : rest)
     | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
     | otherwise = Nothing
 
-{- Peel a scoped package unit, the leading @\@…@ segment, handling both wire
-encodings of a scoped name:
-
-\* one decoded segment, @\@scope\/pkg@: split on the first @\'\/\'@.
-\* two segments, @\@scope@ then @pkg@: consume both.
+{- Peel a scoped package unit off the leading @\@…@ segment, handling both wire encodings: one
+decoded segment @\@scope\/pkg@, or @\@scope@ and @pkg@ as two segments.
 -}
 takeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
 takeScoped seg rest =
@@ -473,25 +454,18 @@ takeScoped seg rest =
             (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
             _ -> Nothing
 
--- A scoped name is usable only when both halves are safe components. Both
--- arguments arrive with the leading '@' already stripped, so this check rejects a
--- degenerate or hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg').
+-- Both arguments arrive with the leading '@' already stripped, so requiring two safe components
+-- rejects a degenerate or hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg').
 scopedName :: Text -> Text -> Maybe PackageName
 scopedName scope base
     | isSafeComponent scope && isSafeComponent base =
         Just (mkPackageName Npm (Just (mkScope scope)) base)
     | otherwise = Nothing
 
-{- | Parse an npm tarball-slot @file@ into the artifact coordinate it names for @name@:
-the 'Version' and the verbatim 'Filename'. 'Nothing' denies it.
-
-The npm convention is @{unscoped-name}-{version}.tgz@, so the file must end in @.tgz@ over a
-non-empty name and have a basename of exactly @{unscoped-name}-{version}@. A basename that
-does not begin with @{unscoped-name}-@ is a path-confusion attempt and denies. On a match
-the total 'mkVersion' reads the @version@ run, and the parse keeps the @file@ verbatim.
-
-Exported so its spec asserts the coordinate parse directly, rather than only through the
-router. That parse is the security-critical half of the artifact route.
+{- | Parse an npm tarball-slot @file@ into the 'Version' and verbatim 'Filename' it names for
+@name@. The npm convention is @{unscoped-name}-{version}.tgz@, and a basename that does not begin
+with @{unscoped-name}-@ is a path-confusion attempt, so it yields 'Nothing' and the route denies
+it.
 -}
 tarballCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
 tarballCoordinate name file =
@@ -506,9 +480,8 @@ same 'npmRoutes' the router runs, plus the synthetic deny-by-default catch-all.
 npmRouteSpecs :: NonEmpty RouteSpec
 npmRouteSpecs = unsupportedGetSpec :| (unsupportedHeadSpec : concatMap specsOf npmRoutes)
 
-{- | The synthetic spec for the deny-by-default catch-all. It is not a route (it is the
-/absence/ of a match), so it has no record in 'npmRoutes'. The manifest documents it
-explicitly as the boundary.
+{- | The synthetic spec for the deny-by-default catch-all. It is the absence of a match, not a
+route, so it has no record in 'npmRoutes' and the manifest documents it explicitly.
 -}
 unsupportedGetSpec :: RouteSpec
 unsupportedGetSpec =

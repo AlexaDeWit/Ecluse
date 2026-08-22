@@ -48,24 +48,13 @@ import Data.Time (NominalDiffTime, UTCTime)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (Scope)
 
-{- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator
-selects and refines in config. Most built-in rules reason only over the
-'Ecluse.Core.Package.PackageDetails' an adapter already fetched.
-'AllowIfRemediatesCve' and 'DenyIfCve' also consult the local advisory database
-through the boot-bound 'Ecluse.Core.Rules.RuleDeps'.
+{- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator selects
+and refines in config. "Ecluse.Core.Rules" prepares each one into the engine's runtime
+'Ecluse.Core.Rules.PreparedRule', binding /how/ it is evaluated.
 
-This is __data, not the engine's runtime representation__. It is a small, inspectable,
-@Eq@\/@Show@ enum, so config can parse each rule, patch it (override its parameters),
-and name it. "Ecluse.Core.Rules" turns it into the engine's runtime
-'Ecluse.Core.Rules.PreparedRule', binding /how/ it is evaluated. It carries no
-allow\/deny "direction": whether a rule admits or blocks is simply what its evaluation
-returns.
-
-It is also the __security boundary__ on what config can express. Untrusted config only
-ever yields closed 'Rule' data, never arbitrary computation. A rule whose evaluation
-performs IO ('AllowIfRemediatesCve', 'DenyIfCve') is a plain constructor here that
-'Ecluse.Core.Rules.evalRule' dispatches on. An arbitrary evaluation closure is a
-code-layer capability, never reachable from config.
+Security boundary: untrusted config only ever yields closed 'Rule' data, never an
+arbitrary evaluation closure. A rule whose evaluation performs IO is a plain constructor
+here that 'Ecluse.Core.Rules.evalRule' dispatches on.
 -}
 data Rule
     = -- | Unconditionally allow every package under the given scope.
@@ -117,17 +106,15 @@ the constructor, so its selectors stay total under the sum (@-Wpartial-fields@).
 -}
 data DenyIfCveParams = DenyIfCveParams
     { dicMinSeverity :: Double
-    {- ^ The CVSS base score (0 to 10) at or above which an affecting advisory denies.
-    Below it, the audit trail notes the advisory but it does not block. A qualitative
-    label counts as its band's ceiling, and an unscored advisory counts as above every
-    threshold ('Ecluse.Core.Cve.severityAtLeast'). Severity that cannot be proven low
-    must not slip a deny gate.
+    {- ^ The CVSS base score (0 to 10) at or above which an affecting advisory denies. A
+    qualitative label counts as its band's ceiling, and an unscored advisory counts as
+    above every threshold ('Ecluse.Core.Cve.severityAtLeast'). Severity that cannot be
+    proven low must not slip a deny gate.
     -}
     , dicOnUnavailable :: FailureAlignment
-    {- ^ How the rule resolves when the advisory database cannot answer, whether it is
-    not loaded, failing, or timed out. 'FailDeny' refuses the version: fail-closed, the
-    shipped default. 'FailNoDecision' skips the rule: fail-open, for the operator whose
-    availability outranks a blind gate. The decision's audit reasons record the skip.
+    {- ^ How the rule resolves when the advisory database cannot answer. 'FailDeny' refuses
+    the version and is the shipped default. 'FailNoDecision' skips the rule, and the
+    decision's audit reasons record the skip.
     -}
     }
     deriving stock (Eq, Show)
@@ -145,16 +132,12 @@ ruleName = \case
     AllowIfRemediatesCve -> "AllowIfRemediatesCve"
     DenyIfCve{} -> "DenyIfCve"
 
-{- | A 'Rule' paired with the integer precedence at which it competes (higher wins).
-This is config's resolved-policy element. "Ecluse.Core.Rules" prepares it into the
-engine's runtime rule. That rule's boot-time ordering ('Ecluse.Core.Rules.bootOrder')
-turns precedence, and at equal precedence the rule name, into the single total order the
-engine walks.
+{- | A 'Rule' paired with the integer precedence at which it competes, higher first.
+'Ecluse.Core.Rules.bootOrder' turns precedence, and at equal precedence the rule name,
+into the single total order the engine walks.
 
-Precedence is a __field, not an @Ord@ instance__. Equal precedence between two rules is
-legal, resolved by name in the boot order, so a total derived 'Ord' would be
-non-antisymmetric: unlawful and misleading. This mirrors 'Ecluse.Core.Version.Version',
-whose ordering likewise goes through a function rather than a derived instance.
+Precedence is a field, not an @Ord@ instance: equal precedence is legal, so a derived
+'Ord' would be non-antisymmetric.
 -}
 data PrecededRule = PrecededRule
     { rulePrecedence :: Int
@@ -165,29 +148,16 @@ data PrecededRule = PrecededRule
     deriving stock (Eq, Show)
 
 {- | The default precedence for a rule /type/, used when a policy omits an explicit
-precedence for a rule.
+precedence.
 
-The rule types climb one ladder, most-passive to most-decisive:
+The ladder climbs most-passive to most-decisive:
 
 @AllowIfOlderThan@ (100) < @AllowIfRemediatesCve@ (150) < @AllowScope@ (200) <
 @DenyIfCve@ (225) < @AllowByIdentity@ (250) < @DenyInstallTimeExecution@ (300) <
-@DenyByIdentity@ (400)@
+@DenyByIdentity@ (400)
 
-Two placements carry the design and are worth stating plainly:
-
-* @DenyByIdentity@ and @DenyInstallTimeExecution@ default strictly above every allow.
-  A blanket "any deny overrides any allow" therefore holds for them out of the box:
-  revocation and the install-script deny keep the last word.
-* The @DenyIfCve@ default is the deliberate exception. It sits /below/
-  @AllowByIdentity@. An operator's exact-identity allow, the explicit "I have decided
-  this specific version must ship" escape hatch, therefore overrides an advisory deny.
-  That is a graceful pin for a false positive or an accepted risk. It still sits
-  /above/ the passive age gate, the remediation lane, and a scope allow-list, so an
-  unpinned affected version is denied despite them.
-
-An operator may still raise a /specific/ allow above a /specific/ deny, or the reverse,
-with an explicit precedence. The per-type defaults set only the out-of-the-box
-ordering.
+@DenyIfCve@ is the one deny below an allow, so an operator's exact-identity pin overrides
+an advisory deny.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
@@ -205,36 +175,29 @@ quarantine that yields to an explicit allow-list and to every deny.
 defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
-{- | Default precedence of 'AllowIfRemediatesCve': above the passive age quarantine.
-That is the point of the fast lane, because a security fix is admitted immediately
-instead of waiting out @min-age@. It is below 'AllowScope', so a scoped package an
-operator already trusts never pays the advisory probe. The more explicit rule also keeps
-the audit credit.
+{- | Default precedence of 'AllowIfRemediatesCve': above the passive age quarantine, so a
+security fix is admitted immediately instead of waiting out @min-age@. Below
+'AllowScope', so a scoped package an operator already trusts never pays the advisory probe.
 -}
 defaultAllowIfRemediatesCvePrecedence :: Int
 defaultAllowIfRemediatesCvePrecedence = 150
 
-{- | Default precedence of 'AllowScope': above the passive age quarantine. An explicit
-allow-list of a trusted internal scope is a stronger statement than the time gate. It
-still sits below every deny.
+{- | Default precedence of 'AllowScope': above the passive age quarantine, because an
+explicit allow-list is a stronger statement than the time gate. Still below every deny.
 -}
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
 
-{- | Default precedence of 'DenyIfCve': above the passive age gate, the remediation
-lane, and a scope allow-list, so the rule denies an affected version despite them. It sits
-deliberately /below/ 'AllowByIdentity', so an operator's exact-identity allow can pin a
-specific version past a false-positive or risk-accepted advisory. It is the one deny
-type that is not strictly above every allow (see 'defaultPrecedence').
+{- | Default precedence of 'DenyIfCve': above the age gate, the remediation lane, and a
+scope allow-list, but deliberately below 'AllowByIdentity', so an operator's identity pin
+can override an advisory deny. It is the one deny type not strictly above every allow.
 -}
 defaultDenyIfCvePrecedence :: Int
 defaultDenyIfCvePrecedence = 225
 
-{- | Default precedence of 'AllowByIdentity': the top of the allow band, because an
-exact identity is the most explicit allow an operator can state. It sits above
-'DenyIfCve', so the identity pin overrides an advisory deny. It still sits strictly
-below the 'DenyInstallTimeExecution' and 'DenyByIdentity' defaults, so the
-install-script deny and revocation keep the last word.
+{- | Default precedence of 'AllowByIdentity': the top of the allow band, above 'DenyIfCve'
+so an identity pin overrides an advisory deny, and below 'DenyInstallTimeExecution' and
+'DenyByIdentity' so those two keep the last word.
 -}
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
@@ -251,33 +214,23 @@ every other rule (including explicit allow-lists), to serve as a hard revocation
 defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
 
-{- | Ambient information a rule may need that is not part of the package itself. It
-carries the wall-clock "now" for age calculations, and the active advisory database's
-identity for a decision's audit trail.
--}
+-- | Ambient information a rule may need that is not part of the package itself.
 data EvalContext = EvalContext
     { ctxNow :: UTCTime
     -- ^ The wall-clock "now" for age-based rules.
     , ctxAdvisoryEtag :: Maybe DbEtag
-    {- ^ The advisory database 'DbEtag' active when this request was admitted, or
-    'Nothing' when none is loaded, or on a path that does not consult one. It is the
-    artifact a denial's audit line names as active at emit. It is deliberately __not__
-    "the database this decision was evaluated against", because a shadow-swap may land
-    mid-request. Resolved once per request.
+    {- ^ The advisory database 'DbEtag' a denial's audit line names as active at emit, or
+    'Nothing' when none is loaded. It is deliberately __not__ the database the decision was
+    evaluated against, because a shadow swap may land mid-request.
     -}
     }
     deriving stock (Eq, Show)
 
-{- | Assemble the ambient evaluation context: the __one__ assembly point for every
-consumer, the packument sweep, the tarball gate, and the mirror worker's ingest
-re-evaluation. What feeds a decision is therefore defined once, not at each call site.
+{- | Assemble the ambient evaluation context, the one assembly point every consumer shares.
 
-The single point holds two contract terms. 'ctxNow' must come from the injected clock
-the mount's decisions share ('Ecluse.Core.Server.Context.pdNow', which the worker's
-bundle reuses), never an ad-hoc 'Data.Time.getCurrentTime'. The age gate then cannot
-drift between contexts. 'ctxAdvisoryEtag' is __audit-only__ and never enters a rule's
-decision, so a consumer that emits no audit line passes 'Nothing' without changing any
-decision.
+'ctxNow' must come from the mount's injected clock ('Ecluse.Core.Server.Context.pdNow'),
+never an ad-hoc 'Data.Time.getCurrentTime', so the age gate cannot drift between
+consumers. 'ctxAdvisoryEtag' is audit-only and never enters a rule's decision.
 -}
 mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
 mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
@@ -285,15 +238,12 @@ mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
 -- | A human-facing reason a rule attaches to its result, kept for the audit trail.
 type Reason = Text
 
-{- | What a single rule returns for a single package version: a __deterministic__
-verdict. The rule computes its answer over the package, and for the effectful rules the
-advisory database, then returns one of these. A rule cannot manufacture an
-'Unavailable'. That is the distinction the resilience harness turns on. A verdict is a
-decided value the harness takes at face value, never a fault it retries.
+{- | What a single rule returns for a single package version: a __deterministic__ verdict.
+A rule cannot manufacture an 'Unavailable', so the harness takes every verdict at face
+value and never retries one.
 
-A verdict is __decisive__ iff it is 'Allow', 'Deny', or @'CannotVet' 'FailDeny' _@.
-'NoDecision' and @'CannotVet' 'FailNoDecision' _@ are __non-decisive__ no-ops, and the
-engine collects their reasons, in boot order, for the deny-by-default audit trail.
+A verdict is __decisive__ iff it is 'Allow', 'Deny', or @'CannotVet' 'FailDeny' _@. The
+engine collects every other reason, in boot order, for the deny-by-default audit trail.
 -}
 data RuleVerdict
     = -- | This rule admits the package (with a human reason). Decisive.
@@ -313,16 +263,12 @@ data RuleVerdict
       CannotVet FailureAlignment Reason
     deriving stock (Eq, Show)
 
-{- | The outcome the resilience harness produces for one rule. Either the rule
-'Decided', carrying any 'RuleVerdict' taken at face value, or the harness could not
-obtain a verdict at all. An 'Unavailable' evaluation means the rule's IO threw, timed
-out, or its source circuit breaker was open. Only the harness constructs 'Unavailable',
-never a rule. The retry\/breaker machinery therefore provably reacts only to a fault the
-harness itself observed, never to a verdict a rule deliberately returned.
+{- | The outcome the resilience harness produces for one rule. Only the harness constructs
+'Unavailable', so the retry and breaker machinery reacts only to a fault the harness itself
+observed, never to a verdict a rule returned.
 
-Decisive iff it credits a 'Decision': a decisive 'RuleVerdict', or an
-@'Unavailable' _ 'FailDeny' _@. A non-decisive verdict, or an @'Unavailable' _
-'FailNoDecision' _@, is a no-op whose reason the engine gathers for the audit trail.
+An evaluation is decisive iff it credits a 'Decision': a decisive 'RuleVerdict', or an
+@'Unavailable' _ 'FailDeny' _@. The engine gathers every other reason for the audit trail.
 -}
 data RuleEvaluation
     = -- | The rule returned a verdict, and the harness takes it at face value.
@@ -339,9 +285,9 @@ data RuleEvaluation
 {- | How a rule aligns when it cannot vet a version, or its evaluation faults.
 
 There is deliberately __no @FailAllow@__: a failed or uncomputable check must never
-/admit/ unvetted bytes. A rule whose verdict is load-bearing for safety fails
-__closed__ ('FailDeny'). A remediation or allow-direction rule whose missing signal
-should not block availability fails __open__ ('FailNoDecision').
+/admit/ unvetted bytes. A rule whose verdict is load-bearing for safety fails closed
+('FailDeny'). A remediation or allow-direction rule whose missing signal should not block
+availability fails open ('FailNoDecision').
 -}
 data FailureAlignment
     = -- | __Fail closed.__ An uncomputable result is decisive: the version is not admitted.
@@ -350,10 +296,8 @@ data FailureAlignment
       FailNoDecision
     deriving stock (Eq, Show)
 
-{- | The overall decision for a package version against a whole rule set.
-
-A 'Decision' credits the deciding rule by __name__ ('Text'). A rule's stable identity is
-its name (see 'ruleName'), independent of how the engine evaluates it.
+{- | The overall decision for a package version against a whole rule set. It credits the
+deciding rule by __name__ (see 'ruleName'), independent of how the engine evaluates it.
 -}
 data Decision
     = -- | Admitted by the named rule, with its reason.
@@ -373,14 +317,11 @@ data Decision
       Undecidable Transience Reason
     deriving stock (Eq, Show)
 
-{- | Whether an unavailability is expected to resolve on its own.
+{- | Whether an unavailability is expected to resolve on its own. The serve status mapping
+turns on this distinction alone: 'WillResolve' is a @503@, 'WontResolve' a @500@.
 
-This is the single distinction the serve status mapping turns on. A transient cause
-('WillResolve') is worth retrying, so it is a @503@. A permanent or internal one
-('WontResolve') is not, so the serve layer never dresses it up as a retryable @503@. It
-is a @500@. The resilience harness sets it from the nature of the failure. An upstream
-outage, rate limit, timeout, or open breaker is transient. An internal or parse fault
-is not.
+The resilience harness treats an upstream outage, rate limit, timeout, or open breaker as
+transient, and an internal or parse fault as not.
 -}
 data Transience
     = {- | Transient: a retry may succeed (an advisory source briefly down, a

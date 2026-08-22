@@ -89,12 +89,9 @@ import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
-{- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
-rewritten @dist.tarball@ path. Every structural component must pass
-"Ecluse.Core.Server.Route.isSafeComponent": the scope and base name either side of an
-@\@scope\/@ prefix, or the whole name when unscoped. Splitting on the scope separator
-first means a legitimate @\@scope\/name@'s own @\'\/\'@ is not itself judged unsafe.
-A slash anywhere else (a traversal, a path injection) is caught.
+{- | Whether an upstream-controlled packument @name@ is safe to interpolate into a rewritten
+@dist.tarball@ path. Splitting an @\@scope\/name@ first lets that name's own slash pass, so
+a slash anywhere else (a traversal, a path injection) is still refused.
 -}
 safeName :: Text -> Bool
 safeName name = all isSafeComponent components
@@ -105,24 +102,15 @@ safeName name = all isSafeComponent components
              in if T.null base then [name] else [scope, T.drop 1 base]
         Nothing -> [name]
 
-{- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the
-client fetches the artifact back through this mount rather than directly from
-upstream.
+{- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the client
+fetches the artifact back through this mount. The @{file}@ is the tarball URL's last path
+segment, kept verbatim so the bytes a client integrity-checks do not change.
 
-The caller supplies @prefix@: the mount's @{base}\/{pkg}@, the externally-visible base
-URL joined with the package's URL form. The @{file}@ is the existing tarball URL's last
-path segment, the artifact filename, kept verbatim so the bytes a client
-integrity-checks do not change.
+Total, lossless, and idempotent: a version with no @dist@, no @tarball@ string, or no
+filename segment is left unchanged, and every unmodelled key is relayed.
 
-Total and lossless. The rewrite leaves a version untouched when it has no @dist@
-object, no @tarball@ string, or a @tarball@ with no filename segment. It relays every
-unmodelled key unchanged. Rewriting is __idempotent__: a second pass derives the same
-@{file}@ and so produces the same URL.
-
-A @{pkg}@ read from a document's own @name@ is __upstream-controlled__, so the caller
-must gate it component-wise through "Ecluse.Core.Server.Route.isSafeComponent" before
-it reaches the prefix. 'assembleMergedPackument' performs that gate as it places each
-surviving version, and a caller building its own prefix owns it.
+@prefix@ is the mount's @{base}\/{pkg}@. A @{pkg}@ read from a document's own @name@ is
+upstream-controlled, so the caller must gate it through 'safeName' first.
 -}
 rewriteVersion :: Text -> Value -> Value
 rewriteVersion prefix = \case
@@ -141,30 +129,13 @@ rewriteDist prefix = \case
             Object (KeyMap.insert "tarball" (String (prefix <> "/-/" <> file)) dist)
     other -> other
 
-{- | Assemble the served packument from a 'MergePlan' and the raw source documents.
-Rebuild @versions@, @dist-tags@, and @time@ from the plan onto the base document,
-rewriting each surviving version's @dist.tarball@ under @mountBase@ in the same pass.
-Other top-level keys come from the base document.
+{- | Assemble the served packument for @mountBase@ from a 'MergePlan' and the raw source
+documents. The plan owns @versions@, @dist-tags@, and @time@, and every other top-level key
+comes from the base document.
 
-The decision ran over the projected 'Ecluse.Core.Package.PackageInfo's, the typed
-views of the /same/ documents. The assembly reads the raw @Value@s, so unmodelled
-fields survive (see the module header). Each surviving version's object comes from the
-source that won its key ('mpSurvivors'). The assembly drops a survivor whose source
-object is missing rather than fabricating one, so the result stays coherent with the
-plan by construction. The @dist-tags@ object is the plan's reconciled map
-('mpDistTags': @latest@ resolved, absent-target tags dropped). The @time@ object is the
-plan's surviving-version instants ('mpTime', rendered as normalised ISO-8601) plus the
-base document's non-version @created@\/@modified@ bookkeeping.
-
-The tarball rewrite applies 'rewriteVersion' to each surviving version as the assembly
-places it. The assembly therefore builds the versions object once, and no second
-whole-document pass rebuilds it. 'safeName' gates the interpolated prefix on the base
-document's own @name@, and an unusable name means no rewrite.
-
-The caller decides what to do with an empty plan. An empty 'mpSurvivors' assembles an
-empty @versions@ object. A non-object base document contributes no top-level keys and
-no bookkeeping (the plan-owned keys are still assembled), so the result is always an
-object.
+The assembly reads the raw @Value@s rather than the typed projections, so unmodelled fields
+survive. A survivor whose source object is missing drops out, never a fabricated one. The
+result is always an object, even for an empty plan or a non-object base document.
 -}
 assembleMergedPackument :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
@@ -182,18 +153,14 @@ assembleMergedPackument mountBase bySource plan base =
         Object o -> o
         _ -> mempty
 
-    -- The per-version tarball rewrite, resolved once for the whole assembly:
-    -- 'rewriteVersion' under the @{base}/{pkg}@ prefix, over the base document's
-    -- safe-name-gated self-reported @name@. No usable or safe name -> no rewrite.
+    -- 'safeName' gates the document's own upstream-controlled @name@ before it reaches the URL.
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = case stringField "name" baseObject of
         Just pkg | safeName pkg -> rewriteVersion (joinUrlPath mountBase pkg)
         _ -> id
 
-    -- Each surviving version's object comes from the raw @Value@ of the source that
-    -- won the key. The served bytes are therefore the winning upstream's, unmodelled
-    -- keys and all. The rewrite runs as this step places each version. A survivor
-    -- whose source object is missing drops out, never a fabricated one.
+    -- Each survivor's object is the raw @Value@ of the source that won the key, unmodelled
+    -- keys and all. A survivor whose source object is missing drops out, never fabricated.
     survivingVersions :: KeyMap Value
     survivingVersions =
         KeyMap.fromList
@@ -202,11 +169,8 @@ assembleMergedPackument mountBase bySource plan base =
             , Just object <- [versionObjectFrom sid version]
             ]
 
-    -- Each source's raw @versions@ object, extracted once per source.
-    -- 'versionObjectFrom' runs once per surviving version, up to the packument's
-    -- version cap. Resolving the source's @versions@ object inside it would
-    -- re-extract the same object on every version. Hoisting it here leaves each
-    -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
+    -- Hoisted so each survivor costs one inner lookup. Resolving a source's @versions@ object
+    -- inside 'versionObjectFrom' would re-extract it once per version.
     versionsBySource :: Map SourceId (KeyMap Value)
     versionsBySource = Map.mapMaybe versionsObjectOf bySource
 
@@ -214,9 +178,7 @@ assembleMergedPackument mountBase bySource plan base =
     versionObjectFrom sid version =
         Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
 
-    -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
-    -- string). The plan has already resolved @latest@ and dropped absent-target
-    -- tags over the union.
+    -- The plan has already resolved @latest@ and dropped absent-target tags over the union.
     distTags :: KeyMap Value
     distTags =
         KeyMap.fromList
@@ -234,10 +196,8 @@ assembleMergedPackument mountBase bySource plan base =
                 | (version, t) <- Map.toList (mpTime plan)
                 ]
 
-    -- The base @time@ map carries one entry per published version (up to the
-    -- packument's version cap) plus the @created@\/@modified@ bookkeeping keys.
-    -- Look those two keys up directly rather than filtering the whole map. That is a
-    -- pair of lookups, not a full traversal of every version's publish time.
+    -- Two direct lookups, not a traversal: the base @time@ map carries one entry per published
+    -- version alongside the @created@\/@modified@ bookkeeping keys.
     bookkeepingTime :: KeyMap Value
     bookkeepingTime = case KeyMap.lookup "time" baseObject of
         Just (Object timeObject) ->
@@ -250,11 +210,9 @@ assembleMergedPackument mountBase bySource plan base =
         _ -> mempty
 
 {- | npm's served-document __assemble__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'). Project each per-source
-'CachedDoc' and the precedence-winning base document into npm's 'Value', replay the plan
-through 'assembleMergedPackument', then inject the assembled 'Value' back. The neutral
-pipeline threads the documents opaquely. The projection and injection are npm's
-boundary.
+('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'). The neutral pipeline threads the
+documents opaquely, so projecting them into npm's 'Value' and injecting the result back is
+npm's boundary.
 -}
 assembleMergedDocument :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
 assembleMergedDocument mountBase bySource plan base =
@@ -267,10 +225,8 @@ assembleMergedDocument mountBase bySource plan base =
 serialiseMergedDocument :: CachedDoc -> LByteString
 serialiseMergedDocument = encode . npmValue
 
--- Project a served document back to npm's 'Value'. The single disposition for the
--- projection boundary: a document npm did not inject falls back to the empty object.
--- That is a benign miss, contributing no keys and no versions. The npm adapter is the
--- only injector, so this default is never taken in practice.
+-- npm is the only injector, so the empty-object fallback never runs in practice. It is a
+-- benign miss: no keys and no versions.
 npmValue :: CachedDoc -> Value
 npmValue = fromMaybe (Object mempty) . snd npmCached
 
@@ -285,15 +241,13 @@ versionsObjectOf = \case
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
 
--- Render a publish time as the ISO-8601 instant npm serves in its @time@ map. This
--- goes through the hot-path renderer (byte-for-byte 'iso8601Show' parity), because it
--- runs once per surviving version per request.
+-- The @time@ map renders once per surviving version per request, so it goes through the
+-- hot-path renderer, which holds byte-for-byte 'iso8601Show' parity.
 renderTime :: UTCTime -> Text
 renderTime = renderIso8601Utc
 
-{- | Apply a function to the value at @key@ in an object, only when that key is
-present. A missing key stays absent, never fabricated, preserving lossless
-passthrough. The function itself decides what to do with a non-object value.
+{- | Apply a function to the value at @key@, only when the object already carries that key.
+A missing key stays absent, never fabricated, so passthrough stays lossless.
 -}
 adjustObject :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
 adjustObject key f o = case KeyMap.lookup key o of

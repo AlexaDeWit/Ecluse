@@ -51,109 +51,56 @@ import Data.Text qualified as T
 import Ecluse.Core.Security.Authority (HostPort (..), hostPortAddress)
 import Ecluse.Core.Security.IpLiteral (IpAddr (IpV4, IpV6), parseIpLiteral)
 
-{- | The @host:port@ pairs the host guards authorise, each host normalised to its
-canonical key.
+{- | The @host:port@ pairs the host guards authorise, each host already canonicalised
+by 'allowedHostPorts', its only constructor.
 
-The type is opaque, and 'allowedHostPorts' is its only constructor. A value of this
-type therefore carries the proof that every entry is already canonicalised.
-'isAllowedUpstreamHost' canonicalises only the /incoming/ host, and an un-normalised
-configuration set cannot bypass the match. Each entry authorises exactly its own pair.
-An entry built from a URL with no explicit port authorises port 443 alone, since
-'hostPortAddress' bakes the default in. It never authorises the same host on another
-port.
+An entry authorises exactly its own pair, and one built from a URL with no explicit port
+authorises port 443 alone.
 -}
 newtype AllowedHostPorts = AllowedHostPorts (Set HostPort)
     deriving stock (Eq, Show)
 
-{- | Normalise a set of configured upstream authorities to the canonical key form
-the host guards take, yielding an 'AllowedHostPorts'.
+{- | Normalise configured upstream authorities to the canonical key form the host guards
+match on (see 'canonicalHostKey').
 
-A plain DNS name folds to lower case, since hostnames are case-insensitive. The guards
-therefore match an incoming host against the configuration however either was spelled.
-A host that parses as an IP literal also renders to its single canonical literal (see
-'canonicalHostKey'). Equivalent spellings of one address (compressed versus expanded
-IPv6, differing case) therefore collapse to one key. An operator who opts in
-@0:0:0:0:0:0:0:1@ therefore matches a literal @::1@ rather than missing it on a textual
-difference. Ports are already numeric and pass through untouched.
+Equivalent spellings of one IP literal collapse to one key, so an operator who opts in
+@0:0:0:0:0:0:0:1@ matches an incoming @::1@.
 -}
 allowedHostPorts :: Set HostPort -> AllowedHostPorts
 allowedHostPorts = AllowedHostPorts . Set.map canonicalEntry
   where
     canonicalEntry (HostPort host port) = HostPort (canonicalHostKey host) port
 
-{- | Whether @target@ dials one of the configured upstream authorities.
+{- | Whether @target@ dials one of the configured upstream authorities. It is the first
+guard on every outbound fetch, and the allowlist half of the SSRF gate. Pair it with
+'isBlockedTarget' for the internal-range half.
 
-This is the first guard on every outbound fetch. The proxy talks to its configured
-private\/public upstreams and mirror target and nothing else. A target derived from a
-packument's @dist.tarball@, or from anywhere else, is fetched only if its host and
-effective port appear together in @allowed@. Matching the pair rather than the host
-alone is load-bearing, because the fetch dials the full authority. An allowlisted host
-on an attacker-chosen port (@registry.npmjs.org:9443@) is an unauthorised target, not
-a variant of an authorised one. The host match is exact and case-insensitive, since
-DNS hostnames are. Ports compare numerically, and 'hostPortAddress' already folded an
-absent port and a written @:443@ to the same value. An empty host is never allowed.
-This is the allowlist half of the SSRF gate. Pair it with 'isBlockedTarget' for the
-internal-range half.
-
-The allowlist is an 'AllowedHostPorts', so it is already normalised and only the
-incoming host folds here. That fold uses the same 'canonicalHostKey' the set was built
-with, so an IP-literal entry matches however either side spells the address.
+Matching the @host:port@ pair rather than the host alone is load-bearing: an allowlisted
+host on an attacker-chosen port (@registry.npmjs.org:9443@) is an unauthorised target.
 -}
 isAllowedUpstreamHost :: AllowedHostPorts -> HostPort -> Bool
 isAllowedUpstreamHost (AllowedHostPorts allowed) (HostPort host port) =
     not (T.null host) && HostPort (canonicalHostKey host) port `Set.member` allowed
 
-{- | Whether @host@ is an internal address the proxy must not fetch.
+{- | Whether @host@ is an internal-address literal the proxy must not fetch: the fixed
+'blockedRanges' plus the operator's @ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@.
 
-A proxy sits in a privileged network position. An attacker who can steer a fetch (see
-the module header) aims it at addresses only the proxy can reach. Those are the cloud
-instance-metadata endpoint (@169.254.169.254@), loopback, and the private network
-(RFC1918). This parses @host@ as a literal IP and tests it against these ranges.
-
-* Link-local @169.254.0.0\/16@, which contains the @169.254.169.254@ metadata address,
-  and IPv6 @fe80::\/10@.
-* Loopback @127.0.0.0\/8@ and IPv6 @::1@.
-* Unspecified \/ this-host @0.0.0.0\/8@ and IPv6 @::@. @0.0.0.0@ is not a no-op target.
-  On Linux a connect to it reaches a loopback-bound service, so the block must cover it
-  alongside @127.0.0.0\/8@.
-* RFC1918 private @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@.
-* CGNAT shared @100.64.0.0\/10@ (RFC 6598), carrier-grade NAT space some cloud fabrics
-  route internally.
-* IPv6 unique-local @fc00::\/7@ (RFC 4193), the private-network IPv6 analogue, which
-  contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@.
-* Every range in @additionalRanges@, the operator-configured extension of this fixed
-  set (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@). It is a deployment's own internal
-  space this module cannot know about in advance.
-
-A @host@ that is not an IP literal (a DNS name) is not blocked here. The
-'isAllowedUpstreamHost' allowlist constrains name-based targets instead. The
-resolve-to-internal class is an allowlisted name resolving to an internal address. The
-validating-TLS manager closes it by authenticating the dialled host
-('Ecluse.Core.Security.Egress'), not by re-testing the resolved IP. This pure check
-blocks only an internal IP literal written into the host.
+An attacker who steers a fetch aims it at addresses only the privileged proxy reaches, the
+cloud metadata endpoint above all. A DNS name is not blocked here: the host allowlist and
+the validating-TLS manager ('Ecluse.Core.Security.Egress') close that class.
 -}
 isBlockedTarget :: [IPRange] -> Text -> Bool
 isBlockedTarget additionalRanges host =
     maybe False (isBlockedIP additionalRanges . ipAddrToIP) (parseIpLiteral host)
 
-{- | Whether an 'IP' falls in a blocked internal range: the fixed 'blockedRanges'
-set together with the caller-supplied @additionalRanges@.
+{- | Whether an 'IP' falls in a blocked internal range: 'blockedRanges' plus the
+caller-supplied @additionalRanges@.
 
-The single source of record for the internal-range decision, used by the literal block
-('isBlockedTarget') on the @dist.tarball@ host gate. For an IPv6 address that embeds
-an IPv4 address, this first decodes the embedded IPv4 and tests that against the IPv4
-ranges. An embedded internal literal (e.g. @::ffff:169.254.169.254@, or its NAT64
-spelling @64:ff9b::a9fe:a9fe@) is a recognised SSRF smuggling form. The IPv4 block
-must catch it rather than let it slip through as an unrelated IPv6 address.
-
-The decoded embeddings are exactly the fixed-prefix forms. They are IPv4-mapped
-@::ffff:a.b.c.d@ and IPv4-compatible @::a.b.c.d@ (RFC 4291), the NAT64 well-known
-prefix @64:ff9b::\/96@ (RFC 6052), and the NAT64 local-use prefix @64:ff9b:1::\/48@
-(RFC 8215). An RFC 6052 network-specific translation prefix cannot be enumerated here.
-The operator chooses it from their own unicast space, so nothing in the address marks
-it as an embedding. An operator whose fabric translates under such a prefix extends
-the block with @additionalRanges@ (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@)
-instead.
+An IPv6 address embedding an IPv4 one decodes first and tests against the IPv4 ranges,
+because an embedded internal literal (@::ffff:169.254.169.254@, or its NAT64 spelling
+@64:ff9b::a9fe:a9fe@) is a recognised SSRF smuggling form. An RFC 6052 network-specific
+prefix cannot be enumerated here, so an operator whose fabric translates under one extends
+the block with @additionalRanges@.
 -}
 isBlockedIP :: [IPRange] -> IP -> Bool
 isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
@@ -167,14 +114,9 @@ isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges
             IPv6 a -> a `isMatchedTo` r
             IPv4 _ -> False
 
-{- The internal ranges the proxy refuses to fetch from, as @iproute@ CIDR values:
-the unspecified \/ this-host, loopback, link-local, RFC1918, CGNAT-shared, and IPv6
-unique-local blocks. Declared once, and consulted by 'isBlockedIP' alone, so the
-blocked set is a single cross-cutting invariant. The set blocks @0.0.0.0\/8@ because
-@0.0.0.0@ reaches a loopback-bound service on Linux. The link-local @169.254.0.0\/16@
-range contains the @169.254.169.254@ cloud-metadata endpoint, and @fc00::\/7@ contains
-the AWS IMDSv6 endpoint @fd00:ec2::254@. An operator cannot narrow this fixed set,
-only extend it through the @additionalRanges@ 'isBlockedIP' also consults.
+{- The internal ranges the proxy refuses to fetch from, as @iproute@ CIDR values. An
+operator cannot narrow this fixed set, only extend it through the @additionalRanges@
+'isBlockedIP' also consults.
 -}
 blockedRanges :: [IPRange]
 blockedRanges =
@@ -191,62 +133,43 @@ blockedRanges =
     , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
     ]
 
-{- | Parse one operator-configured @ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@ entry (a
-single CIDR, e.g. @"203.0.113.0\/24"@ or @"2001:db8::\/32"@) into an 'IPRange', or
-'Nothing' for anything malformed.
+{- | Parse one operator-configured @ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@ entry (one
+CIDR, e.g. @"203.0.113.0\/24"@) into an 'IPRange', or 'Nothing' for anything malformed.
 
-A total wrapper over @iproute@'s own 'Read' instance for 'IPRange'. That instance's
-underlying parser (@parseIPRange@) already fails by returning no parse rather than
-calling 'error', so 'readMaybe' over it is safe. The partial 'IsString' instance is
-not safe. 'blockedRanges' relies on it for its own compile-time literals, where a
-malformed literal is a build-time error rather than runtime input. This is the only
-way the config decoder turns operator text into an 'IPRange'. A malformed entry must
-fail closed at boot, never be silently dropped or accepted as an unblocked range.
+This is total: @iproute@'s 'Read' instance returns no parse rather than calling 'error',
+unlike its partial 'IsString' instance. A malformed entry must fail closed at boot, never
+be silently dropped or accepted as an unblocked range.
 -}
 parseBlockedRange :: Text -> Maybe IPRange
 parseBlockedRange = readMaybe . toString
 
-{- Convert a recognised literal to an @iproute@ 'IP' for the membership test.
-The four IPv4 octets become an 'IPv4', and the eight 16-bit groups an 'IPv6'. The
-embedded-IPv4 decode stays with 'isBlockedIP' ('decodeEmbeddedV4'). An embedding
-literal therefore rides here as the IPv6 it textually is, and decodes only at the
-range test.
+{- Convert a recognised literal to an @iproute@ 'IP' for the membership test. The
+embedded-IPv4 decode stays with 'isBlockedIP', so an embedding literal rides here as the
+IPv6 it textually is.
 -}
 ipAddrToIP :: IpAddr -> IP
 ipAddrToIP = \case
     IpV4 a b c d -> IPv4 (toIPv4 (map fromIntegral [a, b, c, d]))
     IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))
 
-{- The canonical comparison key for a host: a normalised string the host guards
-match an 'AllowedHostPorts' entry on. A host that parses as an IP literal renders to
-the @iproute@ canonical literal through @IP@ 'show'. Equivalent spellings of one
-address therefore collapse to one key. Compressed versus expanded IPv6 (@::1@ is
-@0:0:0:0:0:0:0:1@), embedded IPv4, and hex case all canonicalise identically. Anything
-that is not a literal (a DNS name) is merely case-folded, since hostnames are
-case-insensitive.
+{- The canonical comparison key for a host: an IP literal renders through @iproute@'s
+'show', so equivalent spellings of one address (@::1@, @0:0:0:0:0:0:0:1@) collapse to one
+key. A DNS name is only case-folded.
 
-This is the single canonicaliser feeding the host allowlist. 'allowedHostPorts' builds
-the configured set with it, and 'isAllowedUpstreamHost' folds the queried host with it.
-A configured entry therefore matches a literal address whichever representation either
-uses. Pointing both sides at one @show@ is what guarantees they render identically. A
-second, separate canonicaliser could drift.
+Both host guards fold through this one function, which is what guarantees a configured
+entry and a queried host render identically.
 -}
 canonicalHostKey :: Text -> Text
 canonicalHostKey host = case parseIpLiteral host of
     Just addr -> show (ipAddrToIP addr)
     Nothing -> T.toLower host
 
-{- Decode an IPv6 address that carries one of the fixed-prefix IPv4 embeddings
-'isBlockedIP' documents. The result is the embedded IPv4 (the low 32 bits), so the
-IPv4 ranges test it. Any other address returns unchanged. Over the sixteen octets
-'fromIPv6b' yields, the IPv4-mapped form is ten zeros then @ff ff@, and the
-IPv4-compatible form is twelve zeros. The NAT64 well-known prefix is
-@00 64 ff 9b@ then eight zeros. The RFC 8215 local-use prefix is
-@00 64 ff 9b 00 01@ with the middle six octets unconstrained. Every \/96 within
-the \/48 embeds in the low 32 bits. Testing an embedded internal literal against
-the IPv6 ranges instead would let @::169.254.169.254@ or @64:ff9b::a9fe:a9fe@
-through. No embedding prefix falls in a blocked IPv6 range, so the decode is
-load-bearing for the SSRF block.
+{- Decode the fixed-prefix IPv4 embeddings so 'isBlockedIP' tests the embedded address
+against the IPv4 ranges: IPv4-mapped and IPv4-compatible (RFC 4291), and the NAT64
+well-known @64:ff9b::\/96@ (RFC 6052) and local-use @64:ff9b:1::\/48@ (RFC 8215) prefixes.
+
+No embedding prefix falls in a blocked IPv6 range, so without this decode
+@::169.254.169.254@ and @64:ff9b::a9fe:a9fe@ would pass the SSRF block.
 -}
 decodeEmbeddedV4 :: IP -> IP
 decodeEmbeddedV4 = \case
@@ -262,16 +185,11 @@ decodeEmbeddedV4 = \case
         _ -> IPv6 v6
     ip -> ip
 
-{- | The trust of the origin a @dist.tarball@ comes from. The operator-configured
-private upstream is 'TrustedOrigin'. The public upstream, and every artifact location
-an attacker could influence, is 'UntrustedOrigin'.
+{- | The trust of the origin a @dist.tarball@ comes from.
 
-The distinction governs the literal internal-range block alone, the cheap pure
-defence-in-depth on the host gate. The trusted private origin is deliberately exempt
-from it. A private registry may legitimately live on an internal address, and only an
-untrusted target can be steered there. It never relaxes the host allowlist or the
-same-authority clause, which gate both origins identically. A trusted origin's
-@dist.tarball@ is therefore still constrained to its own allowlisted @host:port@ pair.
+The distinction governs the literal internal-range block alone, since a private registry
+may legitimately live on an internal address. It never relaxes the host allowlist or the
+same-authority clause, which gate both origins identically.
 -}
 data Origin
     = -- | The operator-configured private upstream: exempt from the literal internal-range block.
@@ -280,40 +198,16 @@ data Origin
       UntrustedOrigin
     deriving stock (Eq, Show)
 
-{- | Whether a @dist.tarball@ authority may be fetched, given the origin's trust,
-the policy, the authority that served the packument, and the configured guards.
+{- | Whether a @dist.tarball@ authority may be fetched, given the origin's trust and the
+authority that served the packument. It composes on top of the host allowlist and the
+internal-range block, and over-blocking is the fail-safe.
 
-This is the policy half of the @dist.tarball@ defence. It never replaces the host
-allowlist or the literal internal-range block, but composes /on top/ of them. The
-answer is the conjunction of three independent checks, and over-blocking is the
-fail-safe.
-
-* The target must be on the @host:port@ allowlist (@allowed@), as every outbound
-  target is. A @dist.tarball@ authority off the allowlist is refused outright.
-* Its host must not be an internal-address literal: the fixed range set plus the
-  operator-configured @additionalBlockedRanges@, the cheap pure defence-in-depth. A
-  'TrustedOrigin' is exempt from this clause (see 'Origin').
-* It must equal the packument origin's authority, host and port both. An upstream's
-  @dist.tarball@ is server-chosen data (see @docs\/architecture\/security.md@ → "Why
-  @dist.tarball@ is honoured"). A tarball on a /different/ host, or on the same host
-  at a different port, is refused even when that pair is allowlisted. The one
-  equivalence is the ecosystem's own canonical artifact hosts (@ecosystemHosts@,
-  adapter-declared: npm has none, PyPI's is @files.pythonhosted.org@). A host the
-  ecosystem serves artifact bytes from by design passes the same-authority clause,
-  while staying allowlist-gated and internal-range-gated like any other target.
-
-The allowlist and same-authority clauses gate both origins identically. Only the
-internal-range clause is origin-aware. A 'TrustedOrigin' is never let past its own
-allowlisted authority, or onto a /different/ one than its metadata.
-
-Hosts compare by their canonical key, as the host guards do: case-folded, and for an
-IP-literal the single canonical literal (see 'canonicalHostKey'). Ports compare
-numerically, with no written port meaning 443 ('hostPortAddress'). Either side
-arriving as 'Nothing' refuses the fetch: that is a URL from which no dialable
-authority could be extracted. An authority the gate cannot compare is an authority it
-never authorises. The packument side is the authority the metadata was fetched from.
-Only its equality to the target matters, so it needs no re-validation here: it was
-already gated when the packument was fetched.
+An upstream's @dist.tarball@ is server-chosen data (@docs\/architecture\/security.md@ →
+"Why @dist.tarball@ is honoured"), so the target must equal the packument authority, host
+and port both. The one equivalence is @ecosystemHosts@, the hosts an ecosystem serves
+artifact bytes from by design (npm has none, PyPI's is @files.pythonhosted.org@). The
+packument authority is only compared, never re-validated here: it was already gated when
+the packument itself was fetched.
 -}
 tarballHostAllowed ::
     -- | The ecosystem's canonical artifact authorities, same-host-equivalent.
@@ -339,10 +233,8 @@ tarballHostAllowed ecosystemHosts origin allowed additionalBlockedRanges packume
         -- A missing comparable authority on either side authorises nothing (fail closed).
         _ -> False
   where
-    -- The literal internal-range block is origin-aware. The trusted private origin is
-    -- exempt, and it gates the untrusted origin against the fixed set plus the
-    -- operator's additional ranges. It classifies the bare host: an address is
-    -- internal regardless of the port it is dialled on.
+    -- The internal-range block classifies the bare host: an address is internal whatever
+    -- port it is dialled on. The trusted private origin is exempt (see 'Origin').
     internalRangeOk :: HostPort -> Bool
     internalRangeOk target = case origin of
         TrustedOrigin -> True
@@ -354,31 +246,24 @@ sameAuthority :: HostPort -> HostPort -> Bool
 sameAuthority (HostPort host port) (HostPort host' port') =
     canonicalHostKey host == canonicalHostKey host' && port == port'
 
-{- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate.
-'tarballHostGate' extracts them once from a mount's three configured upstream URLs, so
-the serve path parses no URL and builds no host set per request.
+{- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate, extracted
+once by 'tarballHostGate'.
 
-The serve-path tarball gate is on the hot artifact path: every private hit and every
-public leg runs it. Its allowlist and the private\/public upstream authorities never
-change after boot, since the mount's configuration fixes them. Recovering them from
-the base URLs per request would rebuild an 'AllowedHostPorts' and re-parse the base
-authorities several times per artifact. Precomputing them here into a
-'TarballHostGate' collapses that to a few field reads. The only genuinely per-request
-authority is the dynamic public @dist.tarball@, still parsed at the call site.
+The gate runs on the hot artifact path, and a mount's configuration fixes its allowlist
+and upstream authorities at boot. Precomputing them collapses a per-request set rebuild
+and URL re-parse to a few field reads. Only the dynamic public @dist.tarball@ authority is
+parsed per request.
 -}
 data TarballHostGate = TarballHostGate
     { thgAllowlist :: AllowedHostPorts
-    {- ^ The canonicalised @host:port@ allowlist of the mount's configured upstreams
-    (public, private, and mirror target), plus the ecosystem's canonical artifact
-    hosts. It is the same set every outbound fetch is gated against (security.md
-    invariant 2). An upstream URL that writes no port contributes its host at 443.
+    {- ^ The canonicalised @host:port@ allowlist of the mount's configured upstreams plus the
+    ecosystem's artifact hosts, the same set every outbound fetch is gated against
+    (security.md invariant 2). A URL that writes no port contributes its host at 443.
     -}
     , thgEcosystemHosts :: AllowedHostPorts
-    {- ^ The ecosystem's canonical artifact authorities, supplied by the adapter: npm
-    has none, PyPI's is @files.pythonhosted.org@. These are hosts the ecosystem serves
-    artifact bytes from by design, the one same-host equivalence
-    'tarballHostAllowed' grants. Also folded into 'thgAllowlist', and still
-    internal-range-gated like any target.
+    {- ^ The ecosystem's canonical artifact authorities, supplied by the adapter: npm has
+    none, PyPI's is @files.pythonhosted.org@. They are the one same-host equivalence
+    'tarballHostAllowed' grants, and they stay internal-range-gated like any target.
     -}
     , thgPrivateHostPort :: Maybe HostPort
     {- ^ The private upstream's authority, extracted once. 'Nothing' when the configured
@@ -392,17 +277,12 @@ data TarballHostGate = TarballHostGate
     deriving stock (Eq, Show)
 
 {- | Build the 'TarballHostGate' from the ecosystem's canonical artifact hosts and a
-mount's private, public, and mirror-target upstream URLs. The artifact-host set is
-empty for an ecosystem, like npm, that serves artifacts from its registry host. The
-allowlist is the canonicalised set of their @host:port@ pairs, and 'hostPortAddress'
-extracts the private and public authorities once each.
+mount's private, public, and mirror-target upstream URLs. The composition root calls it
+once per mount.
 
-The composition root calls it once per mount, and test fixtures call it too. The result
-rides on the serve dependencies, so the per-request gate reads fields rather than
-re-parsing URLs. A URL from which no authority extracts contributes no allowlist entry
-and leaves its reference authority 'Nothing'. A misconfigured upstream therefore
-authorises nothing rather than something unintended. An absent private upstream or
-mirror target (a serve-only mount) composes identically, contributing nothing.
+A URL from which no authority extracts contributes no allowlist entry and leaves its
+reference authority 'Nothing', so a misconfigured or absent upstream authorises nothing
+rather than something unintended.
 -}
 tarballHostGate :: [Text] -> Maybe Text -> Text -> Maybe Text -> TarballHostGate
 tarballHostGate ecosystemHostUrls privateUrl publicUrl mirrorUrl =

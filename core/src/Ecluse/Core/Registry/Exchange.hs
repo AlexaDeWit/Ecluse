@@ -50,12 +50,9 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Security (LimitError, Limits, boundedRead)
 
-{- | Run a formed 'Request' over the manager and read its response body bounded
-against the budget. Every failure folds into the typed 'FetchFault' channel: a
-thrown transport exception through 'classifyTransport' as 'FetchTransport', an
-over-cap body as 'FetchBoundExceeded'. The transport wrap covers the __whole__
-exchange, the bounded body read included. A connection lost mid-body is therefore a
-pre-commit fault with a value representation, never a half-read response.
+{- | Run a formed 'Request' over the manager and read its response body bounded against the
+budget. The transport wrap covers the whole exchange, the bounded body read included, so a
+connection lost mid-body is a typed 'FetchFault', never a half-read response.
 -}
 boundedFetch :: Manager -> Limits -> Request -> IO (Either FetchFault RegistryResponse)
 boundedFetch manager limits request =
@@ -65,14 +62,9 @@ boundedFetch manager limits request =
             Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
             Right (Right response) -> Right response
 
-{- | Run a formed publish 'Request' over the manager and buffer the publication
-target's response bounded against the budget. Every failure folds into the typed
-'PublishRelayFault' channel: a thrown transport exception through 'classifyTransport'
-as 'RelayTransport', an over-cap body as 'RelayBoundExceeded'. The transport wrap
-covers the __whole__ exchange, the bounded body read included. A connection lost
-mid-body is therefore a pre-commit fault with a value representation, never a
-half-relayed response. The result carries the status the target answered, paired with
-the buffered body.
+{- | Run a formed publish 'Request' and buffer the target's response bounded against the budget.
+The transport wrap covers the whole exchange, the bounded body read included. A connection lost
+mid-body is therefore a typed 'PublishRelayFault', never a half-relayed response.
 -}
 boundedRelay :: Manager -> Limits -> Request -> IO (Either PublishRelayFault PublishRelayResponse)
 boundedRelay manager limits request =
@@ -81,18 +73,11 @@ boundedRelay manager limits request =
             Left httpErr -> Left (RelayTransport (classifyTransport httpErr))
             Right relayed -> relayed
 
-{- Read a response body chunk-by-chunk through 'boundedRead' against the budget.
-Within the cap, the whole body comes back as a 'RegistryResponse'. Across the budget,
-the 'LimitError' comes back as a value, never a truncated body. Shared by both
-exchanges: 'boundedFetch' returns it directly, 'boundedRelay' pairs it with the
-answered status. -}
+{- An overstep yields the 'LimitError' as a value, never a truncated body. -}
 readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
 readBoundedBody limits bodyReader =
     fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)
 
-{- Buffer the publication target's response to a relayed publish. Read the body
-bounded against the budget, then pair it with the status the target answered. An
-overstep is the typed 'RelayBoundExceeded'. -}
 readRelayResponse :: Limits -> Response BodyReader -> IO (Either PublishRelayFault PublishRelayResponse)
 readRelayResponse limits response =
     readBoundedBody limits (responseBody response) <&> \case

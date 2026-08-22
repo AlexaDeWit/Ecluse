@@ -24,54 +24,38 @@ import Data.Text.Lazy.Builder.Int qualified as TBI
 import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, toGregorian)
 import Data.Time.Format.ISO8601 (iso8601Show)
 
-{- | The text trimmed of surrounding whitespace, or 'Nothing' when nothing remains. An
-empty or all-whitespace value counts as absent: the idiom an environment lookup or an
-optional configuration field wants for "present but blank means unset". The surviving
-text comes back trimmed, so a caller never has to strip it a second time.
+{- | The text trimmed of surrounding whitespace, or 'Nothing' when nothing remains.
+An empty or all-whitespace value therefore counts as absent.
 -}
 nonBlank :: Text -> Maybe Text
 nonBlank t =
     let trimmed = T.strip t
      in if T.null trimmed then Nothing else Just trimmed
 
-{- | Drop a single trailing @\'\/\'@ from a URL base when present, leaving any other
-base untouched. It removes at most one slash, and is idempotent on a base that already
-carries none.
--}
+-- | Drop a single trailing slash from a URL base when present.
 stripTrailingSlash :: Text -> Text
 stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
 
-{- | Join a URL base and an already-encoded path with exactly one @\'\/\'@, tolerating
-one trailing slash on the base so the join never doubles it. It appends the path
-verbatim, and neither encodes nor validates it.
+{- | Join a URL base and an already-encoded path with exactly one slash, tolerating one
+trailing slash on the base. It appends the path verbatim, and neither encodes nor validates it.
 -}
 joinUrlPath :: Text -> Text -> Text
 joinUrlPath b path = stripTrailingSlash b <> "/" <> path
 
-{- | The last path segment of a slash-separated string: the text after the final
-@\'\/\'@, or the whole string when it carries none. 'Nothing' when that segment is
-empty (the string ends in a slash), so a caller supplies its own fallback rather
-than forming a segmentless path. This neither decodes nor validates the segment.
+{- | The text after the final slash, or the whole string when it carries none.
+'Nothing' when that segment is empty, so a caller supplies its own fallback.
 -}
 lastPathSegment :: Text -> Maybe Text
 lastPathSegment url =
     let afterLastSlash = snd (T.breakOnEnd "/" url)
      in if T.null afterLastSlash then Nothing else Just afterLastSlash
 
-{- | Render a 'UTCTime' as the ISO-8601 instant 'iso8601Show' produces, byte-for-byte,
-at a fraction of the allocation cost. It writes a handful of digits into a builder
-instead of running the general @time@ formatting machinery. The packument serve path
-re-renders one instant per surviving version per request, since it rebuilds the served
-@time@ map from the merge plan's normalised instants. The formatter therefore sits on a
-hot loop that would otherwise pay the general machinery's cost thousands of times per
-request.
+{- | Render a 'UTCTime' byte for byte as 'iso8601Show' does, at a fraction of the
+allocation cost. The packument serve path renders one instant per surviving version per
+request, so this sits on a hot loop.
 
-The fast path covers the whole real-world domain: years 0-9999 and a time-of-day below
-86 400 seconds. An input outside it (an expanded-representation year, a leap-second
-reading) delegates to 'iso8601Show' itself. Parity is therefore total by construction,
-and property-tested byte-for-byte in @TextSpec@. The fractional second renders exactly
-as @iso8601Show@ does: omitted when zero, else the picosecond digits with trailing zeros
-trimmed.
+Years 0-9999 with a time-of-day below 86 400 seconds take the builder path. Anything
+else delegates to 'iso8601Show', so parity is total.
 -}
 renderIso8601Utc :: UTCTime -> Text
 renderIso8601Utc t@(UTCTime day dt)
@@ -114,9 +98,6 @@ renderIso8601Utc t@(UTCTime day dt)
         | otherwise =
             TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
 
-{- | Render an exception as 'Text' for a log line or error value. relude's
-'displayException' is over 'String'. This is the 'Text' form the log and error sites
-want, defined once rather than re-spelled at each call site.
--}
+-- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text
 displayExceptionT = toText . displayException

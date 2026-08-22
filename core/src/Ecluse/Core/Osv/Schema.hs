@@ -37,32 +37,13 @@ module Ecluse.Core.Osv.Schema (
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
-{- | The table-schema epoch: the version of the artifact's shape, shared by
-the Pilot writer and the proxy reader.
-
-Bump it only for a breaking change to the existing shape (a column rename, a semantic
-change, a key change). An additive change (a new column, a new table) must not bump
-it: a reader selects explicit columns, so an addition is invisible to it. A column
-exists exactly when the build populates it, so a reader learns what data an artifact
-offers from the schema itself.
+{- | The version of the artifact's shape, shared by the Pilot writer and the proxy
+reader. Bump it only for a breaking change to the existing shape, never for an additive
+one: a reader selects explicit columns.
 
 The epoch names the published artifact ('osvDbFileName'), and SQLite's @user_version@
-carries it as the artifact's stamp. A reader must reject an artifact whose stamp does
-not match its own compiled-in epoch, and keep its last known-good database.
-
-Epoch 2 widened the affected-set model. The ranges table gained a
-@last_affected_version@ column, an inclusive upper bound distinct from the exclusive
-@fixed_version@. The writer stores exact enumerated versions as points, and
-@severity@ became a numeric @REAL@ CVSS base score. A reader compiled for epoch 2
-requires those columns, so it rejects an epoch-1 artifact rather than reading it.
-
-Epoch 3 made the stored value types part of the contract. Both tables declare
-@STRICT@, so SQLite enforces each column's declared type at write time and
-@PRAGMA quick_check@ verifies the stored values against it. The reader accepts an
-artifact only after confirming that declaration ('osvTableSpecs'). Every value the
-reader decodes is therefore type-sound by construction. The ranges table's composite
-primary key became an equivalent unique index. Under @STRICT@ a primary-key column is
-implicitly @NOT NULL@, and the bound columns are legitimately absent.
+carries it as the artifact's stamp. A reader rejects an artifact whose stamp does not
+match its own compiled-in epoch and keeps its last known-good database.
 -}
 osvSchemaEpoch :: Int
 osvSchemaEpoch = 3
@@ -150,10 +131,8 @@ osvTableSpecs =
         }
     ]
 
-{- | A key of the artifact's @meta@ table (one @TEXT@ key\/value row per key).
-
-The table carries the artifact's provenance: which build produced it, from
-what source, and when.
+{- | A key of the artifact's @meta@ table, which holds one @TEXT@ key\/value row per key
+and carries the artifact's provenance.
 -}
 data MetaKey
     = -- | The Pilot application version that produced the artifact.

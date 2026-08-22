@@ -47,12 +47,8 @@ import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataReq
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
-{- | npm's mirror-write protocol codec. The presence probe reads the abbreviated
-packument and projects its version list. The publish assembles the
-packument-fragment @PUT@ ('npmPublishDocument' under 'publishRequest'), with the
-@dist@ digests picked from the re-admitted artifact's verified set. A @409@ answer
-is idempotent success: versions are immutable, so an already-present version is the
-write's goal already met.
+{- | npm's mirror-write protocol codec. The probe reads the abbreviated packument, and the
+publish @PUT@s a single-version packument fragment carrying the artifact's verified digests.
 -}
 npmPublishCodec :: PublishCodec
 npmPublishCodec =
@@ -68,10 +64,6 @@ npmPublishCodec =
         , pcPublishOutcome = classifyPublish
         }
 
-{- Map a publish response status onto success or a 'PublishFault'. A 2xx or a
-@409@ (already present, immutable) is success. Anything else is a retryable
-'PublishRejected' naming the status the job saw.
--}
 classifyPublish :: Int -> Either PublishFault ()
 classifyPublish code
     | code >= 200 && code < 300 = Right ()
@@ -87,14 +79,9 @@ sriOf = firstHashValue SRI
 sha1Of :: MirrorArtifact -> Maybe Text
 sha1Of = firstHashValue SHA1
 
-{- | Build the publish @PUT /{pkg}@ request. The body is the npm publish document
-the caller already serialised: a packument carrying the version manifest and the
-base64 tarball under @_attachments@. Carries the bearer token and a
-@Content-Type: application/json@ header.
-
-Fails with a 'UrlFormationError' only when the URL cannot be formed. A genuine
-write fault (a non-2xx, non-409 status) is the 'PublishError' that
-'Ecluse.Core.Registry.publishArtifact' reports.
+{- | Build the publish @PUT /{pkg}@ request from the already-serialised npm publish document,
+carrying the bearer token. Fails with a 'UrlFormationError' only when the URL cannot be formed,
+never for a write fault, which 'Ecluse.Core.Registry.publishArtifact' reports.
 -}
 publishRequest ::
     Text ->
@@ -119,26 +106,9 @@ publishRequest baseUrl token name document = do
                     : requestHeaders base
             }
 
-{- | Assemble the npm publish document for one version from its verified tarball
-bytes: the serialised body 'publishRequest' (hence
-'Ecluse.Core.Registry.publishArtifact') @PUT@s to @/{pkg}@.
-
-The document is the npm @PUT /{pkg}@ shape. It carries the package name and a
-single-version @versions@ map holding the version manifest: @name@, @version@, and a
-@dist@ with the integrity digests. It points @dist-tags.latest@ at that version, and
-base64-encodes the tarball under @_attachments@ with its byte @length@. A managed npm
-registry (CodeArtifact, Artifact Registry, Verdaccio) recomputes the served
-@dist.tarball@ location from the attachment, so the location is not carried.
-
-The integrity digests written into @dist@ are the __caller's__. The worker passes the
-serve-time-admitted digests it already verified the bytes against, so the published
-manifest's integrity matches exactly the bytes attached. The tarball @length@ is taken
-from the actual byte count, never a caller-declared size, so the attachment can never
-disagree with its own bytes.
-
-This is the inverse of the read-side decode in "Ecluse.Core.Registry.Npm.Wire", which
-deliberately does not model @_attachments@. Only this module constructs them, for the
-write.
+{- | Assemble the npm publish document for one version from its verified tarball bytes.
+The @dist@ digests are the caller's verified ones, so the manifest matches the attached bytes.
+A managed registry recomputes the served @dist.tarball@, so @dist@ carries only the filename.
 -}
 npmPublishDocument ::
     -- | The package being published.
@@ -178,9 +148,8 @@ versionManifestObject rendered versionText dist =
         , "dist" .= dist
         ]
 
--- The manifest's @dist@ descriptor: the tarball filename plus whichever of the
--- caller's verified digests are known. It omits an absent digest, never fabricates
--- one.
+-- The manifest's @dist@ descriptor: the tarball filename plus whichever of the caller's
+-- verified digests are known, never a fabricated one.
 distObject :: Text -> Maybe Text -> Maybe Text -> Aeson.Value
 distObject filename integrity shasum =
     object
@@ -203,17 +172,11 @@ attachmentObject tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
-{- | Every package name a first-party npm publish body declares as its own identity:
-the top-level @_id@ and @name@, and each @versions.\<v\>.name@. Only string-valued
-name slots are read, because a non-string slot is no name claim. A body that does not
-decode to a JSON object declares no readable name (the empty list). The base64
-@_attachments@ are never decoded.
+{- | Every package name a first-party npm publish body declares as its own identity: @_id@,
+@name@, and each @versions.\<v\>.name@. A body that does not decode declares nothing.
 
-This is the read-side inverse of 'npmPublishDocument', which assembles the same
-@_id@\/@name@\/@versions@ shape for the mirror write. The ecosystem-neutral publish
-pipeline injects it as its adapter's declared-name extractor. The anti-shadowing
-body-name guard can then refuse a crafted body that names a package the scope guard
-never authorised. The neutral pipeline never learns npm's document schema.
+The publish pipeline's anti-shadowing guard checks these names, so a crafted body cannot claim
+a package the scope guard never authorised.
 -}
 declaredNames :: LByteString -> [Text]
 declaredNames body =

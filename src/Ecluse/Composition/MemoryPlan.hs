@@ -104,9 +104,7 @@ import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes, m
 import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, provenanceClause)
 
 {- | Whether the memory plan owes the in-memory queue a tenant, projected from the
-already-made backend selection ('Ecluse.Composition.MirrorQueue.planMirrorRuntime').
-Only the memory backend spends heap on queued jobs, while any mirroring at all
-charges the fixed enqueue buffer.
+backend selection ('Ecluse.Composition.MirrorQueue.planMirrorRuntime').
 -}
 data QueueTenantDemand
     = -- | No mount mirrors: no queue tenant, no enqueue buffer.
@@ -130,14 +128,8 @@ newtype PublishTenant = PublishTenant
     }
     deriving stock (Eq, Show)
 
-{- | The mirror-artifact tenant: the mirror worker's per-artifact byte cap. Present
-only when some mount mirrors.
-
-'matMaxBytes' is the tarball byte cap the worker's bounded fetch enforces
-('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'). The heap the combined invariant
-charges for it is that cap scaled by 'mirrorArtifactEnvelopeMultiplier'. That scale
-is what the buffered tarball, its base64 'Text', and the serialised publish document
-may transiently hold together.
+{- | The mirror-artifact tenant, present only when some mount mirrors. The plan charges
+its heap as 'matMaxBytes' scaled by 'mirrorArtifactEnvelopeMultiplier'.
 -}
 newtype MirrorArtifactTenant = MirrorArtifactTenant
     { matMaxBytes :: Int
@@ -145,10 +137,8 @@ newtype MirrorArtifactTenant = MirrorArtifactTenant
     }
     deriving stock (Eq, Show)
 
-{- | The resolved plan: every byte-valued bound the composition root builds with,
-each an explicit config value or its tenant-derived default. It also carries the
-degradation warnings the solver took and any explicit-override violations, the one
-refusal.
+{- | The resolved plan: every byte-valued bound the composition root builds with, each an
+explicit config value or its tenant-derived default. Override violations are the one refusal.
 -}
 data MemoryPlan = MemoryPlan
     { mpRuntimeReserveBytes :: Int
@@ -165,9 +155,8 @@ data MemoryPlan = MemoryPlan
     , mpAdmissionCapacity :: Int
     -- ^ @max 1 (min A_cpu A_mem)@. The composition root builds admission from it.
     , mpShedCapabilities :: Maybe Int
-    {- ^ A capability count to shrink to when the nursery is the memory pressure,
-    because each capability holds an allocation area. 'Nothing' when the live count
-    stands. The composition root applies it in-process.
+    {- ^ A capability count the composition root shrinks to when the nursery is the memory
+    pressure, because each capability holds an allocation area. 'Nothing' leaves the live count.
     -}
     , mpPublishTenant :: Maybe PublishTenant
     -- ^ Tenant 5, present only when a publication target is configured.
@@ -182,18 +171,14 @@ data MemoryPlan = MemoryPlan
     , mpDegradations :: [Text]
     -- ^ The shed-ladder warnings, in the order taken. Empty when everything fits.
     , mpOverrideViolations :: [Text]
-    {- ^ The pins named as the cause of a residual overshoot the plan cannot shed
-    around. Populated only when the override-free minimum fits the ceiling while the
-    pinned plan does not. The boot and check-config refuse on these (exit 2). A pin
-    that contributes nothing to the overshoot is never named. A pod too small even
-    without the pins boots: a degradation, not a refusal.
+    {- ^ The pins the plan blames for a residual overshoot it cannot shed around, from
+    'attributeOverrideViolations'. The boot and check-config refuse on these with exit 2.
     -}
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the memory plan and its boot lines. The inputs are the configuration
-groups, the effective runtime plan, the explicit admission override, the queue-tenant
-demand, and whether any mount publishes. The backend selection precedes this plan.
+{- | Resolve the memory plan and its boot lines. The caller selects the mirror-queue
+backend first, since 'QueueTenantDemand' projects from that choice.
 -}
 resolveMemoryPlan ::
     CacheSettings ->
@@ -225,10 +210,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
     -- the same predicate the fixed enqueue buffer rides.
     mirrors = queueDemand /= NoQueueTenant
 
-    {- The solved plan over a ceiling h: resolve each tenant's desired share, shed to
-    fit ('shedToFit'), then render the boot log from the outcomes. The arithmetic (the
-    demands, the ladder) stays apart from the prose, so the sum-within-ceiling
-    invariant reads without stepping through boot-log text. -}
+    {- The solved plan over a heap ceiling h. The arithmetic stays apart from the boot-log
+    prose, so the sum-within-ceiling invariant reads on its own. -}
     solvedPlan :: Int -> (MemoryPlan, [Text])
     solvedPlan h =
         ( MemoryPlan
@@ -254,9 +237,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         reserve = max runtimeReserveFloorBytes (h `div` runtimeReserveShareDiv)
         appHeap = max 0 (h - reserve)
 
-        -- Each shedable tenant's desired share, remembering which an explicit config
-        -- value pinned (an explicit bound never sheds, and a violation attributes to
-        -- it).
+        -- Each shedable tenant's desired share. An explicit config value never sheds, and a
+        -- violation attributes to it.
         cacheExplicit = csMaxBytes cacheSettings
         cacheDesired = fromMaybe (clamp cacheBytesFloor cacheBytesCap (appHeap * cacheSharePercent `div` 100)) cacheExplicit
 
@@ -268,9 +250,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         responseExplicit = limMaxResponseBytes limitsSettings
         materialShareBytes = appHeap * materialSharePercent `div` 100
 
-        -- Admission bounded jointly: the CPU capacity and what the material share
-        -- holds at the floor response cap. An explicit serveMaxInFlight is a pinned
-        -- claim (cpuAdmission already carries it).
+        -- Admission is bounded by the CPU capacity and by what the material share holds at the
+        -- floor response cap. An explicit serveMaxInFlight wins, already inside cpuAdmission.
         admissionMemBound = max 1 (materialShareBytes `div` envelope responseBytesFloor)
         admissionDesired = case explicitAdmission of
             Just n -> n
@@ -288,10 +269,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         depthExplicit = qsMemoryMaxDepth queueSettings
         depthDesired = fromMaybe (clamp queueDepthFloor queueDepthCap ((appHeap * queueSharePercent `div` 100) `div` mirrorJobEstimatedBytes)) depthExplicit
 
-        -- The mirror-artifact cap: an explicit config value, else the mirror-artifact
-        -- share divided by the envelope multiplier and capped. The charged envelope
-        -- (cap x multiplier) is therefore a bounded share of the heap. Charged only
-        -- when mirroring.
+        -- The charged envelope is the cap times the envelope multiplier, so dividing the share
+        -- back down keeps the mirror tenant a bounded share of the heap.
         artifactExplicit = limMaxArtifactBytes limitsSettings
         artifactCapDesired =
             fromMaybe
@@ -340,8 +319,6 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
         ceilingClause = provenanceClause ceilingProvenance
 
         -- Attribute a residual overshoot to the pins that cause it before refusing.
-        -- Substitute the pins out, all at once for the override-free minimum, then one
-        -- at a time. 'attributeOverrideViolations' then names the culprits.
         actualPins = (cacheExplicit, explicitAdmission, responseExplicit, requestExplicit, depthExplicit, artifactExplicit)
         overshootFor pins =
             max 0 (overrideMinShedSum (reserve + fixedBuffers) computedRequestDefault publishConfigured memoryBacked mirrors pins - h)
@@ -368,9 +345,8 @@ queueCharge memoryBacked d = if memoryBacked then d * mirrorJobEstimatedBytes el
 clamp :: (Ord a) => a -> a -> a -> a
 clamp lo hi = max lo . min hi
 
-{- No ceiling datapoint: the shipped fallbacks that predate the plan, and admission
-from CPU alone. There is no tenant arithmetic to check, since there is nothing to sum
-against. -}
+{- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.
+Nothing bounds the sum, so there is no tenant arithmetic to check. -}
 fallbackPlan ::
     CacheSettings ->
     LimitsSettings ->
@@ -465,9 +441,8 @@ data ShedOutcomes = ShedOutcomes
     , soResidualOvershoot :: Int
     }
 
--- One shed-ladder step: give up as much of a tenant's reclaimable bytes as the
--- residual overshoot demands. 'stepFinal' is the value after shedding, 'stepResidual'
--- the overshoot the next step inherits.
+-- One shed-ladder step: give up as much of a tenant's reclaimable bytes as the residual
+-- overshoot demands. 'stepResidual' is the overshoot the next step inherits.
 data ShedStep = ShedStep
     { stepShed :: Int
     , stepFinal :: Int
@@ -480,9 +455,8 @@ shedStep overshoot desired reclaimable =
   where
     shed = min overshoot reclaimable
 
--- Step 0: the mirror-artifact cap gives way first, to zero if needed (the plan
--- surrenders the background back-fill leg before the serve hot path). An explicit
--- cap never sheds.
+-- Step 0: the mirror-artifact cap gives way first, to zero if needed. The plan surrenders
+-- the background back-fill leg before the serve hot path.
 shedMirrorStep :: Int -> Int -> Maybe Int -> ShedStep
 shedMirrorStep overshoot mirrorDesired artifactExplicit =
     shedStep overshoot mirrorDesired (if isJust artifactExplicit then 0 else mirrorDesired)
@@ -500,9 +474,8 @@ data MaterialOutcome = MaterialOutcome
     , moResponse :: Int
     }
 
-{- Step 2: admission shrinks toward one in-flight operation at the floor response cap
-(never an explicit one). The surviving material share then fixes the admission and the
-response cap, the latter by the shared wire-to-resident ratio. -}
+{- Step 2: admission shrinks toward one in-flight operation at the floor response cap. The
+surviving material share then fixes both the admission and the response cap. -}
 shedMaterialStep :: Int -> Int -> Int -> Int -> Maybe Int -> Maybe Int -> MaterialOutcome
 shedMaterialStep overshoot materialDesired materialMinimum admissionDesired explicitAdmission responseExplicit =
     MaterialOutcome{moStep = step, moAdmission = admissionFinal, moResponse = responseFinal}
@@ -551,11 +524,8 @@ shedQueueStep overshoot memoryBacked depthDesired depthExplicit =
             | queueShedBytes > 0 -> max queueDepthFloor ((charge depthDesired - queueShedBytes) `div` mirrorJobEstimatedBytes)
             | otherwise -> depthDesired
 
-{- Walk the shed ladder over the resolved demands. Allocate every tenant at its desired
-share, then shed in priority order until the sum fits or every computed tenant is at
-its minimum. That order is the mirror-artifact cap first, then cache, then
-admission/material, then publish, then queue depth. The residual overshoot is what even
-the fully-shed plan cannot reclaim. -}
+{- Walk the shed ladder: every tenant at its desired share, then shed in step order until
+the sum fits or every tenant hits its minimum. The residual is what shedding cannot reclaim. -}
 shedToFit :: TenantDemands -> ShedOutcomes
 shedToFit d =
     ShedOutcomes
@@ -695,24 +665,13 @@ renderPlanLines d o ceilingClause cpuAdmissionLine cacheEntries entriesExplicit 
                     else " (computed from heap ceiling " <> show (tdCeiling d) <> ", " <> ceilingClause <> ")"
                )
 
-{- | A hypothetical set of explicit overrides for the memory plan, each pinned
-('Just') or substituted out ('Nothing'). In allocation order they are the cache byte
-bound, the serve admission, and the response byte cap. Then the request byte cap, the
-memory-queue depth, and the mirror-artifact byte cap.
+{- | Explicit overrides, each pinned ('Just') or substituted out ('Nothing'), in the plan's
+allocation order: cache bytes, admission, response bytes, request bytes, depth, artifact bytes.
 -}
 type OverridePins = (Maybe Int, Maybe Int, Maybe Int, Maybe Int, Maybe Int, Maybe Int)
 
-{- | The fully-shed minimum tenant sum for a hypothetical set of explicit pins. It is
-the pin-independent @base@: the runtime reserve plus the fixed buffers. Each shedable
-tenant adds its pinned value, or, un-pinned, the floor the shed ladder would reach.
-Those floors are cache to zero, admission to one operation, and response to its floor.
-The publish aggregate goes to the computed one-request floor, the queue depth to its
-floor, and the mirror-artifact envelope to zero, which sheds fully.
-
-@memoryBacked@ gates the queue tenant and @mirrors@ the mirror-artifact tenant. A
-durable or absent backend spends no heap on depth, and a non-mirroring deployment
-none on the artifact envelope, whatever the pin's value. Comparing this across pin
-sets attributes a residual overshoot to the pins that cause it.
+{- | The fully-shed minimum tenant sum for a pin set. Each unpinned tenant contributes
+the floor the shed ladder reaches. Comparing pin sets attributes an overshoot to its pins.
 -}
 overrideMinShedSum :: Int -> Int -> Bool -> Bool -> Bool -> OverridePins -> Int
 overrideMinShedSum base computedRequestFloor publishPresent memoryBacked mirrors (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth, pinArtifact) =
@@ -725,10 +684,8 @@ overrideMinShedSum base computedRequestFloor publishPresent memoryBacked mirrors
   where
     materialFloor = fromMaybe 1 pinAdmission * packumentOriginFanout * expandWireBytes (fromMaybe responseBytesFloor pinResponse)
 
-{- | Each explicit override in the pin set, paired with the pin set that substitutes
-only it out. That substitution is the value the shed ladder would reach without the
-pin. Each pair carries the operator's config-key name, in the plan's allocation
-order. An absent override contributes no substitution.
+{- | Each explicit override present in the pin set, paired with the pin set that
+substitutes only it out, and with the operator's config-key name.
 -}
 overrideSubstitutions :: OverridePins -> [(Text, OverridePins)]
 overrideSubstitutions (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth, pinArtifact) =
@@ -741,17 +698,8 @@ overrideSubstitutions (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth
         , ("limits.maxArtifactBytes", (pinCache, pinAdmission, pinResponse, pinRequest, pinDepth, Nothing)) <$ pinArtifact
         ]
 
-{- | Decide the override refusal from the residual overshoots, and name the culprits.
-Refuse only when the override-free minimum fits the heap ceiling (@freeOvershoot@ is
-zero) while the pinned plan does not (@overriddenOvershoot@ is positive). The pins
-are the cause. A pod too small even without them is a degradation the shed ladder
-already warned about, never a refusal.
-
-Name the pins whose individual removal makes the plan fit, meaning their one-out
-overshoot is zero. When none alone flips the verdict, because the pins only overshoot
-in combination, name them all rather than under-blame. The message reports only the
-overshoot the named pins are responsible for, since the override-free minimum fits
-within the ceiling.
+{- | Decide the override refusal and name the culprits. A pod too small even without the
+pins degrades instead of refusing. When no single pin flips the verdict, name them all.
 -}
 attributeOverrideViolations :: Int -> Int -> Int -> [(Text, Int)] -> [Text]
 attributeOverrideViolations heapCeiling overriddenOvershoot freeOvershoot perOverrideOvershoot
@@ -770,15 +718,8 @@ attributeOverrideViolations heapCeiling overriddenOvershoot freeOvershoot perOve
         [] -> map fst perOverrideOvershoot
         flips -> flips
 
-{- | The metadata cache's tunables: the configured TTL married to the plan's cache
-aggregate, split into the three stores' named sub-budgets __summing exactly to the
-aggregate__. The assembled share is the remainder.
-
-The full-packument store carries the decoded working set at 60%. The single-version
-store holds small flat entries at 15%, but four times the entry count. The assembled
-store's encoded documents take the remaining 25%. A fully-shed (zero) aggregate
-yields stores that retain nothing: every value takes the oversized pass-through and
-the proxy serves uncached.
+{- | The metadata cache's tunables: the configured TTL with the plan's cache aggregate
+split across the three stores. A zero aggregate stores nothing, so the proxy serves uncached.
 -}
 planCacheConfig :: CacheSettings -> MemoryPlan -> CacheConfig
 planCacheConfig cacheSettings plan =
@@ -807,9 +748,8 @@ cacheVersionSharePercent = 15
 cacheVersionEntriesFactor :: Int
 cacheVersionEntriesFactor = 4
 
--- Tenant shares of the application heap (the ceiling less the reserve), summing
--- to 95% so the computed plan fits by construction. Floors and explicit overrides
--- are what the shed ladder and the override check answer for.
+-- Tenant shares of the application heap (the ceiling less the reserve), summing to 95%
+-- so the computed plan fits by construction. Floors and pins are what the shed ladder answers for.
 cacheSharePercent :: Int
 cacheSharePercent = 30
 
@@ -822,26 +762,19 @@ publishSharePercent = 15
 queueSharePercent :: Int
 queueSharePercent = 5
 
--- The mirror-artifact tenant's share of the application heap. Kept modest for two
--- reasons. The charged envelope is this share: the worker's cap is it, divided by the
--- multiplier. The background back-fill leg must also not crowd the serve hot path. A
--- normally provisioned pod fits it without shedding, and a larger pod scales the cap
--- up to the mirrorArtifactBytesCap ceiling.
+-- The mirror-artifact tenant's share of the application heap. It is the charged envelope,
+-- kept small so the background back-fill never crowds the serve hot path.
 mirrorArtifactSharePercent :: Int
 mirrorArtifactSharePercent = 4
 
-{- The transient publish envelope one mirrored artifact holds, as a multiple of the
-buffered tarball. The worker holds the strict tarball (B) and decodes a base64 'Text'
-(~4/3 B). It then serialises a strict publish document embedding that base64 (~4/3 B
-plus lazy chunks). Those can coexist before GC at ~3.7x B, rounded up to 4 so the
-charged tenant never under-provisions the peak. -}
+{- The transient envelope one mirrored artifact holds, as a multiple of the buffered tarball B.
+The tarball, its base64 'Text', and the serialised publish document coexist at ~3.7x B before
+GC, rounded up here so the charged tenant never under-provisions the peak. -}
 mirrorArtifactEnvelopeMultiplier :: Int
 mirrorArtifactEnvelopeMultiplier = 4
 
--- The plan clamps the computed artifact cap to this ceiling, which is also the
--- no-ceiling fallback: the shipped 512 MiB bound that predates the plan. The charged
--- envelope is therefore at most this times the multiplier even on an enormous pod,
--- and the worker's cap never exceeds that shipped bound.
+-- The ceiling the plan clamps the computed artifact cap to, and the no-ceiling fallback.
+-- The charged envelope is therefore at most this times the envelope multiplier.
 mirrorArtifactBytesCap :: Int
 mirrorArtifactBytesCap = 512 * 1024 * 1024
 
@@ -858,9 +791,8 @@ runtimeReserveFloorBytes = 33554432
 nurseryCeilingShareDiv :: Int
 nurseryCeilingShareDiv = 4
 
--- The response-cap floor is the shipped policy value. Real-world packuments reach
--- multiple MiB, so a small pod must never compute itself below what is known to
--- admit them. The cap keeps one hostile document from monopolising a huge heap.
+-- Real-world packuments reach multiple MiB, so a small pod must never compute a response
+-- cap below this floor. 'responseBytesCap' stops one hostile document monopolising the heap.
 responseBytesFloor :: Int
 responseBytesFloor = 12582912
 
@@ -884,9 +816,8 @@ requestBytesFallback = 26214400
 publishAggregateFallbackRequests :: Int
 publishAggregateFallbackRequests = 4
 
--- The floor keeps a pod that can afford one caching a useful working set. The cap
--- exists because past a gigabyte of decoded metadata the TTL, not memory, is the
--- effective bound. The shed ladder may go below the floor, to zero.
+-- The floor keeps a pod that can afford one caching a useful working set. Past a gigabyte
+-- of decoded metadata the TTL bounds the cache, not memory. The shed ladder may still go to zero.
 cacheBytesFloor :: Int
 cacheBytesFloor = 67108864
 

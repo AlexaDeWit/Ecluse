@@ -66,93 +66,60 @@ import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment, ddPayloa
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
 
-{- | The composition-root record: the handles plus the shared HTTP manager and the
-metadata cache, from which the whole effectful shell is reached. See the module
-header for the no-SDK and sole-composition-root invariants it upholds.
+{- | The composition-root record from which the whole effectful shell is reached. The module
+header states the no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
     { envServeAdmission :: ServeAdmission
     {- ^ The process-wide brief-wait bound for metadata-bearing serve work
-    ("Ecluse.Core.Server.Admission"). 'serveRuntimeOf' projects it into every request
-    runtime, so all mounts share one aggregate cap and one waiting room.
+    ("Ecluse.Core.Server.Admission"). Every mount shares this one aggregate cap and waiting room.
     -}
     , envQueue :: MirrorQueue
     {- ^ The mirror-queue handle: the durable hand-off from the request path to the
     mirror worker.
     -}
     , envManager :: Manager
-    {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane: the
-    public-upstream metadata fetch and every artifact stream. Connection pooling and TLS
-    setup happen once and are reused across requests. This is the standard validating
-    TLS manager. Registry egress is https-only by construction, and certificate
-    validation authenticates the dialled host (see "Ecluse.Core.Security.Egress"). A
-    public @dist.tarball@ therefore cannot steer the proxy at an internal or rebound
-    address: that address has no CA-trusted certificate for the requested name.
+    {- ^ The shared validating-TLS 'Manager' for the __untrusted__ data plane: public
+    metadata fetches and artifact streams. Egress is https-only, so certificate validation
+    authenticates the dialled host. A public @dist.tarball@ cannot steer the proxy at an
+    internal or rebound address (see "Ecluse.Core.Security.Egress").
     -}
     , envPrivateManager :: Manager
-    {- ^ The @http-client@ 'Manager' for the __trusted__ private upstream. The private
-    base URL is operator-configured and is held to the same https-only requirement. This
-    manager is the same validating TLS manager as 'envManager'. The split stays because
-    the two origins differ in credential handling and in the @dist.tarball@ host gate's
-    trust, not in the manager itself (see @docs\/architecture\/security.md@).
+    {- ^ The 'Manager' for the __trusted__ private upstream, the same validating TLS manager as
+    'envManager' and held to the same https-only requirement. The split stays because the two
+    origins differ in credential handling and in the @dist.tarball@ host gate's trust.
     -}
     , envMetadataCache :: MetadataCache
-    {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Core.Server.Cache")
-    shared by the serve paths. One parsed packument is reused across the packument and
-    tarball-gating fetches, and concurrent resolutions of a hot package collapse to a
-    single upstream call.
+    {- ^ The metadata cache ("Ecluse.Core.Server.Cache"). One parsed packument serves the
+    packument and tarball-gating fetches. Hot-package resolutions collapse to one upstream call.
     -}
     , envLogEnv :: LogEnv
-    {- ^ The @katip@ logging environment (see "Ecluse.Runtime.Log"): the structured-log
-    stream every layer attaches context to, with its stdout scribe and format
-    chosen at startup.
+    {- ^ The @katip@ logging environment (see "Ecluse.Runtime.Log"): the structured-log stream
+    every layer attaches context to. Its stdout scribe and format are chosen at startup.
     -}
     , envTelemetry :: Telemetry
-    {- ^ The OpenTelemetry handle (see "Ecluse.Runtime.Telemetry"): the tracer and meter
-    providers spans and metrics are emitted through. By default, with
-    @ECLUSE_OBSERVABILITY__TELEMETRY@ unset, it is the inert no-op that emits nothing.
-    The composition root that supplies it brackets its provider lifecycle.
+    {- ^ The OpenTelemetry handle ("Ecluse.Runtime.Telemetry") that emits spans and metrics.
+    It is an inert no-op unless @ECLUSE_OBSERVABILITY__TELEMETRY@ is set.
     -}
     , envMetrics :: Metrics
-    {- ^ The @ecluse.*@ metric instruments (see "Ecluse.Runtime.Telemetry.Instruments"),
-    built once from 'envTelemetry' so every layer records through the same
-    instruments. Inert when telemetry is off (the instruments are created on the
-    SDK's no-op meter), so a layer records unconditionally.
+    {- ^ The @ecluse.*@ metric instruments ("Ecluse.Runtime.Telemetry.Instruments"), built once
+    from 'envTelemetry'. They are inert when telemetry is off, so a layer records unconditionally.
     -}
     , envDdContext :: DdContext
     {- ^ The resolved @dd@ log identity (@service@\/@env@\/@version@, see
-    "Ecluse.Runtime.Telemetry.Correlation"). It is installed as the initial @katip@
-    context at the request and worker entry points, so every line carries the @dd@
-    object. The active span's trace\/span ids are filled per line on top of it.
+    "Ecluse.Runtime.Telemetry.Correlation"). Each log line adds the active span's trace\/span ids.
     -}
     , envWorkerHeartbeat :: WorkerHeartbeat
-    {- ^ The mirror worker's consume-loop heartbeat: the time of its last successful
-    poll. This is the worker's own liveness surface, distinct from the server's HTTP
-    readiness. The liveness probe reads it, so a stalled worker is visible in
-    single-process health (see "Ecluse.Core.Worker").
+    {- ^ The time of the mirror worker's last successful poll ("Ecluse.Core.Worker"). The liveness
+    probe reads it, so a stalled worker shows up in health, separately from HTTP readiness.
     -}
     }
 
-{- | Assemble an 'Env' from its built handles, an explicit process-wide serve
-admission handle, and the two data-plane HTTP 'Manager's. There is one manager per
-origin: the untrusted public\/artifact fetches and the trusted private upstream, both
-the validating TLS manager. The executable passes the admission handle sized from its
-configured bound.
-
-The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are arguments rather
-than built here. A 'Manager' owns a connection pool whose lifetime the caller that also
-owns teardown should bracket (see 'withEnvWithAdmission'). Injecting them keeps 'Env'
-assembly pure of network, logging, and telemetry setup. A test then drives it against
-in-memory handle doubles: no sockets opened, no scribe attached to stdout, and no
-exporter initialised. Backend selection happens in the handle smart constructors that
-produce the arguments. This only gathers them.
+{- | Assemble an 'Env' from its built handles and the two data-plane 'Manager's, one per origin.
+The caller supplies each handle and owns its lifetime, so assembly opens no socket itself.
 -}
 newEnvWithAdmission :: ServeAdmission -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
 newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat = do
-    -- The metric instruments are built once here from the telemetry handle: on its
-    -- meter provider when enabled, on the SDK's no-op meter when off. They are inert
-    -- without an SDK. Building them here keeps this function the single source of
-    -- telemetry-derived state, so no caller threads a separate handle.
     metrics <- newMetrics telemetry
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
     -- same precedence table the exporter uses, so logs and traces share one identity.
@@ -171,11 +138,8 @@ newEnvWithAdmission admission queue manager privateManager metadataCache logEnv 
             , envWorkerHeartbeat = heartbeat
             }
 
-{- | Assemble an 'Env' carrying an explicit serve admission handle and run an action
-within its scope: the scope the server and worker run in. The composition root
-__borrows__ every resource it holds (the 'Manager's, the 'Telemetry' providers). The
-caller that supplied each one owns it and tears it down. This root therefore has
-nothing of its own to release and needs no teardown bracket.
+{- | Assemble an 'Env' and run an action in its scope, the scope the server and worker run in.
+The root borrows every resource it holds, so it has nothing to release and needs no bracket.
 -}
 withEnvWithAdmission ::
     (MonadIO m) =>
@@ -190,21 +154,11 @@ withEnvWithAdmission ::
     (Env -> m a) ->
     m a
 withEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
-    -- Whoever provided the connection pool behind each 'Manager' and the telemetry
-    -- providers behind the 'Telemetry' handle also releases them. That is the
-    -- manager's caller, and 'Ecluse.Runtime.Telemetry.withTelemetry' for the
-    -- providers. The handles hold no resource this root acquired, so assembly needs no
-    -- teardown bracket. The 'Env' simply scopes the action.
     env <- liftIO (newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat)
     action env
 
-{- | Project the request runtime ("Ecluse.Core.Server.Context.ServeRuntime") the serve
-path is closed over from the composition root. It carries the two data-plane managers,
-the metadata cache and mirror queue, and the OpenTelemetry-backed metric and tracing ports
-('Ecluse.Runtime.Telemetry.Instruments.metricsPortOf', 'Ecluse.Runtime.Telemetry.Tracing.tracingPortOf').
-Built at dispatch per request, gathering existing handles and wrapping the instrument
-and telemetry handles in their ports. The core pipeline then reads its backends through
-the core interface without depending on this application 'Env'.
+{- | Project the 'ServeRuntime' the serve path closes over, built per request at dispatch.
+The core pipeline reads its backends through it without depending on this application 'Env'.
 -}
 serveRuntimeOf :: Env -> ServeRuntime
 serveRuntimeOf env =
@@ -218,24 +172,9 @@ serveRuntimeOf env =
         , srTracing = tracingPortOf (envTelemetry env)
         }
 
-{- | Project the worker runtime ("Ecluse.Core.Worker.WorkerRuntime") the mirror worker
-is closed over from the composition root. It carries the mirror queue, the untrusted
-data-plane manager, the consume-loop heartbeat, and the
-OpenTelemetry-backed worker metric and tracing ports
-('Ecluse.Runtime.Telemetry.Instruments.workerMetricsPortOf',
-'Ecluse.Runtime.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry
-point, gathering existing handles and wrapping the instrument and telemetry handles in
-their worker ports. The core loop then reads its backends through the core interface
-without depending on this application 'Env'. This is the analogue of 'serveRuntimeOf'
-for the serve path.
-
-The per-ecosystem bundles are arguments rather than 'Env' fields. They derive from the
-served mounts and the resolved publish targets. Each bundle carries the same prepared
-rules, artifact request formation, and public origin the serve path gates with, plus
-that mount's married mirror-write capability. The composition root resolves them
-alongside the handles ('Ecluse.Composition.Worker.workerPoliciesFor'). The worker
-therefore re-runs current policy against a job before mirroring it, through one
-codepath with the serve gate. It publishes through the job ecosystem's own bundle.
+{- | Project the 'WorkerRuntime' the mirror worker closes over, the analogue of 'serveRuntimeOf'.
+'WorkerPolicies' is an argument because it derives from the served mounts. The worker re-runs
+it against a job before mirroring, through one codepath with the serve gate.
 -}
 workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =

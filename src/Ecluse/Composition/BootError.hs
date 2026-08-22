@@ -28,9 +28,8 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve qualified as Resolve
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
-{- | A reason the composition root refuses to start. Every case is a __fail-loud__
-boot failure. The root aggregates them, so a single run reports every problem an
-operator must fix.
+{- | A reason the composition root refuses to start. The root aggregates them, so a
+single run reports every problem an operator must fix.
 -}
 data BootError
     = -- | A rule policy did not resolve (surfaced by 'Ecluse.Config.loadConfig').
@@ -130,9 +129,7 @@ renderBootError = \case
         "memory plan refused: " <> T.intercalate "; " details
 
 {- | The full environment key of a mount-scoped setting
-(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it. The
-'Ecosystem'-typed wrapper over the shared 'Resolve.mountEnvKey', for the boot-error
-renderings above.
+(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it.
 -}
 mountEnvKey :: Ecosystem -> Text -> Text
 mountEnvKey eco = Resolve.mountEnvKey (ecosystemName eco)

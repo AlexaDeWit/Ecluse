@@ -70,18 +70,16 @@ runCheckConfig = do
         Just _ -> "config document: " <> toText docPath
         Nothing -> "config document: none at " <> toText docPath <> " (defaults and environment only)"
     config <- either (refuseWith . renderErrs renderConfigError) pure (loadConfig envVars docBlob)
-    -- The pure structural half of the composition (missing adapters, publish
-    -- policy). It runs the same validateComposition the boot's composeBindings runs,
-    -- so a configuration the proxy would refuse can never validate here.
+    -- The same validateComposition the boot's composeBindings runs, so a configuration the
+    -- proxy would refuse can never validate here.
     case validateComposition config of
         [] -> pass
         errs -> refuseWith (renderErrs renderBootError errs)
     let env = configApp config
         runtimeSettings = cfgRuntime env
-    -- The pure half of the posture chain: resolved exactly as a boot would, never
-    -- applied (no capability change, no re-exec). The sizings compute from the
-    -- plan a successful application would produce ('appliedRuntimePlan'): the
-    -- checker's own process posture says nothing about the boot it is checking.
+    -- Resolved exactly as a boot would, never applied (no capability change, no re-exec).
+    -- The sizings compute from 'appliedRuntimePlan', because the checker's own process
+    -- posture says nothing about the boot it is checking.
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit

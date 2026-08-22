@@ -26,9 +26,8 @@ module Ecluse.Core.Wire (
 
 import Data.Text qualified as T
 
-{- | The wire vocabulary of a named-enum type. The @(value, name)@ table is the single
-source of truth for 'parseWire'. The human noun names the set in the rejected-input
-message.
+{- | The wire vocabulary of a named-enum type. The @(value, name)@ table is the single source of
+truth for 'parseWire'.
 -}
 class WireVocab a where
     {- | The human noun for the vocabulary, e.g. @"log format"@. Names the
@@ -41,10 +40,9 @@ class WireVocab a where
     -}
     wireTable :: NonEmpty (a, Text)
 
-{- | Parse a wire name to its value through the 'wireTable', or report the accepted set
-on an unrecognised input. The failure message is
-@unknown \<kind\> "\<raw\>" (expected one of: \<names\>)@, with the names joined by a
-comma and a space in table order.
+{- | Parse a wire name to its value through the 'wireTable', or report the accepted set on an
+unrecognised input. The failure message is
+@unknown \\<kind\\> "\\<raw\\>" (expected one of: \\<names\\>)@, with the names in table order.
 -}
 parseWire :: forall a. (WireVocab a) => Text -> Either Text a
 parseWire raw =

@@ -45,20 +45,16 @@ import Ecluse.Core.Credential.Refresh (
     refreshingProvider,
  )
 
-{- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token.
-Thrown as a typed exception, not a stringly one, because the refresh breaker runs
-this leaf and catches 'SomeException' to count failures and trip. The leaf must
-throw to be seen, and a returned value would fight that contract (STYLE.md section
-11.4). Not exported for the same reason: the breaker sees it as a 'SomeException'. -}
+{- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token. The refresh
+breaker catches 'SomeException' to count failures, so this unexported leaf throws (STYLE.md 11.4).
+-}
 data CodeArtifactMintError = AuthorizationTokenMissing
     deriving stock (Eq, Show)
 
 instance Exception CodeArtifactMintError
 
-{- | What the CodeArtifact leaf needs to mint a token. The AWS /credentials/ for the
-call are __not__ here. 'AWS.discover' finds them the standard AWS way in the ambient
-environment: env vars, an instance or container role, SSO, or STS. The proxy never
-holds long-lived AWS keys itself.
+{- | What the CodeArtifact leaf needs to mint a token. The AWS /credentials/ are __not__ here:
+'AWS.discover' finds them in the ambient environment, so the proxy never holds long-lived AWS keys.
 -}
 data CodeArtifactConfig = CodeArtifactConfig
     { caRegion :: Text
@@ -70,38 +66,25 @@ data CodeArtifactConfig = CodeArtifactConfig
     the calling account ('Nothing' to default to the caller's account).
     -}
     , caDurationSeconds :: Maybe Natural
-    {- ^ Requested token lifetime in seconds (@900@-@43200@, that is, 15 min to 12 h).
-    'Nothing' lets CodeArtifact default it, which ties the token to the caller's
-    role-credential expiry. The refresh policy adapts to whatever expiry the minted
-    token carries, so this is only a preference.
+    {- ^ Requested token lifetime in seconds (@900@-@43200@, 15 min to 12 h). 'Nothing' lets
+    CodeArtifact default it to the caller's role-credential expiry. The refresh policy adapts
+    to the minted token's actual expiry, so this is only a preference.
     -}
     }
     deriving stock (Eq, Ord, Show)
 
-{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact
-@GetAuthorizationToken@. Discovers AWS credentials the standard way
-('AWS.discover') and hands the resulting 'AWS.Env' to 'providerForEnv'.
+{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact @GetAuthorizationToken@,
+discovering AWS credentials with 'AWS.discover'.
 
-Mints once eagerly to seed the cache. A misconfiguration (bad region, missing
-credentials, no permission) therefore fails here at construction, not on the first
-mirror write.
-
-The 'CredentialReporters' carry the telemetry observers the refresh policy records
-through: the mint breaker's state and each refresh outcome. Pass inert
-'CredentialReporters' for an unobserved provider.
+It mints once eagerly, so a misconfiguration (bad region, missing credentials, no permission) fails
+at construction rather than on the first mirror write.
 -}
 newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider reporters cfg =
     AWS.newEnv AWS.discover >>= \env -> providerForEnv reporters env cfg
 
-{- | Build the provider over a caller-supplied @amazonka@ 'Env', the boundary the
-production 'newCodeArtifactProvider' wraps with credential discovery. The config's
-region goes onto the 'Env'. Each mint then calls @GetAuthorizationToken@ through it
-under the cache\/proactive-refresh\/single-flight\/breaker policy of
-"Ecluse.Core.Credential.Refresh", so the token API is not re-hit per request. Each mint
-reports its refresh and breaker signals through the given 'CredentialReporters'.
-Exposed so a test can drive the real mint against an 'Env' aimed at a stub endpoint,
-with no live AWS.
+{- | Build the provider over a caller-supplied @amazonka@ 'Env', minting through the policy of
+"Ecluse.Core.Credential.Refresh". Exposed so a test can drive the mint against a stub endpoint.
 -}
 providerForEnv :: CredentialReporters -> AWS.Env -> CodeArtifactConfig -> IO CredentialProvider
 providerForEnv reporters env cfg =
@@ -134,8 +117,6 @@ mintToken env request = do
             , authExpiresAt = response ^. CA.getAuthorizationTokenResponse_expiration
             }
 
-{- | Set an optional request field only when present, leaving the @amazonka@
-default ('Nothing') in place otherwise.
--}
+-- | Set a request field only when the caller supplied a value.
 setOptional :: Lens' s (Maybe a) -> Maybe a -> s -> s
 setOptional l = maybe id (l ?~)

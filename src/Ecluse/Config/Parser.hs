@@ -39,12 +39,9 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
--- A registry URL entry must be https (mkRegistryUrl). It must also carry a dialable
--- authority: a host, and, when it writes a port, a decimal port in 1..65535. That
--- check is hostPortAddress, the same extraction the egress gate authorises by. The gate
--- treats an unextractable authority as refused, so an entry that fails here could
--- only ever produce a mount that refuses every fetch. Failing the boot names the
--- offending value instead.
+-- A registry URL must be https (mkRegistryUrl) and carry an authority the egress gate can
+-- extract (hostPortAddress). The gate refuses what it cannot extract, so an entry that fails
+-- here could only build a mount that refuses every fetch.
 parseRegistryUrl :: Value -> Parser RegistryUrl
 parseRegistryUrl = \case
     String t
@@ -90,11 +87,10 @@ parseUrl = withText "Url" $ \t ->
         Right u -> pure u
         Left e -> fail (T.unpack e)
 
-{- | An @http(s)@ URL Écluse itself serves or rewrites against (the public URL). The
-scheme must be http or https, and http stays legal for loopback development
-deployments. The authority must be dialable by the same extraction the egress gate
-authorises ('hostPortAddress'). A value that cannot name a real listener is therefore
-refused at load, instead of surfacing as rewritten artifact URLs no client can fetch.
+{- | An @http(s)@ URL Écluse itself serves or rewrites against, such as the public URL. Plain
+http stays legal for loopback development. The authority must be dialable by the same
+extraction the egress gate authorises ('hostPortAddress'), so a value no client could fetch
+fails at load.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
 parseHttpUrl field = \case

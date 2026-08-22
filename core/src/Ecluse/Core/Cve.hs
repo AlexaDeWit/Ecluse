@@ -61,27 +61,18 @@ import Ecluse.Core.Version (compareVersions, mkVersion)
 import Database.SQLite.Simple (Connection, SQLError, close)
 
 {- | An artifact version marker: S3's ETag, opaque text compared for equality only.
-Two objects with equal ETags carry equal bytes. An unchanged ETag therefore means
-"nothing to do", and a rejected artifact's remembered ETag means "still the same bad
-artifact". The ETag also names the exact advisory database behind a recorded rule
-decision.
+Two objects with equal ETags carry equal bytes, so an unchanged ETag means nothing to do.
 -}
 newtype DbEtag = DbEtag Text
     deriving stock (Eq, Show)
 
-{- | Advisory questions about one ecosystem's artifact: the read-only view a consumer
-(a rule evaluation) gets. It deliberately cannot release the underlying connection.
-That is the owning 'CveDb''s capability.
-
-Names and versions are the artifact's own vocabulary: the OSV wire package name
-(scope inline, for example @\@scope\/name@) and verbatim version text. A caller
-renders its domain values to that form at the boundary.
+{- | The read-only advisory view a rule evaluation gets, keyed by the OSV wire
+vocabulary: package name with scope inline (@\@scope\/name@) and verbatim version text.
 -}
 data CveLookup = CveLookup
     { cveRemediationProbe :: Text -> Text -> IO Bool
-    {- ^ Does any advisory for this package name carry this exact version string
-    as a fixed bound? One indexed B-tree traversal. A query fault throws the
-    confined 'CveQueryFault' (see its Haddock for the confinement contract).
+    {- ^ Does any advisory for this package name carry this exact version string as a fixed
+    bound? Throws the confined 'CveQueryFault' on a query fault.
     -}
     , cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
     {- ^ Every advisory range recorded against a package name. Rule predicates
@@ -89,22 +80,9 @@ data CveLookup = CveLookup
     -}
     }
 
-{- | A query the accepted advisory database could not answer. The SQLite edge threw
-mid-query, on an I\/O error on the database file or on a connection released out from
-under a straggling reader. The fault carries which handle field was asked and the
-rendered 'SQLError' for the log line. The artifact's __content__ can never produce this,
-because 'openCveDb' acceptance made the row decodes total, so it marks an
-infrastructural fault, not a data fault.
-
-A __confined typed exception__, the same shape as
-'Ecluse.Core.Credential.Refresh.CredentialError' at the breaker leaf. The handle
-throws it at the SQLite edge. One boundary absorbs it, the one every advisory query
-runs under: the rules engine's resilience harness
-('Ecluse.Core.Rules.runEffectfulRule'). The harness resolves the fault to an
-@Unavailable@ evaluation and advances the rule's circuit breaker. It never crosses
-that boundary, so no caller above the rules engine sees it. The alternative, an
-@Either@ on every 'CveLookup' field, would reshape every rule's evaluation type for a
-fault only the harness ever handles.
+{- | A query the accepted advisory database could not answer. Acceptance made every row
+decode total, so it marks an infrastructural fault. Only 'Ecluse.Core.Rules.runEffectfulRule'
+catches it, resolving it to an @Unavailable@ evaluation that advances the rule's breaker.
 -}
 data CveQueryFault = CveQueryFault
     { cqfQuery :: Text
@@ -123,35 +101,26 @@ data CveDb = CveDb
     { cveDbLookup :: CveLookup
     -- ^ The view consumers query through.
     , cveDbClose :: IO ()
-    {- ^ Release the artifact's connection. Owner-only: nothing may read the
-    artifact through this handle's view afterwards. __Never throws__. The handle
-    absorbs a close fault: the connection is going away either way. Every close
-    site wants that same disposition, a swap-out drain and an exception unwind
-    alike.
+    {- ^ Release the artifact's connection. Owner-only: nothing may read through this
+    handle's view afterwards. __Never throws__, since the connection is going away either way.
     -}
     , cveDbMeta :: [(Text, Text)]
-    {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build
-    timestamp, source URL, row count), snapshotted at open, key-sorted. The
-    audit surface that ties this handle's decisions to the exact database that
-    produced them.
+    {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build timestamp,
+    source URL, row count), snapshotted at open and key-sorted for the audit trail.
     -}
     }
 
-{- | Open an @osv.db@ artifact and build the owning handle over it, or reject the
-artifact ('CveDbRejected') with its connection already closed. Nothing an artifact
-carries can make this throw. Acceptance admits only a conformant @STRICT@ schema whose
-stored values the integrity walk verified, so the provenance decode below it is total.
-A fault below the artifact contract, such as an unopenable file, still throws, and
-then too the connection is already closed. An exception never leaks it.
+{- | Open an @osv.db@ artifact and build the owning handle over it, or reject it
+('CveDbRejected'). Nothing an artifact carries can make this throw, and a rejection or a
+throw below the artifact contract, such as an unopenable file, leaves the connection closed.
 -}
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile =
     openHardenedConnection eco dbFile >>= \case
         Left rejection -> pure (Left rejection)
         Right conn -> do
-            -- This side owns the connection until it hands the handle over.
-            -- The guard is the no-leak backstop for a fault below the artifact
-            -- contract, since acceptance already made the decode itself total.
+            -- No-leak backstop for a fault below the artifact contract. Acceptance already made the
+            -- provenance decode itself total.
             meta <- provenanceQuery conn `onException` close conn
             pure (Right (mkCveDb conn meta))
 
@@ -169,23 +138,14 @@ mkCveDb conn meta =
         , cveDbMeta = meta
         }
 
--- The SQLite edge: re-raise a mid-query 'SQLError' as the handle's confined
--- 'CveQueryFault', tagged with which field was asked. What escapes the handle is
--- then this module's closed vocabulary, not the driver's exception type.
+-- The SQLite edge: the driver's 'SQLError' never escapes the handle, only this module's
+-- confined 'CveQueryFault'.
 taggedQuery :: Text -> IO a -> IO a
 taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
-{- | Is this version inside the advisory segment's affected interval, under the
-ecosystem's version ordering? The interval is @introduced <= v@, bounded above by
-either @v < fixed@ (exclusive) or @v <= last_affected@ (inclusive), whichever the
-segment carries. It is unbounded when the segment carries neither. A point segment
-(@introduced == last_affected@) is affected only at that exact version.
-
-__Fail-closed.__ The remediation fast lane and the deny gate want the same polarity. A
-fix must not fast-track while it sits inside another advisory's affected range, and
-the gate must not admit an unvettable version. Every unprovable comparison, an
-unparseable bound or version, therefore counts as __inside__. Écluse grants trust only
-on evidence.
+{- | Is this version inside the advisory segment's affected interval, under the ecosystem's
+version ordering? A carried @fixed@ bound wins over @last_affected@. __Fail-closed:__ an
+unprovable comparison, from an unparseable bound or version, counts as __inside__.
 -}
 insideAffectedRange :: Ecosystem -> Text -> AdvisoryRange -> Bool
 insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
@@ -214,14 +174,9 @@ insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
         -- No upper bound: the range never ends.
         (Nothing, Nothing) -> True
 
-{- | Does this advisory segment's severity meet or exceed the threshold (a CVSS base
-score, 0 to 10)? 'arSeverity' is the artifact's normalised numeric score, or absent.
-Pilot reduces a CVSS vector or a qualitative label to a number at ingest.
-
-__Fail-closed for the deny direction.__ The threshold gates a deny, so a severity that
-cannot be shown to fall below it counts as meeting it. An unscored advisory ('Nothing',
-most of the npm malware feed) returns 'True'. Only a score strictly below the threshold
-returns 'False'.
+{- | Does this advisory segment's severity meet or exceed the threshold, a CVSS base score
+from 0 to 10? __Fail-closed:__ an unscored advisory ('Nothing', most of the npm malware
+feed) counts as meeting the threshold, because the threshold gates a deny.
 -}
 severityAtLeast :: Double -> Maybe Double -> Bool
 severityAtLeast threshold = maybe True (>= threshold)

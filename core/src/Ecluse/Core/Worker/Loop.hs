@@ -34,20 +34,12 @@ import Ecluse.Core.Worker.Job (processBatch)
 import Ecluse.Core.Worker.Types
 
 {- | The continuous consume loop: long-poll for a batch, process it, repeat, under the
-given supervision policy. The composition root names the wiring faults that must fail
-up rather than retry, and a test injects its own.
+given supervision policy.
 
-A failed poll arrives as the handle's typed 'Ecluse.Core.Queue.QueueFault' value. The
-step logs it, backs off, and polls again, so a queue outage cannot kill the worker
-thread. A successful poll advances the heartbeat, whether or not the batch was empty,
-and 'processBatch' advances it again after each completed job. A liveness probe
-therefore sees the loop alive even while a healthy worker grinds through a long batch
-of large artifacts. An idle queue reads as a healthy empty poll, not a stall.
-
-The heartbeat advances only on demonstrated progress, a successful @receive@ or a
-completed job. A worker that cannot poll at all, on a persistently faulting @receive@,
-keeps retrying but never advances the heartbeat. The heartbeat then goes stale and
-@\/livez@ fails, surfacing a fully-dead worker for the orchestrator to restart.
+A failed poll arrives as a typed 'Ecluse.Core.Queue.QueueFault' that the step logs and
+backs off from, so a queue outage cannot kill the worker thread. The heartbeat advances
+only on demonstrated progress, so a worker stuck on a persistently faulting @receive@
+goes stale and fails @\/livez@ for the orchestrator to restart.
 -}
 workerLoop :: SupervisionPolicy -> WorkerM Void
 workerLoop policy = superviseLoop policy pollAndProcess
@@ -57,11 +49,8 @@ workerLoop policy = superviseLoop policy pollAndProcess
         queue <- asks wrQueue
         liftIO (receive queue) >>= \case
             Left fault -> do
-                -- A failed poll: no heartbeat advance (the loop is retrying, not
-                -- healthy-idle), log the typed fault, and back off before the next
-                -- poll. The backoff retries a dead backend at a bounded rate. This is
-                -- the step's own pacing over the typed channel. The supervisor's
-                -- exponential backoff paces only residue.
+                -- No heartbeat advance: the loop is retrying, not healthy-idle. The supervisor
+                -- backs off only on residue, so this step paces the typed-fault channel itself.
                 logFM ErrorS (ls ("worker receive failed, backing off: " <> qfDetail fault))
                 backoff
             Right messages -> do

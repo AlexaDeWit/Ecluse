@@ -63,64 +63,44 @@ import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Version (Version)
 
-{- | One ecosystem's mirror-write protocol: the pure request formations and
-projections that differ per registry protocol, and nothing effectful. An adapter
-registers exactly one of these ('Ecluse.Core.Registry.Adapter.Types.AdapterPublish').
-The target endpoint and bearer arrive as arguments from the transport, so the codec
-holds no URL, no credential, and no connection state. The mirror target's protocol (a
-packument-fragment @PUT@, a multipart upload, a binary push) is entirely the codec's to
-shape through the 'Request' it forms.
+{- | One ecosystem's mirror-write protocol: the pure request formations and projections, nothing
+effectful. The endpoint and bearer arrive as arguments, so the codec holds no URL, credential, or
+connection state.
 -}
 data PublishCodec = PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
-    {- ^ Form the mirror-listing read for the presence probe: the package's
-    metadata at the given target endpoint, under the given bearer.
-    -}
+    -- ^ Form the metadata read the presence probe makes against the mirror target.
     , pcParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed metadata response onto the versions the mirror holds.
     , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> Version -> MirrorArtifact -> ByteString -> Either UrlFormationError Request
-    {- ^ Form the complete publish request for one verified artifact. Document
-    assembly and request shaping happen in one step, from the re-admitted artifact's
-    descriptor and the verified bytes.
-    -}
+    -- ^ Form the complete publish request for one verified artifact, document assembly included.
     , pcPublishOutcome :: Int -> Either PublishFault ()
-    {- ^ What the registry's status answer means for the write. Which statuses are
-    success, idempotent already-present answers included where the protocol has
-    them, and which are the retryable 'Ecluse.Core.Registry.PublishRejected'.
-    Protocol semantics, so it lives with the codec: registries disagree on how an
-    immutable re-publish answers.
+    {- ^ Classify the registry's status answer, counting an idempotent already-present as
+    success. Registries disagree on how an immutable re-publish answers, so the codec decides.
     -}
     }
 
-{- | The shared half of the mirror write: the trusted-path connection manager, the
-credential mint, and the response bound the probe reads under. The environment
-supplies it at construction: the composition root builds one per marriage from
-process-wide parts, exactly like the queue handle. Nothing here is ecosystem-shaped.
+{- | The ecosystem-agnostic half of the mirror write. The composition root builds one per
+marriage from process-wide parts.
 -}
 data MirrorTransport = MirrorTransport
     { ptManager :: Manager
     -- ^ The trusted-path connection manager the worker dials the mirror target through.
     , ptMintToken :: IO (Maybe Secret)
-    {- ^ Mint the bearer for one request, per call and never cached here. The
-    refresh, expiry, and breaker policy live behind the action
-    ("Ecluse.Core.Credential.Refresh"), so the marriage always writes under a
-    current token.
+    {- ^ Mint the bearer for one request. Nothing caches it here: refresh, expiry, and breaker
+    policy live behind the action ("Ecluse.Core.Credential.Refresh").
     -}
     , ptLimits :: Limits
     -- ^ The response bound the probe's metadata read is held to (fail-closed).
     }
 
-{- | The married mirror-write capability one worker bundle carries: the presence
-probe's read pair and the verified-bytes publish. Both are bound to one mirror-target
-endpoint under one credential mint. A record of functions (the Handle pattern). The
-worker consumes a plain handle and never sees the codec, the transport, or the
-adapter that contributed them.
+{- | The mirror-write capability one worker bundle carries, bound to one mirror-target endpoint
+under one credential mint. The worker never sees the codec, the transport, or the adapter.
 -}
 data MirrorPublish = MirrorPublish
     { mpProbeMetadata :: PackageName -> IO (Either FetchFault RegistryResponse)
-    {- ^ Read the package's metadata from the mirror target. Every failure is a
-    'FetchFault' value (an unformable URL, a bound breach, a transport fault), so
-    the probe's positive-confirmation fall-through is a total match.
+    {- ^ Read the package's metadata from the mirror target. Every failure is a 'FetchFault'
+    value, so the probe's fall-through match is total.
     -}
     , mpParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed response onto the versions the mirror holds.
@@ -131,12 +111,8 @@ data MirrorPublish = MirrorPublish
     -}
     }
 
-{- | Marry a protocol codec to the shared transport against one mirror-target
-endpoint. The transport executes what the codec forms. It mints the bearer per call,
-runs the request over the trusted manager, and reads the probe's body bounded. It
-folds a thrown transport failure into the typed channel, with 'classifyTransport' on
-both the probe's read and the write. It hands the write's status answer to the
-codec's own outcome classification.
+{- | Marry a protocol codec to the shared transport against one mirror-target endpoint. The
+transport mints a bearer per call and folds every thrown failure into the typed channel.
 -}
 newMirrorPublish :: MirrorTransport -> Text -> PublishCodec -> MirrorPublish
 newMirrorPublish transport targetUrl codec =
@@ -156,10 +132,6 @@ probeMetadata transport targetUrl codec name = do
         Right request ->
             boundedFetch (ptManager transport) (ptLimits transport) request
 
--- Execute the codec's publish over the transport: mint, form, PUT the whole
--- document, and let the codec classify the status answer. A thrown transport
--- failure folds through the shared 'classifyTransport' into the retryable
--- 'PublishTransport' value, exactly as the probe folds its own.
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name version artifact bytes = do
     token <- ptMintToken transport

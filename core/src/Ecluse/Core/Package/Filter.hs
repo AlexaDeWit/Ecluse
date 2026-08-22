@@ -86,11 +86,8 @@ import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
-{- | The decisions filtering a single public packument owns, for the adapter to
-replay onto the raw upstream @Value@. It carries only what the filter decides over
-the typed model, never a finished, re-serialisable document (see this module's
-header). The replay derives everything else from these fields: which stale tags to
-drop, which @time@ entries to prune.
+{- | The filtering decisions for one public packument, for the adapter to replay onto the raw
+upstream @Value@. It carries only decisions, never a finished, re-serialisable document.
 -}
 data FilterPlan = FilterPlan
     { fpSurvivors :: Set Text
@@ -98,33 +95,19 @@ data FilterPlan = FilterPlan
     exactly those the rules engine approved. Empty when no version survived.
     -}
     , fpLatest :: Maybe Version
-    {- ^ @dist-tags.latest@ resolved over the survivors by the shared selector: kept
-    as published while it survives, else repointed (stable-preferring) to the highest
-    survivor. 'Nothing' when nothing survives. When present it is always one of
-    'fpSurvivors', so the replay can point @latest@ at a key that is served.
+    {- ^ @dist-tags.latest@ resolved over the survivors: kept while it survives, else repointed
+    (stable-preferring) to the highest survivor. Always one of 'fpSurvivors', or 'Nothing'.
     -}
     , fpDecisions :: [Decision]
-    {- ^ Every version's 'Decision', in version-key order, for the no-survivors
-    status and denial body. The plan carries every version, including the admitted
-    ones, so the adapter can zip the decisions back onto the same-ordered versions.
+    {- ^ Every version's 'Decision', admitted ones included, in version-key order so the adapter can
+    zip them back onto the same-ordered versions. Feeds the no-survivors status and denial body.
     -}
     }
     deriving stock (Eq, Show)
 
-{- | Build a 'FilterPlan' from per-version 'Decision's already taken. The __effectful__
-tier feeds this path. It decides each version in IO (see "Ecluse.Core.Rules"), then hands
-the decisions here for the pure survivor and @latest@ resolution.
-'Ecluse.Core.Version.selectLatest' resolves @latest@ from the upstream-tagged @latest@ and
-the surviving versions. It keeps the tag while its target survives, and otherwise repoints
-it down to the highest stable survivor. It looks the upstream tag up among the versions,
-so a tag aimed at an absent version contributes nothing. The decision map is keyed by
-raw version string and __must__ cover exactly the packument's versions. A version with
-no decision does not survive.
-
-A version survives iff its decision is an 'Admitted'. Every other verdict drops it: a
-denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable'. A fail-closed
-undecidable version is therefore filtered out exactly like a denial, while
-'fpDecisions' still carries its decision for the no-survivors status.
+{- | Build a 'FilterPlan' from per-version 'Decision's already taken. The decision map __must__
+cover every version of the packument, because an undecided version does not survive.
+A version survives iff its decision is 'Admitted'. Every other verdict drops it, fail-closed.
 -}
 filterPlanFromDecisions :: Map Text Decision -> PackageInfo -> FilterPlan
 filterPlanFromDecisions decisions info =
@@ -149,9 +132,8 @@ filterPlanFromDecisions decisions info =
     versionOf :: Text -> Maybe Version
     versionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
 
-    -- 'selectLatest'\'s @chosen@: the upstream @latest@ tag's target as a 'Version',
-    -- the tag's raw string looked up among the versions. 'selectLatest' decides
-    -- /survival/ itself, so the version need only be present, not surviving.
+    -- The upstream @latest@ tag's target. 'selectLatest' decides survival itself, so this version
+    -- need only be present, not surviving.
     chosen :: Maybe Version
     chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . unVersion
 
@@ -159,14 +141,8 @@ filterPlanFromDecisions decisions info =
     survivingVersions :: [Version]
     survivingVersions = mapMaybe versionOf (Set.toList survivors)
 
-{- | Restrict a 'PackageInfo' to the version keys that survived filtering: the
-'FilterPlan'\'s own 'fpSurvivors'. The typed view handed to the cross-upstream merge
-then carries exactly the gated set. 'Ecluse.Core.Package.Merge.mergePackuments'
-treats a gated source as already filtered and never re-filters. This prunes
-@dist-tags@ to the surviving keys likewise, dropping every target absent from the
-survivors, and the merge then reconciles tags over the union. Each surviving version
-carries its own publish time, so restricting the versions carries the times with it. The
-merge then reconstructs the served @time@ from the survivors.
+{- | Restrict a 'PackageInfo' to the surviving version keys, pruning @dist-tags@ to targets
+that survive. 'Ecluse.Core.Package.Merge.mergePackuments' treats the result as already gated.
 -}
 restrictToSurvivors :: Set Text -> PackageInfo -> PackageInfo
 restrictToSurvivors survivors info =
@@ -175,20 +151,9 @@ restrictToSurvivors survivors info =
         , infoDistTags = Map.filter ((`Set.member` survivors) . renderVersion) (infoDistTags info)
         }
 
-{- | Normalise every served version's artifact URL scheme against the https-only egress
-policy ('Ecluse.Core.Security.Egress.resolveTarballUrl'), given the @upstreamBaseUrl@ the
-packument was served from. It keeps an https artifact URL and __upgrades__ a same-host
-@http@ URL to https. It __drops__ a version whose artifact is @http@ on a foreign host, or
-on any non-http(s) URL, from the served set. It records each drop as an
-'Ecluse.Core.Package.InvalidVersionManifest' carrying the offending authority. That is the
-drop-and-record contract: the version is never dialled in plaintext, and the drop is
-observable.
-
-The enforcement applies only when the upstream is __https__. In production every configured
-upstream is https by construction. A non-https upstream is the test\/dev loopback opt-in,
-and this leaves its artifact URLs untouched. It runs as a projection post-step at the fetch
-boundary, where the upstream URL is known. Each ecosystem's projection therefore stays
-context-free and shares this one fold rather than copying it.
+{- | Normalise each served artifact URL against the https-only egress policy
+('Ecluse.Core.Security.Egress.resolveTarballUrl'): upgrade a same-host @http@ URL, drop and record
+every other non-https version. Only an https upstream triggers this, sparing a test\/dev loopback.
 -}
 enforceArtifactScheme :: Text -> PackageInfo -> PackageInfo
 enforceArtifactScheme upstreamBaseUrl info =
@@ -202,16 +167,12 @@ enforceArtifactScheme upstreamBaseUrl info =
         case resolveDetails upstreamHost details of
             Right ok -> (Map.insert rawVersion ok keptAcc, dropAcc)
             Left (reason, badUrl) ->
-                -- A log line renders this record, and the offending value is an
-                -- upstream-supplied dist.tarball URL. The record therefore keeps only the
-                -- authority ('authorityLabel'). The reason already names why the resolver
-                -- refused the URL.
+                -- The offending URL is upstream-supplied and reaches a log line, so the record
+                -- keeps only its authority ('authorityLabel').
                 (keptAcc, InvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel badUrl)) reason : dropAcc)
 
-{- | The single-version form of 'enforceArtifactScheme' for the selective decode path.
-'Nothing' drops the version, because its artifact URL is non-https and not upgradeable. A
-'Just' carries the version with each artifact's URL normalised to https. A non-https
-(test\/dev loopback) upstream leaves the version untouched.
+{- | The single-version form of 'enforceArtifactScheme', for the selective decode path.
+'Nothing' means the artifact URL is non-https and not upgradeable, so the version drops.
 -}
 enforceArtifactSchemeDetails :: Text -> PackageDetails -> Maybe PackageDetails
 enforceArtifactSchemeDetails upstreamBaseUrl details =

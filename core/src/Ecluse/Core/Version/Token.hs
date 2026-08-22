@@ -39,15 +39,9 @@ instance Ord VToken where
     compare (VNum _) (VStr _) = GT
     compare (VStr _) (VNum _) = LT
 
-{- | The maximum length of a version string the hand-rolled numeric grammars
-("Ecluse.Core.Version.Pep440" and "Ecluse.Core.Version.Gem") parse. It bounds the cost
-of reading numeric segments. 'readMaybe' turns a segment into an 'Integer', which is
-quadratic in the digit count. An unbounded digit run in hostile registry metadata would
-therefore be an algorithmic-complexity DoS. Real version strings are tiny, and npm caps
-its own version field at 256 characters, so this far larger bound rejects only
-adversarial input. A version past it fails to parse, and Écluse serves it raw without
-an ordering key. That is the total-by-design @mkVersion@ path in
-"Ecluse.Core.Version": a version is never dropped over a parser gap.
+{- | The maximum length of a version string the version grammars parse. It bounds the quadratic
+cost of reading a digit run into an 'Integer', which hostile registry metadata could otherwise
+turn into an algorithmic-complexity DoS. A version past it gets no ordering key and is served raw.
 -}
 maxVersionLength :: Int
 maxVersionLength = 1024
@@ -62,13 +56,9 @@ parseNumSeg t
 numOr0 :: Text -> Integer
 numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
 
-{- | ASCII-only \"alphanumeric\" predicate: an ASCII letter or ASCII digit. Use it,
-not the Unicode-aware 'Data.Char.isAlphaNum', wherever the PEP 440 and
-@Gem::Version@ grammars gate \"alphanumeric\" characters. Python's @packaging@ and
-Ruby's @Gem::Version@ are ASCII-only. A Unicode-aware gate therefore over-accepts
-(fullwidth\/Arabic-Indic digits, @1.0+café@) and mis-orders: it classifies a Unicode
-\"digit\" that is not an ASCII digit as text. 'Data.Char.isDigit' is already
-ASCII-only, so the grammars call it directly.
+{- | An ASCII letter or ASCII digit. The PEP 440 and @Gem::Version@ grammars gate \"alphanumeric\"
+with this, not the Unicode-aware 'Data.Char.isAlphaNum'. Python's @packaging@ and Ruby's
+@Gem::Version@ are ASCII-only, so a Unicode gate over-accepts and mis-orders a non-ASCII digit.
 -}
 isAsciiAlphaNum :: Char -> Bool
 isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c

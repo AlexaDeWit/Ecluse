@@ -56,15 +56,8 @@ import Ecluse.Core.Server.Pipeline.Internal (
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
-{- | Log a per-origin metadata-fetch failure, dispatched by its cause:
-
-* a response-bound breach names the ceiling crossed ('logBreach')
-* an undecodable body takes the silent-guard decode log ('logDecodeFailure')
-* a self-reported /different/ name takes the name-mismatch log ('logNameMismatch')
-* an unformable configured base URL takes the config-fault log ('logUpstreamUnformable')
-* an unreachable origin takes the outage log ('logUpstreamUnreachable')
-
-Called once per real fetch, inside the single-flight leader, in the request's context.
+{- | Log a per-origin metadata-fetch failure, dispatched by its cause. The serve path calls it once
+per real fetch, inside the single-flight leader and in the request's context.
 -}
 logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
 logMetadataFailure name baseUrl = \case
@@ -74,14 +67,9 @@ logMetadataFailure name baseUrl = \case
     MetadataUrlUnformable urlErr -> logUpstreamUnformable name baseUrl urlErr
     MetadataUnreachable fault -> logUpstreamUnreachable name baseUrl fault
 
-{- Log a response-bound breach at 'WarningS' before the contribution degrades
-fail-closed. An operator can then tell a bound breach from an ordinary parse failure
-or an upstream outage. A breach means a hostile or oversized upstream, or a too-tight
-cap. The structured payload names the package, the @bound@ crossed, and the observed
-value against its @cap@. Those high-cardinality identifiers belong on the log line,
-not on a metric label. The line rides the ambient @katip@ context (the request's, so
-it carries the trace-correlation @dd@), under the @ecluse@ namespace the rest of the
-stream uses. -}
+{- Log a response-bound breach at 'WarningS' before the contribution degrades fail-closed. A
+breach means a hostile or oversized upstream, or a too-tight cap. The package and the observed
+value are high-cardinality, so they ride the log line and never a metric label. -}
 logBreach :: (KatipContext m) => PackageName -> LimitError -> m ()
 logBreach name err =
     katipAddContext payload $
@@ -107,13 +95,10 @@ logBreach name err =
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
-{- | Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it.
-A public copy contradicts the trusted one on a shared integrity algorithm for a shared
-version. The trusted copy still won the merge, and it is served, or withheld under
-'FailClosed'. So this is the supply-chain signal an operator alarms on, never a silent
-reconciliation. The structured payload names the package and the contradicting versions.
-The @ecluse.registry.merge.divergence@ counter counts one per contradicting version. A
-clean merge logs and meters nothing.
+{- | Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it: a public
+copy contradicts the trusted one on a shared integrity algorithm for a shared version. The trusted
+copy still wins the merge, so this is the supply-chain signal an operator alarms on, never a silent
+reconciliation. The @ecluse.registry.merge.divergence@ counter counts one per diverging version.
 -}
 warnDivergences :: (KatipContext m) => MetricsPort -> PackageName -> MergePlan -> m ()
 warnDivergences metrics name plan =
@@ -150,18 +135,10 @@ renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashe
 renderHash :: (Text, Maybe HashAlg, Text) -> Text
 renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
 
-{- | Log at 'WarningS' the malformed packument entries the projection dropped rather
-than failing the whole document on. An operator sees that an upstream served a malformed
-entry, which kind it was, and __the raw value it sent__. The kinds are a version
-manifest, a dist-tag, and a per-version publish time. The structured payload names the
-package, the upstream's authority, the per-kind drop counts, and a bounded sample of the
-dropped entries. Each sample renders its raw 'Data.Aeson.Value', truncated if large and
-capped to 'maxRenderedDrops' entries, so a flood of drops cannot bloat the line. The
-dropped versions are still served minus those entries (graceful degradation), so this is
-an observability signal, not a refusal. The serve path emits it once per real fetch,
-inside the cache leader, so a coalesced follower never re-logs, and through the request's
-@katip@ context. The caller guards on a non-empty list, so a clean document logs
-nothing.
+{- | Log at 'WarningS' the malformed packument entries the projection dropped rather than failing
+the whole document. The rest is still served, so this is an observability signal, not a refusal.
+The line carries the raw value the upstream sent, truncated and capped to 'maxRenderedDrops' so a
+flood cannot bloat it. The serve path calls it once per real fetch, inside the cache leader.
 -}
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
 logInvalidEntries name baseUrl entries =
@@ -222,19 +199,15 @@ truncatedValue v =
             then T.take maxRenderedValueChars rendered <> "…"
             else rendered
 
--- How many dropped entries the drop-tracking log renders in full, and how many
--- characters of each raw value. An unbounded flood of malformed entries, or one huge
--- value, therefore cannot bloat a single log line. The per-kind counts in the payload
--- still report the full totals.
+-- How many dropped entries the log renders in full, and how many characters of each raw value, so
+-- a flood of drops or one huge value cannot bloat a log line. The per-kind counts stay complete.
 maxRenderedDrops :: Int
 maxRenderedDrops = 20
 
 maxRenderedValueChars :: Int
 maxRenderedValueChars = 200
 
--- The @module@ tag this module's breach log carries. It is the operator-facing log
--- filter key, held stable as this value rather than the source module path, so an
--- operator's saved filter keeps matching. The decode-failure log lives in
--- "Ecluse.Core.Server.Pipeline.Internal", tagged likewise.
+-- The operator-facing @module@ log filter key. It is held stable as this value rather than the
+-- source module path, so an operator's saved filter keeps matching.
 pipelineModule :: Text
 pipelineModule = "Ecluse.Server.Pipeline"

@@ -62,16 +62,8 @@ import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
 
 {- | Build the worker's per-ecosystem bundles from the served mounts and the resolved
-publish targets. A mount earns a bundle when it serves a packument (it carries
-'PackumentDeps') and its ecosystem resolves both a publish target and an adapter. Its
-key is the ecosystem its path prefix names. A mount left at the
-recognised-but-unserved stub contributes none, and a job for an ecosystem absent here
-is fail-closed at the worker.
-
-The bundles reuse each mount's __own__ prepared rules. The serve gate and the ingest
-re-evaluation therefore share one prepared rule set, with any per-source breaker
-state, rather than preparing a second. The publish leg is that ecosystem's codec
-married to the shared transport at its declared mirror target.
+publish targets, keyed by the ecosystem each mount's path prefix names. A job for an
+ecosystem absent here is fail-closed at the worker.
 -}
 workerPoliciesFor :: Env -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies
 workerPoliciesFor env bindings targets artifactMaxBytes =
@@ -86,23 +78,17 @@ workerPoliciesFor env bindings targets artifactMaxBytes =
   where
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
-{- Marry one ecosystem's mirror write: its adapter's protocol codec over the shared
-publish transport, bound to the mount's declared mirror target. That transport is the
-trusted private-origin manager, the target's credential mint, and the mount's own
-plan-resolved response bound on the probe. 'Nothing' when the ecosystem resolved no
-publish target or no adapter, so the caller wires no half-publish bundle. -}
+{- Marry one ecosystem's mirror write to the shared publish transport. 'Nothing' when it
+resolves no publish target or no adapter, so the caller wires no half-publish bundle. -}
 mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Ecosystem -> Maybe MirrorPublish
 mirrorPublishFor env deps targets eco = do
     target <- Map.lookup eco targets
     adapter <- adapterFor eco
     pure (newMirrorPublish (mirrorTransportFor env deps target) (ptMirrorUrl target) (publishCodec (adapterPublish adapter)))
 
-{- | The shared mirror-write transport for one mount: the trusted private-origin
-manager, the target's credential mint, and the mount's __own__ 'pdLimits' as the
-probe's response bound. The presence probe therefore reads under the same
-boot-computed, operator-overridable bound every other metadata read on the mount
-honours. The shipped metadata-path default would not do: a larger mirror packument
-would silently overrun it and defeat duplicate suppression.
+{- | The shared mirror-write transport for one mount. The presence probe reads under the
+mount's own 'pdLimits', because the shipped metadata-path default would let a larger
+mirror packument overrun the bound and defeat duplicate suppression.
 -}
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
 mirrorTransportFor env deps target =
@@ -112,26 +98,12 @@ mirrorTransportFor env deps target =
         , ptLimits = pdLimits deps
         }
 
-{- Build one mount's worker bundle from its packument-serve dependencies and its
-married publish capability. The bundle takes:
-
-  * The single-version resolver over the guarded public origin through the shared
-    metadata cache. This is the same fetch-and-project the serve path runs.
-  * The mount's prepared rules, its configured integrity floor, and its tarball-host
-    gate.
-  * Its ecosystem's artifact request formation, its injected clock, and the mirror
-    write.
-
-Every decision input comes from the mount's __own__ 'PackumentDeps', so the ingest
-decision cannot diverge from the serve decision.
-
-This builds the metadata client through the same injected constructor the serve path
-uses ('pdNewMetadataClient', over the same shared manager 'srPublicManager' is wired
-to). It is anonymous, so no client credential reaches the public origin, and the host
-allowlist gates it with certificate validation authenticating the dialled host. The
-bundle elides the client's own failure and dropped-entry logs, because the worker
-logs its own re-evaluation outcome per job. The upstream-fetch metrics still record
-through the shared instruments. -}
+{- Build one mount's worker bundle. Every decision input comes from the mount's own
+'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The
+metadata client is anonymous, so no client credential reaches the public origin, and the
+host allowlist gates it with certificate validation authenticating the dialled host. The
+no-op callbacks elide the client's own failure and dropped-entry logs, because the worker
+logs its re-evaluation outcome per job, and the metrics still record. -}
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy
@@ -139,9 +111,8 @@ workerPolicyFor env deps publish artifactMaxBytes =
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =
-            -- The same host-gate composition the serve path applies before its public
-            -- artifact fetch. It is closed against the public upstream authority: the
-            -- reference host:port the public leg gates dist.tarball targets by.
+            -- The same host gate the serve path applies before its public artifact fetch, closed
+            -- against the public upstream authority.
             tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps))
         , -- The mount's own request formation (the adapter's artifact capability,
           -- projected onto these deps at the composition root), so the worker fetches
@@ -149,10 +120,8 @@ workerPolicyFor env deps publish artifactMaxBytes =
           wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
         , wpPublish = publish
         , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant,
-          -- not the metadata-path default: a real tarball far exceeds the packument cap,
-          -- while this cap bounds the transient publish envelope against the heap
-          -- ceiling. The other limits (version count, nesting depth) stay at their
-          -- defaults. They do not apply to an opaque tarball.
+          -- not the metadata-path default, because a tarball far exceeds the packument cap. The
+          -- other limits do not apply to an opaque tarball, so they stay at their defaults.
           wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
         , wpNow = pdNow deps
         }

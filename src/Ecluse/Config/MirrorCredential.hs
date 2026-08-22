@@ -34,12 +34,10 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
 
-{- | Derive the mirror-write credential from the resolved mirror-target URL, its
-optional static token, and the optional token-duration. A CodeArtifact host yields a
-'MirrorCodeArtifact' whose identity comes straight from the host. The mint is
-therefore scoped to the domain the worker writes to. Any other host yields a
-'MirrorStatic' from the supplied token. The two refusals keep a "derived" credential
-from ever meaning a silent one.
+{- | Derive the mirror-write credential from the resolved mirror-target URL. A CodeArtifact
+host yields a 'MirrorCodeArtifact' whose identity comes from the host, so the mint is scoped to
+the domain the worker writes to. Any other host yields a 'MirrorStatic', and a missing or
+conflicting token is refused rather than silently dropped.
 -}
 resolveMirrorCredential ::
     Ecosystem ->
@@ -65,22 +63,15 @@ resolveMirrorCredential eco url mToken mDuration =
             Just token -> Right (MirrorStatic token)
             Nothing -> Left (MirrorCredentialTokenMissing eco)
 
-{- | Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The host
-shape is @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@. The @{owner}@ is
-the 12-digit account id after the __last__ hyphen of the first label, so a domain may
-itself contain hyphens.
-
-'Nothing' for any host that is not this shape, including one whose tail after the
-last hyphen is not an account id. A hyphen-bearing non-CodeArtifact host therefore
-never mis-parses into a bogus owner, and counts as a static-token target instead.
+{- | Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The shape is
+@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@, where @{owner}@ is the 12-digit
+account id after the __last__ hyphen, so a domain may itself contain hyphens. Any other host
+yields 'Nothing' and counts as a static-token target, never a bogus owner.
 -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host =
-    -- The accepted shape carries exactly one @.d.codeartifact.@ marker, splitting the
-    -- host into its @{domain}-{owner}@ label and its @{region}.amazonaws.com@ tail.
-    -- Any other number of parts (none, or a host carrying the marker twice) is not a
-    -- CodeArtifact endpoint. This rejects it here rather than through an implicit
-    -- pattern-match failure in the 'Maybe' monad.
+    -- The accepted shape carries exactly one @.d.codeartifact.@ marker. Any other count is not
+    -- a CodeArtifact endpoint, refused here rather than by an implicit pattern-match failure.
     case T.splitOn ".d.codeartifact." host of
         [domainOwner, regionTail] -> do
             region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail

@@ -135,14 +135,8 @@ import Ecluse.Core.Server.RouteSpec (
     RouteSpec (rsDescription, rsMethod, rsName, rsOutcomes, rsPattern, rsRequest, rsSummary),
  )
 
-{- | The explicit inputs the manifest is a pure function of: the server's
-externally-reachable base URL, and the mounted ecosystems. The base URL is the
-@servers@ entry artifact URLs resolve against, and each mounted ecosystem
-contributes a tag and its path grammar.
-
-It is deliberately a narrow value: the base URL and the set of mounts, not the
-proxy's credentials, upstreams, or policy. The assembly therefore stays a total,
-deterministic function of something easy to fix for the generator.
+{- | The explicit inputs the manifest is a pure function of: the base URL and mounted ecosystems.
+It excludes credentials, upstreams, and policy, so assembly stays total and deterministic.
 -}
 data ManifestSource = ManifestSource
     { manifestBaseUrl :: Text
@@ -152,10 +146,8 @@ data ManifestSource = ManifestSource
     }
     deriving stock (Eq, Show)
 
-{- | The fixed canonical source the build-time generator runs against. Its base URL
-is a stable placeholder, and its mounts are the single served @npm@ ecosystem. The
-generated artifact is therefore byte-reproducible across machines, and it captures
-/code-level/ changes rather than per-deployment values.
+{- | The fixed canonical source the build-time generator runs against. Its placeholder base URL
+keeps the generated artifact byte-reproducible across machines.
 -}
 canonicalManifestSource :: ManifestSource
 canonicalManifestSource =
@@ -164,11 +156,7 @@ canonicalManifestSource =
         , manifestEcosystems = Npm :| []
         }
 
-{- | Assemble the OpenAPI 3 document, a __pure__ function of the source. It folds the
-operations from the closed 'Route' enumeration over each mount, carries the owned
-bodies' schemas in @components@, and tags operations by ecosystem. A renderer then
-groups the document as "one server, these protocols."
--}
+-- | Assemble the OpenAPI 3 document, a __pure__ function of the source.
 buildOpenApi :: ManifestSource -> OpenApi
 buildOpenApi src =
     (mempty :: OpenApi)
@@ -211,11 +199,8 @@ ownedSchemas =
 ecosystemTag :: Ecosystem -> Tag
 ecosystemTag eco = Tag (ecosystemName eco) (Just (ecosystemName eco <> " registry protocol coverage")) Nothing
 
-{- | The (path key, spec) entries an ecosystem contributes: its mounted adapter's
-declarative route grammar ('Ecluse.Core.Registry.Adapter.Types.serveRoutes'). Each
-entry is keyed by its rendered path template under the ecosystem's mount prefix. An
-ecosystem with no adapter contributes nothing, rather than documenting a route the
-server cannot serve. Adding a mount is what adds its routes to the manifest.
+{- | The (path key, spec) entries an ecosystem's adapter declares in 'serveRoutes'. An ecosystem
+with no adapter contributes nothing, rather than documenting a route the server cannot serve.
 -}
 ecosystemRouteSpecs :: Ecosystem -> [(Ecosystem, FilePath, RouteSpec)]
 ecosystemRouteSpecs eco =
@@ -226,11 +211,8 @@ ecosystemRouteSpecs eco =
             | spec <- toList (serveRoutes (adapterServe adapter))
             ]
 
-{- | Fold the (path key, spec) entries into the paths map. Specs that render to the
-same key (the packument @GET@ and the publish @PUT@ on @\/{package}@) merge. Their
-operations combine through 'PathItem''s 'Semigroup'. The key's path parameters are
-the union of the contributing specs' parameters, de-duplicated by name so the
-manifest documents a shared parameter once.
+{- | Fold the entries into the paths map. Specs that render to the same key (the packument @GET@
+and the publish @PUT@ on @\/{package}@) merge, and their path parameters de-duplicate by name.
 -}
 pathsFrom :: [(Ecosystem, FilePath, RouteSpec)] -> InsOrd.InsOrdHashMap FilePath PathItem
 pathsFrom entries =
@@ -252,9 +234,7 @@ pathsFrom entries =
     sameName a b = psName a == psName b
 
 {- | The full path-template key for a route under a mount prefix, e.g.
-@\/npm\/{package}\/-\/{filename}@. A 'Lit' segment renders verbatim and a 'Param' as
-the OpenAPI @{name}@ template. Routes that share a key (the packument @GET@ and the
-publish @PUT@ on @\/{package}@) render to the same string, so they merge.
+@\/npm\/{package}\/-\/{filename}@. Routes that share a key render to the same string, so they merge.
 -}
 routePathKey :: NonEmpty Text -> RouteSpec -> Text
 routePathKey prefix spec =
@@ -268,9 +248,8 @@ routePathKey prefix spec =
 specParams :: RouteSpec -> [ParamSpec]
 specParams spec = [p | Param p <- rsPattern spec]
 
-{- | Place an operation on the 'PathItem' field its HTTP method names. Total over
-'StdMethod'. The final @CONNECT@ branch is genuinely unreachable (see below), so it
-is the sanctioned per-declaration @error@ escape hatch (STYLE.md section 10).
+{- | Place an operation on the 'PathItem' field its HTTP method names. Total over 'StdMethod'.
+The unreachable @CONNECT@ branch is the sanctioned @error@ escape hatch (STYLE.md section 10).
 -}
 
 {- HLINT ignore methodItem "Avoid restricted function" -}
@@ -289,17 +268,8 @@ methodItem method op = case method of
 
 {- | Interpret a route's __documentation__ into an OpenAPI operation.
 
-This is the whole of the manifest's per-route knowledge: there is none. The core
-declares a route's summary, its request body, and its status set, beside the pattern
-that routes it ("Ecluse.Core.Server.RouteDoc"). This function renders whatever it is
-handed. There is no table here to keep in step with the routes, so there is nothing
-to drift.
-
-The tag is the ecosystem this walk is on, so each mount's operations carry the
-registry they belong to. That ecosystem also qualifies the route's name to form
-OpenAPI's @operationId@. Client generators key on it, and it must be unique across
-the whole document. Only here, where every mount is in view, can the code guarantee
-that.
+The ecosystem qualifies the route's name to form OpenAPI's @operationId@, which must be unique
+across the whole document, and only here is every mount in view.
 -}
 operationFrom :: Ecosystem -> RouteSpec -> Operation
 operationFrom eco spec =
@@ -348,16 +318,10 @@ responseFrom doc =
             , _responseContent = bodyContent (responseBodySchema doc)
             }
 
-{- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body
-vocabulary, so a new shape cannot go unrendered.
+{- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body vocabulary.
 
-This is the one join between the core's OpenAPI-free vocabulary and @openapi3@. A
-codec body ('SchemaJson') renders its schema from the /same/ @autodocodec@ codec the
-serve path encodes the wire body with. That rendering uses @autodocodec-openapi3@, in
-this tier only, so the documented schema and the wire format cannot diverge. A
-'SchemaDocumented' body references a hand-authored component schema by name (the
-packument, the publish document). Écluse builds those imperatively, so the manifest
-documents them rather than round-tripping them.
+A 'SchemaJson' body renders from the /same/ @autodocodec@ codec the serve path encodes with, so the
+documented schema and the wire format cannot diverge.
 -}
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
@@ -370,9 +334,8 @@ bodyContent = \case
 mediaTypeOf :: ByteString -> MediaType
 mediaTypeOf media = fromString (decodeUtf8 media :: String)
 
-{- | Render an @autodocodec@ 'JSONCodec' to its OpenAPI schema (this tier only). The
-codec bodies Écluse owns are flat, so the declared definitions are empty and the
-schema inlines. 'undeclare' discards the (empty) definition set.
+{- | Render an @autodocodec@ 'JSONCodec' to its OpenAPI schema (this tier only). The codec bodies
+Écluse owns are flat, so the declared definitions are empty and the schema inlines.
 -}
 schemaViaCodec :: JSONCodec a -> Schema
 schemaViaCodec c =
@@ -399,10 +362,8 @@ jsonContent = mediaContent "application/json"
 mediaContent :: MediaType -> Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 mediaContent mediaType ref = InsOrd.singleton mediaType ((mempty :: MediaTypeObject){_mediaTypeObjectSchema = Just ref})
 
-{- | A type-level handle for the synthesized packument's hand-written schema. It has
-no values: the npm serve path builds the served packument, and no single Haskell type
-decodes it. This exists only to carry 'synthesizedPackumentSchema' as a 'ToSchema'
-instance for schema-validation backstops.
+{- | A type-level handle for the synthesized packument's hand-written schema. It has no values:
+the npm serve path builds the served packument, and no single Haskell type decodes it.
 -}
 data SynthesizedPackument
 
@@ -413,22 +374,11 @@ instance ToSchema SynthesizedPackument where
 synthesizedPackumentSchemaName :: Text
 synthesizedPackumentSchemaName = "SynthesizedPackument"
 
-{- | The hand-written __partial__ schema of the served (merged-and-filtered)
-packument: the documented __trust boundary__.
+{- | The __partial__ schema of the served packument: the documented __trust boundary__.
 
-This is the highest-scrutiny piece of the manifest. It models only the fields Écluse
-reads and transforms (@versions@, @dist-tags@, @time@, and each version's @dist@),
-and it carries @additionalProperties: true@ everywhere. Écluse __relays every
-unlisted field unchanged from the contributing upstream, and the private upstream
-wins on a collision__.
-
-The schema is therefore a precise statement of what the gate touches, and what it
-does not. A valid instance is __not__ a proof that the filtered document is
-internally coherent, that every @dist-tags@ target is a surviving @versions@ key.
-That cross-field coherence is not schema-expressible.
-
-It is hand-written, not codec-derived, because an open schema has no clean
-@autodocodec@ representation.
+It models only the fields Écluse reads and transforms, and stays open everywhere else. A valid
+instance is __not__ a proof that every @dist-tags@ target is a surviving @versions@ key, because
+that cross-field coherence is not schema-expressible.
 -}
 synthesizedPackumentSchema :: Schema
 synthesizedPackumentSchema =
@@ -522,9 +472,8 @@ publishDocumentSchema =
 publishDocumentSchemaName :: Text
 publishDocumentSchemaName = "PublishDocument"
 
-{- | Render the document to __byte-stable__ JSON. Sorted object keys make the output
-independent of insertion order and reproducible across runs and machines. The file
-ends in a trailing newline for a clean diff.
+{- | Render the document to __byte-stable__ JSON. Sorted keys make the output independent of
+insertion order, so the generated file is reproducible across runs and machines.
 -}
 renderManifest :: OpenApi -> LByteString
 renderManifest =

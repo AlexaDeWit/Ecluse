@@ -31,22 +31,13 @@ import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker.Liveness (WorkerHeartbeat, recordPoll)
 
-{- | The runtime backends the mirror worker closes over: exactly the effectful
-capabilities the consume loop needs to poll, fetch, verify, publish, and record. A
-record of concrete handles and abstract ports (the Handle pattern). The composition
-root assembles it ('Ecluse.Env.workerRuntimeOf') and the loop reads it through the
-'WorkerM' reader.
+{- | The effectful backends the mirror worker closes over: a record of concrete handles
+and abstract ports. The composition root assembles it ('Ecluse.Env.workerRuntimeOf') and
+the loop reads it through the 'WorkerM' reader.
 
-The mirror queue is the demand-driven hand-off the loop consumes. The untrusted
-data-plane manager fetches the artifact bytes: the validating TLS manager, over an
-https-only @dist.tarball@. The heartbeat is the loop's liveness surface. The mirror
-write is not a runtime slot. It rides each ecosystem's bundle ('wpPublish'), so every
-job publishes through its own ecosystem's married capability. The metric and tracing
-ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
-"Ecluse.Core.Telemetry.Span"). The application supplies their OpenTelemetry-backed
-implementations, so the loop records without naming a telemetry backend. There is no
-log field: the loop logs through the ambient @katip@ context the entry point
-establishes.
+The mirror write is not a slot here. It rides each ecosystem's bundle ('wpPublish'), so a
+job publishes through its own ecosystem's capability. There is no log field either. The
+loop logs through the ambient @katip@ context the entry point establishes.
 -}
 data WorkerRuntime = WorkerRuntime
     { wrQueue :: MirrorQueue
@@ -68,30 +59,20 @@ data WorkerRuntime = WorkerRuntime
     @katip@ context for the inner action.
     -}
     , wrPolicies :: WorkerPolicies
-    {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The
-    worker re-runs current policy against a job's version before it mirrors it. A
-    policy that tightened toward deny since the enqueue therefore drops the job rather
-    than freezing a now-disallowed version into the trusted mirror store.
+    {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The worker
+    re-runs current policy before it mirrors a version, so a policy that tightened toward
+    deny since the enqueue drops the job instead of freezing it into the trusted mirror.
     -}
     }
 
-{- | The per-ecosystem bundle the worker dispatches every job through. It holds a
-resolver that fetches and projects the single version's metadata, the prepared rule
-set, the integrity floor, and the tarball-host gate. It also holds the artifact request
-formation, the married mirror-write capability, and the wall clock the age rules
-read.
+{- | The per-ecosystem bundle the worker dispatches every job through: the version
+resolver, the rules, the gates, the request formation, the mirror write, and the clock.
 
-The resolver is the __shared__ single-version fetch-and-project, wired by the
-composition root ('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded
-public origin). The rules are the __same__ prepared rules the serve path gates with.
-The floor and the host gate are the mount's __own__ configured policy values. The
-request formation is the mount ecosystem's own
-('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). The worker's ingest
-decision and the serve-time decision therefore run one codepath
-('Ecluse.Core.Package.Admission.admitArtifact') over one policy. They share any
-per-source breaker state rather than forking it. The publish capability is likewise
-the mount's own. The presence probe and the mirror write therefore speak the job
-ecosystem's protocol at that ecosystem's declared mirror target, never a neighbour's.
+The resolver, rules, and gates are the serve path's own, so the worker's ingest decision
+and the serve-time decision run one codepath
+('Ecluse.Core.Package.Admission.admitArtifact') over one policy and share its per-source
+breaker state. The publish capability is the mount's own, so a job's presence probe and
+mirror write reach only its own ecosystem's declared mirror target.
 -}
 data WorkerPolicy = WorkerPolicy
     { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
@@ -117,28 +98,23 @@ data WorkerPolicy = WorkerPolicy
     payload is a trust boundary.
     -}
     , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL,
-    through the mount ecosystem's own request formation
-    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). A job's bytes therefore
-    come back through the same request formation the serve path streams with. Riding this
-    bundle means a job whose ecosystem has none never reaches a fetch. It is
-    fail-closed with the rest of the bundle.
+    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL, through the
+    mount ecosystem's own request formation
+    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). A job's bytes therefore come
+    back through the same request formation the serve path streams with.
     -}
     , wpPublish :: MirrorPublish
     {- ^ The mount's married mirror-write capability
-    ('Ecluse.Core.Registry.Publish.newMirrorPublish': the adapter's protocol codec
-    over the shared publish transport, bound to the mount's declared mirror
-    target). The presence probe and the verified-bytes publish both ride it, so a
-    job can only ever consult the capability keyed by its own ecosystem. A job whose
-    ecosystem carries no bundle is fail-closed before any of this runs.
+    ('Ecluse.Core.Registry.Publish.newMirrorPublish', the adapter's protocol codec over the
+    shared publish transport, bound to the mount's declared mirror target). The presence probe
+    and the verified-bytes publish both ride it, so a job reaches only its own ecosystem's
+    mirror target.
     -}
     , wpArtifactLimits :: Limits
     {- ^ The bounded-fetch budget for the artifact download
-    ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'). The composition root sets its
-    @maxBodyBytes@ from the memory plan's mirror-artifact tenant (in
-    @Ecluse.Composition.MemoryPlan@). The worker therefore never buffers a tarball
-    whose transient publish envelope would breach the heap ceiling the plan
-    partitions.
+    ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes'). The composition root sets @maxBodyBytes@
+    from the memory plan's mirror-artifact tenant (@Ecluse.Composition.MemoryPlan@), so the
+    worker never buffers a tarball whose publish envelope would breach the heap ceiling.
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext', injected so the
@@ -146,23 +122,14 @@ data WorkerPolicy = WorkerPolicy
     -}
     }
 
-{- | The worker's per-ecosystem re-evaluation bundles, keyed by the ecosystem a job's
-package belongs to ('Ecluse.Core.Package.pkgEcosystem'). Built once at boot and shared
-with the serve mounts. A job whose ecosystem is absent here is fail-closed, dropped and
-never mirrored unvetted.
+{- | The worker's per-ecosystem re-evaluation bundles, keyed by a job's package ecosystem
+('Ecluse.Core.Package.pkgEcosystem') and shared with the serve mounts. A job whose
+ecosystem is absent is fail-closed: dropped, never mirrored unvetted.
 -}
 type WorkerPolicies = Map Ecosystem WorkerPolicy
 
 {- | The mirror worker's monad: a reader over the 'WorkerRuntime' layered on @katip@'s
 logging context.
-
-A @newtype@ over @'ReaderT' 'WorkerRuntime' ('KatipContextT' 'IO')@, so its instances
-are this module's to control and call sites name one concrete monad. The derived
-instances give reader access to the runtime ('MonadReader' 'WorkerRuntime') and
-arbitrary effects ('MonadIO'). They also give the unlift capability ('MonadUnliftIO')
-the loop's @tryAny@ and the per-job span bracket need. They give the @katip@ classes
-('Katip', 'KatipContext') too, so a structured log call composes through the ambient
-context the entry point establishes.
 
 The @katip@ base is a reader, never a 'StateT', so the logging context behaves correctly
 across the loop (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
@@ -181,27 +148,20 @@ newtype WorkerM a = WorkerM
         , KatipContext
         )
 
-{- | Run a 'WorkerM' against the 'WorkerRuntime' and the @katip@ logging environment and
-initial context the entry point supplies, yielding the underlying 'IO' action. This is
-the boundary where the worker's 'WorkerM' code becomes 'IO'.
+{- | Run a 'WorkerM' against the 'WorkerRuntime' and the @katip@ environment the entry
+point supplies. This is the boundary where the worker's code becomes 'IO'.
 
-The caller passes in the 'LogEnv' (the structured-log scribes) and the initial context
-payload, rather than the runtime carrying them. The application therefore owns the log
-stream and the trace-correlation @dd@ enrichment. The application resolves the @dd@ identity
-and hands it here as the initial context, so every line the loop emits carries @dd@.
-The loop narrows the namespace with @katip@'s combinators on top as it logs.
+The caller passes the 'LogEnv' and the initial context, so the application owns the log
+stream and the @dd@ trace-correlation identity every line carries.
 -}
 runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
 runWorkerM logEnv initialContext runtime action =
     runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
 
-{- | Advance the worker heartbeat to the current instant, recording a unit of
-demonstrated progress. The consume loop ('Ecluse.Core.Worker.Loop.workerLoop') calls
-it after every successful poll, since an empty long-poll is a healthy idle.
-'Ecluse.Core.Worker.Job.processBatch' calls it after every completed job. The
-@\/livez@ staleness bound ('Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter')
-therefore covers a single job's worst case rather than a whole sequential batch of
-them. This is the one place the beat is taken, so the two call sites cannot drift.
+{- | Advance the worker heartbeat to the current instant, recording a unit of demonstrated
+progress. The consume loop beats on every successful poll, an empty long-poll included,
+and 'Ecluse.Core.Worker.Job.processBatch' beats after every completed job, so the
+staleness bound covers one job's worst case rather than a whole batch.
 -}
 recordWorkerProgress :: WorkerM ()
 recordWorkerProgress = do

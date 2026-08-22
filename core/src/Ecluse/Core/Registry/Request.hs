@@ -46,63 +46,41 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Finalise a data-plane request: __disable redirect following__ ('redirectCount' = 0)
-on __every__ request, then apply the ecosystem's injected credential attach.
+{- | Finalise a data-plane request: pin @redirectCount = 0@, then apply the ecosystem's injected
+credential attach. Every adapter's request builder funnels through here, so __Écluse never
+follows an upstream redirect__, on the credentialed and the anonymous plane alike.
 
-This is the single request-finalisation point for the whole data plane. Every adapter's
-request builder funnels through it, so pinning @redirectCount = 0@ here makes one
-invariant universal: __Écluse never follows an upstream redirect__. That holds on the
-credentialed and the anonymous plane alike. The caller injects the credential attach
-rather than fixing it here: a 'Request' -> 'Request' function carrying an ecosystem's
-own scheme (npm's @Bearer@, another's @Basic@). No attach can reach the wire around
-the pin.
+Two dangers it forecloses:
 
-Two dangers it forecloses, one per plane:
+\* __Credential leakage__ (credentialed plane). The http-client default @redirectCount = 10@
+re-sends the @Authorization@ header to the redirect's @Location@, and
+@shouldStripHeaderOnRedirect@ does not strip it cross-host. A hostile or misconfigured upstream
+could @302@ a forwarded or minted credential to an attacker-chosen host, worst of all on the
+trusted private manager.
 
-\* __Credential leakage__ (credentialed plane). The http-client default ('redirectCount'
-  = 10) re-sends the @Authorization@ header to the redirect's @Location@, and its
-  @shouldStripHeaderOnRedirect@ does not strip it cross-host. A hostile or misconfigured
-  upstream could then @302@ a forwarded or minted credential to an attacker-chosen host.
-  That is especially dangerous on the __trusted private manager__, where a redirect
-  could exfiltrate the credential to an attacker-chosen target. Pinning
-  @redirectCount = 0@ removes the hop entirely rather than relying on the per-hop egress
-  controls.
+\* __SSRF via redirect__ (anonymous plane). The proxy enforces the host allowlist when it builds
+the URL, not per redirect hop. Following a @302@ would let an allowlisted upstream steer an
+anonymous fetch to any host, an internal or cloud-metadata address included.
 
-\* __SSRF via redirect__ (anonymous plane). The proxy enforces the host allowlist when it
-  builds the URL, not per redirect hop. Following a @302@ would let an allowlisted
-  upstream steer an anonymous fetch to __any__ host, re-gated by nothing. That host
-  could be an internal or cloud-metadata address, or any off-allowlist host. Not
-  following the redirect removes the hop there is to gate.
-
-The accepted consequence, symmetric across both planes: a read does not follow an
-upstream's CDN @302@. It returns the @3xx@ to the serve path rather than chasing it. That
-is the safer posture, and the proxy honours the __packument's__ @dist.tarball@ location
-explicitly, gated by the egress policy, rather than relying on redirects.
-Redirect-following for a nonstandard upstream (a presigned or redirecting object store)
-is an explicit, per-upstream opt-in, never the default.
+The accepted consequence: a read returns an upstream CDN's @3xx@ to the serve path rather than
+chasing it. Écluse honours the packument's @dist.tarball@ location explicitly instead, gated by
+the egress policy.
 -}
 finaliseRequest :: (Request -> Request) -> Request -> Request
 finaliseRequest attach request = (attach request){redirectCount = 0}
 
-{- | One ecosystem's credential presentation: how the mapping recovers a client's
-credential from presented headers, and how it carries one on an outbound request. The two
-halves are one type because they are one contract. The recovery yields the token
-__text__, so an attach always goes back through the same ecosystem's encoding instead of
-replaying a header verbatim. An adapter declares exactly one mapping
-('Ecluse.Core.Registry.Adapter.Types.serveCredential'). The neutral serve pipeline
-consumes the recovery, so only the ecosystem that presents a scheme ever spells it.
+{- | One ecosystem's credential presentation: how it recovers a client's credential from
+presented headers, and how it carries one on an outbound request. The recovery yields the token
+__text__, so an attach re-encodes rather than replaying a header verbatim.
 
-The encoding half (the carrying header and how a token renders into it) is unreachable
-outside this module. The constructor is hidden, and 'attachCredential' is the only way to
-run one. Every attach composes through 'finaliseRequest' here, so the redirect pin holds
-by construction rather than by convention.
+The constructor is hidden and 'attachCredential' is the only way to run the encoding, so every
+attach composes through 'finaliseRequest' and the redirect pin holds by construction.
 -}
 data CredentialMapping = CredentialMapping
     { credentialRecover :: RequestHeaders -> Maybe Secret
-    {- ^ Recover the token text a client presented, or 'Nothing' when the request carries
-    no credential in this ecosystem's form. The edge gate compares the result against the
-    configured inbound token. It denies a 'Nothing' whenever a mount carries a configured
-    inbound token, so it refuses a foreign presentation rather than half-reading one.
+    {- ^ Recover the token text a client presented, or 'Nothing' when the request carries no
+    credential in this ecosystem's form. The edge gate denies a 'Nothing' on a mount with a
+    configured inbound token, so it refuses a foreign presentation rather than half-reading one.
     -}
     , -- The header that carries an outbound credential: named per ecosystem, never assumed.
       credentialHeader :: HeaderName
@@ -110,9 +88,8 @@ data CredentialMapping = CredentialMapping
       credentialRender :: Secret -> ByteString
     }
 
-{- | Declare an ecosystem's credential presentation: the recovery over presented
-headers, the header an outbound credential travels on, and the rendering into that
-header's value.
+{- | Declare an ecosystem's credential presentation. The constructor is hidden, so this is the
+only way to build a 'CredentialMapping'.
 -}
 credentialMapping ::
     (RequestHeaders -> Maybe Secret) ->
@@ -126,10 +103,8 @@ credentialMapping recover header render =
         , credentialRender = render
         }
 
-{- | Attach a credential to an outbound request under the mapping's own header, and
-finalise it through 'finaliseRequest'. This is the only way to run an ecosystem's
-encoding, so the redirect pin holds on the credentialed and the anonymous request alike.
-A 'Nothing' attaches no header, and the pin still applies.
+{- | Attach a credential to an outbound request under the mapping's own header, then finalise it
+through 'finaliseRequest'. A 'Nothing' attaches no header, and the redirect pin still applies.
 -}
 attachCredential :: CredentialMapping -> Maybe Secret -> Request -> Request
 attachCredential mapping token = finaliseRequest $ case token of
@@ -140,11 +115,8 @@ attachCredential mapping token = finaliseRequest $ case token of
                 (credentialHeader mapping, credentialRender mapping secret) : requestHeaders request
             }
 
-{- | The conditional-GET validators to relay on a metadata fetch. Replaying an
-upstream's @ETag@ as @If-None-Match@ (or its @Last-Modified@ as @If-Modified-Since@) lets
-the upstream answer @304 Not Modified@ with no body. That is the cheap freshness check
-the proxy uses on a cache revalidation. The proxy forwards each one only when it is
-present.
+{- | The conditional-GET validators to relay on a metadata fetch. Replaying them lets the
+upstream answer @304 Not Modified@ with no body on a cache revalidation.
 -}
 data Validators = Validators
     { validatorIfNoneMatch :: Maybe ByteString
@@ -171,41 +143,30 @@ addValidators validators request =
             , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
             ]
 
-{- | Build the artifact @GET@ request addressing a tarball at its __authoritative
-upstream location__. That location is the absolute @url@ a projection preserved from
-the upstream's @dist.tarball@, never a rebuild from a @(base, package, file)@
-coordinate. 'attachCredential' attaches the credential under the ecosystem's own
-presentation and finalises the request, so the redirect pin always applies.
+{- | Build the artifact @GET@ addressing a tarball at the absolute @url@ a projection preserved
+from the upstream's @dist.tarball@, never a rebuild from a @(base, package, file)@ coordinate.
+That location is server-chosen data, and it is the one the served metadata pairs its integrity
+digest with, so the bytes still verify.
 
-The artifact location is server-chosen data, not a derivable fact. A registry may serve
-a version's tarball from a different host, or from a path a naming convention cannot
-rebuild. Honouring the preserved location is what lets Écluse front those registries.
-The URL it fetches is the one the served metadata pairs its integrity digest with, so
-the bytes still verify.
-
-The request is __non-decompressing__ ('decompress' returns 'False'). A tarball is opaque
-binary that must reach the client byte-for-byte, so nothing gunzips it in flight and its
-integrity digest stays valid. Fails with a 'UrlFormationError' only when the @url@ cannot
-be parsed into a request.
+The request is __non-decompressing__ ('decompress' returns 'False'), so nothing gunzips an
+opaque tarball in flight and its integrity digest stays valid. It fails with a
+'UrlFormationError' only when the @url@ cannot be parsed.
 -}
 artifactRequestByUrl :: CredentialMapping -> Maybe Secret -> Text -> Either UrlFormationError Request
 artifactRequestByUrl mapping token url = do
     base <- parseRequestEither url
     pure . attachCredential mapping token $ base{decompress = const False}
 
-{- Join a base URL and an already-encoded path, tolerating one trailing slash on the base
-so the join never doubles it. It refuses an empty base URL with a 'UrlFormationError'.
-The read- and write-path builders share this report, so an unformable URL is never
-mislabelled as a publish failure.
+{- Join a base URL and an already-encoded path, tolerating one trailing slash on the base so the
+join never doubles it.
 -}
 joinPath :: Text -> Text -> Either UrlFormationError Text
 joinPath baseUrl path
     | T.null baseUrl = Left EmptyBaseUrl
     | otherwise = Right (joinUrlPath baseUrl path)
 
-{- Parse a built URL into a 'Request', mapping a parse failure into a 'UrlFormationError'.
-The URL comes from configuration and an already-safe name, so a failure here is a
-configuration fault, reported uniformly with the other URL-formation errors.
+{- The URL comes from configuration and an already-safe name, so a parse failure here is a
+configuration fault.
 -}
 parseRequestEither :: Text -> Either UrlFormationError Request
 parseRequestEither url =

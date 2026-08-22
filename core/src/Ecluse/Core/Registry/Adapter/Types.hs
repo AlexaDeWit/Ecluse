@@ -61,16 +61,14 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
-{- | One ecosystem's complete capability record: the interfaces the composition root
-projects every consuming pipeline's wiring from. Each ecosystem assembles it once
-(npm's is 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'), and
-'Ecluse.Core.Registry.Adapter.adapterFor' resolves it.
+{- | One ecosystem's complete capability record, which the composition root wires every
+consuming pipeline from. 'Ecluse.Core.Registry.Adapter.adapterFor' resolves it (npm's is
+'Ecluse.Core.Registry.Npm.Adapter.npmAdapter').
 -}
 data RegistryAdapter = RegistryAdapter
     { adapterEcosystem :: Ecosystem
-    {- ^ The ecosystem this record serves. The registry's key must agree with it
-    (pinned by the adapter spec), so no record can register under a foreign
-    ecosystem unnoticed.
+    {- ^ The ecosystem this record serves. The registry key must agree with it, so no record can
+    register under a foreign ecosystem.
     -}
     , adapterServe :: AdapterServe
     -- ^ The web-facing serve surface: the route grammar and response contracts.
@@ -79,53 +77,36 @@ data RegistryAdapter = RegistryAdapter
     , adapterArtifact :: AdapterArtifact
     -- ^ The artifact request formation, by filename and by authoritative URL.
     , adapterPublish :: AdapterPublish
-    {- ^ The publish capability: the first-party relay, the name canonicaliser, the
-    mirror write's protocol codec, and the declared-name extractor. The anti-shadowing
-    guard reads a publish body through that extractor.
+    {- ^ The publish capability: the first-party relay, the name canonicaliser, the declared-name
+    extractor, and the mirror write's protocol codec.
     -}
     }
 
-{- | The ecosystem's web-facing serve surface: the one slice of the record about HTTP
-shape rather than registry protocol. Its types come from the agnostic action and
-response vocabulary ("Ecluse.Core.Server.Context", "Ecluse.Core.Server.Response"),
-because it is web-facing by definition. The registry-to-server import direction is
-deliberate here. Serve surfaces are where ecosystems diverge most, so this slice
-stands alone rather than sharing shape with the protocol slices.
-
-The adapter __derives both routing fields from one declarative route table__ (npm's is
-"Ecluse.Core.Registry.Npm.Route"). The surface the server routes and the surface the
-manifest documents are therefore two readings of a single declaration, and cannot
-drift apart. The credential presentation joins them here because it states the same
-kind of fact: what this ecosystem's clients put on the wire.
+{- | The ecosystem's web-facing serve surface. The adapter derives both routing fields from one
+declarative route table (npm's is "Ecluse.Core.Registry.Npm.Route"), so the routed surface and
+the documented one cannot drift apart.
 -}
 data AdapterServe = AdapterServe
     { serveRouter :: MountRouter
-    {- ^ The ecosystem's __whole routing decision__: which of its paths a
-    mount-relative request names, and what serving that amounts to (an
-    'Ecluse.Core.Server.Context.RouteAction'). The authoritative router the server
-    dispatches through. An unrecognised path yields the deny-by-default @404@.
+    {- ^ The ecosystem's whole routing decision: which path a mount-relative request names and
+    what serving it amounts to (an 'Ecluse.Core.Server.Context.RouteAction'). An unrecognised
+    path yields the deny-by-default @404@.
     -}
     , serveRoutes :: NonEmpty RouteSpec
-    {- ^ The same route table as data: the declarative 'RouteSpec' projection of the
-    patterns 'serveRouter' routes on, one per served route. The capability manifest
-    ("Ecluse.Manifest") renders this rather than re-describing the path grammar, so the
-    documented surface cannot drift from the routed one.
+    {- ^ The same route table as data, one 'RouteSpec' per route 'serveRouter' serves. The
+    capability manifest ("Ecluse.Manifest") renders this instead of re-describing the grammar.
     -}
     , serveCredential :: CredentialMapping
-    {- ^ The ecosystem's __credential presentation__: how the mount recovers a client's
-    credential from the headers the client presents. The same presentation carries a
-    credential on a request Écluse makes upstream. A mount accepts exactly the form its
-    ecosystem presents. The neutral pipeline therefore spells no scheme of its own, and
-    still keeps the constant-time edge compare and the deny-by-default refusal.
+    {- ^ The ecosystem's credential presentation: how the mount recovers a client's credential
+    from its headers, and how Écluse carries one upstream. The neutral pipeline spells no scheme
+    of its own and keeps the constant-time edge compare and the deny-by-default refusal.
     -}
     }
 
-{- | The ecosystem's metadata capability: how the proxy reads a package's metadata
-from an origin and how it assembles a served document. The fields have exactly the
-shapes the consuming dependency records carry
-('Ecluse.Core.Server.Context.pdNewMetadataClient' and
-'Ecluse.Core.Server.Context.pdAssemble'). The composition root therefore projects
-them unchanged, and registering an adapter cannot reshape a pipeline.
+{- | The ecosystem's metadata capability: reading a package's metadata from an origin,
+assembling the served document, and encoding it. The fields match the consuming dependency
+record ('Ecluse.Core.Server.Context.pdNewMetadataClient' and
+'Ecluse.Core.Server.Context.pdAssemble'), so the composition root projects them unchanged.
 -}
 data AdapterMetadata = AdapterMetadata
     { metadataNewClient ::
@@ -146,24 +127,17 @@ data AdapterMetadata = AdapterMetadata
     primitives.
     -}
     , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
-    {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
-    documents, rewriting each surviving version's artifact URL under the given mount
-    base. The adapter projects each source and the precedence-winning base document
-    ('Nothing' when there is none) into its own representation. It merges them and
-    injects the result back, so the neutral pipeline threads the documents without
-    reading them.
+    {- ^ Assemble the served document from a merge plan, the raw source documents, and the
+    precedence-winning base document ('Nothing' when there is none), rewriting each surviving
+    version's artifact URL under the given mount base.
     -}
     , metadataSerialise :: CachedDoc -> LByteString
-    {- ^ Encode an assembled served document ('CachedDoc') to its wire bytes. The
-    adapter projects the document to its own representation and serialises it. The
-    neutral serve tail turns a served document into bytes without knowing its shape.
-    -}
+    -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
     }
 
-{- | The ecosystem's artifact request formation: the two ways the proxy addresses an
-artifact. One is a conventional filename under a registry base, the other its
-authoritative upstream URL. The fields have exactly the shapes the consuming dependency
-records carry ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByFile' and
+{- | The ecosystem's artifact request formation: by conventional filename under a registry base,
+or at the artifact's authoritative upstream URL. The request fields match the consuming
+dependency record ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByFile' and
 'Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl').
 -}
 data AdapterArtifact = AdapterArtifact
@@ -172,30 +146,21 @@ data AdapterArtifact = AdapterArtifact
     how the proxy addresses a trusted origin.
     -}
     , artifactByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request at its authoritative upstream URL: how the proxy
-    honours a location the upstream chose. The URL is complete on its own, so an
-    implementation must form the request from it alone. A caller may pass an empty
-    base URL and an anonymous credential ('Nothing'), as the mirror worker's fetch
-    does. There is no base to resolve against.
+    {- ^ Build an artifact request at its authoritative upstream URL. The URL is complete on its
+    own, so an implementation must form the request from it alone. A caller may pass an empty
+    base URL and an anonymous credential ('Nothing'), as the mirror worker's fetch does.
     -}
     , artifactHosts :: [Text]
-    {- ^ The ecosystem's canonical artifact hosts, as URLs whose authorities feed
-    the tarball-host gate. These are hosts the public registry serves artifact bytes
-    from __by design__ (PyPI's @https://files.pythonhosted.org@). The secure-default
-    same-host policy admits them without the operator naming hostnames. Empty for
-    an ecosystem (npm) whose artifacts ride the registry host.
+    {- ^ The ecosystem's canonical artifact hosts, whose authorities feed the tarball-host gate.
+    The secure-default same-host policy admits them (PyPI's is @https://files.pythonhosted.org@)
+    without the operator naming hostnames. Empty for npm, whose artifacts ride the registry host.
     -}
     }
 
-{- | The ecosystem's publish capability: relaying a client's own publish document and
-canonicalising a raw package name. It also extracts the names a publish body declares,
-and holds the mirror-write protocol codec. The relay, canonicaliser, and declared-name
-extractor have exactly the shapes the consuming dependency record carries
-('Ecluse.Core.Server.Context.pubRelayPublish',
-'Ecluse.Core.Server.Context.pubCanonicaliseName', and
-'Ecluse.Core.Server.Context.pubDeclaredNames'). The codec is the protocol half of the
-mirror write. The composition root marries it to the shared publish transport per
-mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
+{- | The ecosystem's publish capability: the first-party relay, the name canonicaliser, the
+declared-name extractor, and the mirror write's protocol codec. The composition root marries
+the codec to the shared publish transport per mounted ecosystem
+('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
 data AdapterPublish = AdapterPublish
     { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either PublishRelayFault PublishRelayResponse)
@@ -203,17 +168,13 @@ data AdapterPublish = AdapterPublish
     , publishCanonicaliseName :: Text -> Maybe PackageName
     -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.
     , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Extract every package name a publish body declares as its own identity, read
-    from the ecosystem's own publish-document schema. The neutral publish pipeline's
-    anti-shadowing body-name guard injects this and refuses any declared name that
-    disagrees with the URL-path name. The npm document shape therefore stays
-    adapter-side instead of coupling the pipeline. A body that declares no readable
-    name yields @[]@.
+    {- ^ Extract every package name a publish body declares as its own identity. The
+    anti-shadowing guard refuses any declared name that disagrees with the URL-path name. A body
+    that declares no readable name yields @[]@.
     -}
     , publishCodec :: PublishCodec
-    {- ^ The mirror write's protocol codec: publish document assembly and request
-    formation, the probe's request and version-list projection, and the status
-    semantics. Protocol only: the manager, credential mint, and fault classification
-    belong to the shared transport, supplied at the marriage.
+    {- ^ The mirror write's protocol codec: publish document assembly, request formation, the
+    probe's request and version-list projection, and the status semantics. Protocol only: the
+    manager, credential mint, and fault classification belong to the shared transport.
     -}
     }
