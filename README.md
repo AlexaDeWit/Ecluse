@@ -25,20 +25,26 @@ rebuild.
 
 ## Overview
 
-Most damage from a malicious package publish happens in the first days, before the ecosystem
-notices and pulls the version. Écluse makes a build late instead of trying to detect malice.
-Every new version waits in a quarantine, seven days by default, before a build can install it.
-A version that an advisory names as the fix for a vulnerability skips the queue, so the
-quarantine never delays a security patch. Écluse runs in front of the registry you already have,
-AWS CodeArtifact today. It reads your private registry first, gates the public one, and mirrors
-approved versions into yours with the cloud's own identity. It hosts nothing.
+Écluse is a proxy you put in front of public package registries to protect the builds that install
+from them. Point your CI and developer tooling at Écluse instead of at a public registry. Écluse
+fetches from that registry on their behalf and decides which versions a build may install. The npm
+registry is the first one supported, and any client that speaks its protocol works, such as npm,
+pnpm, yarn, or bun.
 
-Point npm at Écluse as its registry. npm is the supported ecosystem, and the core is
-registry-agnostic. [`USAGE.md`](USAGE.md) starts with the idea and builds down to the details.
-[`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
-engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in
-[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as a
-readable [register](https://ecluse-proxy.com/threat-model.html).
+A new public version waits in a quarantine, seven days by default, before a build can install it.
+Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with no
+attempt to detect malice. A version that an advisory names as the fix for a vulnerability skips the
+wait, so the quarantine never delays a security patch. Everything else is deny by default and opt-in
+by name.
+
+If you run a private registry, Écluse reads it first and passes your own packages through untouched.
+It can also mirror each admitted public version into that registry, so a mirrored version survives a
+public outage or yank. AWS CodeArtifact is supported today. Écluse hosts no packages itself.
+
+[`USAGE.md`](USAGE.md) is the operator manual. [`docs/architecture.md`](docs/architecture.md) has
+the design: the registry roles, the rules engine, and the mirror queue. The threat model (OWASP
+Threat Dragon, STRIDE) lives in [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The
+site build renders it as a readable [register](https://ecluse-proxy.com/threat-model.html).
 
 ## Using Écluse
 

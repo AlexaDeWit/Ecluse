@@ -115,8 +115,10 @@ h3.threat { scroll-margin-top: 1rem; }
   display: block; width: 100%; height: auto; margin: 0 0 1.5rem;
   border: 1px solid var(--border); border-radius: 12px;
 }
-.hero h1 { border: none; margin: 0 0 0.5rem; }
-.hero .lead { font-size: 1.1rem; margin: 0; }
+.hero h1 { border: none; margin: 0; text-align: center; }
+.hero .tagline { margin: 0.25rem 0 1.5rem; text-align: center; color: var(--muted); font-size: 1.15rem; }
+.hero .lead { font-size: 1.1rem; }
+.hero .lead p { margin: 0 0 1rem; }
 .index { max-width: 40rem; margin: 1.5rem auto 0; padding-left: 1.25rem; }
 .index li { margin: 0.4rem 0; }
 .cards {

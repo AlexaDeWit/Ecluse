@@ -5,7 +5,7 @@
 Écluse builds outbound HTTP requests (private upstream, public upstream, mirror target) from
 client-supplied package identifiers and upstream-supplied artifact locations. The operator
 manual states what a deployment must fence around that
-([Securing network egress](../../USAGE.md#securing-network-egress-required)). This document
+([Securing network egress](../../USAGE.md#network-egress)). This document
 records the deployment assumptions the threat model rests on and the credential posture. It also
 records the two floors that fail closed: the integrity digest and a static publish credential.
 

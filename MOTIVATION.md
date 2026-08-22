@@ -60,7 +60,7 @@ public registries closed off, can't be side-stepped. Whatever `npm` or `pnpm` a 
 conjures up, its fetches still cross the network, and only the chokepoint answers. That turns
 "please install safely" into "you can only install through here". The egress lockdown is an
 operator concern: see
-[`USAGE.md` → Locking down CI egress](USAGE.md#locking-down-ci-egress-recommended).
+[`USAGE.md` → Locking down CI egress](USAGE.md#locking-down-ci-egress).
 
 ## Why you can't naively build it either
 
