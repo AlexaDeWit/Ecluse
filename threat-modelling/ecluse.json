@@ -644,17 +644,6 @@
                   "mitigation": "S3 bucket is private. Proxy IAM role is granted GetObject only. Atomic shadow-swap prevents partial reads. In addition, the proxy explicitly binds the SQLite connection to Read-Only mode and disables Trusted Schema (PRAGMA trusted_schema = OFF;) upon opening the connection to prevent execution of attacker-controlled triggers or views. Acceptance further verifies the artifact before it is served: the schema epoch stamp, a PRAGMA quick_check integrity walk (which also verifies stored values against each STRICT table's declared column types), the required tables being real STRICT tables carrying the required columns, and the ecosystem; a failing artifact is refused as a rejection value with its ETag remembered, and the last-good database keeps serving.",
                   "modelType": "STRIDE",
                   "id": "32d813d8-6bee-4fa3-acb2-d62efe5aff18"
-                },
-                {
-                  "number": 19,
-                  "status": "Mitigated",
-                  "severity": "Medium",
-                  "title": "Docker Hub Static Credential Leakage",
-                  "type": "Information disclosure",
-                  "description": "Docker Hub does not support OIDC, forcing the CI release workflow to rely on a static, long-lived DOCKERHUB_TOKEN.",
-                  "mitigation": "The release workflow publishes to GitHub Container Registry, authenticating with the ephemeral, repository-scoped GITHUB_TOKEN that exists only for the duration of the publish job. Provenance and SBOM attestations are signed keylessly through GitHub OIDC, with no stored key. No static registry credential is held by the workflow or configured on the release environment.",
-                  "modelType": "STRIDE",
-                  "id": "006c7e3d-71f3-414f-87a5-901def6bf71e"
                 }
               ]
             }
