@@ -8,29 +8,30 @@ upstream's.
 The proxy serves two kinds of body, and they validate differently (see
 @docs\/architecture\/web-layer.md@ → "Middleware and helper libraries"):
 
-* __Pass-through bodies__ -- artifacts, and unfiltered private-upstream metadata --
+* __Pass-through bodies__ (artifacts, and unfiltered private-upstream metadata)
   are byte-identical to upstream's, so upstream's own validator is authoritative.
   The client's validators are __relayed upstream__ ('forwardValidators') and an
   upstream @304@ is passed straight back ('isNotModified'). Relaying is correct
   precisely because we do not change the bytes.
 
-* __Transformed bodies__ -- every packument, which is merged across upstreams and
-  filtered by the rules -- differ from any single upstream's body, so an upstream
-  validator would validate the wrong bytes. We instead serve our __own__ strong
-  'ETag' ('mkStrongETag') and answer the client's conditional request against it
+* __Transformed bodies__ differ from any single upstream's body, so an upstream
+  validator would validate the wrong bytes. Every packument is transformed: merged
+  across upstreams and filtered by the rules. We instead serve our __own__ strong 'ETag'
+  ('mkStrongETag') and answer the client's conditional request against it
   ('evaluateETag').
 
-The own-ETag is __derived from the serve's inputs__, not hashed over its output: a
-SHA-256 over the origin bodies' digests, the per-source surviving version sets, and
+The own-ETag is __derived from the serve's inputs__, not hashed over its output. It is
+a SHA-256 over the origin bodies' digests, the per-source surviving version sets, and
 the assembly's identity (see 'Ecluse.Core.Server.Pipeline.Packument.packumentETag').
-The served document is a deterministic function of exactly those inputs, so the tag
-can never validate a stale body as fresh -- the direction correctness needs -- while
-it may occasionally change when the re-assembled bytes would not have (a spurious
-@200@, never a wrong @304@). Deriving it from inputs is what lets the serve path
-answer a @304@ __without assembling, encoding, or hashing the document at all__, and
-stream a @200@ body without materialising it for a hash pass first. The functions
-here are pure; turning a 'Conditional' or relayed status into a WAI response is the
-serving layer's job.
+The served document is a deterministic function of exactly those inputs. The tag can
+therefore never validate a stale body as fresh, the direction correctness needs. It may
+occasionally change when the re-assembled bytes would not have: a spurious @200@,
+never a wrong @304@. Deriving it from inputs lets the serve path answer a @304@
+__without assembling, encoding, or hashing the document at all__. It also lets the
+path stream a @200@ body without materialising it for a hash pass first.
+
+The functions here are pure. Turning a 'Conditional' or relayed status into a WAI
+response is the serving layer's job.
 -}
 module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
@@ -59,9 +60,9 @@ is not confused with the bare digest or any other 'Text'.
 newtype ETag = ETag Text
     deriving stock (Eq, Ord, Show)
 
-{- | Quote a SHA-256 digest as a strong 'ETag' -- hex-encoded, in the quoted
+{- | Quote a SHA-256 digest as a strong 'ETag': hex-encoded, in the quoted
 opaque-tag wire form. The digest is whatever fingerprint the serving layer stands
-behind; for packuments that is the input fingerprint of
+behind. For packuments that is the input fingerprint of
 'Ecluse.Core.Server.Pipeline.Packument.packumentETag'.
 -}
 mkStrongETag :: Digest SHA256 -> ETag
@@ -82,11 +83,11 @@ etagHeader etag = (hETag, encodeUtf8 (renderETag etag))
 validator already matches what we would serve.
 -}
 data Conditional
-    = {- | The served body is unchanged from the client's validator -- answer @304@
-      with this 'ETag', no body.
+    = {- | The served body is unchanged from the client's validator. Answer @304@
+      with this 'ETag' and no body.
       -}
       NotModified ETag
-    | {- | The served body differs (or no validator was sent) -- serve @200@ with
+    | {- | The served body differs, or no validator was sent. Serve @200@ with
       this 'ETag' header.
       -}
       Modified ETag
@@ -94,13 +95,13 @@ data Conditional
 
 {- | Evaluate a conditional request against our own ETag for a transformed body.
 
-The given tag is matched against the request's @If-None-Match@: a @*@ wildcard, or
-any tag in the (comma-separated) list whose opaque value equals ours, is a match →
-'NotModified'. The match is __weak__ (RFC 7232): a @W/@ prefix on either side is
+The given tag is matched against the request's @If-None-Match@. A @*@ wildcard, or
+any tag in the comma-separated list whose opaque value equals ours, is a match →
+'NotModified'. The match is __weak__ (RFC 7232). A @W/@ prefix on either side is
 ignored, so a client echoing our tag with a weakness marker still matches. Anything
-else -- a stale tag, or no validator -- is 'Modified'.
+else is 'Modified': a stale tag, or no validator.
 
-@If-Modified-Since@ is deliberately not consulted for transformed bodies: a merged
+@If-Modified-Since@ is deliberately not consulted for transformed bodies. A merged
 packument has no single upstream @Last-Modified@ to compare to, and the strong
 ETag is the precise validator.
 -}
@@ -134,8 +135,8 @@ normaliseTag t = fromMaybe t (T.stripPrefix "W/" t)
 
 {- | The client's conditional validators to relay upstream for a __pass-through__
 body. Only the request-side conditional headers (@If-None-Match@,
-@If-Modified-Since@) are forwarded; everything else is dropped, since this is the
-exact set that lets upstream answer @304@ for a body we serve unchanged.
+@If-Modified-Since@) are forwarded, and everything else is dropped. That is the exact
+set that lets upstream answer @304@ for a body we serve unchanged.
 -}
 forwardValidators :: RequestHeaders -> RequestHeaders
 forwardValidators = filter (isValidator . fst)
