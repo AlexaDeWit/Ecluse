@@ -26,6 +26,12 @@ A PR flips **ready for review** only when both hold:
    critical findings.
 2. **CI `gate` green.** Every job the terminal `gate` needs is green on the PR.
 
+**The flip is the hand-off.** Marking a PR ready for review is how the team lead hands work to the
+architect; nothing else is. Verify that the commit the reviewer passed is the one the gate ran on
+and that `CI gate` and every context the ruleset requires (`codecov/project`) pass, then
+`gh pr ready`, then report. A PR still in draft is never reported to the architect as done, green,
+or reviewed. `codecov/patch` is non-gating and does not hold a flip.
+
 A green gate is necessary but not sufficient. It verifies build and test; it does not judge
 requirements, quality, or security, which the evaluation does. Neither substitutes for the other. Do
 not flip a PR ready on a green gate alone. This is the failure the procedure exists to prevent.
@@ -43,7 +49,10 @@ loop](../../orchestration-strategy.md#the-per-pr-loop).
 3. **Evaluate (mandatory).** Dispatch a fresh-context reviewer with no exposure to the implementer's
    reasoning, read-and-verify only. It runs both passes below. Read the diff yourself as well.
 4. **Gate.** Open the draft PR and watch the CI `gate` to green.
-5. **Hand off.** Flip the PR ready only when both hand-off gates hold. Until then it stays a draft.
+5. **Hand off.** Flip the PR ready for review only when both hand-off gates hold on the same head
+   commit (`gh pr checks` for the gate and the ruleset's required contexts, then `gh pr ready`),
+   and report it to the architect only after the flip. Until then it stays a draft and is not
+   reported as done.
 
 ## Evaluation: the two mandatory passes
 
@@ -111,8 +120,13 @@ Detail: [Guardrails](../../orchestration-strategy.md#guardrails-always-on) and [
   bounded attempt first; never fabricate a value, weaken a test, or leave a stub.
 - **PRs only.** The team lead never merges and never pushes to `main`.
 - **Cross-cutting invariants live in one shared helper**, called by each slice, never duplicated.
-- **Surface decisions one at a time**, lead-with-a-recommendation; park a backlog in a short-lived
-  `.agents/design-queue.md`.
+- **Surface decisions one at a time, paced by a task list.** When the architect must answer a
+  series of questions, put the series on the task list first (one entry per question: the
+  harness task list where available, otherwise a short-lived `.agents/design-queue.md`), then
+  ask the first question alone: the decision, two or three options, a recommendation, and
+  nothing the answer does not need. Record the ruling and act on it before asking the next.
+  Never stack several questions in one message; a wall of detail costs the architect more
+  than the serialised round-trips cost the lead.
 - **Reference work by PR or issue number**, never an internal task-tracker ID the architect cannot
   see.
 - After every merge, rebase the dependent worktrees onto the new base and re-run their gate. Between

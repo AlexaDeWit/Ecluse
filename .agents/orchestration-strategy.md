@@ -81,7 +81,10 @@ flowchart TD
 
 **Draft until ready.** A PR opens as a **draft** and stays one until both gates hold and the team
 lead is confident handing it over. Marking it **ready for review** is the hand-off signal: ready for
-the architect to review and potentially merge, nothing less. A PR still building, mid-review,
+the architect to review and potentially merge, nothing less. Marking it is the act of handing off:
+the team lead verifies that the reviewer's head commit is the one the gate ran on and that every
+context the ruleset requires passes, flips it with `gh pr ready`, and only then reports it to the
+architect; a draft is never reported as done. A PR still building, mid-review,
 evaluation-blocked, gate-red, or that the team lead is simply unsure of stays a draft, so the
 architect never spends attention on, or merges, work that was not deliberately offered. This is the
 one definition of ready-for-review; later sections reference it.
@@ -355,11 +358,14 @@ checklist. These are the standing rules it does not capture:
   one slice (`latest` resolution in the npm filter and the packument merge; lossless `Value`
   passthrough across filter, merge, and serve), extract it into a single shared helper the slices
   call. Duplicated invariant logic drifts and gets fixed N times.
-- **Surface decisions one at a time.** When several design questions are open at once, the team lead
-  does not front-load them all in one message. They are parked (a short-lived `design-queue.md` under
-  `.agents/`, spun up when decisions accumulate and removed once drained into `docs/` and issues)
-  and brought one at a time, lead-with-a-recommendation. This complements _escalate, don't guess_:
-  surface proactively, but serialised.
+- **Surface decisions one at a time, paced by a task list.** When several design questions are open
+  at once, the team lead does not front-load them in one message. The series goes on a task list
+  first (one entry per question: the harness task list where available, otherwise a short-lived
+  `design-queue.md` under `.agents/`, spun up when decisions accumulate and removed once drained
+  into `docs/` and issues), and each question is brought alone, lead-with-a-recommendation,
+  resolved and recorded before the next is asked. This complements _escalate, don't guess_:
+  surface proactively, but serialised, so the architect answers one short question at a time
+  rather than a wall of detail.
 - **Reference work by identifiers the architect can see.** Name a piece of work by its PR or issue
   number (`#168`) or a short descriptive title, never an internal task-tracker ID the architect's
   view does not render.
