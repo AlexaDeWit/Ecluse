@@ -12,26 +12,11 @@
 -- from docs/ still maps to motivation.html, and `architecture/foo.md` lands on
 -- the right GitHub path.
 
--- Only docs rendered 1:1 belong here. README.md is deliberately absent, because
--- the landing page is hand-authored rather than a rendering of the README. A
--- README link carries anchors like #verifying-the-image, so it must go to GitHub,
--- where that content and those anchors exist.
+-- Only docs rendered 1:1 belong here. Every other in-repo path, README.md and the
+-- architecture documents included, falls back to GitHub, where the file and its
+-- heading anchors exist.
 local pages = {
-  ["MOTIVATION.md"]        = "motivation.html",
-  ["ALTERNATIVES.md"]      = "alternatives.html",
-  ["USAGE.md"]             = "usage.html",
-  ["SECURITY.md"]          = "security.html",
-  ["docs/architecture.md"] = "architecture.html",
-  ["docs/architecture/registry-model.md"] = "architecture/registry-model.html",
-  ["docs/architecture/rules-engine.md"] = "architecture/rules-engine.html",
-  ["docs/architecture/web-layer.md"] = "architecture/web-layer.html",
-  ["docs/architecture/security.md"] = "architecture/security.html",
-  ["docs/architecture/access-model.md"] = "architecture/access-model.html",
-  ["docs/architecture/fault-model.md"] = "architecture/fault-model.html",
-  ["docs/architecture/observability.md"] = "architecture/observability.html",
-  ["docs/architecture/cloud-backends.md"] = "architecture/cloud-backends.html",
-  ["docs/architecture/release-supply-chain.md"] = "architecture/release-supply-chain.html",
-  ["docs/architecture/configuration.md"] = "architecture/configuration.html",
+  ["USAGE.md"] = "usage.html",
 }
 
 local blob = "https://github.com/AlexaDeWit/Ecluse/blob/main/"

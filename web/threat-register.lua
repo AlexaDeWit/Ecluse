@@ -1,5 +1,5 @@
 -- Expand a ```threat-register fence into the project's threat register, rendered
--- from the OWASP Threat Dragon model at `make site` time. The model
+-- from the OWASP Threat Dragon model at `task site` time. The model
 -- (threat-modelling/ecluse.json) is the single source of truth. Every Pages build
 -- regenerates the register, and nobody hand-copies it into prose, so the docs
 -- cannot drift from the model.

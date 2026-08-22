@@ -65,7 +65,6 @@ pre {
   overflow-x: auto; border: 1px solid var(--border);
 }
 pre code { background: none; padding: 0; }
-pre.mermaid { background: none; border: none; text-align: center; }
 
 blockquote {
   margin: 1.25rem 0; padding: 0.25rem 1rem; color: var(--muted);
@@ -114,22 +113,12 @@ h3.threat { scroll-margin-top: 1rem; }
 }
 .hero h1 { border: none; margin-bottom: 0; }
 .hero .lead { color: var(--muted); font-size: 1.15rem; max-width: 34rem; margin: 0.5rem auto 0; }
-.hero-actions {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-  gap: 1rem; margin-top: 1.25rem;
-}
-.hero-actions .primary-action {
-  padding: 0.55rem 0.9rem; border-radius: 8px; color: var(--surface);
-  background: var(--accent); font-weight: 600; text-decoration: none;
-}
-.hero-actions .primary-action:hover { color: var(--surface); background: var(--accent-strong); }
+.index { max-width: 34rem; margin: 2rem auto 0; padding-left: 1.25rem; }
+.index li { margin: 0.4rem 0; }
 .cards {
   display: grid; gap: 1rem; margin: 2.5rem 0;
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
 }
-.path-heading { margin-top: 2.5rem; text-align: center; }
-.path-intro { max-width: 38rem; margin: 0.5rem auto 0; text-align: center; color: var(--muted); }
-.cards.paths { margin-top: 1.5rem; }
 .card {
   border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem;
   text-decoration: none; color: inherit; background: var(--surface);

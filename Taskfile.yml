@@ -5,7 +5,7 @@ vars:
   SUITE: ecluse-unit
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
-  PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
+  PANDOC_FLAGS: --standalone --from gfm --template web/template.html --lua-filter web/links.lua
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 tasks:
   default:
@@ -507,8 +507,7 @@ tasks:
     cmds:
       - cp -R web/static/. _site/
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
-      - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
-      - mkdir -p _site/architecture
+      - sh -c 'mkdir -p _site/vendor && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - task: site:pandoc
   # PR-tier site gate. Everything the link and metadata checks cover lives in web/,
   # the Markdown sources, and the sitemap. None of that needs Haddock or the OpenAPI
@@ -528,37 +527,9 @@ tasks:
     internal: true
     deps:
       - task: site:pandoc-page
-        vars: { SRC: "MOTIVATION.md", OUT: "motivation.html", TITLE: "Why Écluse?", DESCRIPTION: "Why package registries need a policy enforcement point, and the design bet behind Écluse." }
-      - task: site:pandoc-page
-        vars: { SRC: "ALTERNATIVES.md", OUT: "alternatives.html", TITLE: "Alternatives", DESCRIPTION: "Compare Écluse with registry hosts, repository managers, and package-security tools." }
-      - task: site:pandoc-page
-        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", DESCRIPTION: "Deploy, configure, and operate Écluse safely as a package-registry policy proxy.", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
+        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", DESCRIPTION: "Deploy, configure, and operate Écluse as a package-registry policy proxy.", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
       - task: site:pandoc-page
         vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", DESCRIPTION: "The generated STRIDE threat register and deployment assumptions for Écluse.", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
-      - task: site:pandoc-page
-        vars: { SRC: "SECURITY.md", OUT: "security.html", TITLE: "Security Policy", DESCRIPTION: "How to report a vulnerability in Écluse, and where the threat model and security invariants live." }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture.md", OUT: "architecture.html", TITLE: "Architecture", DESCRIPTION: "How Écluse is designed: the request lifecycle, the codebase decomposition, and the map of concern documents.", EXTRA_FLAGS: "-M link-base=docs" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/registry-model.md", OUT: "architecture/registry-model.html", TITLE: "Registry model", DESCRIPTION: "The four registry roles behind one endpoint: private-first reads, gated public fallback, mirror and publication writes, and the packument merge.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/rules-engine.md", OUT: "architecture/rules-engine.html", TITLE: "Rules engine", DESCRIPTION: "How Écluse decides: deny-by-default evaluation, rule precedence, advisory gating, and how verdicts apply to packuments and tarballs.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/web-layer.md", OUT: "architecture/web-layer.html", TITLE: "Web layer", DESCRIPTION: "The raw-WAI front door: routing and mounts, the capability manifest, streaming, admission control, and the error model.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/security.md", OUT: "architecture/security.html", TITLE: "Security design", DESCRIPTION: "The security design: the egress invariants, the SSRF posture, credential handling, and the shared-responsibility boundary with the operator.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/access-model.md", OUT: "architecture/access-model.html", TITLE: "Access model", DESCRIPTION: "Who holds which credential: passthrough reads, the mirror-write provider, edge authentication, and the planned service-credential model.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/fault-model.md", OUT: "architecture/fault-model.html", TITLE: "Fault model", DESCRIPTION: "How faults are classified and rendered: the typed request perimeter, pre- and post-commit dispositions, and steady-state-zero alarms.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/observability.md", OUT: "architecture/observability.html", TITLE: "Observability", DESCRIPTION: "Traces, metrics, and logs over OpenTelemetry: the metric catalogue, the Datadog path, and what is deliberately never recorded.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/cloud-backends.md", OUT: "architecture/cloud-backends.html", TITLE: "Cloud backends", DESCRIPTION: "The cloud edge behind handles: the mirror queue, the credential provider, service mapping, and the unified multicall binary.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/release-supply-chain.md", OUT: "architecture/release-supply-chain.html", TITLE: "Release and supply chain", DESCRIPTION: "How a release is cut and attested: reproducible Nix builds, keyless provenance and SBOM attestations, and vulnerability scanning.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
-      - task: site:pandoc-page
-        vars: { SRC: "docs/architecture/configuration.md", OUT: "architecture/configuration.html", TITLE: "Configuration model", DESCRIPTION: "The configuration model: sources and precedence, validation, runtime sizing, and the document-merge schema for rules.", EXTRA_FLAGS: "-M link-base=docs/architecture -M prefix=../" }
   site:pandoc-page:
     internal: true
     sources:
@@ -566,7 +537,6 @@ tasks:
       - web/template.html
       - web/static/style.css
       - web/links.lua
-      - web/mermaid.lua
     generates:
       - '_site/{{.OUT}}'
     cmds:

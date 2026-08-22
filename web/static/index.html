@@ -46,11 +46,8 @@
     <header class="site-header">
       <a class="brand" href="index.html"><img src="logo.svg" alt="" height="28" /> Écluse</a>
       <nav>
-        <a href="motivation.html">Why</a>
-        <a href="alternatives.html">Alternatives</a>
-        <a href="architecture.html">Design</a>
+        <a href="index.html">Home</a>
         <a href="usage.html">Operating</a>
-        <a href="security.html">Security</a>
         <a href="threat-model.html">Threat model</a>
         <a href="api/index.html">API</a>
         <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
@@ -61,42 +58,16 @@
         <img class="hero-art" src="lock-illustration.svg" alt="A draughtsman's section of a canal lock: a barge of stacked shipping containers waits in the low chamber below the closed gate." />
         <h1>Écluse</h1>
         <p class="lead">
-          An open-source supply-chain policy proxy for package registries: the
-          controlled passage every dependency clears before it reaches your build.
+          A supply-chain policy proxy for package registries. It applies a
+          deny-by-default policy before a package reaches a build.
         </p>
-        <div class="hero-actions">
-          <a class="primary-action" href="motivation.html">Why Écluse?</a>
-          <a href="https://github.com/AlexaDeWit/Ecluse">View on GitHub</a>
-        </div>
       </section>
-      <h2 class="path-heading">What brought you here?</h2>
-      <p class="path-intro">Start with the path that matches what you need. Each one leads from the short answer to the relevant detail.</p>
-      <div class="cards paths">
-        <a class="card" href="motivation.html">
-          <h3>Decide if it fits</h3>
-          <p>Start with the problem and the policy-proxy bet, then compare the alternatives honestly.</p>
-        </a>
-        <a class="card" href="usage.html">
-          <h3>Deploy and operate</h3>
-          <p>Configure Écluse, connect npm, and lock down the deployment around it.</p>
-        </a>
-        <a class="card" href="architecture.html">
-          <h3>Understand the design</h3>
-          <p>Use the architecture map to follow one concern down to its rationale.</p>
-        </a>
-        <a class="card" href="https://github.com/AlexaDeWit/Ecluse/blob/main/docs/getting-started.md">
-          <h3>Contribute</h3>
-          <p>Enter the pinned development environment and take a change through the test gates.</p>
-        </a>
-        <a class="card" href="security.html">
-          <h3>Assess security</h3>
-          <p>Review the security contract, invariants, and generated threat model.</p>
-        </a>
-        <a class="card" href="https://github.com/AlexaDeWit/Ecluse/blob/main/README.md#verifying-the-image">
-          <h3>Verify the provenance</h3>
-          <p>Pin a release by digest, then verify its provenance and SBOM attestations against the public Rekor log.</p>
-        </a>
-      </div>
+      <ul class="index">
+        <li><a href="usage.html">Operator manual</a></li>
+        <li><a href="threat-model.html">Threat model</a></li>
+        <li><a href="api/index.html">API reference (Haddock and the capability manifest)</a></li>
+        <li><a href="https://github.com/AlexaDeWit/Ecluse">Source on GitHub</a></li>
+      </ul>
     </main>
     <footer class="site-footer">
       <p>
