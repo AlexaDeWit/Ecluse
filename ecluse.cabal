@@ -113,6 +113,7 @@ library ecluse-core
     Ecluse.Core.Osv.Retry
     Ecluse.Core.Osv.Schema
     Ecluse.Core.Osv.Stream
+    Ecluse.Core.Osv.Types
     Ecluse.Core.Package
     Ecluse.Core.Package.Admission
     Ecluse.Core.Package.Filter

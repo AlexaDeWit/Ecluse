@@ -89,8 +89,9 @@ import Ecluse.Core.Breaker (
     BreakerReporter (..),
     noBreakerReporter,
  )
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, UpperBound (FixedBefore), insideAffectedRange, severityAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),

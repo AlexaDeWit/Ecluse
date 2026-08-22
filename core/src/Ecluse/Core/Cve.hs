@@ -37,7 +37,6 @@ module Ecluse.Core.Cve (
 
     -- * What a lookup returns
     AdvisoryRange (..),
-    UpperBound (..),
 
     -- * Rejection
     CveDbRejected (..),
@@ -57,7 +56,7 @@ import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Osv.Advisory (UpperBound (..))
+import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
 import Database.SQLite.Simple (Connection, SQLError, close)

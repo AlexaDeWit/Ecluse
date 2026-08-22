@@ -23,8 +23,8 @@ import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_,
 import UnliftIO.Exception (onException, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Osv.Advisory (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Osv.Schema (ColumnSpec (..), MetaKey (MetaEcosystem), TableSpec (..), osvSchemaEpoch, osvTableSpecs, renderMetaKey)
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 
 {- | One advisory segment recorded against a package. 'arSeverity' is the CVSS base score
 from 0 to 10, or 'Nothing' when unscored. The bounds are verbatim version text: 'arIntroduced'

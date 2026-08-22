@@ -12,7 +12,8 @@ module Ecluse.Test.Cve (
     fakeCveLookup,
 ) where
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), UpperBound (FixedBefore))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 
 {- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
 on the fixed bound, matching the artifact's verbatim version text.

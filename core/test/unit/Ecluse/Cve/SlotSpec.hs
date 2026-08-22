@@ -10,8 +10,9 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..), UpperBound (FixedBefore))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Test.Cve (fakeCveLookup)
 
 {- | A fake owning resource over the in-memory lookup, recording every close so the
