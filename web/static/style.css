@@ -23,73 +23,126 @@
   --accent-strong: #2e4a45;
   --border:        var(--tan);
   --code-bg:       var(--cream);
+
+  /* Two widths on one centre axis. Prose stops at the reading measure, and code,
+     tables, and card grids step out into the gutters. --wide is sized so the
+     longest line in the embedded configuration reference fits without scrolling. */
+  --measure: 42rem;
+  --wide:    58rem;
+  --gutter:  1.25rem;
+
   color-scheme: light;
 }
 
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   color: var(--fg);
   background: var(--bg);
   font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-a { color: var(--accent); }
+a { color: var(--accent); text-underline-offset: 0.15em; }
 a:hover { color: var(--accent-strong); }
+:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+img { max-width: 100%; height: auto; }
 
 .site-header {
-  display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--slate);
-  background: var(--tan);
+  /* Align the header's own content with the page column below it. */
+  padding: 0.7rem max(var(--gutter), calc((100% - var(--wide)) / 2 + var(--gutter)));
+  border-bottom: 1px solid var(--slate); background: var(--tan);
 }
 .site-header .brand {
   display: inline-flex; align-items: center; gap: 0.5rem;
   font-weight: 600; text-decoration: none; color: var(--fg);
 }
-.site-header nav { display: flex; flex-wrap: wrap; gap: 1rem; }
-.site-header nav a { color: var(--muted); text-decoration: none; }
-.site-header nav a:hover { color: var(--accent); }
-
-main.doc, main.home { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
-
-h1 { font-size: 2rem; line-height: 1.2; margin: 1.5rem 0 0.5rem; }
-h2 { margin-top: 2.25rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
-h3 { margin-top: 1.75rem; }
-
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
-  background: var(--code-bg); padding: 0.15em 0.35em; border-radius: 4px;
+.site-header .brand img { height: 1.75rem; width: auto; }
+.site-header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 1.1rem; font-size: 0.95rem; }
+.site-header nav a {
+  color: var(--muted); text-decoration: none;
+  border-bottom: 1px solid transparent; padding-bottom: 1px;
 }
+.site-header nav a:hover { color: var(--accent-strong); border-bottom-color: var(--accent); }
+
+main.doc, main.home { max-width: var(--wide); margin: 0 auto; padding: 2.75rem var(--gutter) 4rem; }
+/* Everything centres on the same axis. Prose keeps the measure, the wide blocks
+   below reclaim the full column. */
+main.doc > * { max-width: var(--measure); margin-inline: auto; }
+main.doc > div.sourceCode,
+main.doc > pre,
+main.doc > table,
+main.doc > figure { max-width: 100%; margin-inline: auto; }
+
+h1, h2, h3, h4 { line-height: 1.25; scroll-margin-top: 1.5rem; }
+h1 { font-size: 2.15rem; margin: 0 0 0.85rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 3rem 0 0.85rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+h3 { font-size: 1.2rem; margin: 2.4rem 0 0.6rem; }
+h4 { font-size: 1rem; margin: 1.6rem 0 0.4rem; }
+p { margin: 0 0 1rem; }
+ul, ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+li { margin: 0.3rem 0; }
+li > ul, li > ol { margin: 0.3rem 0 0.4rem; }
+/* The standfirst under a page title. */
+main.doc > h1 + p { font-size: 1.1rem; line-height: 1.55; margin-bottom: 1.25rem; }
+
+/* The manual's Contents list, set as a compact index rather than body copy. */
+#contents { margin-top: 2.25rem; }
+#contents + ul {
+  list-style: none; margin: 0.25rem auto 0; padding: 1rem 1.25rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+#contents + ul li { margin: 0.2rem 0; break-inside: avoid; }
+#contents + ul a { text-decoration: none; }
+#contents + ul a:hover { text-decoration: underline; }
+@media (min-width: 34rem) {
+  #contents + ul { columns: 2; column-gap: 2rem; }
+}
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+/* Inline code carries no chip. The manual sets identifiers a few to a sentence,
+   and a padded background there reads as a space inside the punctuation around
+   it. An identifier longer than a narrow column breaks rather than pushing the
+   page sideways. */
+:not(pre) > code { overflow-wrap: break-word; }
 pre {
-  background: var(--code-bg); padding: 1rem; border-radius: 8px;
-  overflow-x: auto; border: 1px solid var(--border);
+  background: var(--code-bg); padding: 0.9rem 1rem; border-radius: 8px;
+  border: 1px solid var(--border); overflow: auto;
+  /* The configuration reference runs past 200 lines. Capping it keeps the page
+     navigable and keeps a long line's horizontal scrollbar in view. */
+  max-height: min(70vh, 48rem);
 }
-pre code { background: none; padding: 0; }
+pre > code { font-size: 0.85rem; }
+main.doc pre > code.sourceCode > span { line-height: 1.5; }
+/* pandoc emits an empty per-line anchor inside every highlighted line. */
+main.doc pre > code.sourceCode > span > a:first-child { color: inherit; text-decoration: none; }
 
 /* A blockquote in the manual is a callout, not a quotation: keep it in body
    ink on the raised surface so it reads as a note. */
 blockquote {
-  margin: 1.25rem 0; padding: 0.6rem 1rem; background: var(--surface);
+  margin: 1.5rem 0; padding: 0.75rem 1.1rem; background: var(--surface);
   border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
 }
-blockquote > p { margin: 0.4rem 0; }
-table { border-collapse: collapse; width: 100%; margin: 1.25rem 0; display: block; overflow-x: auto; }
-th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
-th { background: var(--code-bg); }
-img { max-width: 100%; }
+blockquote > :first-child { margin-top: 0; }
+blockquote > :last-child { margin-bottom: 0; }
 
-/* Desktop: widen the documentation column so the embedded configuration
-   reference and the code fences get room, while prose blocks keep the readable
-   measure and anchor left within the wider column. */
-@media (min-width: 75rem) {
-  main.doc, .site-footer { max-width: 70rem; }
-  main.doc > p, main.doc > ul, main.doc > ol, main.doc > blockquote { max-width: 56rem; }
+table {
+  border-collapse: collapse; width: 100%; margin: 1.5rem 0;
+  display: block; overflow-x: auto; font-size: 0.95rem;
+}
+th, td { padding: 0.55rem 0.8rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+tr > :first-child { padding-left: 0; }
+tr > :last-child { padding-right: 0; }
+thead th {
+  border-bottom: 2px solid var(--tan); color: var(--muted);
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em;
 }
 
 /* Threat-register pills (web/threat-register.lua emits these classes). */
 .badge {
-  display: inline-block; padding: 0.05em 0.5em; border-radius: 999px;
-  font-size: 0.8em; font-weight: 600; line-height: 1.5; white-space: nowrap;
+  display: inline-block; padding: 0.1em 0.55em; border-radius: 999px;
+  font-size: 0.78em; font-weight: 600; line-height: 1.6; white-space: nowrap;
   border: 1px solid var(--border);
 }
 .severity-high   { background: #f3d9d2; color: #7a2718; border-color: #e0b7ac; }
@@ -99,39 +152,86 @@ img { max-width: 100%; }
 .status-mitigated { background: #d7e6da; color: #285c36; border-color: #b4d3bb; }
 .status-accepted  { background: #e4dfed; color: #46335f; border-color: #cfc4dd; }
 .status-na        { background: var(--tan); color: var(--muted); }
-h3.threat { scroll-margin-top: 1rem; }
+/* One rule per register entry, so a long detail run reads as separate entries. */
+h3.threat { margin-top: 2.75rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+/* The badge, category, and element line under each entry heading. */
+h3.threat + p { margin: 0 auto 1rem; color: var(--muted); font-size: 0.95rem; }
 
 .site-footer {
-  max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem;
+  /* The footer is prose, so its rule aligns with the prose measure rather than
+     with the wider code column. */
+  max-width: calc(var(--measure) + 2 * var(--gutter)); margin: 0 auto;
+  padding: 2rem var(--gutter) 3rem;
   border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem;
 }
+.site-footer p { margin: 0 0 0.5rem; }
 .site-footer a { color: var(--muted); }
+.site-footer a:hover { color: var(--accent-strong); }
 .site-footer .made-in { margin-top: 1rem; font-size: 0.85rem; }
 
-/* Landing page: one 40rem column, centred on the page, text set ragged-right.
-   The artwork, the lead, and the index share its left edge. */
-.hero { max-width: 40rem; margin: 0 auto; padding: 2.5rem 0 0; }
+/* Landing page: the artwork, the title, the lead, and the index all share the
+   measure and its left edge. The artwork carries its own pale ground, so the
+   rounded border clips it into a plate rather than letting it float. */
+.hero { max-width: var(--measure); margin: 0 auto; }
 .hero-art {
-  display: block; width: 100%; height: auto; margin: 0 0 1.5rem;
+  display: block; width: 100%; margin: 0 0 2rem;
   border: 1px solid var(--border); border-radius: 12px;
 }
-.hero h1 { border: none; margin: 0 0 0.5rem; }
-.hero .lead { font-size: 1.1rem; margin: 0; }
-.index { max-width: 40rem; margin: 1.5rem auto 0; padding-left: 1.25rem; }
-.index li { margin: 0.4rem 0; }
+.hero h1 { margin: 0 0 0.4rem; }
+.landing .hero h1 { font-size: 2.6rem; }
+.hero .tagline { margin: 0 0 2rem; color: var(--muted); font-size: 1.2rem; }
+.hero .lead { font-size: 1.05rem; }
+.hero .lead p { margin: 0 0 1.1rem; }
+
+.index {
+  list-style: none; max-width: var(--measure); margin: 2.5rem auto 0; padding: 0;
+  border-top: 1px solid var(--border);
+}
+.index li { margin: 0; border-bottom: 1px solid var(--border); }
+.index a {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: 0.7rem 0.25rem; text-decoration: none;
+}
+.index a::after { content: "\2192"; color: var(--muted); }
+.index a:hover { background: var(--surface); }
+
 .cards {
-  display: grid; gap: 1rem; margin: 2.5rem 0;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  display: grid; gap: 1rem; margin: 2.75rem 0 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
 }
 .card {
   border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem;
   text-decoration: none; color: inherit; background: var(--surface);
 }
 .card:hover { border-color: var(--accent); }
-.card h3 { margin: 0 0 0.3rem; }
+.card h3 { margin: 0 0 0.4rem; font-size: 1.05rem; color: var(--accent-strong); }
 .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
 /* Supplementary link beneath the card grid, for example the raw OpenAPI spec.
    A whole card is an anchor, so an in-card inline link would nest <a> in <a>.
    This keeps such a link valid and reachable without breaking the card
    affordance. */
 .cards-note { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+@media (max-width: 30rem) {
+  .site-header { padding: 0.6rem 1rem; }
+  .site-header nav { gap: 0.15rem 0.9rem; font-size: 0.9rem; }
+  main.doc, main.home, .site-footer { padding-left: 1rem; padding-right: 1rem; }
+  main.doc, main.home { padding-top: 2rem; }
+  h1 { font-size: 1.7rem; }
+  .landing .hero h1 { font-size: 2.1rem; }
+  h2 { font-size: 1.25rem; margin-top: 2.25rem; }
+  .hero .tagline { font-size: 1.1rem; }
+  pre { padding: 0.75rem 0.8rem; }
+  pre > code { font-size: 0.8rem; }
+  th, td { padding: 0.5rem 0.6rem; }
+}
+
+@media print {
+  body { background: #fff; }
+  .site-header nav { display: none; }
+  main.doc, main.home, .site-footer, main.doc > * { max-width: none; }
+  pre { max-height: none; overflow: visible; break-inside: avoid; }
+  a { color: inherit; }
+  h1, h2, h3 { break-after: avoid; }
+  blockquote, table, .card { break-inside: avoid; }
+}

@@ -132,7 +132,7 @@ declares such hosts and the same-host gate admits them, with no operator knob to
 surface. The proxy never trusts that location. The allowlist and the same-host gate bound where
 it may fetch the bytes, and https-only egress with certificate validation authenticates the host.
 The proxy upgrades a legacy `http` tarball on the same host, or drops it (see
-[Securing network egress](../../USAGE.md#securing-network-egress-required)).
+[Securing network egress](../../USAGE.md#network-egress)).
 
 On a private miss the proxy gates that one version, streams from public, and enqueues a
 demand-driven mirror job. The enqueue does not block, so the proxy serves the client immediately.
