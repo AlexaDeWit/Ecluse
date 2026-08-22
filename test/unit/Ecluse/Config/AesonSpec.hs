@@ -371,10 +371,10 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
 
-        -- A successful load is echoed key by key at boot, warns on colliding
-        -- endpoints, and prints a posture line per mount, each rendering a configured
-        -- registry URL as given. Refusing these shapes at load is what keeps a
-        -- credential off those lines, so the refusal names the key and never the value.
+        -- Boot echoes a successful load key by key, warns on colliding endpoints, and
+        -- prints a posture line per mount. Each line renders a configured registry URL
+        -- as given. Refusing these shapes at load is what keeps a credential off those
+        -- lines, so the refusal names the key and never the value.
         it "rejects an upstream URL carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://deploy:hunter2@repo.internal.example.test/npm")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry userinfo"

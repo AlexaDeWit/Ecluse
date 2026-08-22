@@ -133,9 +133,9 @@ spec = do
 
     describe "logUpstreamUnformable (url minimisation)" $
         it "reduces the offending URL to its authority, dropping userinfo and query" $ do
-            -- The URL a fault carries can be an upstream-supplied artifact location,
-            -- which holds a credential in its userinfo or a signed query, so the
-            -- rendered fault names the authority alone.
+            -- The URL a fault carries can be an upstream-supplied artifact location.
+            -- That location can hold a credential in its userinfo or a signed query,
+            -- so the rendered fault names the authority alone.
             let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv

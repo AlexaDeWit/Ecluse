@@ -44,8 +44,8 @@ rejectSecretKeys o =
 -- extract, so an entry that fails here could only build a mount that refuses every fetch.
 --
 -- mkConfiguredRegistryUrl runs first because the refusal below it quotes the value. Once it
--- has passed, the value carries no userinfo and no query string, so naming it cannot surface
--- a token.
+-- passes, the value carries no userinfo and no query string, so naming it cannot surface a
+-- token.
 parseRegistryUrl :: String -> Value -> Parser RegistryUrl
 parseRegistryUrl field = \case
     String t -> case mkConfiguredRegistryUrl t of

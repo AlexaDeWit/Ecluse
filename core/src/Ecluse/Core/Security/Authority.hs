@@ -154,10 +154,10 @@ False
 carriesUserinfo :: Text -> Bool
 carriesUserinfo = T.isInfixOf "@" . authoritySpan
 
-{- The authority component of a URI or bare @host[:port]@ value with its userinfo
-intact: the text after the scheme separator, truncated at the first
-path\/query\/fragment delimiter. Kept module-private, because a caller holding the
-credential-bearing span is the exposure 'authorityLabel' exists to prevent.
+{- The authority component of a URI or bare @host[:port]@ value, userinfo intact. It is
+the text after the scheme separator, truncated at the first path\/query\/fragment
+delimiter. Kept module-private, because a caller holding the credential-bearing span
+is the exposure 'authorityLabel' exists to prevent.
 'carriesUserinfo' answers the one question about it from outside.
 -}
 authoritySpan :: Text -> Text

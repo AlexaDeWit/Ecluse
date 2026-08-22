@@ -42,10 +42,10 @@ mkRegistryUrlSpec = describe "mkRegistryUrl (https-only by construction)" $ do
         mkRegistryUrl "ftp://registry.example/" `shouldSatisfy` isLeft
 
 {- | 'mkConfiguredRegistryUrl' is the boundary an __operator-configured__ endpoint is
-built at: https as above, and no credential material. Boot echoes every resolved key,
-the endpoint-collision warnings, and a posture line per mount, each printing a
-configured registry URL as the operator wrote it, so a value carrying userinfo or a
-query string must never become a 'Ecluse.Core.Security.Egress.RegistryUrl' at all.
+built at: https as above, and no credential material. Boot prints every resolved key,
+the endpoint-collision warnings, and a posture line per mount. Each renders a
+configured registry URL as the operator wrote it. A value carrying userinfo or a
+query string must therefore never become a 'Ecluse.Core.Security.Egress.RegistryUrl'.
 -}
 mkConfiguredRegistryUrlSpec :: Spec
 mkConfiguredRegistryUrlSpec = describe "mkConfiguredRegistryUrl (a configured endpoint carries no credential)" $ do
