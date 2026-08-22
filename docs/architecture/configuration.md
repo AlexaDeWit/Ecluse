@@ -63,6 +63,11 @@ A **mirrored** mount holds a credential to write its mirror target. That write i
 standing credential. It runs on the async worker under Écluse's own identity, and reads carry none
 of it. A serve-only mount, or a deployment with no mirrored mounts, mints nothing.
 
+A credential is always its own key, never part of an endpoint. Écluse refuses a registry URL
+carrying userinfo, a query string, or a fragment at load, and the error names the key. That refusal
+lets the boot-time configuration echo, the endpoint-collision warnings, and the mount posture lines
+print a configured endpoint as written.
+
 The mirror-write credential is **derived from the mirror-target URL**. It is always the credential
 that endpoint dictates, and Écluse can never pair it with an endpoint it was not minted for. A
 CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) encodes its whole

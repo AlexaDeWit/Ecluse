@@ -24,7 +24,7 @@ import Data.Text qualified as T
 
 import Ecluse.Config.Types (Url, mkUrl)
 import Ecluse.Core.Security (hostPortAddress)
-import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
+import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
 
 rejectSecretKeys :: KeyMap.KeyMap Value -> Parser ()
 rejectSecretKeys o =
@@ -39,20 +39,27 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
--- A registry URL must be https (mkRegistryUrl) and carry an authority the egress gate can
--- extract (hostPortAddress). The gate refuses what it cannot extract, so an entry that fails
--- here could only build a mount that refuses every fetch.
-parseRegistryUrl :: Value -> Parser RegistryUrl
-parseRegistryUrl = \case
-    String t
-        | isNothing (hostPortAddress t) ->
-            fail
-                ( "registry URL must carry a host and, when a port is written, a decimal port in 1..65535 (got "
-                    <> T.unpack t
-                    <> ")"
-                )
-        | otherwise -> either (fail . T.unpack) pure (mkRegistryUrl t)
-    other -> fail ("parseRegistryUrl expected a string, but encountered a " <> valueKind other)
+-- A registry URL must be credential-free and https (mkConfiguredRegistryUrl) and carry an
+-- authority the egress gate can extract (hostPortAddress). The gate refuses what it cannot
+-- extract, so an entry that fails here could only build a mount that refuses every fetch.
+--
+-- mkConfiguredRegistryUrl runs first because the refusal below it quotes the value. Once it
+-- has passed, the value carries no userinfo and no query string, so naming it cannot surface
+-- a token.
+parseRegistryUrl :: String -> Value -> Parser RegistryUrl
+parseRegistryUrl field = \case
+    String t -> case mkConfiguredRegistryUrl t of
+        Left reason -> fail (field <> ": " <> T.unpack reason)
+        Right url
+            | isNothing (hostPortAddress t) ->
+                fail
+                    ( field
+                        <> ": registry URL must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                        <> T.unpack t
+                        <> ")"
+                    )
+            | otherwise -> pure url
+    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
 
 parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
 parseEnum parser field = \case

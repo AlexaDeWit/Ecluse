@@ -24,6 +24,7 @@ module Ecluse.Core.Security.Authority (
     hostAddress,
     hostPortAddress,
     splitHostPort,
+    authoritySpan,
 
     -- * Log-safe rendering
     authorityLabel,
@@ -135,26 +136,40 @@ parsePort t = do
     guard (n >= 1 && n <= 65535)
     pure (fromInteger n)
 
+{- | The authority component of a URI or bare @host[:port]@ value __with its userinfo
+intact__: the text after the scheme separator, truncated at the first
+path\/query\/fragment delimiter.
+
+The configured-endpoint refusal in "Ecluse.Core.Security.Egress" tests for userinfo
+here, at the same boundary 'authorityOf' strips it at. A path segment beginning with
+@\@@ (an npm scope) sits past the truncation and is not userinfo.
+
+>>> authoritySpan "https://deploy:hunter2@registry.npmjs.org/thing?sig=abc"
+"deploy:hunter2@registry.npmjs.org"
+
+>>> authoritySpan "https://registry.npmjs.org/@acme/thing"
+"registry.npmjs.org"
+-}
+authoritySpan :: Text -> Text
+authoritySpan raw = T.takeWhile (`notElem` ['/', '?', '#']) (afterFirst "://" raw)
+
 {- The authority of a URI or bare @host[:port]@ value, with any userinfo dropped. 'hostAddress' and
 'hostPortAddress' share it, so the two extractions cannot drift on an authority edge case. -}
 authorityOf :: Text -> Text
-authorityOf raw =
-    let afterScheme = afterFirst "://" raw
-        authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-     in afterLast "@" authority
-  where
-    -- The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme
-    -- separator must match first: a crafted "https://169.254.169.254/x?u=https://ok.example"
-    -- gates on 169.254.169.254, the host dialled, never on the host after the last "://".
-    afterFirst :: Text -> Text -> Text
-    afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
+authorityOf = afterLast "@" . authoritySpan
 
-    -- The text after @needle@'s last occurrence, or all of @hay@ if absent. The last "@" is the
-    -- userinfo boundary, matching what URL parsers do.
-    afterLast :: Text -> Text -> Text
-    afterLast needle hay =
-        let (pre, post) = T.breakOnEnd needle hay
-         in if T.null pre then hay else post
+-- The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme
+-- separator must match first: a crafted "https://169.254.169.254/x?u=https://ok.example"
+-- gates on 169.254.169.254, the host dialled, never on the host after the last "://".
+afterFirst :: Text -> Text -> Text
+afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
+
+-- The text after @needle@'s last occurrence, or all of @hay@ if absent. The last "@" is the
+-- userinfo boundary, matching what URL parsers do.
+afterLast :: Text -> Text -> Text
+afterLast needle hay =
+    let (pre, post) = T.breakOnEnd needle hay
+     in if T.null pre then hay else post
 
 {- | Split a @host[:port]@ authority into its bare host and the raw @":port"@ remainder, empty when
 no port is present.
