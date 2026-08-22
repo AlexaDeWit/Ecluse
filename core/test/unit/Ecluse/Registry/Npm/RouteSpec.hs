@@ -86,7 +86,7 @@ carries no separator to split at.
 -}
 twoSegments :: Text -> Maybe [Text]
 twoSegments raw = case T.breakOn "/" raw of
-    (before, rest) | Just after <- T.stripPrefix "/" rest -> Just [before, after]
+    (scopeSeg, rest) | Just baseSeg <- T.stripPrefix "/" rest -> Just [scopeSeg, baseSeg]
     _ -> Nothing
 
 {- | The npm routing table, asserted as @pathInfo → Route@. The path arrives percent-decoded, so

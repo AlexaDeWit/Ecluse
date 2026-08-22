@@ -303,9 +303,9 @@ jobBodyFor ecosystem wireName =
         <> ",\"filename\":\"x-1.0.0.tgz\"}"
   where
     (scopeField, bare) = case T.breakOn "/" wireName of
-        (before, rest)
-            | Just after <- T.stripPrefix "/" rest ->
-                (quoted (fromMaybe before (T.stripPrefix "@" before)), after)
+        (scopePart, rest)
+            | Just basePart <- T.stripPrefix "/" rest ->
+                (quoted (fromMaybe scopePart (T.stripPrefix "@" scopePart)), basePart)
         _ -> ("null", wireName)
     quoted t = "\"" <> t <> "\""
 
