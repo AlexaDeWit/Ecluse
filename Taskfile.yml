@@ -5,7 +5,7 @@ vars:
   SUITE: ecluse-unit
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
-  PANDOC_FLAGS: --standalone --from gfm --template web/template.html
+  PANDOC_FLAGS: --standalone --from gfm --template web/template.html --highlight-style web/highlight.theme
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 tasks:
   default:
@@ -536,6 +536,7 @@ tasks:
       - '{{.SRC}}'
       - web/template.html
       - web/static/style.css
+      - web/highlight.theme
       - web/links.lua
       - web/embed-config.lua
       - config/default.yaml

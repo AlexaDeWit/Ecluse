@@ -66,18 +66,21 @@ pre {
 }
 pre code { background: none; padding: 0; }
 
+/* A blockquote in the manual is a callout, not a quotation: keep it in body
+   ink on the raised surface so it reads as a note. */
 blockquote {
-  margin: 1.25rem 0; padding: 0.25rem 1rem; color: var(--muted);
-  border-left: 3px solid var(--border);
+  margin: 1.25rem 0; padding: 0.6rem 1rem; background: var(--surface);
+  border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
 }
+blockquote > p { margin: 0.4rem 0; }
 table { border-collapse: collapse; width: 100%; margin: 1.25rem 0; display: block; overflow-x: auto; }
 th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
 th { background: var(--code-bg); }
 img { max-width: 100%; }
 
-/* Desktop: widen the documentation column so data-heavy blocks (the operator
-   manual's configuration tables, code fences, diagrams) get room, while prose
-   blocks keep the readable measure and anchor left within the wider column. */
+/* Desktop: widen the documentation column so the embedded configuration
+   reference and the code fences get room, while prose blocks keep the readable
+   measure and anchor left within the wider column. */
 @media (min-width: 75rem) {
   main.doc, .site-footer { max-width: 70rem; }
   main.doc > p, main.doc > ul, main.doc > ol, main.doc > blockquote { max-width: 56rem; }
@@ -105,15 +108,16 @@ h3.threat { scroll-margin-top: 1rem; }
 .site-footer a { color: var(--muted); }
 .site-footer .made-in { margin-top: 1rem; font-size: 0.85rem; }
 
-/* Landing page */
-.hero { text-align: center; padding: 3rem 0 1rem; }
+/* Landing page: one 40rem column, centred on the page, text set ragged-right.
+   The artwork, the lead, and the index share its left edge. */
+.hero { max-width: 40rem; margin: 0 auto; padding: 2.5rem 0 0; }
 .hero-art {
-  display: block; width: 100%; max-width: 40rem; height: auto;
-  margin: 0 auto 1.5rem; border: 1px solid var(--border); border-radius: 12px;
+  display: block; width: 100%; height: auto; margin: 0 0 1.5rem;
+  border: 1px solid var(--border); border-radius: 12px;
 }
-.hero h1 { border: none; margin-bottom: 0; }
-.hero .lead { color: var(--muted); font-size: 1.15rem; max-width: 34rem; margin: 0.5rem auto 0; }
-.index { max-width: 34rem; margin: 2rem auto 0; padding-left: 1.25rem; }
+.hero h1 { border: none; margin: 0 0 0.5rem; }
+.hero .lead { font-size: 1.1rem; margin: 0; }
+.index { max-width: 40rem; margin: 1.5rem auto 0; padding-left: 1.25rem; }
 .index li { margin: 0.4rem 0; }
 .cards {
   display: grid; gap: 1rem; margin: 2.5rem 0;
