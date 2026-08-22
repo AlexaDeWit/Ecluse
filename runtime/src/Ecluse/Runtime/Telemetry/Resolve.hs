@@ -28,8 +28,10 @@ normalises it and uses it as given, never classified or gated.
 uses__. One grammar reads the variable, so a percent-encoded value decodes the same
 way for the @dd@ log object and for the span resource. Blank members are dropped
 first, because operator-authored configuration carries a stray comma often enough.
-A value the grammar still rejects warns at boot and resolves as unset. The SDK
-rejects the same value, so both halves agree on carrying no attributes.
+A value the grammar still rejects warns at boot and contributes nothing. The
+projection then overwrites the variable with the resolved identity alone. Both the
+@dd@ log object and the span resource carry that identity, and neither carries the
+operator's attributes.
 
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
 the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
@@ -298,7 +300,7 @@ malformedAttributesMessage :: Text -> Text
 malformedAttributesMessage reason =
     "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage ("
         <> reason
-        <> "). Resolving as unset. The OpenTelemetry SDK rejects the same value."
+        <> "). Dropping its attributes and exporting the resolved service identity alone."
 
 {- | The throttle state for SDK export-error routing. Exposed so a test asserts the throttle
 decision without wall-clock timing.

@@ -125,13 +125,15 @@ resourceAttributeSpec = describe "OTEL_RESOURCE_ATTRIBUTES" $ do
             `shouldBe` Just "stg"
 
     it "resolves as unset and warns when the baggage grammar rejects the value" $ do
-        -- A non-token key fails the whole value for the SDK too, so both halves then carry no
-        -- attributes and still agree.
+        -- A non-token key drops the operator's attributes from both halves. The projection
+        -- exports the resolved identity alone, so the log object and the span resource agree.
         let environment = [("OTEL_RESOURCE_ATTRIBUTES", "bad key=1,service.name=api")]
         rtServiceName (resolveTelemetry environment) `shouldBe` "ecluse"
         rtEnvironment (resolveTelemetry environment) `shouldBe` Nothing
         telemetryWarnings environment
             `shouldSatisfy` any (T.isInfixOf "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage")
+        detectedResourceAttributes environment
+            `shouldReturn` [("service.name", "ecluse"), ("service.version", buildVersion)]
 
     it "raises no warning for a value the grammar accepts" $
         telemetryWarnings
