@@ -41,11 +41,12 @@ credential. It does hold every in-transit caller's credential in memory, transie
 reproducible image ([release supply chain](release-supply-chain.md)). The token-stripping
 boundary and the no-redirect-with-credential invariant are load-bearing, because real caller credentials cross them.
 
-**The outbound controls guard what Écluse builds from untrusted input.** The host allowlist,
-the internal-range block, and the redirect pin apply to the private and public reads and to the
-worker's artifact fetch. A request to an operator-declared destination (the mirror and
-publication targets, SQS, S3, the OTLP collector) goes where the configuration says. The AWS SDK
-and the OTLP exporter build those requests themselves.
+**The outbound controls guard the downloads an attacker can influence.** The host allowlist and
+the internal-range block apply to the public packument and to every public `dist.tarball`.
+That holds on the serve path and on the worker's back-fill fetch alike. They are absent from a trusted,
+operator-declared destination (the private upstream, the mirror and publication targets, SQS,
+S3, the OTLP collector), which goes where the configuration says. Https-only with certificate
+validation applies to every registry endpoint regardless.
 
 **The mirror-target write token is the one standing credential a mirrored deployment holds.** A
 serve-only deployment holds none. The token is also the sharpest privilege, since it writes the

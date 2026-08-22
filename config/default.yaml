@@ -155,8 +155,8 @@ mounts:
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
     # mirrorTargetToken:
-    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200. Unset, the
-    # token lives as long as the role credential that minted it.
+    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200. Unset, Écluse
+    # sends no duration and CodeArtifact applies its own default.
     # mirrorCodeArtifactTokenDuration: 3600
     # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
     # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
