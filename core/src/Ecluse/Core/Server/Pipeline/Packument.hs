@@ -5,71 +5,76 @@
 {- | The serve paths behind the package routes: the packument merge behind
 @GET \/{pkg}@.
 
-This is the data-plane handler module for packuments. It composes the
-slices that decide /what/ to serve -- the origin resolution
-("Ecluse.Core.Server.Pipeline.Origin"), the per-version rules ("Ecluse.Core.Rules"), the structural
-filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
-("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Core.Server.Cache"), the
-own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
-("Ecluse.Core.Server.Response") -- into one action in the
-'Ecluse.Core.Server.Context.Handler' reader, reading its mount's serve dependencies and
-the request runtime 'Ecluse.Core.Server.Context.ServeRuntime' from the request's
+This is the data-plane handler module for packuments. It composes the slices that decide
+/what/ to serve into one action in the 'Ecluse.Core.Server.Context.Handler' reader:
+
+* the origin resolution ("Ecluse.Core.Server.Pipeline.Origin")
+* the per-version rules ("Ecluse.Core.Rules")
+* the structural filter ("Ecluse.Core.Registry.Npm.Filter")
+* the cross-upstream merge ("Ecluse.Core.Package.Merge")
+* the metadata cache ("Ecluse.Core.Server.Cache")
+* the own-ETag conditional ("Ecluse.Core.Server.Conditional")
+* the serve-outcome status ("Ecluse.Core.Server.Response")
+
+It reads its mount's serve dependencies and the request runtime
+'Ecluse.Core.Server.Context.ServeRuntime' from the request's
 'Ecluse.Core.Server.Context.RequestCtx'.
 
 == Credential authority
 
-This handler implements the default @passthrough@ credential posture (see
-@docs\/architecture\/access-model.md@). The invariant that holds under __every__
-strategy is the __public strip__: the client's credential is __stripped before any
-public-upstream fetch__, which is always anonymous -- sending an internal token to the
-public registry would be a credential disclosure, so the public-upstream fetch is built
-with no token at all. Under @passthrough@ the client's own credential is additionally
-__forwarded verbatim to the private upstream__, which is the authority for who may
-read what. The two origins are fetched concurrently, each with its own credential
-posture; nothing shares a token across the trust split.
+This handler applies the default @passthrough@ credential posture (see
+@docs\/architecture\/access-model.md@). The invariant that holds under __every__ strategy
+is the __public strip__: the client's credential is __stripped before any public-upstream
+fetch__, which is always anonymous. Sending an internal token to the public registry
+would be a credential disclosure, so the public-upstream fetch carries no token at all.
+Under @passthrough@ the handler additionally __forwards the client's own credential
+verbatim to the private upstream__, which is the authority for who may read what. It
+fetches the two origins concurrently, each with its own credential posture, and nothing
+shares a token across the trust split.
 
-Because @passthrough@ makes the private upstream the __per-client authority__, its
-metadata is __not cached across clients__ here: the private origin is fetched and parsed on
-every request with that client's own credential, so the upstream re-authorises each
-client itself, and only the anonymous public origin is cached (one shared document, no
-per-client authority to preserve). Caching the private origin keyed by base URL alone
-would let one client's cached entry serve another client's private document within the
-TTL, bypassing the upstream's authorisation -- a cross-client disclosure. (Other
-strategies make the private origin shareable by authorising each serve differently; the
-metadata cache itself stays credential-free regardless -- see
-@docs\/architecture\/access-model.md@ → "Caching".)
+@passthrough@ makes the private upstream the __per-client authority__, so its metadata is
+__not cached across clients__ here. Every request fetches and parses the private origin
+with that client's own credential, so the upstream re-authorises each client itself. Only
+the anonymous public origin is cached: one shared document, with no per-client authority
+to preserve. A private-origin cache keyed by base URL alone would let one client's entry
+serve another client's private document within the TTL, bypassing the upstream's
+authorisation. That is a cross-client disclosure. Other strategies make the private origin
+shareable by authorising each serve differently, and the metadata cache itself stays
+credential-free either way: see @docs\/architecture\/access-model.md@ → "Caching".
 
 == Merge, not fallback
 
-A packument is the /set of available versions/, spread across upstreams, so it is
-__merged__ rather than short-circuited on a private hit (see
-@docs\/architecture\/registry-model.md@ → "Packument merge across upstreams").
-Private versions are trusted and enter unfiltered; public versions are gated
-through the rules and the structural filter (the 'FilterPlan''s survivors restrict
-the typed view) before they enter; the two are combined, private winning a collision and
-an integrity divergence flagged. If one upstream
-is unavailable while the other succeeds, the best-effort union of what resolved is
-served -- only when /nothing/ resolves does the request error.
+A packument is the /set of available versions/, spread across upstreams. The handler
+therefore __merges__ them rather than short-circuiting on a private hit (see
+@docs\/architecture\/registry-model.md@ → "Packument merge across upstreams"). Private
+versions are trusted and enter unfiltered. The rules and the structural filter gate public
+versions first, where the 'FilterPlan''s survivors restrict the typed view. The merge then
+combines the two: a private version wins a collision, and an integrity divergence is
+flagged. If one upstream is unavailable while the other succeeds, the handler serves the
+best-effort union of what resolved. Only when /nothing/ resolves does the request error.
 
 == Decision surface vs served surface
 
-The merge and filter reason over the /typed/ 'PackageInfo' but the document served is the
-__raw upstream document__, held opaquely here as a 'Ecluse.Core.Registry.CachedDocument.CachedDoc'
-and rebuilt from the winning sources, so every unmodeled wire key survives (see
+The merge and filter reason over the /typed/ 'PackageInfo'. The document served is the
+__raw upstream document__, held opaquely here as a
+'Ecluse.Core.Registry.CachedDocument.CachedDoc' and rebuilt from the winning sources.
+Every unmodeled wire key therefore survives (see
 @docs\/architecture\/registry-model.md@ → "Decision surface vs served surface").
-The 'MergePlan' names, for each surviving version, the source that won it; the served body
-is assembled in one pass by the mount's injected assembly capability
-('Ecluse.Core.Registry.Npm.Filter.assembleMergedDocument' for npm), which reads the raw
-documents in the adapter's own representation: each survivor's object is taken from its
-winning source with its tarball URL rewritten under the mount base as it is placed, the
-reconciled @dist-tags@ and @time@ are carried from the plan, and every other top-level key
-is relayed from the precedence-winning document. The typed model is never re-serialised. The two fields the merge /owns/ as a decision -- @dist-tags.latest@
-and the @time@ instants -- are re-rendered from that decision (the times as
-normalised ISO-8601), so they may differ byte-for-byte from any single upstream
-while denoting the same value; integrity-bearing fields (@dist.integrity@,
-@dist.tarball@ up to the rewrite's own prefix) are relayed raw and untouched. The
-served bytes get our __own ETag__, since a merged\/filtered body matches no single
-upstream's.
+
+The 'MergePlan' names, for each surviving version, the source that won it. The mount's
+injected assembly capability ('Ecluse.Core.Registry.Npm.Filter.assembleMergedDocument' for
+npm) builds the served body in one pass, reading the raw documents in the adapter's own
+representation. It takes each survivor's object from its winning source and rewrites the
+tarball URL under the mount base as it places it. It carries the reconciled @dist-tags@
+and @time@ from the plan, and relays every other top-level key from the
+precedence-winning document. The typed model is never re-serialised.
+
+The merge /owns/ two fields as a decision: @dist-tags.latest@ and the @time@ instants.
+Both are re-rendered from that decision, the times as normalised ISO-8601, so they may
+differ byte-for-byte from any single upstream while denoting the same value.
+Integrity-bearing fields (@dist.integrity@, and @dist.tarball@ up to the rewrite's own
+prefix) are relayed raw and untouched. The served bytes get our __own ETag__, since a
+merged or filtered body matches no single upstream's.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
@@ -167,8 +172,8 @@ import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 {- | The route-owned ways the ecosystem-neutral packument pipeline may answer.
 
 The npm adapter supplies these constructors from its closed 'ResponseContract'. The
-pipeline receives no WAI responder, so every branch below must select one of these
-declared alternatives.
+pipeline receives no WAI responder, so every branch below selects one of these declared
+alternatives.
 -}
 data PackumentReplies response = PackumentReplies
     { packumentOk :: ResponseHeaders -> LByteString -> response
@@ -184,27 +189,27 @@ data PackumentReplies response = PackumentReplies
 'RequestCtx'.
 
 The mount's 'PackumentDeps' are read from the matched 'MountBinding' in context, not
-threaded as arguments. When the mount has no
-packument-serve dependencies wired, the route is recognised but not served -- a
-@501@ in the mount's surface -- rather than fabricating a result.
+threaded as arguments. When the mount has no packument-serve dependencies wired, the
+route is recognised but not served. It answers a @501@ in the mount's surface, rather than
+a fabricated result.
 
-With dependencies wired: the edge token, if configured, is validated before any
-upstream is touched. Then the private and public upstreams are fetched
-__concurrently__ -- the client's credential forwarded to the private origin, the public
-origin anonymous -- each parse failure or unavailable upstream degrading to a missing
-contribution rather than an error. Private versions are trusted as-is; public
-versions are gated through the rules and the structural filter (the 'FilterPlan');
-the surviving sets are merged ('mergePackuments') and the 'MergePlan' assembled
-onto the raw upstream documents, through the mount's injected assembly capability, to build
-the served body, which is then answered against the client's conditional request with our own ETag.
-When nothing survives, the status follows the most recoverable cause via
-'packumentStatus'. An origin whose self-reported packument name disagrees with the
-route is validated out -- dropped as untrusted for this request and logged -- so a
-single misreporting upstream never denies a package another upstream serves; when
-that leaves __no__ valid origin, the request is a @502@ (a responding upstream
-returned an invalid response), distinct from a genuine absence. Every refusal -- the
-edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ -- is selected through the
-route's injected 'PackumentReplies'.
+With dependencies wired, the handler validates the edge token, if configured, before it
+touches any upstream. It then fetches the private and public upstreams __concurrently__,
+with the client's credential forwarded to the private origin and the public origin
+anonymous. Each parse failure or unavailable upstream degrades to a missing contribution
+rather than an error. Private versions are trusted as-is. The rules and the structural
+filter (the 'FilterPlan') gate public versions. The handler merges the surviving sets
+('mergePackuments'). It then assembles the 'MergePlan' onto the raw upstream documents,
+through the mount's injected assembly capability, to build the served body. It answers
+that body against the client's conditional request with our own ETag. When nothing
+survives, the status follows the most recoverable cause via 'packumentStatus'.
+
+An origin whose self-reported packument name disagrees with the route is validated out:
+dropped as untrusted for this request, and logged. A single misreporting upstream
+therefore never denies a package another upstream serves. When that leaves __no__ valid
+origin, the request is a @502@ (a responding upstream returned an invalid response),
+distinct from a genuine absence. Every refusal, the edge @401@ and the no-survivors
+@403@\/@503@\/@502@\/@500@, is selected through the route's injected 'PackumentReplies'.
 -}
 servePackument ::
     PackumentReplies response ->
@@ -214,20 +219,19 @@ servePackument ::
     Handler ResponseReceived
 servePackument = packumentWith PackumentFull
 
-{- | Serve a @HEAD \/{pkg}@ packument request: the __identical pipeline and gating__ as
-'servePackument' -- the same fetch, merge, filter, rule decision, and no-survivors
-status -- answered with the __identical status and headers__ as the @GET@ (the would-be
+{- | Serve a @HEAD \/{pkg}@ packument request. The pipeline and gating are __identical__
+to 'servePackument': the same fetch, merge, filter, rule decision, and no-survivors
+status. The reply carries the __identical status and headers__ as the @GET@, the would-be
 merged body's @Content-Length@ and the own @ETag@ the conditional-request machinery
-computes), but with the body suppressed by the route's
-'Ecluse.Core.Server.Contract.bodilessContract', as HTTP semantics require of a @HEAD@
-reply.
+computes. The route's 'Ecluse.Core.Server.Contract.bodilessContract' suppresses the body,
+as HTTP semantics require of a @HEAD@ reply.
 
-A packument body is assembled __locally__ (a metadata fetch plus the cross-upstream
-merge), so -- unlike the tarball @HEAD@ ('headTarball') -- answering it pumps __no
-artifact body__ and carries no egress-amplification risk: this is the HTTP-correctness
-half of the explicit-@HEAD@ handling, not the DoS lever the tarball path closes. The
-merged body is still materialised, to size it and compute its @ETag@; only the bytes
-are withheld from the reply.
+A packument body is assembled __locally__, from a metadata fetch plus the cross-upstream
+merge. So, unlike the tarball @HEAD@ ('headTarball'), answering it pumps __no artifact
+body__ and carries no egress-amplification risk. This is the HTTP-correctness half of the
+explicit-@HEAD@ handling, not the DoS lever the tarball path closes. The merged body is
+still materialised, to size it and compute its @ETag@, and only the bytes are withheld
+from the reply.
 -}
 headPackument ::
     PackumentReplies response ->
@@ -237,13 +241,13 @@ headPackument ::
     Handler ResponseReceived
 headPackument = packumentWith PackumentHead
 
-{- The packument serve mode threaded through the handler: a full @GET@ that serves the
-merged body, or a @HEAD@ that answers the identical status and headers with the body
-suppressed. It changes exactly one thing in the pipeline -- whether the @200@ success
-path stamps the would-be body's @Content-Length@ (a @HEAD@ does, so a client sees the
-framing a @GET@ would; a @GET@ leaves that to the serving layer, which frames the body
-it actually writes). The route contract withholds the body uniformly, and the gating is
-byte-for-byte identical between the two. -}
+{- The packument serve mode threaded through the handler. A full @GET@ serves the merged
+body. A @HEAD@ answers the identical status and headers with the body suppressed. It
+changes exactly one thing in the pipeline: whether the @200@ success path
+stamps the would-be body's @Content-Length@. A @HEAD@ does, so a client sees the framing a
+@GET@ would. A @GET@ leaves that to the serving layer, which frames the body it actually
+writes. The route contract withholds the body uniformly, and the gating is byte-for-byte
+identical between the two. -}
 data PackumentServe
     = -- A @GET@: serve the merged packument body.
       PackumentFull
@@ -264,13 +268,12 @@ packumentWith mode replies name request respond = do
     mount <- asks ctxMount
     serveWithDeps mode replies (bindingPackumentDeps mount) (forwardedCredential mount request) name request respond
 
--- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
--- and answer -- the credential-authority and merge logic the module header
--- describes. The credential is the one the mount's ecosystem presentation recovered,
--- scanned out of the headers once at the entry point. The request runtime is read from
--- the request context. The 'PackumentServe' mode is threaded to the success path so a
--- @HEAD@ stamps the would-be body's @Content-Length@ (the route contract withholds the
--- bytes).
+-- Serve a packument once the mount's dependencies are known: fetch, gate, merge, and
+-- answer, under the credential-authority and merge rules the module header states. The
+-- mount's ecosystem presentation recovered the credential, scanned out of the headers
+-- once at the entry point. The request runtime comes from the request context. The
+-- 'PackumentServe' mode reaches the success path so a @HEAD@ stamps the would-be body's
+-- @Content-Length@ (the route contract withholds the bytes).
 serveWithDeps ::
     PackumentServe ->
     PackumentReplies response ->
@@ -291,12 +294,12 @@ serveWithDeps mode replies deps clientToken name request respond
                 mpServeDecision (srMetrics rt) Metric.Unavailable
                 respond (packumentUnavailable replies [shedRetryAfter] "server is busy; retry later")
 
-{- Serve a packument once past the admission gate: fetch both origins, gate and merge
-them, then either answer the conditional serve or take the no-survivors terminal. The
-private-origin fetch forwards the client's credential (the edge gate already compared it
-before admission). Hoisted to the module level, taking its serve context as parameters
-rather than closing over a large @where@, so the request flow reads as a flat sequence
-rather than deep nesting. -}
+{- Serve a packument once past the admission gate: fetch both origins, then gate and
+merge them. The result either answers the conditional serve or takes the no-survivors
+terminal. The private-origin fetch forwards the client's credential, which the edge gate
+already compared before admission. Its serve context arrives as parameters rather than a
+large @where@ closure, so the request flow reads as a flat sequence rather than deep
+nesting. -}
 serveAdmittedPackument ::
     PackumentServe ->
     PackumentReplies response ->
@@ -334,15 +337,14 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
     case packumentPlan sources of
         Nothing -> noServeableVersions
         Just plan -> do
-            -- A cross-upstream integrity divergence (threat #11) is logged and metered
-            -- under every policy; only 'FailClosed' then withholds the contested
-            -- version(s), which 'survivingPlan' folds into the no-survivors terminal.
+            -- Every policy logs and meters a cross-upstream integrity divergence
+            -- (threat #11). Only 'FailClosed' then withholds the contested versions,
+            -- which 'survivingPlan' folds into the no-survivors terminal.
             warnDivergences metrics name plan
             maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
 
-{- Answer the conditional packument request BEFORE any assembly: a 304 costs the fetches
-and the plan, never the document rebuild, encode, or output hash. Hoisted to the module
-level, its serve context passed in, rather than nested inside 'serveWithDeps'. -}
+{- Answer the conditional packument request before any assembly. A 304 costs the fetches
+and the plan, never the document rebuild, the encode, or an output hash. -}
 answerPackumentConditional ::
     PackumentServe ->
     PackumentReplies response ->
@@ -365,20 +367,18 @@ answerPackumentConditional mode replies deps name request respond rt sources pla
             bytes <- liftIO (servedBytes rt deps sources plan fresh)
             liftIO (respond (packumentResponse replies mode fresh bytes))
 
--- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
--- mount whose packument-serve dependencies are not wired. The decision to serve or
--- stub is the handler's, so the routing layer need not re-derive it.
-
 {- Apply the __trusted integrity floor__ to a private (trusted) contribution before it
-enters the merge, returning the surviving 'Contribution' (if any version survived) and the
-per-version exclusions for the dropped ones (for the no-survivors status). This is the
-trusted-path mirror of 'gatePublic': a private version whose strongest digest is below the
-trusted floor ('pdMinTrustedIntegrity') is dropped from the served listing, so by default
-(floor = SHA-256) a SHA-1-only or hashless private version is not listed, while an operator
-who loosens the trusted floor admits it again. Trusted versions stay __unfiltered by the
-rules__ (the trust split is the caller's); only the integrity floor applies. The raw
-@Value@ is kept whole -- the merge replays only surviving keys onto it, so a dropped version
-is never taken from it; tarball URLs are rewritten at assembly, uniformly across sources. -}
+enters the merge. Returns the surviving 'Contribution', if any version survived, and the
+per-version exclusions for the dropped ones, which feed the no-survivors status.
+
+This is the trusted-path mirror of 'gatePublic'. A private version whose strongest digest
+is below the trusted floor ('pdMinTrustedIntegrity') is dropped from the served listing.
+The floor defaults to SHA-256, so a SHA-1-only or hashless private version is not listed.
+An operator who loosens the trusted floor admits it again. Trusted versions stay
+__unfiltered by the rules__, because the trust split is the caller's, and only the
+integrity floor applies. The raw @Value@ is kept whole: the merge replays only surviving
+keys onto it, so it never yields a dropped version. Tarball URLs are rewritten at
+assembly, uniformly across sources. -}
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
     Nothing -> (Nothing, [])
@@ -390,41 +390,43 @@ admitTrusted minTrusted = \case
                 else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest)), integrityRefusals)
 
 {- Gate a public-upstream contribution through the rules engine and the structural
-filter, returning the surviving 'Contribution' (if any survived) and the per-version
-exclusion outcomes (for the no-survivors status when nothing survives anywhere).
+filter. Returns the surviving 'Contribution', if any survived, and the per-version
+exclusion outcomes, which the no-survivors status uses when nothing survives anywhere.
 
-A public origin that did not resolve contributes nothing and no exclusions. A resolved
-origin first has the __integrity-floor admission policy__ applied: any version whose
-strongest digest does not meet the configured floor ('pdMinIntegrity') is dropped from
-the gated set up front ('admitByIntegrity'), so a below-floor public version is never
-listed (a client cannot fetch it -- the artifact gate would refuse it anyway) and never
-contributes its fingerprint to the merge. The remaining versions are decided by the
-rules engine ('Ecluse.Core.Rules.evalRules' -- the boot order walked to the first decisive
-result), the resulting decisions handed to the agnostic
-'filterPlanFromDecisions', and the plan consumed directly: a plan with survivors
-yields a gated 'Contribution' -- the typed view restricted to the survivors beside
-the __unrestricted raw document__ (the assembly takes only plan-surviving version
-objects from it, so restricting the raw document here would rebuild a many-version
-object only for the assembly to rebuild it again); a plan with no survivors yields
-no contribution and the per-version 'ServeDecision's, each excluded
-version's decision projected (a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' carrying
-its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
-a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
-at all) or 'BelowIntegrityFloor' (a digest, but too weak) refusals and appended to those
-exclusions, so a packument with /only/ inadmissible public versions is a @403@ rather
-than an empty success. Evaluation is IO (an effectful rule may do IO), so this gate is
-IO; with only pure rules it short-circuits without launching any IO.
+A public origin that did not resolve contributes nothing and no exclusions. The
+__integrity-floor admission policy__ applies to a resolved origin first. Any version whose
+strongest digest misses the configured floor ('pdMinIntegrity') is dropped from the gated
+set up front ('admitByIntegrity'). A below-floor public version is therefore never listed,
+and it never contributes its fingerprint to the merge. A client cannot fetch it either,
+because the artifact gate would refuse it anyway.
 
-The gated contribution's typed 'PackageInfo' is __restricted to the survivors__:
-'mergePackuments' treats a 'GatedSource' as the already-filtered set and never
-re-filters, so feeding it the unfiltered view would let a denied version reach the
-merge plan (and skew the reconciled @latest@\/@time@). The raw document needs no
-matching restriction: only versions named by the plan's survivors are ever taken
-from it at assembly, so a denied version's object is unreachable by construction.
+The rules engine then decides the remaining versions ('Ecluse.Core.Rules.evalRules' walks
+the boot order to the first decisive result). The resulting decisions go to the agnostic
+'filterPlanFromDecisions', and the plan is consumed directly. A plan with survivors yields
+a gated 'Contribution': the typed view restricted to the survivors, beside the
+__unrestricted raw document__. The assembly takes only plan-surviving version objects from
+that document. Restricting it here would rebuild a many-version object only for the
+assembly to rebuild it again. A plan with no survivors yields no contribution and the
+per-version 'ServeDecision's, one projected from each excluded version's decision. A
+fail-closed 'Ecluse.Core.Rules.Types.Undecidable' carries its transient or permanent
+cause, so the no-survivors status is a @503@\/@500@ rather than a @403@.
 
-This gate runs on the public path only; the trusted (private) contribution is admitted
-separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
-it -- the trust split is the caller's). -}
+The dropped below-floor versions are projected as 'MissingIntegrity' (no digest at all) or
+'BelowIntegrityFloor' (a digest, but too weak) refusals, and appended to those exclusions.
+A packument with /only/ inadmissible public versions is therefore a @403@ rather than an
+empty success. Evaluation is IO, because an effectful rule may do IO, so this gate is IO.
+With only pure rules it short-circuits without launching any IO.
+
+The gated contribution's typed 'PackageInfo' is __restricted to the survivors__.
+'mergePackuments' treats a 'GatedSource' as the already-filtered set and never re-filters.
+Feeding it the unfiltered view would let a denied version reach the merge plan and skew
+the reconciled @latest@\/@time@. The raw document needs no matching restriction. Only
+versions named by the plan's survivors are ever taken from it at assembly, so a denied
+version's object is unreachable by construction.
+
+This gate runs on the public path only. 'admitTrusted' admits the trusted (private)
+contribution separately, against the trusted integrity floor. The rules never run on it,
+because the trust split is the caller's. -}
 gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe Manifest -> IO (Maybe Contribution, [ServeDecision], [VersionVerdict])
 gatePublic tracing metrics deps name ctx = \case
     Nothing -> pure (Nothing, [], [])
@@ -446,64 +448,68 @@ gatePublic tracing metrics deps name ctx = \case
                     )
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
-version string (the map 'filterPlanFromDecisions' consumes). Each version is run
-through 'Ecluse.Core.Rules.evalRules', so a fail-closed rule that cannot be computed
-yields a 'Ecluse.Core.Rules.Types.Undecidable' decision. With only pure rules the
-per-version call short-circuits without launching any IO. -}
+version string, the map 'filterPlanFromDecisions' consumes. Each version goes through
+'Ecluse.Core.Rules.evalRules', so a fail-closed rule that cannot be computed yields a
+'Ecluse.Core.Rules.Types.Undecidable' decision. With only pure rules the per-version call
+short-circuits without launching any IO. -}
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
     traverse (evalRules ctx (pdRules deps)) (infoVersions info)
 
-{- Project each excluded version's 'Decision' to a 'VersionVerdict', keeping the
-version string so a denial's audit line can name it. The plan carries its
-decisions ('fpDecisions') in @versions@-key order, so they zip back onto the
-same-ordered version keys to recover the package\/version each denial is about. -}
+{- Project each excluded version's 'Decision' to a 'VersionVerdict', keeping the version
+string so a denial's audit line can name it. The plan carries its decisions
+('fpDecisions') in @versions@-key order. They zip back onto the same-ordered version keys,
+which recovers the package and version each denial is about. -}
 projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =
     zipWith versionVerdict (Map.toList (infoVersions info))
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
--- The fully-assembled served body: the served document ('CachedDoc') to serialise
--- and answer against the conditional request.
+-- The fully-assembled served body: the served document ('CachedDoc') to serialise and
+-- answer against the conditional request.
 newtype ServedBody = ServedBody {servedDoc :: CachedDoc}
 
-{- Merge the resolved sources into the serve plan, or 'Nothing' when no version
-survives the merge (no source resolved, or every public version was excluded and no
-private versions exist). Split from the rendering so the conditional evaluation can
-sit between them: the plan (typed, cheap) decides serve-vs-no-survivors, and only a
-'Modified' outcome pays for 'renderServedBody'. -}
+{- Merge the resolved sources into the serve plan. 'Nothing' when no version survives the
+merge: no source resolved, or every public version was excluded and no private versions
+exist. It is split from the rendering so the conditional evaluation can sit
+between them. The plan is typed and cheap, and it decides serve against no-survivors. Only
+a 'Modified' outcome pays for 'renderServedBody'. -}
 packumentPlan :: [Contribution] -> Maybe MergePlan
 packumentPlan sources = do
     plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
     pure plan
 
-{- The plan a request should serve under an operator divergence policy, or 'Nothing' when
-the policy withheld the last surviving version (take the no-survivors terminal). 'Warn'
-never withholds; 'FailClosed' drops the contested versions and may leave no survivors. -}
+{- The plan a request should serve under an operator divergence policy. 'Nothing' when the
+policy withheld the last surviving version, which takes the no-survivors terminal.
+'Warn' never withholds. 'FailClosed' drops the contested versions and may leave no
+survivors. -}
 survivingPlan :: DivergencePolicy -> MergePlan -> Maybe MergePlan
 survivingPlan policy plan =
     let served = applyDivergencePolicy policy plan
      in if Map.null (mpSurvivors served) then Nothing else Just served
 
-{- | The derived packument validator: a SHA-256 over the serve's __inputs__ -- the
-mount base URL, the package name, and per source (in merge order) its provenance,
-its origin body's digest, and the version keys that survived its gate.
+{- | The derived packument validator: a SHA-256 over the serve's __inputs__:
 
-The served document is a deterministic function of exactly these (the merge plan
-derives from the gated typed views, which derive from the origin bytes and the
-survivor sets; the assembly then edits the origin documents under the mount base
-URL), so this tag can never call a changed document unchanged. It may change when
-the re-assembled bytes would not have -- a spurious @200@, never a wrong @304@ --
-which is the correct slack for a validator. Deriving it from inputs is what lets a
-@304@ skip assembly, encoding, and any output hashing entirely.
+* the mount base URL
+* the package name
+* per source, in merge order, its provenance, its origin body's digest, and the version
+  keys that survived its gate
 
-Fields are fed to the hash with unambiguous framing: the digest is fixed-width, the
+The served document is a deterministic function of exactly these. The merge plan derives
+from the gated typed views, which derive from the origin bytes and the survivor sets. The
+assembly then edits the origin documents under the mount base URL. So this tag can never
+call a changed document unchanged. It may change when the re-assembled bytes would not
+have: a spurious @200@, never a wrong @304@. That is the correct slack for a validator.
+Deriving it from inputs is what lets a @304@ skip assembly, encoding, and any output
+hashing entirely.
+
+Fields reach the hash with unambiguous framing: the digest is fixed-width, the
 variable-length pieces are @NUL@-terminated, and each source block closes with an
-@\\SOH@ terminator, so no concatenation of adjacent fields can collide with another
-split of the same bytes. The leading salt versions the scheme: bump it when the
-assembly's behaviour changes so pre-change client caches revalidate as modified.
+@\\SOH@ terminator. No concatenation of adjacent fields can then collide with another
+split of the same bytes. The leading salt versions the scheme: bump it when the assembly's
+behaviour changes, so pre-change client caches revalidate as modified.
 -}
 packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [Text])] -> ETag
 packumentETag mountBaseUrl name sources =
@@ -529,17 +535,17 @@ packumentETag mountBaseUrl name sources =
         TrustedSource -> "t\0"
         GatedSource -> "g\0"
 
--- The validator is a content address over every serve input, so the assembled,
--- encoded document is memoised under it: a recurring triple (public entry,
--- private content, plan) serves the stored bytes with no assembly or encode, and
--- concurrent identical renders coalesce onto one leader. A changed input is a
--- changed key, so the store cannot serve stale bytes; a different private view is
--- a different key, so it cannot cross a client boundary.
+-- The validator is a content address over every serve input, so the assembled, encoded
+-- document is memoised under it. A recurring triple of public entry, private content,
+-- and plan serves the stored bytes with no assembly and no encode. Concurrent identical
+-- renders coalesce onto one leader. A changed input is a changed key, so the
+-- store cannot serve stale bytes. A different private view is a different key, so it
+-- cannot cross a client boundary.
 --
--- The render is total by contract (a pure assembly over already-validated
--- inputs), so a synchronous escape here is an invariant break: it is wrapped in
--- the confined 'RenderEscape' marker -- on the miss leg only, a hit never runs
--- this action -- so the request perimeter can name the leg it escaped from.
+-- The render is total by contract, a pure assembly over already-validated inputs, so a
+-- synchronous escape here is an invariant break. The confined 'RenderEscape' marker wraps
+-- it on the miss leg only, since a hit never runs this action. The request perimeter can
+-- then name the leg it escaped from.
 servedBytes :: ServeRuntime -> PackumentDeps -> [Contribution] -> MergePlan -> ETag -> IO ByteString
 servedBytes rt deps sources plan etag =
     resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
@@ -553,13 +559,13 @@ servedBytes rt deps sources plan etag =
 {- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
 documents, through the mount's injected 'pdAssemble'.
 
-The merge decides over the typed 'PackageInfo's; the served body is built from the raw
+The merge decides over the typed 'PackageInfo's. The served body is built from the raw
 documents so unmodeled keys survive. The pipeline hands the per-source documents and the
-precedence-winning base document ('CachedDoc', opaque here) to 'pdAssemble', which reads
-them in the adapter's own representation, rebuilds @versions@ / @dist-tags@ / @time@ from
-the plan onto the base, rewrites each surviving version's tarball under the mount base,
-and returns the assembled document. Runs only on a 'Modified' outcome -- a @304@ never
-pays for it. -}
+precedence-winning base document ('CachedDoc', opaque here) to 'pdAssemble'. That
+capability reads them in the adapter's own representation. It rebuilds @versions@ /
+@dist-tags@ / @time@ from the plan onto the base and rewrites each surviving version's
+tarball under the mount base. Then it returns the assembled document. It runs only on a
+'Modified' outcome, so a @304@ never pays for it. -}
 renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
 renderServedBody deps sources plan =
     ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources))
@@ -567,25 +573,25 @@ renderServedBody deps sources plan =
     bySource :: Map SourceId CachedDoc
     bySource = Map.fromList (zip [0 ..] (map srcValue sources))
 
-{- The document whose unmodeled top-level keys are relayed into the served body:
-the precedence-winning source's raw document -- the first trusted source if any, else the
-first source. (The merge takes its identity from the first input likewise.) 'Nothing'
-only for an empty source list, which never reaches here; the injected assembly then has
-no base document to relay. -}
+{- The document whose unmodeled top-level keys are relayed into the served body: the
+precedence-winning source's raw document. That is the first trusted source if any, else
+the first source. The merge takes its identity from the first input likewise. 'Nothing'
+only for an empty source list, which never reaches here. The injected assembly then has no
+base document to relay. -}
 baseDocument :: [Contribution] -> Maybe CachedDoc
 baseDocument sources =
     srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
 
-{- The per-version serve decisions weighed for the no-survivors status: the
-public-set exclusions, plus the per-origin signals each upstream contributes.
+{- The per-version serve decisions weighed for the no-survivors status: the public-set
+exclusions, plus the per-origin signals each upstream contributes.
 
-A private upstream that did not resolve is a needed-but-unavailable transient signal
-(it may resolve on retry), so a private outage with no public survivors is a @503@
-rather than a @403@. An origin (private or public) that __answered with a packument
-for a different package__ contributes an 'UpstreamInvalid' signal, so a request whose
-only responding origins were invalid this way renders a @502@ -- distinct from a
-genuine absence. A public upstream that merely did not resolve degrades silently, as
-before: its absence is not by itself a needed-upstream outage. -}
+A private upstream that did not resolve is a needed-but-unavailable transient signal,
+since it may resolve on retry. A private outage with no public survivors is therefore a
+@503@ rather than a @403@. An origin, private or public, that __answered with a packument
+for a different package__ contributes an 'UpstreamInvalid' signal. A request whose only
+responding origins were invalid that way renders a @502@, distinct from a genuine absence.
+A public upstream that merely did not resolve degrades silently: its absence is not by
+itself a needed-upstream outage. -}
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
 collectDecisions privResult pubResult publicExclusions =
     privateDecision privResult <> publicMismatch pubResult <> publicExclusions
@@ -612,12 +618,12 @@ collectDecisions privResult pubResult publicExclusions =
     upstreamInvalidDecision :: ServeDecision
     upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
-{- The served packument @200@ over the (possibly memoised) assembled bytes, carrying
-the derived 'ETag' the caller already evaluated the conditional against ('Modified' --
-a match never reaches here). The bytes come from 'resolveAssembled': strict, encoded
-once per content address, shared across every request whose inputs coincide. A
-'PackumentHead' additionally advertises the body's exact @Content-Length@ (the route
-contract then withholds the bytes), free off the memoised bytes. -}
+{- The served packument @200@ over the (possibly memoised) assembled bytes, carrying the
+derived 'ETag' the caller already evaluated the conditional against. The caller reaches
+here only on 'Modified', never on a match. The bytes come from 'resolveAssembled': strict,
+encoded once per content address, and shared across every request whose inputs coincide. A
+'PackumentHead' additionally advertises the body's exact @Content-Length@, free off the
+memoised bytes, and the route contract then withholds the bytes. -}
 packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
 packumentResponse replies mode etag bytes = case mode of
     PackumentFull ->
@@ -629,7 +635,7 @@ packumentResponse replies mode etag bytes = case mode of
             (LBS.fromStrict bytes)
 
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
-exclusions, with a denial body collecting the reasons. Never a @404@ -- the package
+exclusions, with a denial body collecting the reasons. Never a @404@, because the package
 existed and its versions were withheld. -}
 noSurvivors :: PackumentReplies response -> PackumentDeps -> [ServeDecision] -> response
 noSurvivors replies deps decisions = case status of
@@ -642,7 +648,7 @@ noSurvivors replies deps decisions = case status of
     status :: PackumentStatus
     status = packumentStatus decisions
 
-    -- The collected denial reasons; an empty set (no versions at all) renders a
+    -- The collected denial reasons. An empty set (no versions at all) renders a
     -- deny-by-default message rather than an empty body.
     message :: Text
     message = case mapMaybe rejectionText decisions of
@@ -656,8 +662,8 @@ noSurvivors replies deps decisions = case status of
         Admit -> Nothing
         Reject rej -> Just (rejectionMessage rej)
 
--- The @Retry-After@ header for a transient no-survivors status, when a delay was
--- suggested; nothing for the other statuses.
+-- The @Retry-After@ header for a transient no-survivors status that suggested a delay.
+-- Nothing for the other statuses.
 retryAfterHeader :: PackumentStatus -> ResponseHeaders
 retryAfterHeader = \case
     PackumentUnavailable (Just (RetryAfter secs)) -> [("Retry-After", show secs)]
