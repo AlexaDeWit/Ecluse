@@ -219,8 +219,9 @@ a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud bo
 
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend**. A real SQS URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, region from the host, validated in full (https, single-label region, 12-digit account, one queue segment, no port/query/fragment). A Pub/Sub resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot. **Unset with a mirroring mount ⇒ the bounded in-process queue**: non-durable, best-effort (single-node, trial, or air-gapped), warned loudly at boot. Never consulted serve-only. **On SQS, attach a redrive policy (a dead-letter queue) to the mirror queue:** a poison message the worker can never mirror -- an over-cap artifact, an undecodable payload -- is left undeleted so it rides that policy to the DLQ for inspection instead of cycling. Écluse assumes the redrive policy is present; gracefully handling its absence is tracked in issue #935. |
+| `ECLUSE_QUEUE__URL` | No | In-memory queue | Mirror-queue destination; **its shape selects the backend**. A real SQS URL (`https://sqs.{region}.amazonaws.com/{account}/{queue}`) selects the durable SQS backend, region from the host, validated in full (https, single-label region, 12-digit account, one queue segment, no port/query/fragment). A Pub/Sub resource (`projects/<p>/topics/<t>`) names the GCP backend, recognised but not yet built (fail-loud). Any other shape fails boot. **Unset with a mirroring mount ⇒ the bounded in-process queue**: non-durable, best-effort (single-node, trial, or air-gapped), warned loudly at boot. Never consulted serve-only. **On SQS, attach a redrive policy (a dead-letter queue) to the mirror queue:** a poison message the worker can never mirror -- an over-cap artifact, an undecodable payload -- is left undeleted so it rides that policy to the DLQ for inspection instead of cycling. Écluse checks at boot whether one is attached and **warns loudly when it is not**; without one, `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` is the only terminus such a message has. |
 | `ECLUSE_QUEUE__MEMORY_MAX_DEPTH` | No | Memory budget | In-memory queue only. Depth cap, computed by the memory plan (`50000` with no ceiling datapoint) unless set. An enqueue past the cap is dropped (drop-newest) and re-mirrors on next demand. Positive integer. |
+| `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` | No | `5` | How many deliveries one mirror job gets before the worker **discards it outright** (an error log naming the job, and the `ecluse.mirror.jobs.processed` counter at `result="discarded"`). This is the terminus a queue with no dead-letter queue has: without it a permanently-failing message cycles, re-fetching each time, until SQS's retention window drops it unseen. It is a **floor, not a ceiling**: when a redrive policy is attached, Écluse runs one delivery above that policy's own `maxReceiveCount`, so the dead-letter queue always captures first and you never need to tune this to match it. Positive integer; a value of `1` still grants a first delivery, so the earliest any job is retired is its second. Irrelevant on the in-memory queue, which never redelivers. |
 | `AWS_REGION` | Depends | AWS backends only | Region for SQS **only under an `AWS_ENDPOINT_URL_SQS` override** (a real SQS URL carries its own region), and for the S3 advisory client. **Never consulted for CodeArtifact** (the mint's region is parsed from the mirror-target host). Ambient AWS-SDK environment, read from the process env, **not** a document key: `awsRegion:` in the document is rejected as unknown. |
 | `AWS_ENDPOINT_URL_SQS` | No |  | SQS endpoint override (the AWS-SDK-standard service-specific variable). Setting it **forces the SQS interpretation** of `ECLUSE_QUEUE__URL` regardless of shape, scoped by `AWS_REGION`, signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Ambient, like `AWS_REGION`. |
 | `AWS_ENDPOINT_URL` | No |  | Endpoint override for the S3 advisory-database client (the proxy's sync and Pilot's export). Deliberately **not** consulted for SQS, so an S3-only override can't silently redirect the queue. Ambient, like `AWS_REGION`. |
@@ -231,7 +232,7 @@ a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud bo
 | :--- | :--- | :--- | :--- |
 | `ECLUSE_LIMITS__MAX_RESPONSE_BYTES` | No | Memory budget | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Computed by the memory plan, floored at 12 MiB so real packuments fit, unless set. Positive integer. |
 | `ECLUSE_LIMITS__MAX_REQUEST_BYTES` | No | Memory budget | Largest client request body (a publish) buffered before refusal. Computed by the memory plan (25 MiB with no ceiling datapoint) unless set. Positive integer. |
-| `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES` | No | Memory budget | Largest **mirror-worker artifact** (tarball) buffered before the back-fill fetch aborts fail-closed. Computed by the memory plan's mirror-artifact tenant (512 MiB with no ceiling datapoint) so the transient publish envelope stays within the heap ceiling. An over-cap artifact is **dead-lettered**: on the durable SQS backend the message is left undeleted to ride the operator's redrive policy to the dead-letter queue (never silently dropped); the in-memory backend, which has no DLQ, drops it with an error log and a failure metric. Raising the cap may be refused if the pod cannot hold the envelope. Positive integer. |
+| `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES` | No | Memory budget | Largest **mirror-worker artifact** (tarball) buffered before the back-fill fetch aborts fail-closed. Computed by the memory plan's mirror-artifact tenant (512 MiB with no ceiling datapoint) so the transient publish envelope stays within the heap ceiling. An over-cap artifact is **dead-lettered**: on the durable SQS backend the message is left undeleted to ride the operator's redrive policy to the dead-letter queue (never silently dropped); the in-memory backend, which has no DLQ, drops it with an error log and a failure metric. On a queue with no redrive policy the message is retired by `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` instead. Raising the cap may be refused if the pod cannot hold the envelope. Positive integer. |
 | `ECLUSE_LIMITS__MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before refusal. Bounds per-version rule evaluation. Pinned policy. Positive integer. |
 | `ECLUSE_LIMITS__MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before refusal. Bounds CPU/stack. Pinned policy. Positive integer. |
 
@@ -622,6 +623,24 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
   worker stops re-mirroring, then **(2)** purge that version from the mirror. **Order matters:**
   purge alone is a treadmill, since while the version is live upstream the next install re-admits and
   re-mirrors it.
+- **Give poison mirror jobs somewhere to land.** Some mirror jobs can never succeed: an artifact
+  past `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES`, a payload that no longer decodes, a publish target that
+  refuses it every time. On SQS, **attach a redrive policy with a dead-letter queue** to the mirror
+  queue. Écluse leaves such a message undeleted so your policy moves it there, where you can read it
+  and work out what happened. Écluse reads the queue's redrive configuration at boot, so if none is
+  attached you get a loud `WARNING` at start-up saying poison messages have no terminus; if the
+  probe itself fails, you get a warning naming the missing `sqs:GetQueueAttributes` permission.
+  Either way the process boots.
+
+  Without a dead-letter queue nothing would capture that message, and it would be redelivered until
+  SQS's retention window (up to 14 days) discarded it unseen, re-fetching the artifact every time.
+  So Écluse retires it itself once it has been delivered `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` times:
+  an error log naming the job and why, and the `ecluse.mirror.jobs.processed` counter at
+  `result="discarded"`. **Alert on that series:** every discard is a job nothing else caught. With a
+  redrive policy attached, Écluse runs one delivery above its `maxReceiveCount`, so your dead-letter
+  queue always captures first and the discard path stays dormant. Nothing is lost either way:
+  mirroring is demand-driven, so a discarded job is re-enqueued the next time a client asks for that
+  artifact, and it will fail again the same way until you fix the cause.
 
 ### Datadog on Kubernetes
 

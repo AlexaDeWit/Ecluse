@@ -133,14 +133,20 @@ data ServerSettings = ServerSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @queue@ group: the mirror queue's destination and the in-memory rollover's
-depth cap. The backend is derived from the URL's shape ("Ecluse.Config.QueueTarget"),
-never named here.
+{- | The @queue@ group: the mirror queue's destination, the in-memory rollover's
+depth cap, and the redelivery budget a poison message is retired at. The backend is
+derived from the URL's shape ("Ecluse.Config.QueueTarget"), never named here.
 -}
 data QueueSettings = QueueSettings
     { qsUrl :: Maybe Url
     , qsMemoryMaxDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset; a configured value wins.
+    , qsMaxReceiveCount :: Int
+    {- ^ How many deliveries one message gets before the worker retires it outright.
+    A pinned policy default, and a __floor__: a queue with a dead-letter terminus
+    attached runs one delivery above that terminus's own capture count, so the
+    dead-letter queue always captures first ("Ecluse.Core.Queue").
+    -}
     }
     deriving stock (Eq, Show)
 

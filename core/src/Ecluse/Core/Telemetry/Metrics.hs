@@ -296,7 +296,17 @@ instance Universe CacheResult where universe = universeGeneric
 registry @409@) is __not__ a distinct value: the worker treats it as a success, so it is
 counted as 'Published' -- a series that could never emit is not published.
 -}
-data MirrorResult = Published | Failed
+data MirrorResult
+    = -- | The artifact reached the mirror target (an already-present version included).
+      Published
+    | -- | The job did not publish, and its message stays in the queue's own hands.
+      Failed
+    | {- | The worker retired the message itself, having spent the queue's redelivery
+      budget ('Ecluse.Core.Queue.deliveryBudgetSpent'). Distinct from 'Failed' because
+      it is the terminus a deployment with no dead-letter queue has: an operator alerts
+      on it, since every discarded job is one nothing else captured.
+      -}
+      Discarded
     deriving stock (Eq, Generic, Show)
 
 instance Universe MirrorResult where universe = universeGeneric
@@ -441,6 +451,7 @@ labelValue = \case
     LMirrorResult m -> case m of
         Published -> "published"
         Failed -> "failed"
+        Discarded -> "discarded"
     LCredentialResult c -> case c of
         Refreshed -> "refreshed"
         RefreshFailed -> "failed"

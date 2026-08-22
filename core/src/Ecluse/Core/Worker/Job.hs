@@ -10,6 +10,10 @@ acks on success; before a publish that may run long it calls
 transient failure it does __not__ ack, so the message redelivers. A batch is
 processed __sequentially__, so each job has the full visibility budget rather than
 competing with its batch-mates for it.
+
+A delivery that has already spent the queue's redelivery budget is retired here
+before the job runs at all, so a message nothing else captures stops cycling instead
+of re-fetching its artifact on every redelivery (see "Ecluse.Core.Queue").
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
@@ -36,7 +40,7 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds), qfDetail)
+import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, qfDetail, retiringDelivery)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
@@ -67,23 +71,39 @@ processBatch = traverse_ $ \message -> do
     processMessage message
     recordWorkerProgress
 
--- Process one message: run the job, then realise its terminal outcome -- ack a
--- success or a clean non-retryable drop, dead-letter a terminal fault (the backend
--- routes it to its own terminus), or leave a transient failure un-acked so the queue
--- redelivers it ("retry is don't ack").
+{- Process one message: run the job, then realise its terminal outcome -- ack a
+success or a clean non-retryable drop, dead-letter a terminal fault (the backend
+routes it to its own terminus), or leave a transient failure un-acked so the queue
+redelivers it ("retry is don't ack").
+
+A delivery that has spent the queue's redelivery budget is retired __before__ the job
+runs. Returning a message only ends somewhere if something captures it, so on a queue
+with no dead-letter terminus a poison message would otherwise cycle until the
+retention window discarded it unseen, re-fetching every time; the budget makes that
+terminal instead. Checking first is what spares the re-fetch. -}
 processMessage :: QueueMessage -> WorkerM ()
 processMessage message = do
+    budget <- asks (deliveryBudget . wrQueue)
+    if deliveryBudgetSpent budget message
+        then do
+            metrics <- asks wrMetrics
+            liftIO (wmpMirrorJobProcessed metrics Metric.Discarded)
+            retireTerminally (budgetSpentReason budget message) (msgReceipt message)
+        else processDelivery message
+
+-- Run the job and realise its outcome, for a delivery still within the queue's budget.
+processDelivery :: QueueMessage -> WorkerM ()
+processDelivery message = do
     metrics <- asks wrMetrics
     outcome <- processJob (msgReceipt message) (msgJob message)
     liftIO (wmpMirrorJobProcessed metrics (jobResultMetric outcome))
     case outcome of
         Succeeded -> ackMessage (msgReceipt message)
-        Dropped reason -> do
+        Dropped reason ->
             -- A clean non-retryable rejection (a tampered artifact, an unformable
             -- publish URL): the job can never succeed and is not worth a dead-letter
-            -- forensic trail, so ack it to retire it, having already alarmed.
-            logFM ErrorS (ls ("dropping unrecoverable mirror job: " <> reason))
-            ackMessage (msgReceipt message)
+            -- forensic trail, so retire it, having already alarmed.
+            retireTerminally ("dropping unrecoverable mirror job: " <> reason) (msgReceipt message)
         DeadLettered reason -> do
             -- A terminal fault the backend routes to its own dead-letter terminus: the
             -- in-memory backend drops it (its only terminus), a durable queue returns
@@ -99,9 +119,36 @@ processMessage message = do
             -- re-mirrors it on the next demand. Either way it is not lost.
             logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
 
+{- Retire a message the worker will never mirror: alarm, then ack so it stops
+cycling. The single terminal path for both a job that can never succeed and a
+delivery that has spent the queue's budget, so the two cannot drift on what retiring
+means -- on the in-memory backend the ack is the no-op a delivered job already is,
+and on a durable queue it is the delete that finally kills the message. -}
+retireTerminally :: Text -> ReceiptHandle -> WorkerM ()
+retireTerminally reason receipt = do
+    logFM ErrorS (ls reason)
+    ackMessage receipt
+
+-- The alarm for a delivery past the queue's budget. On a queue with no dead-letter
+-- terminus this line is the only record the message ever leaves, so it names the job,
+-- what it cost, and what the operator can do about it.
+budgetSpentReason :: DeliveryBudget -> QueueMessage -> Text
+budgetSpentReason budget message =
+    "discarding a mirror job after "
+        <> show (msgReceiveCount message)
+        <> " deliveries (this queue retires one on delivery "
+        <> show (retiringDelivery budget)
+        <> "): "
+        <> renderJob (msgJob message)
+        <> ". No dead-letter queue captured it, so it is retired here rather than left to"
+        <> " cycle until the queue's retention window drops it unseen. Attach a redrive"
+        <> " policy to retain it for inspection."
+
 -- Classify a terminal job outcome into the bounded @ecluse.mirror.jobs.processed@
 -- result: a successful publish (the idempotent already-present 409 surfaces here too)
--- is published; a dropped, dead-lettered, or retried job is a failure.
+-- is published; a dropped, dead-lettered, or retried job is a failure. A message the
+-- worker retires for spending the queue's budget is 'Metric.Discarded', counted at the
+-- retirement rather than here (no job outcome exists for a delivery never run).
 jobResultMetric :: JobOutcome -> Metric.MirrorResult
 jobResultMetric = \case
     Succeeded -> Metric.Published

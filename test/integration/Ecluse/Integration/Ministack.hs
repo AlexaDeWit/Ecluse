@@ -38,11 +38,13 @@ module Ecluse.Integration.Ministack (
 import Amazonka qualified as AWS
 import Amazonka.Auth qualified as AWS.Auth
 import Amazonka.SQS.CreateQueue qualified as SQS
+import Amazonka.SQS.GetQueueAttributes qualified as SQS
+import Amazonka.SQS.SetQueueAttributes qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
 import Ecluse.Test.Support (newTestLogEnv)
 import Katip (LogEnv)
-import Lens.Micro ((^.))
+import Lens.Micro ((.~), (?~), (^.))
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
@@ -142,6 +144,11 @@ data QueueOptions = QueueOptions
     {- ^ The backoff window @deadLetter@ returns a terminal message with (a short one
     lets a test observe the not-deleted redelivery within its patience).
     -}
+    , qoDeadLetterAfter :: Maybe Int
+    {- ^ Attach a redrive policy to a fresh dead-letter queue, capturing at this
+    @maxReceiveCount@. 'Nothing' leaves the queue with no dead-letter terminus, the
+    default a plain @CreateQueue@ gives.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -150,7 +157,13 @@ default that does not stall a test on an empty poll. The terminal backoff matche
 production default; a test that observes dead-letter redelivery shortens it.
 -}
 defaultQueueOptions :: QueueOptions
-defaultQueueOptions = QueueOptions{qoVisibilityTimeout = Seconds 30, qoWaitSeconds = 2, qoTerminalBackoff = Seconds 300}
+defaultQueueOptions =
+    QueueOptions
+        { qoVisibilityTimeout = Seconds 30
+        , qoWaitSeconds = 2
+        , qoTerminalBackoff = Seconds 300
+        , qoDeadLetterAfter = Nothing
+        }
 
 {- | A scribe-free 'LogEnv' for the integration suite: layers that need a logger (an
 SQS backend's poison-message drop line, a booted proxy) take this where the spec does
@@ -167,6 +180,9 @@ up the instant the port opens, so the @CreateQueue@ call is retried.
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
     queueUrl <- freshQueueUrl container queueName
+    -- Before the backend is built, since it probes the redrive policy once at
+    -- construction and holds what it found.
+    whenJust (qoDeadLetterAfter options) (attachDeadLetterQueue container queueName queueUrl)
     logEnv <- quietLogEnv
     -- The wire decode's egress former: the loopback dev former, since these
     -- suites' artifact URLs point at in-process http servers.
@@ -179,6 +195,34 @@ freshQueue container queueName options = do
             , sqsVisibilityTimeout = qoVisibilityTimeout options
             , sqsTerminalBackoff = qoTerminalBackoff options
             }
+
+{- | Attach a redrive policy to an existing queue, pointing at a fresh dead-letter
+queue of its own, capturing at the given @maxReceiveCount@. The dead-letter target is
+named by ARN, so the sibling queue is created and read back first.
+-}
+attachDeadLetterQueue :: Container -> Text -> Text -> Int -> IO ()
+attachDeadLetterQueue container queueName queueUrl captureAt = do
+    env <- envFor (endpointFor container)
+    deadLetterUrl <- createQueueWithRetry env (queueName <> "-dlq") 30
+    arn <- queueAttribute env deadLetterUrl SQS.QueueAttributeName_QueueArn
+    void . runResourceT . AWS.send env $
+        SQS.newSetQueueAttributes queueUrl
+            & SQS.setQueueAttributes_attributes
+            .~ fromList [(SQS.QueueAttributeName_RedrivePolicy, redrivePolicy arn)]
+  where
+    redrivePolicy arn =
+        "{\"deadLetterTargetArn\":\"" <> arn <> "\",\"maxReceiveCount\":\"" <> show captureAt <> "\"}"
+
+-- Read one queue attribute back. Only the named attribute is requested, so the
+-- response carries that one value.
+queueAttribute :: AWS.Env -> Text -> SQS.QueueAttributeName -> IO Text
+queueAttribute env queueUrl attribute = do
+    response <-
+        runResourceT . AWS.send env $
+            SQS.newGetQueueAttributes queueUrl & SQS.getQueueAttributes_attributeNames ?~ [attribute]
+    case listToMaybe (toList (fromMaybe mempty (response ^. SQS.getQueueAttributesResponse_attributes))) of
+        Just value -> pure value
+        Nothing -> fail ("ministack GetQueueAttributes returned no " <> show attribute)
 
 {- | Create a fresh SQS queue in the @ministack@ container and return its queue URL
 (without binding a 'MirrorQueue' to it), so a test can drive the queue through the

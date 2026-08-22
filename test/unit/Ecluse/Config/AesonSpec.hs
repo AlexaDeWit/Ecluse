@@ -71,6 +71,10 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"observability\":{\"logLevl\":\"info\"}}")
             `shouldSatisfy` decodeErrorMentions "logLevl"
 
+    it "rejects an unknown key under queue, naming it" $
+        loadConfig [] (Just "{\"queue\":{\"maxRecieveCount\":5}}")
+            `shouldSatisfy` decodeErrorMentions "maxRecieveCount"
+
     it "rejects an unknown top-level key, naming it (strict, not silently dropped)" $
         loadConfig [] (Just "{\"mountz\":{}}") `shouldSatisfy` decodeErrorMentions "mountz"
 
@@ -391,6 +395,14 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "server.shutdownDrainTimeout must be a positive integer"
             loadConfig [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "-5")] Nothing
                 `shouldSatisfy` decodeErrorMentions "server.shutdownDrainTimeout must be a positive integer"
+
+        it "rejects a non-positive queue.maxReceiveCount, through both layers" $ do
+            -- A budget of zero would name a delivery no message can reach, so the
+            -- parser refuses it rather than letting the runtime floor paper over it.
+            loadConfig [] (Just "{\"queue\":{\"maxReceiveCount\":0}}")
+                `shouldSatisfy` decodeErrorMentions "queue.maxReceiveCount must be a positive integer"
+            loadConfig [("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "-2")] Nothing
+                `shouldSatisfy` decodeErrorMentions "queue.maxReceiveCount must be a positive integer"
 
         it "rejects non-positive parser guards (maxVersionCount, maxNestingDepth), through both layers" $ do
             loadConfig [] (Just "{\"limits\":{\"maxVersionCount\":0}}")
