@@ -1,65 +1,67 @@
 name: Set up toolchain
 description: >-
   Install the flake-pinned Nix, restore the Nix store from the GitHub Actions
-  cache, and (optionally) the cabal store + build dir. Centralises the SHA-pinned
-  setup actions and cache config so every CI job shares one definition. Pins are
-  bumped by Dependabot here, in one place. See AGENTS.md → "CI & Security".
+  cache, and optionally the cabal store and build dir. One definition of the
+  SHA-pinned setup actions and the cache config, shared by every CI job.
+  Dependabot bumps the pins here, in one place. See AGENTS.md → "CI & Security".
 
-  CACHING POLICY — restore everywhere, SAVE ONLY ON main. Every cache here is
-  restore-only on PR/feature branches; the canonical entries are written solely
-  by main's runs (the Nix store via cache-nix-action's `save:` guard below; the
-  cabal store + dist-newstyle by the build-test job's explicit save steps). GitHub
-  lets a PR restore caches from its base branch, so PRs still get a fully warm
-  toolchain — they just never create their own branch-scoped copies. That one
-  rule is what keeps the repo under the 10 GB cache ceiling: previously every PR
-  saved its own ~1.3 GB Nix store + ~0.3 GB cabal cache, so a handful of open PRs
+  Caching policy: restore everywhere, save only on main. Every cache here is
+  restore-only on a PR or feature branch. Only main's runs write the canonical
+  entries: the Nix store through cache-nix-action's `save:` guard below, and the
+  cabal store plus dist-newstyle through the build-test job's explicit save
+  steps. GitHub lets a PR restore caches from its base branch, so a PR still gets
+  a fully warm toolchain. It never creates its own branch-scoped copies. That one
+  rule keeps the repo under the 10 GB cache ceiling. Without it every PR saved
+  its own ~1.3 GB Nix store and ~0.3 GB cabal cache, so a handful of open PRs
   filled the quota and evicted main's caches. See AGENTS.md → "CI & Security".
 
 inputs:
   cabal-cache:
     description: >-
-      Also restore the cabal store + dist-newstyle. Enable for jobs that build
-      Haskell (build/test, docs, smoke, weeder); leave off for the
-      fourmolu/hlint/Semgrep/workflow-lint checks, which don't.
+      Also restore the cabal store and dist-newstyle. Enable it for a job that
+      builds Haskell (build/test, docs, smoke, weeder). Leave it off for the
+      fourmolu, hlint, Semgrep, and workflow-lint checks, which do not build.
     default: "false"
   save-nix-store:
     description: >-
-      Whether this job may SAVE the Nix-store cache (only ever on main). Default
-      true. Set "false" for a non-writer job that should restore the shared store
-      but never write it — e.g. the Pages publish, which runs on main concurrently
-      with build-test (the single writer) and must not race it for the one
-      nix-<os>-<flakehash> entry.
+      Whether this job may save the Nix-store cache (only ever on main). Default
+      true. Set "false" for a non-writer job that restores the shared store but
+      never writes it, for example the Pages publish. That job runs on main
+      concurrently with build-test (the single writer) and must not race it for
+      the one nix-<os>-<flakehash> entry.
     default: "true"
   nix-cache-prefix:
     description: >-
-      The Nix-store cache key prefix. Default "nix" — the shared store every gate
-      job realizes the `.#ci` shell into, written by build-test (the single
-      writer). A job that builds a LARGER, distinct closure sets its own prefix so
-      it neither collides with nor races that shared entry — e.g. the `docs` job
-      uses "nix-docs" for the Haddock doc-closure (the dependency `-doc` outputs
-      the `.#ci` store lacks), of which it is then the sole writer. The cache-cleanup
-      sweep keeps only the current epoch of every `nix-` prefix (see prune-caches.sh).
+      The Nix-store cache key prefix. Default "nix": the shared store every gate
+      job realises the `.#ci` shell into, written by build-test (the single
+      writer). A job that builds a larger, distinct closure sets its own prefix,
+      so it neither collides with nor races that shared entry. For example the
+      `docs` job uses "nix-docs" for the Haddock doc closure (the dependency
+      `-doc` outputs the `.#ci` store lacks) and is its sole writer. The
+      cache-cleanup sweep keeps only the current epoch of every `nix-` prefix
+      (see prune-caches.sh).
     default: "nix"
   nix-gc-max-store-size:
     description: >-
-      Cap the Nix store is trimmed to before saving (cache-nix-action
-      gc-max-store-size-linux). A closure larger than the cap is trimmed away before
-      saving and never fully persists, so the cap must EXCEED the closure the job
-      realizes. Default "10G": the `.#ci` dev-shell closure measures ~5.5 GB
-      (shell tools are static executables, so no tool drags a Haskell library
-      universe into it), leaving headroom for build residue. The `docs` job
-      overrides to "13G" for the store it accumulates (~10.5 GB observed).
+      The cap cache-nix-action trims the Nix store to before saving (its
+      gc-max-store-size-linux). It trims away a closure larger than the cap
+      before saving, so that closure never fully persists. The cap must therefore
+      exceed the closure the job realises. Default "10G": the `.#ci` dev-shell
+      closure measures ~5.5 GB (shell tools are static executables, so no tool
+      drags a Haskell library universe into it), which leaves headroom for build
+      residue. The `docs` job overrides it to "13G" for the store it accumulates
+      (~10.5 GB observed).
 
-      The cap must cover the STORE the job accumulates (restored epoch plus
-      build-time inputs plus outputs), not just an output closure: a cap below
+      The cap must cover the store the job accumulates (restored epoch plus
+      build-time inputs plus outputs), not only an output closure. A cap below
       the store trims live paths before saving, and every later run then
       rebuilds them off a partial hit.
 
-      This cap is on the UNCOMPRESSED Nix store; the 10 GB Actions-cache quota is on
-      the COMPRESSED entry, and the two are not the same number. The store compresses
-      roughly 5x (a 5G-trimmed store saved a ~1.05 GB entry), so sizing the cap to the
-      real closure costs far less quota than the raw figure suggests. Do not read the
-      cap as a quota budget.
+      This cap applies to the uncompressed Nix store. The 10 GB Actions-cache
+      quota applies to the compressed entry, and the two are not the same
+      number. The store compresses roughly 5x (a 5G-trimmed store saved a
+      ~1.05 GB entry), so sizing the cap to the real closure costs far less
+      quota than the raw figure suggests. Do not read the cap as a quota budget.
     default: "10G"
 
 runs:

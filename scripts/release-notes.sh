@@ -27,7 +27,7 @@ ${image}@${digest}
 
 ## Verify
 
-This image carries keyless **provenance** and **SBOM** attestations — immutable
+This image carries keyless **provenance** and **SBOM** attestations: immutable
 OCI referrers plus the public Rekor transparency log. Verify them by digest:
 
 \`\`\`bash

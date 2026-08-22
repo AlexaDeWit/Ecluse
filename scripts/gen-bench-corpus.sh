@@ -61,7 +61,7 @@ function stem(name) {
 }
 
 // The registry path for a (possibly scoped) name: the scope separator is %2f
-// encoded, the leading '@' kept literal — the form the registry serves.
+// encoded, the leading '@' kept literal: the form the registry serves.
 function registryPath(name) {
   return "/" + name.replace("/", "%2f");
 }
@@ -129,7 +129,7 @@ async function capture(name, pin) {
   for (const v of Object.keys(kept)) if (srcTime[v] !== undefined) time[v] = srcTime[v];
 
   // Rebuild dist-tags so latest is the pin (a kept version) and every other tag that
-  // survives points at a kept version — no dangling tag onto a dropped prerelease.
+  // survives points at a kept version, so no tag dangles onto a dropped prerelease.
   const distTags = { latest: pin };
   for (const [tag, v] of Object.entries(pkmt["dist-tags"] || {})) {
     if (tag !== "latest" && kept[v] !== undefined) distTags[tag] = v;
