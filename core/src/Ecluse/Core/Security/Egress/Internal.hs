@@ -20,19 +20,16 @@ module Ecluse.Core.Security.Egress.Internal (
 
 import Data.Text qualified as T
 
-{- | An outbound registry-egress URL that is https by construction. The only
-production constructor, 'mkRegistryUrl', rejects any non-https scheme, so a plain-HTTP
-registry target cannot be represented in a running system. Every configured upstream,
-mirror, and publication endpoint, and every @dist.tarball@ target, is one of these.
-Stored normalised (surrounding whitespace trimmed).
+{- | An outbound registry-egress URL that is https by construction. 'mkRegistryUrl' is the only
+production constructor and rejects any other scheme, so a plain-HTTP registry target cannot be
+represented in a running system. Stored with surrounding whitespace trimmed.
 -}
 newtype RegistryUrl = RegistryUrl Text
     deriving stock (Eq, Ord, Show)
 
-{- | Build a 'RegistryUrl', accepting only an @https:\/\/@ URL (the scheme matched
-case-insensitively, since URI schemes are). It rejects a non-https or empty value with
-a reason that names the requirement. The aggregating configuration layer can then fail
-closed at boot and report the offending value.
+{- | Build a 'RegistryUrl', accepting only an @https:\/\/@ URL, the scheme matched
+case-insensitively. The configuration layer fails closed at boot on the 'Left' reason and reports
+the offending value.
 
 >>> mkRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")

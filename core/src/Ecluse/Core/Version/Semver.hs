@@ -28,30 +28,16 @@ import Data.Versions qualified as V
 
 import Ecluse.Core.Version.Token (maxVersionLength)
 
-{- | A parsed semver version, wrapping the @versions@ library's
-'Data.Versions.SemVer'. Its 'Ord' is the library's semver §11 precedence
-(build metadata excluded), derived through the newtype.
+{- | A parsed semver version. Its 'Ord' is the @versions@ library's semver §11 precedence, which
+excludes build metadata.
 -}
 newtype SemverKey = SemverKey SemVer
     deriving stock (Show)
     deriving newtype (Eq, Ord)
 
-{- | Parse a semver version via @versions@' 'Data.Versions.semver' (numeric
-@major.minor.patch@ core, optional @-prerelease@, ignoring @+build@ metadata).
-A parse failure becomes 'Nothing': no key, so an ordering rule abstains rather
-than dropping a version over a parser gap.
-
-This bounds the raw text first, as the PEP 440 ("Ecluse.Core.Version.Pep440") and
-Gem ("Ecluse.Core.Version.Gem") grammars bound it. Hostile registry metadata then
-cannot inflict an algorithmic-complexity DoS through an unbounded version string.
-Semver carries a second hazard those grammars do not. They read numeric segments
-into an unbounded 'Integer', whereas @versions@ stores 'Data.Versions.SemVer''s
-numeric components in fixed-width machine words that overflow __silently__, wrapping
-rather than failing. A numeric run long enough to overflow would key a huge version
-as a small one, corrupting 'Ecluse.Core.Version.compareVersions' and so
-@dist-tags.latest@ selection. This therefore refuses a run too long to fit as well.
-The proxy serves a refused version raw without an ordering key, exactly as any other
-unparseable one.
+{- | Parse a semver version. A parse failure becomes 'Nothing', so an ordering rule abstains
+rather than dropping the version. 'maxVersionLength' bounds the text, and @maxNumericRun@ refuses
+a digit run that would silently overflow the @versions@ library's fixed-width numeric components.
 -}
 parseSemver :: Text -> Maybe SemverKey
 parseSemver raw = do
@@ -59,19 +45,14 @@ parseSemver raw = do
     guard (not (hasOverlongNumericRun raw))
     SemverKey <$> rightToMaybe (V.semver raw)
 
-{- The largest run of consecutive decimal digits guaranteed to fit the
-@versions@ library's fixed-width numeric components. An 18-digit run is at most
-@10^18 - 1 < 2^63@, so it fits any 64-bit signed or unsigned word and never
-overflows. A run of 19 digits or more might overflow, so 'parseSemver' refuses it.
-Real semver numbers are tiny, and node-semver itself caps a component at
-@2^53 - 1@ (16 digits), so this bound only ever rejects adversarial input. -}
+{- The longest digit run guaranteed to fit the @versions@ library's fixed-width numeric
+components: 18 digits is at most @10^18 - 1 < 2^63@. A longer run might overflow silently, so
+'parseSemver' refuses it. Real semver numbers are tiny, so the bound only rejects hostile input. -}
 maxNumericRun :: Int
 maxNumericRun = 18
 
-{- Whether @raw@ contains a maximal run of decimal digits long enough that the
-@versions@ library's fixed-width numeric components could overflow on it. Total:
-'T.groupBy' partitions the text into maximal same-class runs, and a digit run
-longer than 'maxNumericRun' fails the bound. -}
+{- Whether @raw@ holds a digit run long enough to overflow the @versions@ library's fixed-width
+numeric components. -}
 hasOverlongNumericRun :: Text -> Bool
 hasOverlongNumericRun = any overlong . T.groupBy sameClass
   where
@@ -80,8 +61,6 @@ hasOverlongNumericRun = any overlong . T.groupBy sameClass
     -- digit run. An over-long one fails the bound.
     overlong run = T.all isDigit run && T.compareLength run maxNumericRun == GT
 
-{- | Whether a semver version is stable: a final release with no prerelease
-component. So @1.0.0@ is stable. @1.0.0-rc.1@ and @2.0.0-beta@ are not.
--}
+-- | Whether a semver version is stable: a final release with no prerelease component.
 isSemverStable :: SemverKey -> Bool
 isSemverStable (SemverKey sv) = isNothing (_svPreRel sv)

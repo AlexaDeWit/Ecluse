@@ -31,11 +31,10 @@ import Ecluse.Core.Server.Route (
     RouteName (RouteName, unRouteName),
  )
 
-{- | One served HTTP operation: its name, exact method, path template, prose, request,
-and response documents.
+{- | One served HTTP operation, as the manifest documents it.
 
-Not 'Eq'\/ 'Show': response and request schemas may carry @autodocodec@ codecs, which
-are functions.
+No 'Eq' or 'Show': request and response schemas may carry @autodocodec@ codecs, which are
+functions.
 -}
 data RouteSpec = RouteSpec
     { rsName :: RouteName

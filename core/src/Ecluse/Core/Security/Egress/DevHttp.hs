@@ -20,10 +20,8 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl (RegistryUrl))
 
-{- | Build a 'RegistryUrl' from an @http:\/\/@ (or @https:\/\/@) loopback URL,
-bypassing the https-only check. For tests and local development only: it exists only
-in a @dev-http-egress@ build, never in a release artifact. It trims the URL and
-otherwise takes it as given.
+{- | Build a 'RegistryUrl' from a loopback URL, bypassing the https-only check. This exists only
+in a @dev-http-egress@ build, never in a release artifact.
 -}
 loopbackRegistryUrl :: Text -> RegistryUrl
 loopbackRegistryUrl = RegistryUrl . T.strip

@@ -59,11 +59,8 @@ parseEcosystem = \case
     "rubygems" -> Just RubyGems
     _ -> Nothing
 
-{- | The path prefix a mount serves under, derived from its ecosystem (npm →
-@\/npm@, PyPI → @\/pypi@) and never operator-configured. A prefix can therefore
-neither collide nor be mistyped (see @docs\/architecture\/web-layer.md@ →
-"Multi-ecosystem mounts"). A 'NonEmpty' list of path segments: every registry is
-path-mounted, so a root mount is unrepresentable.
+{- | The path prefix a mount serves under, derived from its ecosystem and never
+operator-configured, so it can neither collide nor be mistyped. A root mount is unrepresentable.
 
 >>> prefixFor Npm
 "npm" :| []

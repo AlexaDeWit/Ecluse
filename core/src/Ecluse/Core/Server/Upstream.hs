@@ -70,19 +70,14 @@ data MountUpstreams = MountUpstreams
     }
     deriving stock (Eq, Show)
 
-{- | Bind a mount's upstreams. The arguments are the ecosystem's canonical artifact
-hosts, the private upstream base URL, the public upstream base URL, and the mirror serve
-plan. The artifact-host list is empty for an ecosystem, like npm, that serves artifacts
-from its registry host. The private base URL is 'Nothing' for a serve-only pure public
-gate.
+{- | Bind a mount's upstreams: the ecosystem's canonical artifact hosts, the private upstream
+base URL, the public upstream base URL, and the mirror serve plan. The artifact-host list is
+empty for an ecosystem like npm that serves artifacts from its registry host, and the private
+base URL is 'Nothing' for a serve-only public gate.
 
-This builder derives the tarball-host gate from those arguments instead of taking it
-beside them. Across the library and the application it is the only caller of
-'Ecluse.Core.Security.tarballHostGate'. The gate's own specs call that function directly,
-as an oracle. A mount's allowlist and reference authorities therefore have one
-derivation, and no second, drifting argument list can assemble them. The composition root
-calls this once per mount, and so do the test fixtures. The serve dependencies carry the
-result, so the per-request gate reads precomputed fields.
+This builder is the only caller of 'Ecluse.Core.Security.tarballHostGate' outside that gate's
+own specs, so a mount's allowlist and reference authorities have one derivation that no second
+argument list can drift from.
 -}
 mountUpstreams :: [Text] -> Maybe Text -> Text -> MirrorServePlan -> MountUpstreams
 mountUpstreams ecosystemHostUrls privateBaseUrl publicBaseUrl mirror =

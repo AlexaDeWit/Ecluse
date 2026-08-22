@@ -63,13 +63,9 @@ mkUrl raw =
 unUrl :: Url -> Text
 unUrl (Url u) = u
 
-{- | The mirror-write credential, __derived from the mirror-target URL__ so a token
-can never pair with an endpoint it was not minted for. A CodeArtifact endpoint
-encodes its whole identity in its host, so the derivation reads that identity
-straight from the URL. Any other host takes an operator-supplied static bearer.
-Config load makes the choice once
-('Ecluse.Config.MirrorCredential.resolveMirrorCredential') and carries it here, so the
-pairing is correct by construction.
+{- | The mirror-write credential, __derived from the mirror-target URL__ so a token can never pair
+with an endpoint it was not minted for. Config load resolves it once
+('Ecluse.Config.MirrorCredential.resolveMirrorCredential').
 -}
 data MirrorCredential
     = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
@@ -80,10 +76,9 @@ data MirrorCredential
 
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
-    {- ^ The mount's explicit on\/off switch. Any operator-declared key under the
-    mount activates it. So @enabled: true@ exists for the mount that needs no other
-    key: a serve-only pure public gate on the template public upstream. And
-    @enabled: false@ switches off a mount whose other keys remain in place.
+    {- ^ The mount's explicit on\/off switch. Any operator-declared key under the mount already
+    activates it, so @enabled: true@ serves the pure public gate that declares no other key, and
+    @enabled: false@ switches off a mount whose other keys stay in place.
     -}
     , mntPrivateUpstream :: Maybe RegistryUrl
     , mntPublicUpstream :: RegistryUrl
@@ -103,9 +98,8 @@ data MountConfig = MountConfig
     }
     deriving stock (Eq, Show)
 
-{- | The resolved application configuration, one sub-record per document group, so a
-field's home says what it governs. The document schema and this type mirror each
-other one to one.
+{- | The resolved application configuration, one sub-record per document group. The document
+schema and this type mirror each other one to one.
 -}
 data AppConfig = AppConfig
     { cfgServer :: ServerSettings
@@ -134,9 +128,8 @@ data ServerSettings = ServerSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @queue@ group: the mirror queue's destination, the in-memory rollover's
-depth cap, and the redelivery budget that retires a poison message. The URL's shape
-decides the backend ("Ecluse.Config.QueueTarget"), which is never named here.
+{- | The @queue@ group: the mirror queue's destination, depth cap, and redelivery budget. The
+URL's shape decides the backend ("Ecluse.Config.QueueTarget"), which this type never names.
 -}
 data QueueSettings = QueueSettings
     { qsUrl :: Maybe Url
@@ -144,16 +137,14 @@ data QueueSettings = QueueSettings
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
     {- ^ How many deliveries one message gets before the worker retires it outright.
-    This is a pinned policy default, and a __floor__. A queue with a dead-letter
-    terminus attached runs one delivery above that terminus's own capture count, so
-    the dead-letter queue always captures first ("Ecluse.Core.Queue").
+    It is a __floor__: a queue with a dead-letter terminus runs one delivery above that terminus's
+    capture count, so the dead-letter queue always captures first ("Ecluse.Core.Queue").
     -}
     }
     deriving stock (Eq, Show)
 
-{- | The @limits@ group: the hostile-input bounds. The structural counts are pinned
-policy defaults. The memory plan computes the byte-valued caps when unset
-("Ecluse.Composition.MemoryPlan"), a configured value always winning.
+{- | The @limits@ group: the hostile-input bounds. The memory plan computes the byte-valued caps
+when unset ("Ecluse.Composition.MemoryPlan"), a configured value always winning.
 -}
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int
@@ -204,9 +195,8 @@ data AdvisoriesSettings = AdvisoriesSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @runtime@ group: the process-sizing overrides. Every field is optional.
-Unset, each is computed from the runtime posture (cgroups, RTS, file-descriptor
-limit), with its provenance boot-logged.
+{- | The @runtime@ group: the process-sizing overrides. Unset, each is computed from the runtime
+posture (cgroups, RTS, file-descriptor limit), with its provenance boot-logged.
 -}
 data RuntimeSettings = RuntimeSettings
     { rtCores :: Maybe Int
@@ -231,11 +221,8 @@ data MountRegistries = MountRegistries
     }
     deriving stock (Eq, Show)
 
-{- | Whether a mount mirrors, derived from its declared endpoints. A declared
-@mirrorTarget@ makes the mount 'Mirrored', and it must also declare a private
-upstream so the mirror can be read back. An absent one makes it 'ServeOnly', which
-never writes anywhere. A serve-only mount's private upstream is optional, and a mount
-with neither is the pure public gate. The coupling is structural, so a mirrored mount
+{- | Whether a mount mirrors, derived from its declared endpoints. A declared @mirrorTarget@ makes
+the mount 'Mirrored' and demands a private upstream to read the mirror back, so a mirrored mount
 without a readable private leg is unrepresentable.
 -}
 data MountMode
@@ -254,9 +241,7 @@ data MirroredLegs = MirroredLegs
     }
     deriving stock (Eq, Show)
 
-{- | The mount's private upstream, when it has one. Total over both modes, so the
-compiler makes every call site face the serve-only absence.
--}
+-- | The mount's private upstream, when it has one. It is total over both mount modes.
 regPrivateUpstream :: MountRegistries -> Maybe RegistryUrl
 regPrivateUpstream regs = case regMode regs of
     Mirrored legs -> Just (mlPrivateUpstream legs)

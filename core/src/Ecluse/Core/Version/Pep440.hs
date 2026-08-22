@@ -38,17 +38,16 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0, parseNumSeg)
 
-{- | A parsed PEP 440 version as its canonical ordering key:
-@(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
-(@1.0 == 1.0.0@). The rank tuples encode PEP 440's None-handling:
+{- | A parsed PEP 440 version as its canonical ordering key. The release has trailing
+zeros stripped (@1.0 == 1.0.0@), and the rank tuples encode PEP 440's None-handling for
+the derived 'Ord':
 
-\* The @p440Pre@ rank is @(band, stage, n)@. The @band@ is __0__ for a dev release with
-  no prerelease and no post, which sorts /before/ all prereleases (@1.0.dev1 < 1.0a1@).
-  It is __1__ for an actual prerelease, with @stage@ a\/b\/rc and its number. It is
-  __2__ for a final or post release, which sorts after prereleases.
-\* The @p440Post@ rank is @(0,0)@ when absent, so a final sorts below any post-release.
-\* The @p440Dev@ rank is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
-  sorts below its non-dev sibling.
+\* @p440Pre@ is @(band, stage, n)@. Band __0__ is a dev release with no prerelease and no
+post, sorting before all prereleases (@1.0.dev1 < 1.0a1@). Band __1__ is a prerelease,
+with @stage@ a\/b\/rc. Band __2__ is a final or post release.
+\* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
+\* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release sorts below
+its non-dev sibling.
 -}
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
@@ -98,10 +97,8 @@ parseEpoch mainPart = do
 parseRelease :: Text -> Maybe ([Integer], Text)
 parseRelease afterEpoch = do
     let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
-        -- 'releaseText' greedily grabs the dot that separates the release from a
-        -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing empty
-        -- segment. Only one: the guard below rejects any remaining empty segment, so
-        -- interior and leading blanks ("1..0", ".1.0", "1.0..dev1") never parse.
+        -- 'releaseText' greedily grabs the dot that separates the release from a suffix
+        -- ("1.0.dev1" → "1.0." → ["1","0",""]), so drop one trailing empty segment.
         relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
     guard (not (any T.null relSegs))
     release <- traverse parseNumSeg relSegs
@@ -154,9 +151,8 @@ assembleKey epoch release (mPre, mPost, mDev) localToks =
         Just n -> (0, n)
     stripTrailingZeros = dropWhileEnd (== 0)
 
-{- | Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
-or present), failing if any text is left unconsumed, so trailing garbage never
-parses. The banding into a sort key happens in 'parsePep440'.
+{- | Consume a PEP 440 suffix into its prerelease, post and dev parts. Fails if any text
+is left unconsumed, so trailing garbage never parses.
 -}
 parsePep440Suffix ::
     Text -> Maybe (Maybe (Int, Integer), Maybe Integer, Maybe Integer)
@@ -194,11 +190,9 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- | Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into
-@Just n@. 'Nothing' if absent. PEP 440 spells the post-release label @post@, @rev@,
-or @r@, and its reference implementation @packaging@ normalises all three to @post@,
-so this accepts each. It tries @post@ and @rev@ before the single-letter @r@, so it
-never mis-splits @revN@ as @r@ + @evN@.
+{- | Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into @Just n@.
+PEP 440 normalises all three labels to @post@. It tries @post@ and @rev@ before the
+single-letter @r@, so it never mis-splits @revN@ as @r@ + @evN@.
 -}
 consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
@@ -221,9 +215,8 @@ consumeDev s =
              in (Just (numOr0 digits), rest)
         Nothing -> (Nothing, s)
 
-{- | Whether a PEP 440 version is stable: neither a pre-release (@a@\/@b@\/@rc@)
-nor a dev release. Post-releases /are/ stable. So @1.0@ and @1.0.post1@ are
-stable. @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
+{- | Whether a PEP 440 version is stable: neither a pre-release (@a@\/@b@\/@rc@) nor a dev
+release. A post-release /is/ stable, so @1.0.post1@ is stable and @1.0a1.dev2@ is not.
 -}
 isPep440Stable :: Pep440Key -> Bool
 isPep440Stable k = noPre k && noDev k

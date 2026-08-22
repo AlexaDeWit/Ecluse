@@ -65,11 +65,7 @@ import Data.Aeson qualified as Aeson
 import Network.HTTP.Types (Header, Status, hContentType)
 import Network.Wai (Response, StreamingBody, responseLBS, responseStream)
 
-{- | The structural shape of a response body, kept OpenAPI-free in the core.
-
-'SchemaPassthrough' is deliberately broad: it means the operation transparently relays
-an upstream response whose media type and body shape are outside Écluse's control.
--}
+-- | The structural shape of a response body, kept OpenAPI-free in the core.
 data BodySchema
     = -- | No body at all.
       SchemaEmpty
@@ -82,10 +78,8 @@ data BodySchema
     | -- | An upstream-controlled body under an upstream-controlled media type.
       SchemaPassthrough
 
-{- | A request body a route accepts: its prose, requiredness, and documented shape.
-
-Request decoding is not part of the response algebra. A hand-authored request schema
-still owes the separate conformance check described in the API-surface architecture.
+{- | A request body a route accepts. A hand-authored request schema still owes the separate
+conformance check the API-surface architecture describes.
 -}
 data RequestSpec = RequestSpec
     { reqDescription :: Text
@@ -114,10 +108,9 @@ data ResponseDoc = ResponseDoc
     -- ^ The body shape this response carries.
     }
 
-{- | A response contract indexed by the only value its handler may answer with.
-
-The constructor is private. The list and renderer can therefore only be extended together
-through this module's leaves and 'chooseContract'.
+{- | A response contract indexed by the only value its handler may answer with. The constructor is
+private, so the docs and the renderer extend together through this module's leaves and
+'chooseContract'.
 -}
 data ResponseContract response = ResponseContract
     { contractDocs :: [ResponseDoc]
@@ -135,9 +128,8 @@ data ResponseValue a = ResponseValue [Header] a
 responseValue :: [Header] -> a -> ResponseValue a
 responseValue = ResponseValue
 
-{- | A binary response choice. Nesting 'ResponseChoice's forms a closed route response
-sum without type-level programming. The 'chooseContract' combinator builds its two
-matching interpretations together.
+{- | A binary response choice. Nesting these forms a closed route response sum without type-level
+programming, and 'chooseContract' builds the two matching interpretations together.
 -}
 data ResponseChoice a b
     = FirstResponse a
@@ -216,11 +208,8 @@ data PassthroughResponse = PassthroughResponse Status [Header] PassthroughBody
 passthroughResponse :: Status -> [Header] -> PassthroughBody -> PassthroughResponse
 passthroughResponse = PassthroughResponse
 
-{- | An explicit OpenAPI @default@ contract for a transparent upstream relay.
-
-This is the honest contract when the proxy intentionally forwards arbitrary upstream
-statuses and media types. It prevents drift by documenting that open behaviour rather
-than placing an inaccurate finite status set beside it.
+{- | An OpenAPI @default@ contract for a transparent upstream relay. The proxy forwards arbitrary
+upstream statuses and media types, so any finite status set beside it would be inaccurate.
 -}
 passthroughContract :: Text -> ResponseContract PassthroughResponse
 passthroughContract description =

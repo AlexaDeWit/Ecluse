@@ -77,23 +77,13 @@ import Ecluse.Core.Json.Selective (
  )
 import Ecluse.Core.Version (Version, renderVersion)
 
-{- | The pieces a selective decode pulls out of a packument for one requested version.
-They are the document's self-reported @name@, the requested version's manifest object
-and publish stamp, and the __raw__ number of entries in the @versions@ object. The name,
-the manifest object, and the publish stamp are each the raw 'Value' the whole-document
-path's own projection then consumes.
+{- | The raw 'Value' pieces a selective decode pulls out of a packument for one requested
+version. A field is 'Nothing' when its key is absent, so the caller reproduces the
+whole-document outcome, and an absent @name@ is the empty-name decode failure.
 
-Each value field is 'Nothing' when its key is absent from the document, so the caller
-reproduces the whole-document outcome. An absent @name@ is the empty-name decode failure.
-An absent version object is a genuine miss, and an absent @time@ entry is a version with
-no known publish stamp. The 'svVersionCount' is the count the caller bounds against
-'Ecluse.Core.Security.maxVersionCount'.
-
-A key can appear more than once: a duplicate top-level @name@, @versions@ or @time@, or
-a duplicate version key inside @versions@. The walk keeps the __first__ occurrence and
-consumes the later ones only for validation. That matches @aeson@'s duplicate-key
-resolution, where the first of a duplicate wins, so neither the chosen value nor the
-count diverges from the whole-document decode.
+A duplicate key keeps its __first__ occurrence, matching @aeson@'s own resolution, so
+neither the chosen value nor the count diverges from the whole-document decode. The caller
+bounds 'svVersionCount' against 'Ecluse.Core.Security.maxVersionCount'.
 -}
 data SelectedVersion = SelectedVersion
     { svName :: Maybe Value
@@ -107,39 +97,33 @@ data SelectedVersion = SelectedVersion
     }
     deriving stock (Eq, Show)
 
-{- | Selectively decode a packument's bytes for one version. The walk extracts the
-document @name@, the requested version's object and @time@ entry, and the @versions@
-count. It skips every other version's tokens unallocated, and bounds every value at
-@maxDepth@ levels. That is the 'Ecluse.Core.Security.maxNestingDepth' budget, so the
-depth bound matches 'Ecluse.Core.Security.checkNestingDepth' over the whole document.
+{- | Selectively decode a packument's bytes for one version, skipping every other version's
+tokens unallocated. Each value is bounded at @maxDepth@ levels, the
+'Ecluse.Core.Security.maxNestingDepth' budget, so the bound matches
+'Ecluse.Core.Security.checkNestingDepth' over the whole document.
 
 The body must be a well-formed JSON object with nothing but whitespace after it. Anything
 else is 'SelectiveUndecodable', exactly as @eitherDecodeStrict@ would fail it.
 -}
 selectVersionFromPackument :: Int -> Version -> ByteString -> Either SelectiveError SelectedVersion
 selectVersionFromPackument maxDepth version body
-    -- The top-level value is itself a container occupying one level, so a zero or
-    -- negative budget refuses it before the walk. That mirrors @within cap@ requiring
-    -- @cap >= 1@ for the document object.
+    -- The document object itself occupies one level, so a budget below 1 refuses it before the
+    -- walk, matching @within cap@, which requires @cap >= 1@ for the document object.
     | maxDepth < 1 = Left SelectiveTooDeeplyNested
     | otherwise = case bsToTokens body of
         TkRecordOpen rec -> walkTop (maxDepth - 1) (renderVersion version) rec
-        -- A well-formed non-object body decodes but never projects to a packument, and a
-        -- malformed body never decodes. The whole-document path renders both as the same
-        -- "unobtainable metadata", so this walk does not distinguish them either.
+        -- The whole-document path renders a malformed body and a well-formed non-object alike as
+        -- unobtainable metadata, so this walk does not distinguish them either.
         _ -> Left SelectiveUndecodable
 
 -- The starting accumulator: nothing found, no versions counted.
 emptySelection :: SelectedVersion
 emptySelection = SelectedVersion Nothing Nothing Nothing 0
 
-{- The walk's threaded state: the selection built so far, plus which captured top-level
-keys the walk has already seen. The @aeson@ decoder keeps the __first__ occurrence of a
-duplicate key. Once the walk captures a @name@, @versions@ or @time@ key, it consumes a
-later duplicate for validation but never overwrites the first. The flags carry that
-"already captured" signal, which the selection alone cannot. A captured
-@versions@\/@time@ whose target was absent leaves its value field 'Nothing',
-indistinguishable from "not yet seen". -}
+{- The walk's threaded state. The flags mark a captured @name@, @versions@ or @time@ so a
+later duplicate never overwrites the first, as @aeson@ resolves it. The selection alone
+cannot carry that: a captured key whose target was absent leaves 'Nothing', and so does
+"not yet seen". -}
 data WalkState = WalkState
     { wsSelection :: SelectedVersion
     , wsSeenName :: Bool
@@ -150,12 +134,8 @@ data WalkState = WalkState
 initialWalk :: WalkState
 initialWalk = WalkState emptySelection False False False
 
-{- Walk the top-level packument record to its end, threading the walk state. Each
-top-level value sits at the @childBudget@ depth budget, one below the document object's
-own budget. The walk captures @name@, @versions@ and @time@ at their first occurrence.
-The requested version and the count come from that first @versions@ object. It skips
-every other value unallocated. The trailing bytes after the record must be whitespace
-only. -}
+{- Walk the top-level packument record to its end, threading the walk state. Each top-level
+value sits at @childBudget@, one level below the document object's own budget. -}
 walkTop :: Int -> Text -> TkRecord ByteString String -> Either SelectiveError SelectedVersion
 walkTop childBudget target = fmap wsSelection . go initialWalk
   where
@@ -170,12 +150,9 @@ walkTop childBudget target = fmap wsSelection . go initialWalk
             "name" -> adoptFirst wsSeenName captureName st valueToks
             _ -> skipValue childBudget valueToks >>= go st
 
-    {- Adopt a captured top-level key at its first occurrence, or skip a later duplicate.
-    The @aeson@ decoder keeps the first of a duplicate key, so once the walk captures a
-    key, a repeat must not overwrite it. Either branch still walks the value to its end
-    (its tokens consumed, depth-bounded), so a malformed or over-deep sibling anywhere
-    still breaches. The walk never materialises a skipped value. Continues from the
-    value's continuation. -}
+    {- Adopt a captured top-level key at its first occurrence, or skip a later duplicate, since
+    @aeson@ keeps the first. Either branch still walks the value to its end, depth-bounded and
+    never materialised, so a malformed or over-deep sibling anywhere still breaches. -}
     adoptFirst captured capture st valueToks
         | captured st = skipValue childBudget valueToks >>= go st
         | otherwise = capture st valueToks >>= uncurry go

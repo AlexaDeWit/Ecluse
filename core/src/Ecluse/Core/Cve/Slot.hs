@@ -47,10 +47,8 @@ newtype CveSlot = CveSlot (TVar (Maybe Generation))
 newCveSlot :: IO CveSlot
 newCveSlot = CveSlot <$> newTVarIO Nothing
 
-{- | Borrow the current generation's view for the duration of one action. The bracket
-pins the generation, holding its reader count above zero, so a concurrent 'swapIn'
-cannot close it mid-read. A swap that lands during the action only means the /next/
-bracket sees the new generation.
+{- | Borrow the current generation's lookup for the duration of one action. The bracket
+pins the generation, so a concurrent 'swapIn' cannot close it mid-read.
 -}
 withSlotLookup :: CveSlot -> (Maybe CveLookup -> IO a) -> IO a
 withSlotLookup (CveSlot cell) use = bracket acquire release (use . fmap (cveDbLookup . genDb))
@@ -61,33 +59,15 @@ withSlotLookup (CveSlot cell) use = bracket acquire release (use . fmap (cveDbLo
         pure mGen
     release = traverse_ (\g -> atomically (modifyTVar' (genReaders g) (subtract 1)))
 
-{- | The active generation's artifact 'DbEtag', or 'Nothing' before the first sync. A
-non-pinning read: it snapshots the live generation's identity without bumping the
-reader count, so it never delays a swap. It answers "which advisory database is live
-right now" for the audit trail, not "hold this generation open". A swap that lands
-just after it read means a later reader saw the newer database. The evaluation
-context resolves this once per request.
+{- | The active generation's artifact 'DbEtag', or 'Nothing' before the first sync. The
+read does not pin the generation, so it never delays a 'swapIn'.
 -}
 currentAdvisoryEtag :: CveSlot -> IO (Maybe DbEtag)
 currentAdvisoryEtag (CveSlot cell) = fmap genEtag <$> readTVarIO cell
 
-{- | Install a newly-verified generation and retire the one it displaces. Publish the
-new 'CveDb' to readers atomically, wait for the displaced generation's readers to
-drain to zero, then close it. The close releases the old artifact's last inode
-reference (see the module header). It blocks only the caller, the sync task, and only
-for as long as the longest in-flight evaluation, which the rule's resilience timeout
-already bounds.
-
-__The slot owns the new database from the moment this call is entered__. Publication
-is the first effect, and it is atomic. No failure mode of this call leaves the new
-generation both unpublished and unclosed, and no caller cleanup may close it. This
-call swallows a close failure on the displaced generation, because the swap already
-succeeded and the stale connection is the only casualty. Cancellation during the
-drain wait propagates instead, leaving the new generation live and the displaced one
-unclosed until process exit.
-
-Safe under a single swapper, the one sync task per slot. With several, each call
-retires exactly the generation it displaced.
+{- | Install a newly verified generation, drain the displaced one's readers, then close it.
+The slot owns @newDb@ from entry and publishes it first, so no caller cleanup may close it.
+Cancellation during the drain propagates, leaving the displaced generation unclosed.
 -}
 swapIn :: CveSlot -> DbEtag -> CveDb -> IO ()
 swapIn (CveSlot cell) etag newDb = do

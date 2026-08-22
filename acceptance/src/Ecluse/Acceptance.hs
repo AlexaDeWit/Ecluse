@@ -63,11 +63,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | The acceptance budget: the maximum Écluse work-per-request overhead, in
-milliseconds, allowed before the run reds. A separate default applies to the
-full-packument transform and to the single-version selective decode. Each takes
-optional per-package overrides for the heavy, many-version packuments whose
-processing is legitimately costlier.
+{- | The acceptance budget: the maximum Écluse work-per-request overhead, in milliseconds,
+allowed before the run reds. Per-package overrides cover the heavy, many-version packuments.
 -}
 data Criteria = Criteria
     { critDefaultBudgetMs :: Double
@@ -99,9 +96,8 @@ criteriaPath = "acceptance/criteria.json"
 decodeCriteria :: LByteString -> Either String Criteria
 decodeCriteria = eitherDecode
 
-{- | Read and decode the committed criteria from 'criteriaPath'. Fails loudly if the
-file is missing or malformed: that is a committed-config defect, not a runtime
-condition the harness decides on.
+{- | Read and decode the committed criteria from 'criteriaPath'. It fails loudly when the file
+is missing or malformed, because that is a committed-config defect.
 -}
 loadCriteria :: IO Criteria
 loadCriteria = do
@@ -118,11 +114,8 @@ singleVersionBudgetFor :: Criteria -> Text -> Double
 singleVersionBudgetFor crit name =
     Map.findWithDefault (critDefaultSingleVersionBudgetMs crit) name (critPerPackageSingleVersionBudgetMs crit)
 
-{- | One package's live measurement: how long the registry took to serve the
-packument (the upstream leg), and how long Écluse took to process it. The Écluse leg
-splits into the full-packument transform and the single-version selective decode. A
-reader therefore never mistakes an upstream-bound cost for an Écluse one, and the
-single-version path stays tracked on its own.
+{- | One package's live measurement. The upstream fetch, the full-packument transform, and
+the single-version decode stay separate, so no upstream cost reads as an Écluse one.
 -}
 data Sample = Sample
     { sampleName :: Text
@@ -153,10 +146,8 @@ data Assessment = Assessment
     }
     deriving stock (Eq, Show)
 
-{- | A package's outcome in a run: either the harness measured the package, or it
-could not assess it. A measured outcome carries the per-leg assessments, the
-full-packument leg then the single-version leg. A fetch or decode failure is __not__
-a breach: only an over-budget measurement reds the run.
+{- | A package's outcome in a run: measured, or not assessable. A fetch or decode failure is
+__not__ a breach, because only an over-budget measurement reds the run.
 -}
 data PackageOutcome
     = -- | A measured package: its sample, the full-packument assessment, then the single-version assessment.
@@ -171,10 +162,8 @@ newtype Report = Report
     }
     deriving stock (Eq, Show)
 
-{- | Evaluate each package's raw input against the criteria. A @Left (name, reason)@
-is an unavailable package, carried through and never a breach. It measures a
-@Right sample@ against its resolved budgets: each leg over budget yields a 'Breached'
-margin, and every other leg 'Within'.
+{- | Evaluate each package's raw input against the criteria. A @Left (name, reason)@ carries
+through as an unavailable package and never counts as a breach.
 -}
 evaluate :: Criteria -> [Either (Text, Text) Sample] -> Report
 evaluate crit = Report . map outcome
@@ -206,9 +195,8 @@ breached :: Assessment -> Bool
 breached (Assessment _ (Breached _)) = True
 breached _ = False
 
-{- | The run-shape facts the summary names, so a reader interprets the numbers
-without opening the harness. It carries how many packages the catalogue held, and
-how many timed passes each reported leg's median came from.
+{- | The run-shape facts the summary names, so a reader interprets the numbers without opening
+the harness.
 -}
 data OperatingPoint = OperatingPoint
     { opPassesPerLeg :: Int
@@ -218,30 +206,22 @@ data OperatingPoint = OperatingPoint
     }
     deriving stock (Eq, Show)
 
-{- | The budget-to-observed multiple for one leg: how many times the measured
-overhead fits inside its budget. 'Nothing' when the observed figure is zero or
-negative, where the multiple is meaningless. Rendered per package, so the report
-shows how much room each leg has before a breach, beyond the binary verdict.
+{- | The budget-to-observed multiple for one leg: how many times its overhead fits inside its
+budget. 'Nothing' when the observed figure is not positive, where the multiple is meaningless.
 -}
 headroom :: Double -> Double -> Maybe Double
 headroom budget observed
     | observed <= 0 = Nothing
     | otherwise = Just (budget / observed)
 
-{- | The fraction of its budget a within-budget leg may consume before the report
-marks it __watch__. The mark is early warning that reality is drifting toward the
-bar, while the exit code stays green (only a breach exits non-zero).
-
-Budgets are calibrated at roughly 2.2x the observed CI maxima, so a healthy leg sits
-near 45% of its budget. 0.7 stays quiet across that range and trips once a leg
-reaches about 1.55x its calibration-time maximum, well before the breach at 2.2x.
+{- | The fraction of its budget a within-budget leg may consume before the report marks it
+__watch__, an early warning while the exit code stays green. Budgets sit at roughly 2.2x the
+observed CI maxima, so 0.7 stays quiet near a healthy 45% and trips at about 1.55x that maximum.
 -}
 watchFraction :: Double
 watchFraction = 0.7
 
--- Whether a within-budget leg consumed enough of its budget to be on watch. A
--- breached leg is never merely on watch, and a non-positive budget cannot express a
--- meaningful fraction.
+-- Whether a within-budget leg is on watch. The budget guard keeps the ratio defined.
 watching :: Assessment -> Double -> Bool
 watching a observed = case assessVerdict a of
     Within -> assessBudgetMs a > 0 && observed / assessBudgetMs a >= watchFraction
@@ -336,9 +316,7 @@ renderReport op report =
             ]
         | otherwise = []
 
--- A measured row's verdict cell. It is "within" when both legs are in budget and
--- clear of the watch fraction. Otherwise it names each breached leg with its margin,
--- and each watched leg with the budget share it consumed.
+-- A measured row's verdict cell.
 renderVerdicts :: Sample -> Assessment -> Assessment -> Text
 renderVerdicts s full single =
     case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of

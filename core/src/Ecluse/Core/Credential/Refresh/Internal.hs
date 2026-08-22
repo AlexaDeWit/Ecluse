@@ -54,19 +54,9 @@ import Ecluse.Core.Breaker (
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..))
 import Ecluse.Core.InFlight (guardInFlight)
 
-{- | A failure the credential-refresh layer surfaces.
-
-The runtime case is 'BreakerOpen': there is no valid token to serve and no fresh mint
-available. The provider always serves a still-valid token instead, and a background
-refresh fails silently, so only the expired-token path reaches this. What the
-credential backs decides whether reaching it can affect a client serve. Under the
-default @passthrough@ strategy it never can, because the credential covers the mirror
-write only. Where a provider sits on the private-upstream read it can (see the module
-header).
-
-The degenerate case is 'Unconfigured': a caller used a 'RefreshConfig' from
-'defaultRefreshConfig' without supplying an effectful leaf. The default raises that
-wiring fault loudly rather than silently serving nothing.
+{- | A failure the credential-refresh layer surfaces. 'BreakerOpen' can affect a client
+serve only where a provider sits on the private-upstream read, never under the default
+@passthrough@ strategy.
 -}
 data CredentialError
     = {- | The token has expired and the mint circuit breaker is open, so the
@@ -87,12 +77,9 @@ data CredentialError
 
 instance Exception CredentialError
 
-{- | An observer of a refresh attempt's outcome, so the composition root can record
-the @ecluse.credential.*@ signals without the refresh policy depending on telemetry.
-A successful mint reports the freshly minted token's remaining lifetime. A failed
-mint reports the still-cached token's remaining lifetime, so a sustained outage shows
-the gauge decaying as repeated failures resample the ageing token. The seconds are
-'Nothing' for a token with no expiry. 'noRefreshReporter' is the inert default.
+{- | An observer of a refresh attempt's outcome, so the refresh policy does not depend on
+telemetry. A failed mint reports the still-cached token's remaining lifetime ('Nothing'
+when the token has no expiry), so a sustained outage shows the gauge decaying.
 -}
 data RefreshReporter = RefreshReporter
     { onRefreshSucceeded :: Maybe Int -> IO ()
@@ -105,9 +92,8 @@ data RefreshReporter = RefreshReporter
 noRefreshReporter :: RefreshReporter
 noRefreshReporter = RefreshReporter (const pass) (const pass)
 
-{- | The telemetry observers a refreshing provider records through: the mint circuit
-breaker's state changes and each refresh attempt's outcome. Bundled so the composition
-root passes one value to the provider constructors.
+{- | The telemetry observers a refreshing provider records through, bundled so the
+composition root passes one value to the provider constructors.
 -}
 data CredentialReporters = CredentialReporters
     { crBreakerReporter :: BreakerReporter
@@ -116,10 +102,9 @@ data CredentialReporters = CredentialReporters
     -- ^ Observes each refresh outcome (@ecluse.credential.refresh@ \/ @.token.ttl@).
     }
 
-{- | How a 'refreshingProvider' mints, times, and protects its token. The caller
-injects the two effectful leaves ('rcMint', 'rcClock') and the jitter source
-('rcJitter'), so the whole policy is deterministic under test. The rest are policy
-knobs with sensible defaults in 'defaultRefreshConfig'.
+{- | How a 'refreshingProvider' mints, times, and protects its token. The caller injects
+the effectful leaves ('rcMint', 'rcClock', 'rcJitter') so the policy is deterministic
+under test, and 'defaultRefreshConfig' supplies the rest.
 -}
 data RefreshConfig = RefreshConfig
     { rcMint :: IO AuthToken
@@ -131,18 +116,16 @@ data RefreshConfig = RefreshConfig
     without real time passing.
     -}
     , rcJitter :: IO Double
-    {- ^ A jitter fraction in @[0, 1)@, sampled once per token, that pulls the
-    refresh instant /earlier/. It desynchronises a cohort of instances so they do
-    not all refresh at the same moment.
+    {- ^ A jitter fraction in @[0, 1)@, sampled once per token, that pulls the refresh
+    instant /earlier/. It desynchronises a cohort of instances.
     -}
     , rcRefreshAt :: Double
     {- ^ The fraction of a token's lifetime at which to refresh, before jitter
     (the ~80% point). Clamped into @[0, 1]@.
     -}
     , rcRefreshFloor :: NominalDiffTime
-    {- ^ A hard floor: never schedule the refresh later than this many seconds
-    before expiry. A token with a short lifetime then still refreshes ahead of its
-    deadline rather than serving right up to it.
+    {- ^ A hard floor: never schedule the refresh later than this many seconds before
+    expiry. A short-lived token then still refreshes ahead of its deadline.
     -}
     , rcBreakerThreshold :: Int
     -- ^ Consecutive mint failures that trip the circuit breaker.
@@ -160,14 +143,9 @@ data RefreshConfig = RefreshConfig
     -}
     }
 
-{- | Sensible defaults for the policy knobs. The caller must still supply the
-effectful leaves. 'rcMint' and 'rcClock' default to a mint and a clock that always
-fail. A provider built without wiring them up therefore fails loudly rather than
-silently serving nothing.
-
-* refresh at 80% of lifetime (no jitter by default, and 'rcJitter' may pull it earlier).
-* a 30-second floor before expiry.
-* breaker trips after 5 consecutive failures, cooling down for 60 seconds.
+{- | Sensible defaults for the policy knobs. 'rcMint' and 'rcClock' default to leaves
+that throw 'Unconfigured', so a provider built without wiring them fails loudly rather
+than silently serving nothing.
 -}
 defaultRefreshConfig :: RefreshConfig
 defaultRefreshConfig =
@@ -186,9 +164,7 @@ defaultRefreshConfig =
     unconfigured :: Text -> IO a
     unconfigured field = throwIO (Unconfigured field)
 
-{- | The mutable state of a refreshing provider: the cached token, when its
-proactive refresh is due, the single-flight flag, and the breaker.
--}
+-- | The mutable state of a refreshing provider.
 data CacheState = CacheState
     { csToken :: AuthToken
     -- ^ The token currently served.
@@ -203,20 +179,15 @@ data CacheState = CacheState
     }
 
 {- | Build a 'CredentialProvider' that caches a token and refreshes it under the
-'RefreshConfig' policy (see the module header). It mints once eagerly to seed the
-cache. A provider that cannot mint at all therefore fails here at construction, not
-on the first request. After that, 'currentToken' serves the cache and refreshes
-behind it.
+'RefreshConfig' policy. It mints once eagerly, so a provider that cannot mint at all
+fails here at construction rather than on the first request.
 -}
 refreshingProvider :: RefreshConfig -> IO CredentialProvider
 refreshingProvider = refreshingProviderWith (pure ())
 
-{- | As 'refreshingProvider', but with a hook the serving thread runs at the
-single-flight claim → mint-runner handoff. That handoff is the interruptible window
-between the STM transaction committing the claim and the mint runner installing the
-scope that releases it. It exists only so a test can deterministically park a serving
-thread in that window and cancel it there. Production always passes @pure ()@ through
-'refreshingProvider'.
+{- | As 'refreshingProvider', but with a hook the serving thread runs between the
+single-flight claim and the mint runner, so a test can park a thread in that window and
+cancel it there. Production passes @pure ()@ through 'refreshingProvider'.
 -}
 refreshingProviderWith :: IO () -> RefreshConfig -> IO CredentialProvider
 refreshingProviderWith afterClaim cfg = do
@@ -226,21 +197,11 @@ refreshingProviderWith afterClaim cfg = do
     stateVar <- newTVarIO (CacheState token due False initialBreaker)
     pure CredentialProvider{currentToken = serve afterClaim cfg stateVar}
 
-{- Serve the current token, scheduling a background refresh, or mint synchronously
-when the token has expired. One STM transaction takes the decision, so single-flight
-holds across a concurrent cohort.
-
-The claim of the single-flight flag (inside 'decide') and the run that releases it
-stay in __one masked scope__. 'mask' holds async exceptions off the pure handoff
-between the STM commit and 'guardInFlight', which owns the release. A cancellation or
-a timeout therefore cannot land in the gap and orphan the flag. An orphaned flag would
-wedge every later expired caller on the 'decide' 'retry'. The mint work runs under
-@restore@, and a proactive refresh under the forked child's unmask, so it stays
-interruptible. The flag is simply guaranteed to have an owner first. The refresher's
-waiters re-decide against the freed flag, not on a result promise. 'guardInFlight's
-orphan hand-off is therefore a no-op here: the release is the whole signal.
-The @afterClaim@ hook marks exactly this window for a test (see
-'refreshingProviderWith'). It is @pure ()@ in production.
+{- Serve the current token, scheduling a background refresh, or mint synchronously when
+the token has expired. One STM transaction takes the decision, so single-flight holds
+across a concurrent cohort. The claim of the flag and the run that releases it stay in
+one masked scope, because an async exception in the gap would orphan the flag and wedge
+every later expired caller on the 'decide' 'retry'.
 -}
 serve :: IO () -> RefreshConfig -> TVar CacheState -> IO AuthToken
 serve afterClaim cfg stateVar = mask $ \restore -> do
@@ -249,13 +210,9 @@ serve afterClaim cfg stateVar = mask $ \restore -> do
     case action of
         ServeCached token -> pure token
         ServeAndRefresh token -> do
-            -- Fire-and-forget: the refresh runs in the background and the caller
-            -- gets the still-valid cached token at once. The refresh catches its own
-            -- failures, so the discarded 'Async' can never surface one. The flag was
-            -- claimed under 'mask', and forking is not interruptible, so the releasing
-            -- child is in place before this thread can be interrupted again. The child
-            -- runs unmasked, so the background mint stays cancellable, and
-            -- 'guardInFlight' releases the flag on the child's every exit.
+            -- Fire-and-forget: 'backgroundRefresh' catches its own failures, so the discarded
+            -- 'Async' can never surface one. Forking is not interruptible, so the child that
+            -- releases the single-flight flag is in place before this thread can be interrupted.
             _ <-
                 asyncWithUnmask $ \unmask ->
                     guardInFlight unmask noWaiter (releaseSingleFlight stateVar) (afterClaim >> backgroundRefresh cfg stateVar)
@@ -265,19 +222,14 @@ serve afterClaim cfg stateVar = mask $ \restore -> do
             -- exit and runs the synchronous mint under @restore@ so it stays cancellable.
             guardInFlight restore noWaiter (releaseSingleFlight stateVar) (afterClaim >> mintSynchronously cfg stateVar)
   where
-    -- The refresher's waiters re-decide against the freed flag (the 'decide' STM
-    -- retry), not on a result promise. The orphan hand-off therefore has nothing to
-    -- unblock: releasing the flag is the whole signal.
+    -- Waiters re-decide against the freed flag (the 'decide' STM 'retry'), not on a result
+    -- promise, so the orphan hand-off has nothing to unblock.
     noWaiter :: SomeException -> IO ()
     noWaiter = const pass
 
-{- | The single-flight decision over the current cache state, taken atomically so it
-holds across a concurrent cohort. Serve the still-valid token. Claim the flag and
-route to a background refresh when one is due. When the token has expired, either
-claim the flag and mint synchronously, or wait. If a mint is already in flight,
-'retry' (block) until it lands rather than launching a second. The flag claim happens
-here, in the transaction, so at most one mint is ever launched. The caller that claims
-the flag must release it (see 'serve' and 'releaseSingleFlight').
+{- | The single-flight decision over the current cache state. The flag claim happens
+inside this transaction, so at most one mint is ever launched, and the caller that claims
+it must release it (see 'releaseSingleFlight').
 -}
 decide :: TVar CacheState -> UTCTime -> STM ServeAction
 decide stateVar now = do
@@ -307,12 +259,9 @@ data ServeAction
       MintNow
     deriving stock (Eq, Show)
 
-{- The background refresh: if the breaker admits a mint, attempt it and fold the
-result into the cache. An open breaker skips it. Never throws. A failure leaves the
-still-valid token in place and advances the breaker. A suppressed refresh keeps
-serving the cached token. The request hot path is unaffected either way. 'guardInFlight'
-wraps this run and releases the single-flight flag (see 'serve'). This function never
-releases it. The flag therefore clears on every exit, including an async cancel.
+{- The background refresh. It never throws. A failure leaves the still-valid token in
+place and advances the breaker. 'serve' wraps this run in the 'guardInFlight' that
+releases the single-flight flag, so this function never releases it.
 -}
 backgroundRefresh :: RefreshConfig -> TVar CacheState -> IO ()
 backgroundRefresh cfg stateVar = do
@@ -326,12 +275,9 @@ backgroundRefresh cfg stateVar = do
             Right _ -> recordMintFailure cfg stateVar now'
             Left (_ :: SomeException) -> recordMintFailure cfg stateVar now'
 
-{- The synchronous (expired-token) path: the caller blocks on a mint because there
-is no valid token to serve. The breaker gates it. When the breaker is open and still
-in cooldown, the call fast-fails with 'BreakerOpen' without minting. Otherwise it
-mints, and an expired token plus a failing mint is the one case that surfaces to the
-caller. 'serve' wraps this call in a 'guardInFlight' that releases the single-flight
-flag, claimed and released in one masked scope. This function never releases it.
+{- The synchronous (expired-token) path, the one case where a mint failure surfaces to
+the caller. An open breaker still in cooldown fast-fails with 'BreakerOpen'. 'serve'
+wraps this call in the 'guardInFlight' that releases the single-flight flag.
 -}
 mintSynchronously :: RefreshConfig -> TVar CacheState -> IO AuthToken
 mintSynchronously cfg stateVar = do
@@ -351,27 +297,18 @@ mintSynchronously cfg stateVar = do
             recordMintFailure cfg stateVar now'
             throwIO e
 
-{- | Release the single-flight flag. It runs as the release of the 'guardInFlight'
-that 'serve' installs in the __same masked scope__ that claimed the flag. That is
-directly for the synchronous mint, and inside the forked child for a proactive
-refresh. The flag therefore clears on __every__ exit: success, a synchronous mint
-failure, or an __asynchronous__ exception (a cancellation or a timeout). That holds at
-any point from the claim onward, including the handoff between the STM commit and the
-mint runner. Without this, an orphaned flag would wedge every later expired caller on
-the STM 'retry'. The flag stays held for the whole operation, so no concurrent mint
-can re-claim it mid-flight. An unconditional release here therefore cannot clobber
-another operation's claim.
+{- | Release the single-flight flag. 'serve' runs it as a 'guardInFlight' release inside
+the masked scope that claimed the flag, so the flag clears on every exit, an asynchronous
+cancel included. The claim is held for the whole operation, so this unconditional release
+cannot clobber another caller's claim.
 -}
 releaseSingleFlight :: TVar CacheState -> IO ()
 releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
-{- The circuit-breaker admission gate, shared by the background and synchronous mint
-paths and run through 'gatedMint'. Defer the decision to 'Ecluse.Core.Breaker.admit',
-commit the breaker state it returns, and expose the breaker transition, the old and new
-states. 'gatedMint' reports a half-open recovery probe from that transition. An open
-breaker fast-fails the mint without touching the network. See
-'Ecluse.Core.Breaker.admit' for the admission policy. -}
+{- The circuit-breaker admission gate. It commits what 'Ecluse.Core.Breaker.admit'
+decides and returns the old and new breaker states, so 'gatedMint' can report the
+transition. -}
 admitMintTxn :: TVar CacheState -> UTCTime -> STM (Bool, Breaker, Breaker)
 admitMintTxn stateVar now = do
     st <- readTVar stateVar
@@ -380,38 +317,33 @@ admitMintTxn stateVar now = do
     writeTVar stateVar st{csBreaker = new}
     pure (permitted, old, new)
 
-{- The admission gate plus its breaker-state report: run the transaction, then report
-the new state if it moved the breaker. An elapsed cooldown that admits a half-open
-probe moves it. The report is a cheap, total measurement: it never blocks or throws. -}
+{- The admission gate plus its breaker-state report. The report is a cheap, total
+measurement that never blocks or throws. -}
 gatedMint :: RefreshConfig -> TVar CacheState -> UTCTime -> IO Bool
 gatedMint cfg stateVar now = do
     (permitted, old, new) <- atomically (admitMintTxn stateVar now)
     reportBreakerChange (rcBreakerReporter cfg) old new
     pure permitted
 
-{- Fold a successful mint into the cache, then report it. The report is the breaker
-reset, a state change if the breaker had tripped, plus the refresh outcome carrying
-the new token's remaining lifetime. -}
+{- Fold a successful mint into the cache, then report the breaker reset and the new
+token's remaining lifetime. -}
 recordMintSuccess :: RefreshConfig -> TVar CacheState -> UTCTime -> AuthToken -> IO ()
 recordMintSuccess cfg stateVar now' token = do
     due <- refreshDueAt cfg now' token
     commitBreakerFold cfg stateVar (onMintSuccess token due)
     onRefreshSucceeded (rcRefreshReporter cfg) (ttlSecondsOf now' token)
 
-{- Fold a failed mint into the cache, then report it. The report is any breaker trip
-plus the refresh outcome carrying the still-cached token's remaining lifetime. A
-sustained outage therefore shows as the gauge decaying while repeated failures
-resample the ageing token. -}
+{- Fold a failed mint into the cache, then report any breaker trip and the still-cached
+token's remaining lifetime. -}
 recordMintFailure :: RefreshConfig -> TVar CacheState -> UTCTime -> IO ()
 recordMintFailure cfg stateVar now' = do
     cached <- csToken <$> readTVarIO stateVar
     commitBreakerFold cfg stateVar (onMintFailure cfg now')
     onRefreshFailed (rcRefreshReporter cfg) (ttlSecondsOf now' cached)
 
-{- Commit a mint fold to the cache and report any observable breaker-state change it
-made. It leaves the pure 'onMintSuccess' and 'onMintFailure' folds (and their direct
-tests) untouched. It reads the breaker before and after in one transaction, so the
-report reflects exactly the transition committed. -}
+{- Commit a mint fold to the cache and report any breaker-state change it made. It reads
+the breaker before and after in one transaction, so the report reflects exactly the
+transition committed. -}
 commitBreakerFold :: RefreshConfig -> TVar CacheState -> (CacheState -> CacheState) -> IO ()
 commitBreakerFold cfg stateVar step = do
     (old, new) <- atomically $ do
@@ -421,17 +353,15 @@ commitBreakerFold cfg stateVar step = do
         pure (csBreaker st, csBreaker st')
     reportBreakerChange (rcBreakerReporter cfg) old new
 
-{- A token's remaining lifetime at the given instant, in whole seconds floored at
-zero. 'Nothing' for a token that never expires, which has no finite lifetime to
-report. -}
+{- A token's remaining lifetime at the given instant, in whole seconds floored at zero.
+'Nothing' for a token that never expires. -}
 ttlSecondsOf :: UTCTime -> AuthToken -> Maybe Int
 ttlSecondsOf now token = case authExpiresAt token of
     Nothing -> Nothing
     Just expiry -> Just (max 0 (floor (diffUTCTime expiry now)))
 
-{- | Fold a successful mint into the cache: install the token and reset the breaker.
-'releaseSingleFlight' releases the single-flight flag as the 'guardInFlight' release
-around the mint, not this fold, so the flag clears even on an async exception.
+{- | Fold a successful mint into the cache. 'guardInFlight' releases the single-flight
+flag around the mint, not this fold, so the flag clears even on an async exception.
 -}
 onMintSuccess :: AuthToken -> Maybe UTCTime -> CacheState -> CacheState
 onMintSuccess token due st =
@@ -441,35 +371,25 @@ onMintSuccess token due st =
         , csBreaker = recordSuccess (csBreaker st)
         }
 
-{- | Fold a failed mint into the cache: keep the still-cached token and advance the
-breaker under the configured threshold and cooldown
-('Ecluse.Core.Breaker.recordFailure'). 'releaseSingleFlight' releases the
-single-flight flag separately (see 'onMintSuccess').
+{- | Fold a failed mint into the cache. The cached token stays in place and the breaker
+advances under the configured threshold and cooldown.
 -}
 onMintFailure :: RefreshConfig -> UTCTime -> CacheState -> CacheState
 onMintFailure cfg now st =
     st{csBreaker = recordFailure (rcBreakerThreshold cfg) (rcBreakerCooldown cfg) now (csBreaker st)}
 
-{- Whether a token is still usable at the given instant. A token with no
-expiry ('Nothing') is always valid.
--}
 tokenValid :: UTCTime -> AuthToken -> Bool
 tokenValid now token = case authExpiresAt token of
     Nothing -> True
     Just expiry -> now < expiry
 
-{- Whether a proactive refresh is due: the token has a scheduled refresh
-instant and the clock has reached it.
--}
 refreshNeeded :: UTCTime -> CacheState -> Bool
 refreshNeeded now st = case csRefreshDue st of
     Nothing -> False
     Just due -> now >= due
 
-{- | Compute when a freshly minted token's proactive refresh should fire. It is the
-'rcRefreshAt' fraction of the token's lifetime, pulled earlier by a per-token jitter
-sample and capped at 'rcRefreshFloor' before expiry. A token with no expiry never
-refreshes ('Nothing').
+{- | When a freshly minted token's proactive refresh should fire. Jitter only pulls the
+'rcRefreshAt' fraction of the token's lifetime earlier, never later.
 -}
 refreshDueAt :: RefreshConfig -> UTCTime -> AuthToken -> IO (Maybe UTCTime)
 refreshDueAt cfg issuedAt token = case authExpiresAt token of

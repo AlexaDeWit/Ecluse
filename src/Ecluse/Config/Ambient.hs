@@ -25,9 +25,8 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 
-{- | The @AWS_*@ values Écluse consults directly: region scoping and endpoint
-overrides. Each is 'Nothing' when the variable is unset. Blank-value handling stays
-with each consumer, so sourcing these ambiently changes no behaviour.
+{- | The @AWS_*@ values Écluse consults directly: region scoping and endpoint overrides. A
+field is 'Nothing' when its variable is unset, and each consumer handles a blank value itself.
 -}
 data AmbientAws = AmbientAws
     { ambientAwsRegion :: Maybe Text
@@ -58,16 +57,10 @@ ambientAwsFromEnv env =
   where
     look name = T.pack <$> lookup name env
 
-{- | Parse an endpoint override URL (an 'ambientAwsEndpointUrl' or
-'ambientAwsEndpointUrlSqs' value) into its (TLS flag, host, port). The scheme picks
-the TLS flag and the default port (443\/80) when none is given. An absent scheme or a
-non-numeric port yields 'Nothing'.
-
-The shared bracket-aware 'Ecluse.Core.Security.splitHostPort' splits the
-@host[:port]@ authority. A bracketed IPv6 literal (@[::1]:4566@) therefore splits on
-its closing bracket, not on an inner colon, and the host comes back without brackets.
-That is the same primitive the data-plane host extractor uses, so the two cannot
-drift on an authority edge case.
+{- | Parse an endpoint override URL into its (TLS flag, host, port). The scheme picks the TLS
+flag and the default port, 443 or 80, when the URL writes none. An absent scheme or a
+non-numeric port yields 'Nothing'. A bracketed IPv6 literal (@[::1]:4566@) splits on its
+closing bracket, and the host comes back without its brackets.
 -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do

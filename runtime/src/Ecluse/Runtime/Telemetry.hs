@@ -105,10 +105,8 @@ import Ecluse.Runtime.Telemetry.Resolve (
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
-{- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch: telemetry is opt-in, so
-'TelemetryOff' is the default and the FOSS posture. A sum type rather than a 'Bool', so
-each case names its intent. A future mode (a metrics-only switch, say) is then a new
-constructor, not a second flag.
+{- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Telemetry is opt-in, so
+'TelemetryOff' is the default.
 -}
 data TelemetrySwitch
     = -- | Telemetry is disabled (the default): nothing is wired and nothing is emitted.
@@ -119,19 +117,15 @@ data TelemetrySwitch
       TelemetryOn
     deriving stock (Eq, Show)
 
--- The wire vocabulary of a 'TelemetrySwitch': the single source both 'parseWire' and
--- the accepted-set message derive from for this type. Listed @on@ before @off@, the
--- order the accepted-set message names them.
+-- Listed @on@ before @off@: that is the order the accepted-set message names them.
 instance WireVocab TelemetrySwitch where
     wireKind = "telemetry switch"
     wireTable =
         (TelemetryOn, "on")
             :| [(TelemetryOff, "off")]
 
-{- | Parse a 'TelemetrySwitch' from its wire name, naming the accepted set on
-failure. The same strict, fail-loud style as the other configuration enums
-(@Ecluse.Config@). An unrecognised value is a loud failure, never a silent fallback to
-one mode or the other.
+{- | Parse a 'TelemetrySwitch' from its wire name. An unrecognised value fails loudly with the
+accepted set, never falling back to a mode.
 
 >>> parseTelemetrySwitch "off"
 Right TelemetryOff
@@ -145,10 +139,8 @@ Left "unknown telemetry switch \"maybe\" (expected one of: on, off)"
 parseTelemetrySwitch :: Text -> Either Text TelemetrySwitch
 parseTelemetrySwitch = parseWire
 
-{- | The telemetry handle held in the composition root: either the off-by-default
-no-op or the enabled providers. Spans and metric instruments derive from the providers
-it carries. The disabled case carries none, so a layer that reaches for a provider
-finds nothing to emit through: telemetry is inert rather than unsampled.
+{- | The telemetry handle held in the composition root: the off-by-default no-op or the enabled
+providers. The disabled case carries no provider, so telemetry is inert rather than unsampled.
 -}
 data Telemetry
     = -- | The off-by-default no-op: no providers, nothing emitted.
@@ -175,10 +167,8 @@ and emits nothing. This is what an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ resol
 telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
-{- | Build an enabled telemetry handle from the SDK signals: the tracer and meter
-providers. The disabled case has no constructor argument, so this is the only way to
-obtain an enabled handle. That keeps the providers' origin, the bracketed SDK
-lifecycle, explicit.
+{- | Build an enabled telemetry handle from the SDK signals. This is the only way to obtain
+one, so an enabled handle's providers always come from the bracketed SDK lifecycle.
 -}
 telemetryEnabled :: OTelSignals -> Telemetry
 telemetryEnabled signals =
@@ -188,9 +178,8 @@ telemetryEnabled signals =
             , tpMeterProvider = otelMeterProvider signals
             }
 
-{- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is
-disabled. A caller that wants to create a span resolves this first. 'Nothing' is the
-signal to emit nothing rather than to fabricate a no-op provider at the edge.
+{- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled.
+'Nothing' means emit nothing, never fabricate a no-op provider at the edge.
 -}
 telemetryTracerProvider :: Telemetry -> Maybe TracerProvider
 telemetryTracerProvider = \case
@@ -205,22 +194,9 @@ telemetryMeterProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpMeterProvider providers)
 
-{- | Run an action with a 'Telemetry' handle whose lifecycle the 'TelemetrySwitch'
-brackets. The bracket tears the providers down along every exit path and flushes
-buffered spans and metrics.
-
-* __'TelemetryOff'__ (the default) is a pure pass-through. The SDK is __never
-  initialised__, the body runs against 'telemetryDisabled', the 'LogEnv' is unused,
-  and there is nothing to tear down. An unset @ECLUSE_OBSERVABILITY__TELEMETRY@
-  therefore opens no exporter and emits nothing.
-
-* __'TelemetryOn'__ initialises the SDK from the standard @OTEL_*@ environment, with
-  the OTLP exporters wrapped for failure observation. The shared throttle feeds the
-  supplied 'LogEnv'. The body runs against the enabled handle, and the providers shut
-  down on exit.
-
-This is the scope the composition root ("Ecluse.Runtime.Env") runs the server and worker
-within, so telemetry is established once and flushed on shutdown.
+{- | Run an action with a 'Telemetry' handle bracketed by the 'TelemetrySwitch'. 'TelemetryOff'
+never initialises the SDK, so no exporter opens. 'TelemetryOn' builds the providers from the
+@OTEL_*@ environment and tears them down on every exit path, flushing spans and metrics.
 -}
 withTelemetry :: TelemetrySwitch -> LogEnv -> (Telemetry -> IO a) -> IO a
 withTelemetry switch logEnv use = case switch of
@@ -231,12 +207,8 @@ withTelemetry switch logEnv use = case switch of
         registerObservedSpanExporter sink
         bracket (initializeObservedOpenTelemetry sink) otelShutdown (use . telemetryEnabled)
 
-{- Wrap the OTLP span exporter so a failed export is observed. The wrapper routes the
-failure through the shared 'ExportFailureSink' into @katip@ under a throttle, and
-returns the inner result unchanged. Version 1.0.0.0 of @hs-opentelemetry@ drops a
-failed export silently (the batch processor discards the 'ExportResult'), so this
-wrapper is where the export failure becomes visible. Export semantics are unchanged:
-the failure stays off the request path. -}
+{- Wrap the OTLP span exporter so a failed export is observed: @hs-opentelemetry@ 1.0.0.0
+discards the 'ExportResult' in the batch processor, so the failure is otherwise invisible. -}
 observeSpanExporter :: ExportFailureSink -> SpanExporter -> SpanExporter
 observeSpanExporter sink inner =
     inner
@@ -257,25 +229,17 @@ observeMetricExporter sink inner =
             pure result
         }
 
-{- Register the observed OTLP span exporter under the @otlp@ key before the SDK's
-env-driven tracer init runs. 'initializeGlobalTracerProvider' resolves
-@OTEL_TRACES_EXPORTER@ through the exporter 'OpenTelemetry.Registry', which prefers a
-registered factory over the built-in default. The wrapped exporter is therefore the one
-the batch processor drives. The metric path has no such registry hook, so it is wrapped
-directly in 'initializeObservedMeterProvider'. -}
+{- Register the observed OTLP span exporter under the @otlp@ key before the SDK's env-driven
+tracer init runs: the registry prefers a registered factory over the built-in default. -}
 registerObservedSpanExporter :: ExportFailureSink -> IO ()
 registerObservedSpanExporter sink =
     registerSpanExporterFactory
         "otlp"
         (observeSpanExporter sink <$> (otlpExporter =<< loadExporterEnvironmentVariables))
 
-{- Stand up the three SDK signal providers from the @OTEL_*@ environment with the OTLP
-exporters wrapped for failure observation, mirroring @hs-opentelemetry-sdk@'s own
-@initializeOpenTelemetry@. The tracer picks up the observed span exporter through the
-registry ('registerObservedSpanExporter', run before this). The meter is built here
-because the SDK's metric init exposes no registry hook for its exporter. This and
-'initializeObservedMeterProvider' are pinned to @hs-opentelemetry-sdk 1.0.0.0@. Re-diff
-both against the SDK on any version bump. -}
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeOpenTelemetry@, wrapping the OTLP
+exporters for failure observation. 'registerObservedSpanExporter' must run first, since the
+tracer takes its exporter from the registry. Re-diff against the SDK on any version bump. -}
 initializeObservedOpenTelemetry :: ExportFailureSink -> IO OTelSignals
 initializeObservedOpenTelemetry sink = do
     tracerProvider <- initializeGlobalTracerProvider
@@ -294,12 +258,9 @@ initializeObservedOpenTelemetry sink = do
             , otelShutdown = shutdown
             }
 
-{- Build the global meter provider with the OTLP metric exporter wrapped for failure
-observation. Mirrors @hs-opentelemetry-sdk@'s @initializeGlobalMeterProvider@ exactly,
-differing only in wrapping the exporter the periodic reader drives. Unlike the span
-path, the SDK's metric init takes the exporter directly ('resolveMetricExporter') with
-no registry injection point. Pinned to @hs-opentelemetry-sdk 1.0.0.0@. Re-verify
-against the SDK's @initializeGlobalMeterProvider@ on any version bump. -}
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, differing only in
+wrapping the metric exporter for failure observation. The SDK's metric init takes the exporter
+directly, with no registry hook like the span path. Re-diff against the SDK on any version bump. -}
 initializeObservedMeterProvider :: ExportFailureSink -> IO MeterProvider
 initializeObservedMeterProvider sink = do
     disabled <- lookupBooleanEnv "OTEL_SDK_DISABLED"
@@ -317,9 +278,8 @@ initializeObservedMeterProvider sink = do
             setGlobalMeterProvider provider'
             pure provider'
 
-{- Wrap a meter provider so its shutdown stops the periodic metric reader before the
-provider's own shutdown, as the mirrored SDK init does. Part of the same version-pin
-re-diff surface as 'initializeObservedMeterProvider'. -}
+{- Mirrors the SDK's own shutdown ordering, and is part of the same version-pin re-diff
+surface as 'initializeObservedMeterProvider'. -}
 stopReaderOnShutdown :: PeriodicMetricReaderHandle -> MeterProvider -> MeterProvider
 stopReaderOnShutdown readerHandle provider =
     provider

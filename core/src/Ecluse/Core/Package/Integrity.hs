@@ -95,43 +95,27 @@ import Ecluse.Core.Package.Hash (
     sriPrefix,
  )
 
-{- | The algorithm a 'Hash' asserts: its tag directly, or, for an 'SRI' string, the
-algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved are
-@sha256@, @sha384@ and @sha512@ (every long digest the model represents and a registry
-serves). An unrecognised or malformed prefix yields 'Nothing', so it asserts no
-algorithm and clears no floor: the fail-closed reading.
+{- | The algorithm a 'Hash' asserts: its tag directly, or, for an 'SRI' string, the algorithm named
+in its @\<alg\>-\<base64\>@ prefix. An unrecognised or malformed prefix yields 'Nothing', so
+the hash asserts no algorithm and clears no floor.
 
->>> import Ecluse.Core.Package (mkHash, HashAlg (SHA1, SRI))
->>> assertedAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
+>>> import Ecluse.Core.Package (mkHash, HashAlg (SHA1, SRI)) >>> assertedAlg <$> mkHash SRI
+"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
 Right (Just SHA512)
 
->>> assertedAlg <$> mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-Right (Just SHA1)
+>>> assertedAlg <$> mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709" Right (Just SHA1)
 
->>> assertedAlg <$> mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
-Right (Just SHA384)
+>>> assertedAlg <$> mkHash SRI
+"sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" Right (Just SHA384)
 -}
 assertedAlg :: Hash -> Maybe HashAlg
 assertedAlg h = case hashAlg h of
     SRI -> sriAlgorithm (hashValue h)
     alg -> Just alg
 
-{- | The __most authoritative__ digest of a set, ranked by the algorithm each digest
-asserts ('assertedAlg', under which an SRI ranks as its embedded algorithm). The
-ranking uses the same 'HashAlg' 'Ord' the admission floors rank candidates by. The
-worker's tamper gate and the serve-side floor therefore agree on one authority order,
-rather than each re-encoding it. This is the digest the worker verifies fetched bytes
-against, never a weaker one while a stronger is present. A match on a weaker algorithm
-cannot rescue a failed strong one.
-
-A digest asserting no algorithm sits at the SHA-256 floor tier. That is an unresolvable
-SRI, unconstructable today because 'Ecluse.Core.Package.mkHash' resolves every
-component, but ranked defensively. Inside an equal algorithm authority, a digest Écluse
-can recompute ('Ecluse.Core.Package.isComputable') wins over one it cannot. A tie
-therefore never over-rejects an artifact that a co-present verifiable digest could
-prove. The selection never drops __below__ the strongest tier to a weaker computable
-algorithm. The final tie-break is 'maximumBy''s keep-latest, deterministic over the
-artifact's wire order.
+{- | The __most authoritative__ digest of a set, ranked by 'assertedAlg', then by
+'isComputable' inside an equal algorithm. The worker verifies fetched bytes against this
+digest alone: a match on a weaker algorithm cannot rescue a failed stronger one.
 -}
 authoritativeDigest :: NonEmpty Hash -> Hash
 authoritativeDigest = maximumBy (comparing digestAuthority)
@@ -143,32 +127,24 @@ authoritativeDigest = maximumBy (comparing digestAuthority)
         Nothing -> (SHA256, False)
         Just alg -> (alg, isComputable alg)
 
-{- | The shared interface of an integrity floor: the minimum algorithm it requires. Both
-the hard-floored public 'MinIntegrity' and the loosenable trusted 'MinTrustedIntegrity'
-are floors. 'meetsFloor' and 'classifyArtifacts' therefore rank candidates against either
-through this one class, backed by the same 'HashAlg' ordering the worker's tamper gate
-also consults. The class only /reads/ a floor's algorithm. A newtype's construction
-invariant, the public hard-floor and the trusted loosenability, lives in its smart
-constructors, never here.
+{- | The minimum algorithm an integrity floor requires, shared by the hard-floored public
+'MinIntegrity' and the loosenable trusted 'MinTrustedIntegrity'. The class only reads the
+algorithm. Each floor's construction invariant lives in its own smart constructors.
 -}
 class IntegrityFloor floor where
     -- | The minimum algorithm this floor requires.
     floorAlgorithm :: floor -> HashAlg
 
-{- | The configured minimum integrity algorithm a __public__ (untrusted) version's
-digest must meet to be admitted. The type is opaque and __hard-floored at SHA-256__.
-Build it only through 'mkMinIntegrity' \/ 'parseMinIntegrity', which reject anything
-weaker. A value of this type therefore carries the proof that the floor is itself
-collision-resistant. There is deliberately no loosenable variant of /this/ floor:
-Écluse never admits untrusted public bytes on a sub-SHA-256 digest.
+{- | The configured minimum integrity algorithm a __public__ (untrusted) version's digest
+must meet to be admitted. The type is opaque and __hard-floored at SHA-256__: build it only
+through 'mkMinIntegrity' or 'parseMinIntegrity', which reject anything weaker.
 -}
 newtype MinIntegrity = MinIntegrity HashAlg
     deriving stock (Eq, Show)
 
-{- | Build a 'MinIntegrity', rejecting any algorithm weaker than SHA-256 (the hard
-floor). A weak floor is a configuration error, never a silent clamp. A collision could
-substitute the bytes of a public version admitted on a SHA-1 digest, and that defeats the
-gate.
+{- | Build a 'MinIntegrity', rejecting any algorithm weaker than SHA-256. A weak floor is a
+configuration error, never a silent clamp, because a collision can substitute the bytes of
+a public version admitted on a SHA-1 digest.
 -}
 mkMinIntegrity :: HashAlg -> Either Text MinIntegrity
 mkMinIntegrity alg
@@ -179,10 +155,9 @@ mkMinIntegrity alg
                 <> renderHashAlg alg
             )
 
-{- | Parse a 'MinIntegrity' from an algorithm name (e.g. @"sha256"@, @"sha512"@,
-@"blake2b"@), case- and separator-insensitive. An unrecognised name and an
-algorithm below the SHA-256 floor are distinct errors, so the report names the
-misconfiguration precisely.
+{- | Parse a 'MinIntegrity' from an algorithm name (e.g. @"sha256"@, @"sha512"@), case- and
+separator-insensitive. An unrecognised name and a sub-SHA-256 algorithm are distinct
+errors, so the report names the misconfiguration precisely.
 -}
 parseMinIntegrity :: Text -> Either Text MinIntegrity
 parseMinIntegrity raw = parseHashAlg raw >>= mkMinIntegrity
@@ -195,32 +170,22 @@ instance IntegrityFloor MinIntegrity where
     floorAlgorithm = unMinIntegrity
 
 {- | The configured minimum integrity algorithm a __trusted__ (private) version's digest
-must meet to be served. Like 'MinIntegrity' it defaults to SHA-256, but it carries __no
-hard floor__. An operator may loosen it to SHA-1 or MD5 for a legacy private mirror.
-There, trust in their own vetted source substitutes for cryptographic strength. Build it
-only through 'mkMinTrustedIntegrity' \/ 'parseMinTrustedIntegrity', which still reject an
-unknown algorithm name (and the bare 'SRI' wrapper, which names no algorithm). Loosening
-this floor is the /only/ path by which Écluse serves a sub-SHA-256 digest, and only on the
-operator's own trusted source.
+must meet to be served. It carries __no hard floor__. Loosening it below SHA-256 is the only
+path by which Écluse serves a weak digest, and only on the operator's own trusted source.
 -}
 newtype MinTrustedIntegrity = MinTrustedIntegrity HashAlg
     deriving stock (Eq, Show)
 
-{- | Build a 'MinTrustedIntegrity'. It accepts any /known/ algorithm, including the
-broken SHA-1 and MD5, which an operator may deliberately loosen the trusted floor to. It
-rejects the bare 'SRI' wrapper, which asserts no algorithm of its own and so could never
-be a meaningful floor. There is intentionally no SHA-256 hard minimum here: that is the
-one behavioural difference from 'mkMinIntegrity'.
+{- | Build a 'MinTrustedIntegrity'. It accepts any known algorithm, including the broken
+SHA-1 and MD5, and rejects the bare 'SRI' wrapper, which names no algorithm of its own.
 -}
 mkMinTrustedIntegrity :: HashAlg -> Either Text MinTrustedIntegrity
 mkMinTrustedIntegrity SRI =
     Left "the minimum trusted integrity algorithm must name a concrete algorithm, not a bare SRI"
 mkMinTrustedIntegrity alg = Right (MinTrustedIntegrity alg)
 
-{- | Parse a 'MinTrustedIntegrity' from an algorithm name (e.g. @"sha256"@, @"sha1"@,
-@"md5"@), case- and separator-insensitive. It rejects an unrecognised name. Unlike
-'parseMinIntegrity', it /accepts/ a sub-SHA-256 name, because the trusted floor is
-loosenable.
+{- | Parse a 'MinTrustedIntegrity' from an algorithm name (e.g. @"sha256"@, @"md5"@), case-
+and separator-insensitive. Unlike 'parseMinIntegrity' it accepts a sub-SHA-256 name.
 -}
 parseMinTrustedIntegrity :: Text -> Either Text MinTrustedIntegrity
 parseMinTrustedIntegrity raw = parseHashAlg raw >>= mkMinTrustedIntegrity
@@ -232,9 +197,8 @@ unMinTrustedIntegrity (MinTrustedIntegrity alg) = alg
 instance IntegrityFloor MinTrustedIntegrity where
     floorAlgorithm = unMinTrustedIntegrity
 
-{- | Whether an algorithm meets a floor: at least as strong as the floor's configured
-minimum, by 'HashAlg' 'Ord'. The candidate algorithm is a
-/resolved/ one (from 'assertedAlg'), never a bare 'SRI'.
+{- | Whether an algorithm meets a floor: at least as strong as the floor's minimum, by
+'HashAlg' 'Ord'. Pass a resolved algorithm from 'assertedAlg', never a bare 'SRI'.
 -}
 meetsFloor :: (IntegrityFloor floor) => floor -> HashAlg -> Bool
 meetsFloor flr alg = alg >= floorAlgorithm flr
@@ -256,11 +220,9 @@ data VersionIntegrity
       NoIntegrity
     deriving stock (Eq, Show)
 
-{- | Classify a version's artifacts against a floor (public or trusted). A version
-'MeetsFloor' iff any of its digests, across all of its artifacts, asserts a
-floor-clearing algorithm. Failing that, it is 'NoIntegrity' when no artifact carries any
-digest at all, and 'BelowFloor' otherwise. An npm version has one artifact, but the check
-spans the whole 'NonEmpty', so it holds for a multi-artifact ecosystem too.
+{- | Classify a version's artifacts against a floor. A version 'MeetsFloor' if any digest on
+any artifact clears the floor, is 'NoIntegrity' when no artifact carries a digest at all,
+and is 'BelowFloor' otherwise.
 -}
 classifyArtifacts :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> VersionIntegrity
 classifyArtifacts flr arts
@@ -271,6 +233,5 @@ classifyArtifacts flr arts
     meetsFloorArtifact art = any hashMeetsFloor (artHashes art)
     hashMeetsFloor h = maybe False (meetsFloor flr) (assertedAlg h)
 
--- The algorithm vocabulary (the wire name renderer\/parser and the SRI splitter\/resolver)
--- lives in "Ecluse.Core.Package", the lowest layer. The export list above re-exports it, so
--- this module's callers, the worker, and SQS all import it from here.
+-- Callers, including the worker and SQS, import the algorithm vocabulary from here. This
+-- module re-exports it from "Ecluse.Core.Package.Hash", where it lives.

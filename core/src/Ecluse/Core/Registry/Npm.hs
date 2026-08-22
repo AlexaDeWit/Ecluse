@@ -68,13 +68,8 @@ import Ecluse.Core.Registry.Npm.Request (
  )
 import Ecluse.Core.Security (Limits)
 
-{- | Everything this data plane needs to talk to one npm-speaking registry: the
-base URL, the shared HTTP 'Manager', and an optional injected bearer token.
-
-The 'Manager' owns the connection pool, so this module takes one rather than
-building it: the same one the composition root reuses across requests. The token is
-whatever the request pipeline decided this client should present. This module never
-chooses it.
+{- | Everything this data plane needs to reach one npm-speaking registry. The composition
+root supplies the pooled 'Manager', and the request pipeline picks the token.
 -}
 data NpmClientConfig = NpmClientConfig
     { npmBaseUrl :: Text
@@ -86,28 +81,15 @@ data NpmClientConfig = NpmClientConfig
     , npmToken :: Maybe Secret
     -- ^ An injected bearer token to attach, or 'Nothing' for anonymous requests.
     , npmLimits :: Limits
-    {- ^ The response-bound budget this data plane enforces on a metadata fetch.
-    'fetchMetadataFormBounded' reads the body through
-    'Ecluse.Core.Security.boundedRead' against 'Ecluse.Core.Security.maxBodyBytes'.
-    Past the cap it aborts fail-closed rather than buffering an unbounded body.
+    {- ^ The response-bound budget 'fetchMetadataFormBounded' enforces on a metadata fetch,
+    fail-closed past 'Ecluse.Core.Security.maxBodyBytes'.
     -}
     }
 
-{- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
-conditional-GET 'Validators'. A fetch failure __always__ comes back as a
-'Ecluse.Core.Registry.FetchFault' value: an unformable request URL, a response-bound
-breach, or a transport fault. 'classifyTransport' folds the @http-client@ exception
-into the typed channel at this edge. Total: no fetch failure escapes as an exception.
-The serve read adapter ("Ecluse.Core.Registry.Npm.Metadata") threads it straight into
-its own typed channel, with no throw-then-catch round-trip.
-
-It reads the body __chunk-by-chunk through 'Ecluse.Core.Security.boundedRead'__
-against the config's 'npmLimits', never buffering it whole. It refuses a body larger
-than 'Ecluse.Core.Security.maxBodyBytes' __fail-closed__ as a 'FetchBoundExceeded',
-so a hostile or compromised upstream cannot exhaust memory. The transport wrap covers
-the __whole__ exchange, the body read included. The proxy buffers metadata before it
-serves anything. A connection lost mid-body is therefore still a pre-commit fault with
-a value representation, not a half-delivered response.
+{- | Fetch a package's metadata in the requested 'MetadataForm', relaying any conditional-GET
+'Validators'. Every failure, the body read included, comes back as a 'FetchFault' value, never
+an exception. It reads the body through 'Ecluse.Core.Security.boundedRead' and refuses one past
+'Ecluse.Core.Security.maxBodyBytes' fail-closed, so a hostile upstream cannot exhaust memory.
 -}
 fetchMetadataFormBounded ::
     NpmClientConfig ->

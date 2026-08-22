@@ -33,12 +33,7 @@ module Ecluse.Core.Breaker (
 
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 
-{- | The breaker's state, gating whether the guarded operation may be attempted.
-
-A 'Closed' breaker is healthy and counts consecutive failures towards the trip
-threshold. An 'Open' breaker fast-fails until its instant passes. A 'HalfOpen'
-breaker holds one admitted recovery probe and waits on its outcome.
--}
+-- | The breaker's state, gating whether the guarded operation may be attempted.
 data Breaker
     = -- | Healthy: the consecutive-failure count so far, up to the trip threshold.
       Closed Int
@@ -52,14 +47,8 @@ data Breaker
 initialBreaker :: Breaker
 initialBreaker = Closed 0
 
-{- | Decide whether the guarded operation may be attempted at @now@, returning the
-admission and the breaker state to keep.
-
-A 'Closed' or 'HalfOpen' breaker always admits and stays unchanged. An 'Open' breaker
-denies while its instant is still in the future. Once @now@ reaches that instant the
-breaker moves to 'HalfOpen' and admits a single recovery probe. The caller commits the
-returned state (for example, writes it back to its 'TVar') so the half-open transition
-takes effect.
+{- | Decide whether the guarded operation may be attempted at @now@. The caller must commit the
+returned breaker state, or the move from 'Open' to 'HalfOpen' never takes effect.
 -}
 admit :: UTCTime -> Breaker -> (Bool, Breaker)
 admit now = \case
@@ -67,20 +56,14 @@ admit now = \case
     Open _ -> (True, HalfOpen)
     healthy -> (True, healthy)
 
-{- | Fold a successful attempt into the breaker: reset it to healthy, clearing any
-accumulated failures or a half-open probe.
--}
+-- | Fold a successful attempt into the breaker: reset it to healthy from any state.
 recordSuccess :: Breaker -> Breaker
 recordSuccess Closed{} = initialBreaker
 recordSuccess Open{} = initialBreaker
 recordSuccess HalfOpen = initialBreaker
 
-{- | Fold a failed attempt into the breaker, given the caller's trip @threshold@ and
-@cooldown@ and the current instant.
-
-A 'Closed' breaker counts the failure up, tripping 'Open' for the cooldown once the
-count reaches the threshold. Any other state (a failed half-open probe, or a failure
-folded in while already open) (re-)opens for a fresh cooldown.
+{- | Fold a failed attempt into the breaker, given the caller's trip @threshold@ and @cooldown@.
+A 'Closed' breaker counts up and trips at the threshold, and any other state opens a fresh cooldown.
 -}
 recordFailure :: Int -> NominalDiffTime -> UTCTime -> Breaker -> Breaker
 recordFailure threshold cooldown now = \case
@@ -90,16 +73,8 @@ recordFailure threshold cooldown now = \case
   where
     tripped = Open (addUTCTime cooldown now)
 
-{- | An observer of breaker state changes. 'reportBreakerChange' calls it with the
-new state after a transition commits, so a layer that cares (a state gauge) can
-record it.
-
-It is telemetry-agnostic by design. A bare @'Breaker' -> IO ()@ callback keeps the
-breaker and its callers ("Ecluse.Core.Rules", the credential refresher) free of any
-metric dependency. The composition root supplies the bridge to the instruments.
-'noBreakerReporter' is the inert default: a breaker observed by it records nothing. A
-breaker built before the telemetry substrate exists behaves the same way until the
-composition root installs the live observer.
+{- | An observer of breaker state changes. A bare @'Breaker' -> IO ()@ callback keeps the core
+free of any metric dependency, and the composition root installs the live observer.
 -}
 newtype BreakerReporter = BreakerReporter (Breaker -> IO ())
 
@@ -107,11 +82,8 @@ newtype BreakerReporter = BreakerReporter (Breaker -> IO ())
 noBreakerReporter :: BreakerReporter
 noBreakerReporter = BreakerReporter (const pass)
 
-{- | Report a transition through the observer, but only when @old@ and @new@ differ in
-their observable state. 'Closed' carries a failure tally that is not itself observable.
-A failure that only advances the count within 'Closed' is therefore no state change, and
-fires nothing. A genuine change (a trip, a recovery probe, a reset) fires the reporter
-with the new state.
+{- | Report a transition through the observer, but only when @old@ and @new@ differ observably.
+The failure tally inside 'Closed' is not observable, so advancing it alone fires nothing.
 -}
 reportBreakerChange :: BreakerReporter -> Breaker -> Breaker -> IO ()
 reportBreakerChange (BreakerReporter report) old new

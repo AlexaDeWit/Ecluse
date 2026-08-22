@@ -80,11 +80,8 @@ import Ecluse.Core.Rules.Types (
     Transience (..),
  )
 
-{- | The outcome of deciding a request: serve it, or refuse it with a reason.
-
-Every client-facing reply renders one of these. 'Admit' carries no payload, because
-the artifact or packument is what is then streamed. 'Reject' carries the 'Rejection'
-that explains the refusal and selects the status.
+{- | The outcome of deciding a request: serve it, or refuse it with a reason. Every client-facing
+reply renders one of these.
 -}
 data ServeDecision
     = -- | Serve the request (the @200@ stream for an artifact).
@@ -93,10 +90,7 @@ data ServeDecision
       Reject Rejection
     deriving stock (Eq, Show)
 
-{- | A refusal: /why/ the request was refused, and an intuitive message for the
-client. The 'rejectionReason' selects the HTTP status. The 'rejectionMessage' is the
-human-facing text rendered into the response body.
--}
+-- | A refusal: /why/ the request was refused, and an intuitive message for the client.
 data Rejection = Rejection
     { rejectionReason :: RejectReason
     -- ^ The cause of the refusal, which decides the status.
@@ -105,12 +99,9 @@ data Rejection = Rejection
     }
     deriving stock (Eq, Show)
 
-{- | Why a request was refused.
-
-A policy refusal is a deliberate verdict and is final for this request. An
-unavailability is an /inability to decide/. It carries whether the condition is
-expected to self-heal, which separates a retryable @503@ from a terminal
-@500@\/@403@.
+{- | Why a request was refused. A policy refusal is a deliberate verdict and is final for this
+request. An unavailability is an /inability to decide/, and its 'Transience' separates a
+retryable @503@ from a terminal @500@.
 -}
 data RejectReason
     = {- | A rule denied the version (including deny-by-default). The 'RuleName'
@@ -156,23 +147,15 @@ data RejectReason
       UpstreamInvalid
     deriving stock (Eq, Show)
 
-{- | The name of the rule that decided a refusal, carried for the audit trail and
-the denial body. A 'newtype' over the 'Ecluse.Core.Rules.ruleName' text, so a rule
-identity carries a distinct type rather than a bare 'Text'.
+{- | The name of the rule that decided a refusal, carried for the audit trail and the denial
+body.
 -}
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
-{- | Project a rules 'Decision' (see "Ecluse.Core.Rules") into a serve outcome. Pure
-and total.
-
-An 'Admitted' decision admits. A 'Blocked' or 'BlockedByDefault' decision rejects
-'ByPolicy', naming the deciding rule and carrying the human-readable 'renderDecision'
-as the message. An 'Undecidable' decision is a fail-closed rule that could not be
-computed. It rejects as 'Unavailable' and carries its 'Transience', so the status
-mapping can choose between @503@ and @500@. That is __fail-closed__ exactly as a
-denial removes a version, but flagged retryable when the cause may self-heal. Only an
-admission admits.
+{- | Project a rules 'Decision' (see "Ecluse.Core.Rules") into a serve outcome. Pure and total.
+An 'Undecidable' decision rejects as 'Unavailable', which is __fail-closed__: a version no rule
+could vet is never admitted.
 -}
 serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
 serveDecisionOf pd decision = case decision of
@@ -184,13 +167,9 @@ serveDecisionOf pd decision = case decision of
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason (renderDecision pd decision)
 
-{- | The HTTP status a __concrete-artifact__ request renders to. A domain sum type,
-not a raw code, so the mapping is total and the WAI layer reads off an exhaustive
-set. 'artifactStatusCode' gives the numeric code.
-
-A packument request has no single status: the pipeline filters its versions and chooses
-a status over the survivors. This type therefore models only the concrete-artifact
-case.
+{- | The HTTP status a __concrete-artifact__ request renders to. A packument request has no
+single status, because the pipeline filters its versions and chooses one over the survivors, so
+'PackumentStatus' models that case.
 -}
 data ArtifactStatus
     = -- | @200@: admitted, so the proxy streams the artifact.
@@ -207,14 +186,9 @@ data ArtifactStatus
       NotFound
     deriving stock (Eq, Show)
 
-{- | Map a serve outcome to its concrete-artifact status. Pure and total.
-
-A policy refusal is a @403@. An unavailability that 'WillResolve' is a @503@, because
-a retry may help. The load-bearing rule is __@503@ only when we believe it will
-resolve__: an unavailability that 'WontResolve' is a @500@, since retrying it cannot
-help. A @404@ upstream miss is
-not a serve /decision/ (the version exists unless upstream says otherwise), so this
-function never produces one.
+{- | Map a serve outcome to its concrete-artifact status. Pure and total. The load-bearing rule
+is __@503@ only when we believe it will resolve__, so a 'WontResolve' unavailability is a @500@.
+A @404@ upstream miss is not a serve decision, so this function never produces one.
 -}
 artifactStatus :: ServeDecision -> ArtifactStatus
 artifactStatus = \case
@@ -225,9 +199,8 @@ artifactStatus = \case
         BelowIntegrityFloor -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
-        -- A packument-path validation cause. The artifact path never validates a
-        -- packument name, so this does not arise here. A misbehaving upstream on the
-        -- artifact path is an internal inability to serve, so it maps to @500@.
+        -- The artifact path never validates a packument name, so this cause does not arise here. A
+        -- misbehaving upstream on this path is an internal inability to serve.
         UpstreamInvalid -> ServerError
 
 -- | The numeric HTTP status code for an 'ArtifactStatus'. Pure and total.
@@ -239,18 +212,9 @@ artifactStatusCode = \case
     ServerError -> 500
     NotFound -> 404
 
-{- | The HTTP status a __packument__ request renders to, chosen once the merged
-survivor set is known. A packument has no single per-version status, because the
-pipeline filters and merges its versions across upstreams. The status is chosen __over
-the survivors__. With at least one survivor the proxy serves the document. With none, the
-status follows the most recoverable cause among the exclusions (see
-'packumentStatus').
-
-A domain sum, not a raw code, so the pipeline must map every case through the route's
-typed response factories. There is no @404@. A packument whose versions were all
-withheld is __not__ a miss, because the package exists. A genuine upstream absence (no
-such package at all) is a separate concern of the serve layer, decided before the
-merge.
+{- | The HTTP status a __packument__ request renders to, chosen over the merged survivor set
+(see 'packumentStatus'). There is no @404@: a packument whose versions were all withheld is not
+a miss, because the package exists, and a genuine absence is decided before the merge.
 -}
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
@@ -278,29 +242,17 @@ data PackumentStatus
       PackumentServerError
     deriving stock (Eq, Show)
 
-{- | Choose a packument's status from the per-version serve outcomes weighed for it.
-Those outcomes are the 'Admit's for surviving versions (trusted, or rule-approved) and
-the 'Reject's for excluded ones. They also include any 'Reject' a
-needed-but-unavailable upstream contributes. Pure and total.
+{- | Choose a packument's status from the per-version serve outcomes, including any 'Reject' a
+needed-but-unavailable upstream contributes. Pure and total. Any 'Admit' serves the document.
+With no survivor the status follows the __most recoverable cause__ among the exclusions, so it
+invites a retry exactly when a retry might yield survivors:
 
-Any 'Admit' means the merged document has a survivor, so the proxy serves it
-('PackumentOk'). With no survivor the status follows the __most recoverable cause__
-among the exclusions, so the status invites a retry exactly when it might yield survivors:
-
-* Any 'Unavailable' 'WillResolve' → @503@, suggesting the longest 'RetryAfter' any
-  such cause asked for, so every transient cause has likely cleared by then.
-* Otherwise any 'UpstreamInvalid' → @502@, because a responding upstream returned a
-  packument for a different package. It ranks above the terminal @500@\/@403@, since
-  it names a concrete, actionable gateway fault. It ranks below the retryable @503@,
-  since a transient origin may yet come back with a valid document.
-* Otherwise any 'Unavailable' 'WontResolve' → @500@, a permanent inability. A retry
-  cannot help, so the status does not dress it up as a retryable @503@.
-* Otherwise every exclusion is a deny-by-default cause: a 'ByPolicy' rule denial or
-  an admission refusal ('MissingIntegrity' or 'BelowIntegrityFloor'), __including the
-  degenerate empty input__ → @403@. There is nothing to serve and nothing invites a
-  retry.
-
-Never @404@: the versions existed and were withheld (see 'PackumentStatus').
+* 'Unavailable' 'WillResolve' → @503@, suggesting the longest 'RetryAfter' asked for, so every
+transient cause has likely cleared by then.
+* Otherwise 'UpstreamInvalid' → @502@, a concrete gateway fault. It ranks below @503@, because a
+transient origin may yet return a valid document.
+* Otherwise 'Unavailable' 'WontResolve' → @500@, because a retry cannot help.
+* Otherwise every exclusion is deny-by-default, __the empty input included__ → @403@.
 -}
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
@@ -332,14 +284,9 @@ packumentStatus decisions
             MissingIntegrity -> acc
             BelowIntegrityFloor -> acc
 
-{- | The signals 'packumentStatus' weighs over the per-version serve outcomes,
-accumulated in a single pass. The tally records whether any version was admitted, and
-the suggested retry delay of every transient exclusion, which 'longestRetry' consumes.
-It also records whether a gateway fault or a permanent inability to decide appeared
-among the exclusions.
-
-The fields are strict ('StrictData'), so the booleans are forced as the tally is built
-rather than thunking across a large survivor set.
+{- | The signals 'packumentStatus' weighs over the per-version serve outcomes, accumulated in a
+single pass. The fields are strict ('StrictData'), so the tally does not thunk across a large
+survivor set.
 -}
 data PackumentTally = PackumentTally
     { tallyAdmit :: Bool
@@ -358,10 +305,8 @@ none of them suggested a delay.
 longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
 longestRetry = fmap getMax . foldMap (fmap Max)
 
-{- | An operator-configured message appended to every denial, typically where to ask
-for help (e.g. a support channel). Stored trimmed of surrounding whitespace, so it
-joins the denial text with a single separating space and an all-blank value
-contributes nothing.
+{- | An operator-configured message appended to every denial, typically where to ask for help.
+Stored trimmed, so an all-blank value contributes nothing.
 -}
 newtype HelpMessage = HelpMessage Text
     deriving stock (Eq, Show)
@@ -370,12 +315,8 @@ newtype HelpMessage = HelpMessage Text
 mkHelpMessage :: Text -> HelpMessage
 mkHelpMessage = HelpMessage . T.strip
 
-{- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a
-single space. A blank or absent help message contributes nothing.
-
-This is the ecosystem-neutral part of denial rendering, because every ecosystem
-appends the operator's help text the same way. How the joined text is then wrapped
-into body bytes is the route contract's concern.
+{- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a single space.
+A blank or absent help message contributes nothing.
 -}
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help message =

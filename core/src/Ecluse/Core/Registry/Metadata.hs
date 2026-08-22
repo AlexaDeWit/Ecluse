@@ -66,10 +66,8 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
-{- | A SHA-256 digest of one origin's __wire body__: the exact bytes the mount decoded
-a manifest from. The read boundary hashes them once, where the strict body already
-exists, so downstream consumers can fingerprint a document without re-encoding or
-re-hashing it. Opaque: built only by 'digestOf', read only by 'digestBytes'.
+{- | A SHA-256 digest of one origin's wire body: the exact bytes the mount decoded a
+manifest from. Opaque: built only by 'digestOf', read only by 'digestBytes'.
 -}
 newtype ContentDigest = ContentDigest ByteString
     deriving stock (Eq, Show)
@@ -82,11 +80,8 @@ digestOf body = ContentDigest (BA.convert (hash body :: Digest SHA256))
 digestBytes :: ContentDigest -> ByteString
 digestBytes (ContentDigest bytes) = bytes
 
-{- | A resolved full manifest. It carries the typed packument-level view, the raw
-document the mount decoded it from, and the 'ContentDigest' of the wire bytes both came
-from. The serve path edits the raw document and re-serialises it. That digest is the
-input fingerprint the serve path builds its derived ETag over
-('Ecluse.Core.Server.Conditional').
+{- | A resolved full manifest. The serve path edits the raw document, re-serialises it, and
+builds its derived ETag over 'manifestDigest' ('Ecluse.Core.Server.Conditional').
 -}
 data Manifest = Manifest
     { manifestInfo :: PackageInfo
@@ -97,43 +92,23 @@ data Manifest = Manifest
     -- ^ Digest of the wire bytes behind 'manifestInfo' and 'manifestRaw'.
     }
 
-{- | The serve-path read handle: a record of two intent operations over a registry
-mount. The closures capture its private state, the per-origin fetch configuration and
-the shared cache. Both fields return 'IO' so a backend stays decoupled from the proxy
-core, exactly as the publish-side handle does.
+{- | The serve-path read handle over one registry mount. Its closures capture the
+per-origin fetch configuration and the shared cache, keeping a backend out of the core.
 -}
 data MetadataClient = MetadataClient
     { fetchFullManifest :: PackageName -> IO (Either MetadataError Manifest)
-    {- ^ Fetch and project a package's __full manifest__. It carries the
-    packument-level 'PackageInfo' (every version), the raw document ('CachedDoc') the
-    mount decoded it from, and the wire bytes' 'ContentDigest'. The raw document lets
-    the serve path rebuild and re-serialise the document through injected adapter
-    capabilities. The digest lets it fingerprint the document without re-hashing it.
-    Every failure is a 'MetadataError' value: fetch, transport, parse, or policy.
+    {- ^ Fetch and project a package's full manifest, every version included. Every failure
+    comes back as a 'MetadataError' value: fetch, transport, parse, or policy.
     -}
     , fetchVersionMetadata :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
-    {- ^ Fetch the __single-version metadata__ for one @(package, version)@: that
-    version's 'PackageDetails', or 'Nothing' when the package resolved but does not
-    carry the requested version. That absence is genuine, and the caller renders it as
-    a miss. A 'MetadataError' means the metadata itself was unobtainable. Never carries
-    the raw document, because it does not re-serialise.
-
-    The 'Maybe' is the one deliberate departure from a bare
-    @Either MetadataError PackageDetails@. A serve path must distinguish a version that
-    is absent (a forwarded @404@) from metadata it could not obtain at all (a transient
-    @503@). An absent version is a normal outcome over sound metadata, not a parse
-    error.
+    {- ^ Fetch one @(package, version)@'s metadata. 'Nothing' means the package resolved
+    without that version (a forwarded @404@), unlike a 'MetadataError' (a transient @503@).
     -}
     }
 
-{- | Why a metadata fetch could not yield a usable result. It is a value, so the serve
-path maps each cause onto the response it renders.
-
-Each constructor preserves a distinction the serve path acts on. A name mismatch stays
-apart from a plain decode failure. A mount answering for a /different/ package is an
-untrusted, misreporting origin: the anti-shadowing defence. The proxy
-drops that origin and surfaces the mismatch distinctly, rather than degrading it like
-an outage.
+{- | Why a metadata fetch could not yield a usable result. Each cause is a value the serve
+path maps onto its own response, so a name mismatch (the anti-shadowing defence) never
+degrades like a transient outage.
 -}
 data MetadataError
     = {- | The upstream body breached a response bound (its size, version count, or
@@ -167,12 +142,7 @@ data MetadataError
     deriving stock (Eq, Show)
 
 {- | Fold the shared upstream fault channel ('FetchFault') onto the serve-path error
-vocabulary ('MetadataError'), preserving the distinction each cause carries. A
-response-bound breach is 'MetadataBoundExceeded'. An unformable upstream URL is
-'MetadataUrlUnformable', a config fault held distinct from a decode or an outage. A
-transport fault is 'MetadataUnreachable', the outage, kept transient.
-Ecosystem-agnostic: every adapter's metadata layer threads its bounded fetch's fault
-through this same fold.
+vocabulary. Every adapter's metadata layer threads its bounded fetch's fault through it.
 -}
 fetchFaultError :: FetchFault -> MetadataError
 fetchFaultError = \case
@@ -180,11 +150,8 @@ fetchFaultError = \case
     FetchUrlUnformable urlErr -> MetadataUrlUnformable urlErr
     FetchTransport transport -> MetadataUnreachable transport
 
-{- | The outcome of resolving one version's metadata for a policy decision. It is the
-projected version snapshot when present, or the degrade both the serve-time gate and the
-mirror worker map onto their own response. It is the shared classification of a
-single-version fetch. The gate that decides what to serve and the worker that decides
-what to mirror reach the same three outcomes from one fetch and projection.
+{- | The outcome of resolving one version's metadata for a policy decision. The serve-time
+gate and the mirror worker share it, so both reach the same outcome from one fetch.
 -}
 data VersionEvaluation
     = -- | The version resolved and projected. Its 'PackageDetails' is ready for the rules engine.
@@ -201,17 +168,8 @@ data VersionEvaluation
       VersionMetadataUnavailable
     deriving stock (Eq, Show)
 
-{- | Resolve a single version's metadata through a 'MetadataClient' and classify the
-outcome into a 'VersionEvaluation'. This is the one fetch-and-project step both the
-serve-time tarball gate and the mirror worker run before the rules engine. A future
-rule that reads a new field therefore sees the same projected 'PackageDetails' in
-either context.
-
-Any 'MetadataError' classifies as 'VersionMetadataUnavailable', collapsing every
-unobtainable-metadata cause, an unreachable upstream included, to the one transient
-outcome. A resolved-but-absent version is 'VersionMissing'. A resolved version is
-'VersionPresent'. Total by type: the fetch reports every failure in its 'Either', so
-this classification is a pure fold with nothing to catch.
+{- | Resolve a single version's metadata through a 'MetadataClient' and classify it. Both
+the serve-time tarball gate and the mirror worker run this step before the rules engine.
 -}
 fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEvaluation
 fetchVersionDetails client name version =

@@ -54,10 +54,8 @@ import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (Hash, HashAlg, hashAlg, hashValue)
 import Ecluse.Core.Security (LimitError, authorityLabel)
 
-{- | A raw response fetched from a registry: the unparsed bytes of a metadata
-document, as returned by 'fetchMetadata'. It stays opaque bytes here to keep the
-protocol\/data plane (fetch) separate from parsing. A @parse*@ field turns a
-'RegistryResponse' into a domain type.
+{- | A raw response fetched from a registry, the unparsed bytes 'fetchMetadata' returned.
+The bytes stay opaque here to keep fetching separate from parsing.
 -}
 newtype RegistryResponse = RegistryResponse
     { responseBody :: ByteString
@@ -65,16 +63,9 @@ newtype RegistryResponse = RegistryResponse
     }
     deriving stock (Eq, Show)
 
-{- | The artifact descriptor the mirror publish uses: the filename, integrity
-digests, and declared size of the artifact the worker's ingest re-evaluation
-__re-admitted__ under current policy. The worker derives it entirely from current
-metadata, because the queue payload carries no digest or size. The published
-document can therefore only name what the shared admission gate floor-checked
-(see "Ecluse.Core.Worker.Job").
-
-'maHashes' is a 'NonEmpty' because admission refuses a digest-less version (the
-integrity-presence policy). A descriptor with nothing to verify or publish is
-unrepresentable by construction.
+{- | The artifact descriptor the mirror publish uses. The worker derives it from current metadata,
+not the queue payload, so a publish names only what the admission gate floor-checked (see
+"Ecluse.Core.Worker.Job"). 'maHashes' is 'NonEmpty' because admission refuses a digest-less version.
 -}
 data MirrorArtifact = MirrorArtifact
     { maFilename :: Text
@@ -82,9 +73,8 @@ data MirrorArtifact = MirrorArtifact
     document.
     -}
     , maHashes :: NonEmpty Hash
-    {- ^ The integrity digests, at least one. The tamper gate verified the fetched
-    bytes against this floor-checked set. The npm publish codec fills the publish
-    document's @dist.integrity@ and @shasum@ fields from it.
+    {- ^ The integrity digests, at least one. The tamper gate verified the fetched bytes against
+    this floor-checked set.
     -}
     , maSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball byte
@@ -93,19 +83,15 @@ data MirrorArtifact = MirrorArtifact
     }
     deriving stock (Eq, Show)
 
-{- | The digest value of the first admitted 'Hash' computed with the given
-'HashAlg', or 'Nothing' when the artifact carries none. It reads only 'maHashes'
-and consults no ecosystem, so it lives beside the descriptor. The npm publish codec
-picks the @SRI@ and @SHA1@ entries this way to fill @dist.integrity@ and
-@dist.shasum@.
+{- | The digest value of the first 'Hash' with the given 'HashAlg', or 'Nothing' when the
+artifact carries none.
 -}
 firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
 firstHashValue alg artifact =
     fmap hashValue (find ((== alg) . hashAlg) (maHashes artifact))
 
-{- | Why parsing a 'RegistryResponse' into a domain type failed. Parsing is the
-boundary that turns untrusted wire data into the proxy's precise types, so the
-parser reports a failure instead of throwing it. The caller decides how to respond.
+{- | Why parsing a 'RegistryResponse' into a domain type failed. The parser reports this
+value rather than throwing, so the caller decides how to respond to untrusted wire data.
 -}
 newtype ParseError = ParseError
     { parseErrorMessage :: Text
@@ -113,14 +99,9 @@ newtype ParseError = ParseError
     }
     deriving stock (Eq, Show)
 
-{- | Why publishing an artifact to a registry failed: a genuine write fault the
-mirror write reports ('Ecluse.Core.Registry.Publish.mpPublishArtifact'). The worker
-then leaves the 'Ecluse.Core.Queue' job un-acked for redelivery (see
-@docs\/architecture\/cloud-backends.md@).
-
-This is the __write-path__ fault and nothing more. Forming the request URL is a
-separate concern (a 'UrlFormationError'), so a read-path fetch never surfaces a
-failure mislabelled as a publish.
+{- | Why publishing an artifact to a registry failed, the fault
+'Ecluse.Core.Registry.Publish.mpPublishArtifact' reports. Forming the request URL is a separate
+concern ('UrlFormationError'), so a read-path failure is never mislabelled as a publish.
 -}
 newtype PublishError = PublishError
     { publishErrorMessage :: Text
@@ -128,14 +109,9 @@ newtype PublishError = PublishError
     }
     deriving stock (Eq, Show)
 
-{- | Why an upstream request URL could not be formed from configuration and an
-already-parsed 'Ecluse.Core.Package.PackageName'.
-
-This is a __protocol-independent__ fault, shared by every request an adapter
-builds: metadata fetch, artifact fetch, and publish alike. A read-path failure
-therefore stays what it is, rather than borrowing the write-path's 'PublishError'.
-The cause is an empty configured base URL, or a URL the adapter formed that could
-not be parsed.
+{- | Why an upstream request URL could not be formed from configuration and a parsed
+'Ecluse.Core.Package.PackageName'. Every request an adapter builds shares this fault, whether
+it fetches metadata, fetches an artifact, or publishes.
 -}
 data UrlFormationError
     = -- | The configured base URL is empty, so no request URL can be formed.
@@ -146,13 +122,11 @@ data UrlFormationError
       UnparseableUrl Text
     deriving stock (Eq, Show)
 
-{- | Render a 'UrlFormationError' for an operator log line, with any URL it carries
-reduced to its authority ('authorityLabel').
+{- | Render a 'UrlFormationError' for an operator log line, with any URL it carries reduced to
+its authority ('authorityLabel').
 
-Every consumer uses this one rendering, so no path can skip the reduction. A carried
-URL is a configured base URL or an upstream-supplied artifact location. Either can hold
-a credential in its userinfo or a signed query string, and the 'Show' instance prints it
-whole.
+A carried URL can hold a credential in its userinfo or a signed query string, and the 'Show'
+instance prints it whole.
 
 >>> renderUrlFormationError (UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc")
 "UnparseableUrl upstream.test:443"
@@ -165,12 +139,8 @@ renderUrlFormationError = \case
     EmptyBaseUrl -> "EmptyBaseUrl"
     UnparseableUrl url -> "UnparseableUrl " <> authorityLabel url
 
-{- | Why a metadata fetch could not produce a response body, reported as a __value__.
-A read-path consumer maps each cause onto its own outcome instead of catching a typed
-throw two calls away. The serve read adapter maps onto the response it renders, and the
-worker's mirror-presence probe onto its fall-through. Total over the read fetch: an
-unformable request URL, a response-bound breach, and a transport fault are all in this
-channel. No fetch failure rides up outside the declared type.
+{- | Why a metadata fetch could not produce a response body, reported as a value rather than
+thrown. Total over the read fetch: no fetch failure rides up outside this type.
 -}
 data FetchFault
     = -- | The request URL could not be formed from configuration (an empty or unparseable base URL).
@@ -185,12 +155,9 @@ data FetchFault
       FetchTransport TransportFault
     deriving stock (Eq, Show)
 
-{- | Why a first-party publish relay produced no response from the publication
-target, reported as a __value__ so the serve path renders each cause directly. An
-unformable target URL is the operator-misconfiguration @500@. A transport fault or
-an overstepped response bound is the target-unreachable @502@: in both, the
-target's own answer never arrived whole. Total over the relay: no relay failure
-rides up outside the declared type.
+{- | Why a first-party publish relay produced no response from the publication target,
+reported as a value. The serve path renders an unformable target URL as @500@, and a transport
+fault or an overstepped response bound as @502@. Total over the relay: no fault escapes this type.
 -}
 data PublishRelayFault
     = -- | The publication target URL could not be formed from configuration.
@@ -203,11 +170,9 @@ data PublishRelayFault
       RelayBoundExceeded LimitError
     deriving stock (Eq, Show)
 
-{- | The response from the publication target after relaying a publish document.
-The proxy keeps it in memory and does not stream it. The relayed body is small:
-typically a JSON envelope and a tarball under the target's size limit. Buffering it
-whole lets the proxy catch and log an exception before it starts a chunked response
-it would otherwise abandon mid-stream.
+{- | The response from the publication target after relaying a publish document. The proxy
+buffers the body whole rather than streaming it, so it can catch and log an exception before
+it starts a chunked response it would otherwise abandon mid-stream.
 -}
 data PublishRelayResponse = PublishRelayResponse
     { relayStatus :: Int
@@ -217,11 +182,9 @@ data PublishRelayResponse = PublishRelayResponse
     }
     deriving stock (Eq, Show)
 
-{- | Why a publish could not complete, surfaced as a __value__ rather than thrown.
-The mirror worker then decides retry against drop by an exhaustive pattern match,
-not by catching and re-classifying an exception. The cases differ in retryability,
-which is the whole reason this is a value. A registry rejection or a transport
-fault is worth redelivering. An unformable URL never is.
+{- | Why a publish could not complete, surfaced as a value rather than thrown. The cases
+differ in retryability, so the mirror worker decides retry against drop by an exhaustive
+pattern match.
 -}
 data PublishFault
     = {- | The request URL could not be formed (e.g. an empty base URL): a

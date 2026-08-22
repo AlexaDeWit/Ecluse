@@ -38,14 +38,11 @@ module Ecluse.Core.InFlight (
 
 import UnliftIO.Exception (finally, withException)
 
-{- | Run a leader's @body@ and release its already-claimed in-flight slot on every
-exit, closing the orphan window.
+{- | Run a leader's @body@ and release its already-claimed in-flight slot on every exit,
+closing the orphan window.
 
-Call it from inside the same 'UnliftIO.Exception.mask' that committed the claim, and
-pass that mask's @restore@. Leave no interruptible action between the claim and this
-call. The body runs under @restore@ so it stays cancellable. On any exit it
-releases the slot, and on a failure the orphaning exception first reaches any waiting
-follower. Both of those run masked, so the release cannot be orphaned in turn.
+Call it from inside the same 'UnliftIO.Exception.mask' that committed the claim, pass that
+mask's @restore@, and leave no interruptible action between the claim and this call.
 -}
 guardInFlight ::
     -- | The enclosing mask's @restore@, applied to the body so it stays interruptible.

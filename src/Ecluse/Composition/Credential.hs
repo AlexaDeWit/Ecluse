@@ -63,23 +63,15 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifactProvider)
 
-{- | The process-global credential providers, keyed by the ecosystem they
-serve. Built __once__ at the composition root from the resolved config. A
-mount references one by ecosystem and never holds its own.
-
-The keyset (see 'initializedEcosystems') is the boot-check's pure surface: a mount
-that names an ecosystem absent from it has an unresolved credential reference.
+{- | The process-global credential providers, keyed by the ecosystem they serve. A
+mount references one by ecosystem and never holds its own, so a mount naming an
+ecosystem absent from the keyset has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
-{- | Build the global credential providers from the resolved config, or the aggregated
-boot errors that block them. Each __mirrored__ mount already carries its resolved
-'MirrorCredential', derived from its mirror-target URL at load, so this only realises
-it. A 'MirrorStatic' becomes a stateless static provider. The 'MirrorCodeArtifact'
-identities group by domain and build once each. Each mints eagerly, so a bad identity,
-region, or permission is a fail-loud 'CodeArtifactMintFailed' here at boot, never a
-first-publish surprise. A serve-only mount holds no write credential and contributes
-nothing. With zero mirrored mounts the provider map is empty and nothing mints.
+{- | Build the global credential providers from the resolved config, or the boot
+errors that block them. Each provider mints eagerly, so a bad identity, region, or
+permission fails loud here as 'CodeArtifactMintFailed' rather than at first publish.
 -}
 initCredentialProviders :: CredentialReporters -> Config -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders reporters config = do
@@ -88,9 +80,7 @@ initCredentialProviders reporters config = do
             | (eco, mount) <- Map.toList (configMounts config)
             , Just target <- [regMirrorTarget (mountRegistries mount)]
             ]
-    -- The static leaf is stateless, so it stays per mount. A CodeArtifact provider is
-    -- built once per distinct resolved identity, then fanned out to every ecosystem
-    -- that resolved it.
+    -- The static leaf is stateless, so it stays per mount, unlike a CodeArtifact provider.
     let statics = [(eco, staticProviderFor token) | (eco, MirrorStatic token) <- creds]
     let caPlans = [(eco, ca) | (eco, MirrorCodeArtifact ca) <- creds]
     results <- traverse (initSharedCodeArtifact reporters) (codeArtifactIdentityGroups caPlans)
@@ -99,23 +89,17 @@ initCredentialProviders reporters config = do
         then pure (Left (concat initErrs))
         else pure (Right (CredentialProviders (Map.fromList (statics <> concat shared))))
 
--- One shared CodeArtifact provider per distinct resolved identity. The generic
--- refresh/cache wrapper around the mint leaf is built once, then fanned out to every
--- ecosystem in the group. A shared domain therefore carries one refresh schedule and
--- one breaker rather than one per mount. It mints once eagerly, and a throw renders
--- as a 'CodeArtifactMintFailed' boot error, so it joins the aggregated failure block.
+-- One provider per distinct identity, fanned out to every ecosystem in the group, so
+-- a shared domain carries one refresh schedule and one breaker rather than one per mount.
 initSharedCodeArtifact :: CredentialReporters -> (CodeArtifactConfig, NonEmpty Ecosystem) -> IO (Either [BootError] [(Ecosystem, CredentialProvider)])
 initSharedCodeArtifact reporters (caConfig, ecosystems) =
     tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
         Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
         Right provider -> Right [(eco, provider) | eco <- toList ecosystems]
 
-{- | Group the mounts' resolved CodeArtifact identities: one group per distinct
-'CodeArtifactConfig' (domain, owner, region, and the requested token duration),
-carrying every ecosystem that resolved it. The mint's real scope is the domain, not
-the repository endpoint. Ecosystems whose mirror targets live in one domain therefore
-share one provider. A differing duration is a different requested credential and
-keeps its own. Pure, so the sharing decision is pinned without touching AWS.
+{- | Group the mounts' resolved CodeArtifact identities, one group per distinct
+'CodeArtifactConfig'. The mint's scope is the domain, not the repository endpoint, so
+mounts in one domain share a provider, while a differing duration keeps its own.
 -}
 codeArtifactIdentityGroups :: [(Ecosystem, CodeArtifactConfig)] -> [(CodeArtifactConfig, NonEmpty Ecosystem)]
 codeArtifactIdentityGroups plans =

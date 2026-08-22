@@ -187,10 +187,8 @@ import Ecluse.Core.Telemetry.Record (
  )
 import Ecluse.Core.Version (Version, renderVersion)
 
-{- | One store's bounds: the entry count and the resident-byte budget it keeps its held
-entries under before it evicts. Each entry is weighted by an estimate of its resident
-footprint. An insert past the byte budget evicts the least-recently-used entries until
-the budget holds, which bounds memory more faithfully than the entry count alone.
+{- | One store's bounds: a maximum entry count and a resident-byte budget.
+An insert past the byte budget evicts the least-recently-used entries until the budget holds.
 -}
 data StoreBudget = StoreBudget
     { sbMaxEntries :: Int
@@ -200,12 +198,9 @@ data StoreBudget = StoreBudget
     }
     deriving stock (Eq, Show)
 
-{- | The metadata cache's tunables, sourced from configuration: how long a parsed
-packument stays fresh, and each store's own 'StoreBudget'. The three sub-budgets are
-carved from one cache aggregate at the composition root
-(@Ecluse.Composition.MemoryBudget.budgetCacheConfig@) and __sum to it__. The aggregate
-therefore bounds the cache's total resident bytes, while each class's eviction pressure
-stays its own.
+{- | The metadata cache's tunables, sourced from configuration. The three sub-budgets are carved
+from one aggregate at @Ecluse.Composition.MemoryBudget.budgetCacheConfig@ and __sum to it__, so
+that aggregate bounds the cache's total resident bytes.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
@@ -221,26 +216,18 @@ data CacheConfig = CacheConfig
     }
     deriving stock (Eq, Show)
 
-{- | Which upstream a cached packument was fetched from: the dimension that
-partitions the cache by source so distinct upstreams never share an entry.
+{- | Which upstream a cached packument was fetched from, the dimension that partitions the cache by
+source so distinct upstreams never share an entry.
 
-The discriminator is the upstream's __base URL__. An upstream is addressed at a distinct
-URL. That URL names a location, never a credential, so keying on it keeps the trust
-split intact. The cached origin is fetched with its own token, supplied through its
-fetch action, and the source carries none. Under the default @passthrough@ strategy only
-the anonymous public origin is cached, so in practice the cache holds one source per
-package. The dimension keeps the key honest about /which/ upstream an entry is, and
-never blurs the split.
+The discriminator is the upstream's __base URL__. That URL names a location, never a credential, so
+keying on it keeps the trust split intact.
 -}
 newtype Source = Source Text
     deriving stock (Eq, Ord, Show)
 
-{- | A coherent cache entry: the parsed 'PackageInfo' paired with the raw document
-('CachedDoc') it was decoded from. A hit returns both, so a caller gets a typed view to
-decide over and the exact bytes that produced it. The packument serve path rebuilds the
-served body from the raw document, and must keep its typed decision coherent with those
-bytes. The store holds the raw document opaquely: it never reads it, only weighs it
-('weighCachedDoc') and hands it back to the injected adapter capabilities.
+{- | The parsed 'PackageInfo' paired with the raw document ('CachedDoc') it was decoded from, so a
+caller's typed decision stays coherent with the bytes served from it. The store holds the raw
+document opaquely: it never reads it, only weighs it ('weighCachedDoc') for the budget.
 -}
 data CacheEntry = CacheEntry
     { entryInfo :: PackageInfo
@@ -255,33 +242,24 @@ data CacheEntry = CacheEntry
     }
     deriving stock (Eq, Show)
 
-{- | Estimate a 'CacheEntry'\'s resident footprint in bytes as a fixed multiple of its raw
-document's compact-encoded byte length ('weighCachedDoc'). The resident cost (the parsed
-'PackageInfo' plus the raw document) is a near-constant multiple of the document's size.
-Scaling the encoded length therefore estimates the footprint without measuring the parsed
-structure. The encode is an @O(document)@ pass run only on a leader's insert (the cold
-path after a fetch), never on a hit. The multiplier sits at the high end of the observed
-resident-to-encoded ratio, so the estimate is an upper bound. A memory budget must not
-systematically under-count.
+{- | Estimate a 'CacheEntry'\'s resident footprint as a fixed multiple of its raw document's
+compact-encoded byte length ('weighCachedDoc'). The multiplier is the high end of the observed
+resident-to-encoded ratio, because a memory budget must not under-count. The @O(document)@ encode
+runs on a leader's insert, never on a hit.
 -}
 weighCacheEntry :: CacheEntry -> Int
 weighCacheEntry e = weighEncodedBytes (weighCachedDoc (entryRaw e))
 
-{- | Estimate a single-version entry's resident footprint in bytes. A present version's
-'PackageDetails' is a single bounded manifest, so it is weighted at a flat per-version
-figure. A cached determined absence (a negative entry) carries only a small fixed
-overhead. The single-version store holds no raw document, so its weight is a fixed
-estimate rather than an encoded-size multiple.
+{- | Estimate a single-version entry's resident footprint. The store holds no raw document to
+measure, so a present bounded manifest and a cached absence each weigh a flat figure.
 -}
 weighVersion :: Maybe PackageDetails -> Int
 weighVersion = \case
     Just _ -> versionEntryBytes
     Nothing -> negativeEntryBytes
 
--- Scale a raw document's encoded byte length to an estimated resident footprint,
--- through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel").
--- This weigher and the composition root's memory plan can then never drift on the
--- expansion factor.
+-- Scale through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel"), so this
+-- weigher and the composition root's memory plan never drift on the expansion factor.
 weighEncodedBytes :: Int64 -> Int
 weighEncodedBytes = expandWireBytes . fromIntegral
 
@@ -293,9 +271,8 @@ versionEntryBytes = 16 * 1024
 negativeEntryBytes :: Int
 negativeEntryBytes = 1024
 
-{- | An assembled entry's resident footprint __is__ its strict bytes, plus a small
-constant for the key and spine. Unlike a parsed 'CacheEntry' there is no expanded
-structure to estimate, so the budget counts what is genuinely held.
+{- | An assembled entry's footprint __is__ its strict bytes plus a small constant, so the budget
+counts what is genuinely held rather than an estimate.
 -}
 weighAssembled :: ByteString -> Int
 weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes
@@ -303,22 +280,18 @@ weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes
 assembledEntryOverheadBytes :: Int
 assembledEntryOverheadBytes = 256
 
-{- | The key a 'CacheEntry' is cached under: the upstream 'Source' paired with the
-package's identity, rendered to a stable 'Text'. The package identity is distinct from a
-display name, so two encodings of the same scoped package share one entry. The source
-dimension keeps distinct upstreams apart, and equality and ordering match
-@(Source, PackageName)@ identity. The @cache@ library needs a 'Hashable' key, and the
-opaque 'PackageName' does not expose one. The identity is projected to this key here
+{- | The key a 'CacheEntry' is cached under: the 'Source' paired with the package's identity, not
+its display name, so two encodings of one scoped package share an entry. The @cache@ library needs
+a 'Hashable' key that the opaque 'PackageName' does not expose, so the identity is projected here
 rather than through an orphan instance.
 -}
 newtype CacheKey = CacheKey Text
     deriving stock (Eq, Ord, Show)
     deriving newtype (Hashable)
 
-{- The @(source, package)@ identity rendered to a stable 'Text': the source's base URL
-joined with the package's identity (not its display form). Both cache keys share this
-prefix. The full-packument key is exactly this, and the single-version key appends the
-version, so the two stores partition on the same source\/package identity. -}
+{- Both cache keys share this prefix. The full-packument key is exactly this, and the
+single-version key appends the version, so the two stores partition on the same source/package
+identity. -}
 keyText :: Source -> PackageName -> Text
 keyText (Source source) name =
     source
@@ -329,16 +302,12 @@ keyText (Source source) name =
         <> "\x1f"
         <> TS.toText (pkgCanonical name)
 
-{- | Project a 'Source' and a 'PackageName' to their full-packument cache key (the
-source's base URL joined with the package's identity, not its display form).
--}
+-- | Project a 'Source' and a 'PackageName' to their full-packument cache key.
 cacheKey :: Source -> PackageName -> CacheKey
 cacheKey source name = CacheKey (keyText source name)
 
-{- | The key a single-version entry is cached under: the @(source, package)@ identity
-'cacheKey' uses, with the rendered 'Version' appended. Distinct versions of one package
-therefore hold distinct entries, and the version store partitions on the same source as
-the full store.
+{- | The key a single-version entry is cached under: the identity 'cacheKey' uses with the rendered
+'Version' appended, so the version store partitions on the same source as the full store.
 -}
 newtype VersionKey = VersionKey Text
     deriving stock (Eq, Ord, Show)
@@ -347,32 +316,25 @@ newtype VersionKey = VersionKey Text
 versionKey :: Source -> PackageName -> Version -> VersionKey
 versionKey source name version = VersionKey (keyText source name <> "\x1f" <> renderVersion version)
 
-{- | The metadata-cache handle: the three single-flight stores (the full-packument
-cache, the single-version cache, and the assembled-representation store). Opaque:
-built with 'newMetadataCache' and reached only through the accessors. Lives in the
-composition root (one per process), so every request shares the same caches and their
-connection-collapsing.
+{- | The metadata-cache handle, opaque and built with 'newMetadataCache'. One lives in the
+composition root per process, so every request shares the stores and their connection-collapsing.
 -}
 data MetadataCache = MetadataCache
     { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
     -- ^ The full-packument store, keyed by @(source, package)@.
     , mcVersion :: SingleFlight MetadataError VersionKey (Maybe PackageDetails)
-    {- ^ The single-version store, keyed by @(source, package, version)@, holding one
-    version's 'PackageDetails' or its determined absence. Only the single-version path
-    writes it, never the full path.
+    {- ^ The single-version store, keyed by @(source, package, version)@. Only the single-version
+    path writes it, never the full path.
     -}
     , mcAssembled :: SingleFlight Void Text ByteString
-    {- ^ The assembled-representation store: the encoded served document, keyed by its
-    derived validator's rendered form. That form is a content address over every serve
-    input (see the module header), and only the packument serve tail writes and reads
-    the store. The 'Void' error slot states in the type that the assembled render has no
-    domain failure. A bottom during the render is an invariant break, not an outcome.
+    {- ^ The assembled-representation store, keyed by the derived validator's rendered form: a
+    content address over every serve input (see the module header). Only the packument serve tail
+    writes and reads it. The 'Void' error slot states that the render has no domain failure.
     -}
     }
 
-{- | Build a metadata cache from its configuration: the full-packument store, the
-single-version store, and the assembled-representation store. Each runs over the same
-TTL, sized from its __own__ sub-budget.
+{- | Build a metadata cache from its configuration. The three stores share one TTL, and each is
+sized from its __own__ sub-budget.
 -}
 newMetadataCache :: CacheConfig -> IO MetadataCache
 newMetadataCache cfg =
@@ -384,55 +346,27 @@ newMetadataCache cfg =
     newStore :: StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
     newStore budget = newSingleFlight (cacheTtl cfg) (sbMaxEntries budget) (sbMaxBytes budget)
 
-{- | Resolve a package's metadata from one upstream 'Source', reusing the cache and
-collapsing concurrent misses.
+{- | Resolve a package's metadata from one upstream 'Source', reusing the cache and collapsing
+concurrent misses. A failed fetch caches __nothing__, and its typed 'Left' reaches every waiter.
 
-On a fresh, unexpired hit the cached 'CacheEntry' is returned and the fetch action is
-never run. On a miss the action runs exactly once, even under concurrent callers. The
-first installs an in-flight marker and fetches, and the others wait on its result. A
-successful fetch is cached, subject to the TTL and the size bound. A failed fetch caches
-__nothing__, so a transient upstream error does not poison the cache. Its typed 'Left'
-reaches every waiter, so a coalesced follower sees exactly the fault the leader saw.
+Only the fetch and the parse are memoised. The caller's rules re-decide the verdict per request.
 
-A claimed in-flight slot is __always eventually filled and de-registered__. That holds
-even when an async exception (a request timeout, a killed handler thread) hits the leader
-between the claim and completion. The claim commits under a 'mask', and the leader's run
-goes straight to 'Ecluse.Core.InFlight.guardInFlight'. That frees the slot on every exit.
-On an escape before the marker is filled, it hands the error to every waiting follower
-rather than leaving them parked forever. This closes the single-flight orphan window:
-without it, a cancelled leader would wedge that @(source, package)@ key until restart.
+The 'Source' partitions the cache, and the fetch action supplies that origin's own credential. The
+trusted private origin is fetched per request and never cached, so a shared entry can never serve
+one client another client's private document.
 
-A follower receiving an orphaned marker re-evaluates the resolve when the leader was
-cancelled (async), re-entering interruptibly and counting its miss only once. It
-re-raises when the leader escaped synchronously. The fetch's contract is total, so a
-synchronous escape is an invariant break for the outer boundary, never laundered into
-the typed channel. A follower's own wait on the marker stays interruptible.
+A claimed in-flight slot is always eventually filled and de-registered, even when an async exception
+cancels the leader. Otherwise that key would wedge until restart.
 
-The 'Source' partitions the cache: distinct upstreams of the same package resolve under
-distinct keys and never cross-contaminate. The fetch action supplies the origin's own
-credential, so reading through one source never blurs another's trust posture. Under the
-default @passthrough@ strategy only the anonymous public origin is resolved here. The
-trusted private origin is the per-client authority. The serve path fetches it per
-request and never caches it, so a shared entry can never serve one client another's
-private document.
-
-The caller's rules re-decide the result on each request. Only the fetch and the parse
-are memoised, never the verdict.
-
-Each resolution records the @ecluse.metadata_cache.requests@ hit\/miss counter, where a
-coalescing follower counts as a miss like the leader it waits on. A leader's insert
-refreshes the @ecluse.metadata_cache.entries@ occupancy gauge and the
-@ecluse.metadata_cache.resident_bytes@ residency gauge.
+Each resolution records the @ecluse.metadata_cache.requests@ hit\/miss counter, where a coalescing
+follower counts as a miss like the leader it waits on.
 -}
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadata = resolveMetadataWith (pure ())
 
-{- | As 'resolveMetadata', but with a hook run on the leading thread at the
-single-flight claim → fetch-runner handoff. The window runs from the STM commit of the
-in-flight claim to the leader's exception guard taking ownership of the marker. It
-exists only so a test can deterministically park a leader in that
-window and cancel it there, exercising the orphan-window guarantee. Production always
-passes @pure ()@ via 'resolveMetadata'.
+{- | As 'resolveMetadata', but with a hook run on the leading thread between the in-flight claim's
+STM commit and the leader's exception guard taking the marker. Only a test uses it, to cancel a
+leader inside that window. 'resolveMetadata' passes @pure ()@.
 -}
 resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadataWith afterClaim metrics cache source name =
@@ -446,26 +380,18 @@ resolveMetadataWith afterClaim metrics cache source name =
         (mcFull cache)
         (cacheKey source name)
 
-{- | Resolve __one version's__ 'PackageDetails' (or its determined absence) from the
-single-version cache. A miss leads a selective fetch and collapses concurrent misses,
-exactly as 'resolveMetadata' does for the full packument. The cached value is the
-@'Maybe' 'PackageDetails'@ the fetch yields. A version determined __absent__ over sound
-metadata is therefore cached as 'Nothing' (a negative entry) and re-served without a
-re-fetch within the TTL.
+{- | Resolve __one version's__ 'PackageDetails' from the single-version cache, leading a selective
+fetch on a miss and collapsing concurrent misses as 'resolveMetadata' does.
 
-This writes to the single-version store only, never the full-packument store. A cold
-tarball gate's selective parse therefore cannot materialise a whole packument into the
-shared full cache. Unlike 'resolveMetadata', the store records no hit\/miss counter. A
-leader's insert does refresh the single-version residency gauge
-(@ecluse.metadata_cache.version.resident_bytes@), so the byte budget that bounds both
-stores is observable on each.
+A version determined absent is cached as 'Nothing' and re-served without a re-fetch within the TTL.
+This writes the single-version store only, so a selective parse can never materialise a whole
+packument into the shared full cache.
 -}
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))
 resolveVersion = resolveVersionWith (pure ())
 
-{- | As 'resolveVersion', with the single-flight claim → fetch-runner handoff hook
-'resolveMetadataWith' exposes, for the same orphan-window test (production passes @pure ()@
-via 'resolveVersion').
+{- | As 'resolveVersion', with the claim-to-fetch hook 'resolveMetadataWith' documents.
+'resolveVersion' passes @pure ()@.
 -}
 resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))
 resolveVersionWith afterClaim metrics cache source name version =
@@ -476,25 +402,13 @@ resolveVersionWith afterClaim metrics cache source name version =
         (mcVersion cache)
         (versionKey source name version)
 
-{- | Resolve the __assembled representation__ for one derived validator. A miss leads
-the render (assemble + encode) and collapses concurrent identical renders, exactly as
-'resolveMetadata' does for a fetch.
+{- | Resolve the __assembled representation__ for one derived validator, leading the render on a
+miss and collapsing concurrent identical renders.
 
-The key is the rendered derived 'Ecluse.Core.Server.Conditional.ETag', a content address
-over every input the served document is a function of. A hit is therefore byte-for-byte
-the document this request's own inputs would deterministically produce. The store can
-never serve stale bytes, because changed inputs miss by construction. It never crosses a
-client boundary either: a different private view is a different key (see the module
-header). Under the TTL-zero configuration the store degrades to pure single-flight
-coalescing, the same behaviour as the sibling stores.
-
-Like the single-version store it records no hit\/miss counter. A leader's insert
-refreshes the @ecluse.metadata_cache.assembled.resident_bytes@ residency gauge, so the
-byte budget's third occupant is observable alongside the other two.
-
-The store's error slot is 'Void', because the render has no domain failure. The resolve
-is folded back to a plain 'IO' 'ByteString' here ('absurd' discharges the impossible
-'Left'), which keeps the serve tail's call shape unchanged.
+The key is the rendered derived 'Ecluse.Core.Server.Conditional.ETag', a content address over every
+input the served document is a function of. Changed inputs miss by construction, and a different
+private view is a different key, so the store never serves stale bytes and never crosses a client
+boundary.
 -}
 resolveAssembled :: MetricsPort -> MetadataCache -> Text -> IO ByteString -> IO ByteString
 resolveAssembled metrics cache key render =
@@ -507,29 +421,19 @@ resolveAssembled metrics cache key render =
             key
             (Right <$> render)
 
-{- | Look up a package's cached full-packument entry for one 'Source' without fetching on
-a miss and __without bumping recency__: the cache's read-only view. Two readers share it:
-the inspection and test probes, and the hybrid serve path's step-2 full-packument consult.
-That consult is the tarball gate selecting one version from a warm entry, and it stays
-read-only on purpose. The packument @GET@'s own 'resolveMetadata' hit drives the full
-store's recency, so the gate's select need not bump it. The single-version store
-differs: its only steady-state read is 'cachedVersion'. A 'Nothing' is a miss or an
-expired entry, and this never triggers a fetch and never collapses (use
-'resolveMetadata' for the serve path).
+{- | Look up a cached full-packument entry without fetching on a miss and __without bumping
+recency__. The packument @GET@'s own 'resolveMetadata' hit drives the full store's recency, so the
+tarball gate's read-only consult need not bump it. A 'Nothing' is a miss or an expired entry.
 -}
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
 cachedMetadata cache source name = lookupStore (mcFull cache) (cacheKey source name)
 
-{- | Look up a single-version cached entry for one @(source, package, version)@ without
-fetching on a miss, __bumping the entry's recency on a hit__. This is the hybrid serve
-path's step-1 version consult, before it leads a selective fetch. The read is the version
-store's only steady-state access, because a hit here short-circuits before
-'resolveVersion' and its recency-bumping hit. Without the bump a warm version entry would
-never refresh its recency, and would age out of the least-recently-used eviction in
-insert order. The outer 'Maybe' is the cache hit\/miss, where an expired or absent entry
-is 'Nothing'. The inner @'Maybe' 'PackageDetails'@ is the cached result, where a version
-determined absent is a cached @'Just' 'Nothing'@. Never fetches and never collapses (use
-'resolveVersion' to lead a selective fetch).
+{- | Look up a single-version entry without fetching on a miss, __bumping its recency on a hit__.
+This read is the version store's only steady-state access, so without the bump a warm entry would
+age out of least-recently-used eviction in insert order.
+
+The outer 'Maybe' is the cache hit or miss. The inner @'Maybe' 'PackageDetails'@ is the cached
+result, where @'Just' 'Nothing'@ is a version determined absent.
 -}
 cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
 cachedVersion cache source name version = lookupStoreTouching (mcVersion cache) (versionKey source name version)

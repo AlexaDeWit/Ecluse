@@ -98,30 +98,18 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
-{- | The runtime backends the serve path is closed over: exactly the effectful
-capabilities a request needs to fetch, gate, serve, and record. A record of concrete
-handles and abstract ports (the Handle pattern), assembled by the composition root and
-read by every handler through the 'RequestCtx'.
+{- | The effectful backends the serve path is closed over, assembled by the composition root
+and read by every handler through the 'RequestCtx'. The metric and tracing ports keep it
+free of any named telemetry backend.
 
-The two HTTP managers carry the per-origin split: the public manager serves the
-untrusted public-upstream and artifact egress, the private manager the trusted
-private-upstream path. Both are the validating TLS manager, because registry egress is
-https-only by construction and certificate validation authenticates the host. The split
-is in credential handling and the @dist.tarball@ host gate's trust, not the manager.
-
-The metadata cache and mirror queue are the shared data-plane handles. The metric and
-tracing ports are the abstract recording interfaces
-("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span"). The application supplies
-their OpenTelemetry-backed implementations, so the serve path records without naming a
-telemetry backend. There is no log field: handlers log through the ambient @katip@
-context.
+Both HTTP managers validate TLS, because registry egress is https-only by construction and
+certificate validation authenticates the host.
 -}
 data ServeRuntime = ServeRuntime
     { srAdmission :: ServeAdmission
     {- ^ The process-wide brief-wait bound around metadata materialisation
-    ("Ecluse.Core.Server.Admission"). A private tarball hit and the artifact
-    streaming pump stay outside it. Packument work and a tarball miss's public
-    metadata gate acquire a slot, waiting briefly for one under load.
+    ("Ecluse.Core.Server.Admission"). Packument work and a tarball miss's public metadata gate
+    acquire a slot. A private tarball hit and the artifact streaming pump stay outside it.
     -}
     , srPublicManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
@@ -145,26 +133,17 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
-{- | The per-mount inputs the serve handlers need beyond the request runtime
-'ServeRuntime'. They are the upstream endpoints, the mount's externally-visible base
-URL, and the mirror serve plan. They also include its resolved rule policy, the edge
-auth token, the wall-clock source, and the operator help message.
+{- | The per-mount inputs the serve handlers need beyond the request runtime 'ServeRuntime',
+resolved at the composition root and carried on the mount's 'MountBinding'.
 
-These are a mount-level concern, resolved at the composition root (a separate
-concern) and carried on the mount's 'MountBinding'. A handler reads exactly what it
-needs to decide and serve from the 'RequestCtx' it runs in. Both the packument and the
-tarball paths share these deps, so the name is broader than the one route it mentions.
-The tarball path additionally gates one version and, under
-'Ecluse.Core.Server.Upstream.MirrorOnAdmit', enqueues a mirror job.
+Both the packument and the tarball paths read these deps, so the name is broader than the
+one route it mentions.
 -}
 data PackumentDeps = PackumentDeps
     { pdUpstreams :: MountUpstreams
-    {- ^ The mount's configured upstreams (private, public, and the mirror serve plan)
-    together with the tarball-host gate derived from them
-    ("Ecluse.Core.Server.Upstream"). One opaque cluster rather than four fields, because
-    the gate is a projection of the other three.
-    'Ecluse.Core.Server.Upstream.mountUpstreams' binds them together, so a caller cannot
-    build a gate that disagrees with the URLs it gates for. Read through
+    {- ^ The mount's configured upstreams (private, public, and the mirror serve plan) with the
+    tarball-host gate derived from them ("Ecluse.Core.Server.Upstream"). One opaque cluster, so
+    a caller cannot build a gate that disagrees with the URLs it gates for. Read it through
     'pdPrivateBaseUrl', 'pdPublicBaseUrl', 'pdMirror', and 'pdTarballHostGate'.
     -}
     , pdMountBaseUrl :: Text
@@ -173,9 +152,8 @@ data PackumentDeps = PackumentDeps
     -}
     , pdRules :: [PreparedRule]
     {- ^ The mount's resolved rule set as the engine's prepared runtime rules
-    ("Ecluse.Core.Rules.PreparedRule"), evaluated against every public version. The
-    built-in rules run directly. An effectful rule carries a resilience policy. The
-    composition root 'prepare's it (and logs its boot order) once.
+    ("Ecluse.Core.Rules.PreparedRule"), evaluated against every public version. The composition
+    root 'prepare's them once at boot.
     -}
     , pdAdditionalBlockedRanges :: [IPRange]
     {- ^ The operator-configured ranges (@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@) that
@@ -184,15 +162,11 @@ data PackumentDeps = PackumentDeps
     defence in depth that complements the host allowlist. Empty by default.
     -}
     , pdLimits :: Limits
-    {- ^ The response-bound budget enforced on every upstream metadata fetch and
-    decode (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@\/@ECLUSE_LIMITS__MAX_VERSION_COUNT@\/@ECLUSE_LIMITS__MAX_NESTING_DEPTH@):
-    the body-size, version-count, and JSON-nesting ceilings of
-    'Ecluse.Core.Security.Limits'. The data plane reads the metadata body through
-    'Ecluse.Core.Security.boundedRead' against @maxBodyBytes@, checks
-    'Ecluse.Core.Security.checkNestingDepth' at the JSON-decode boundary, and checks
-    'Ecluse.Core.Security.checkVersionCount' after projection. A breach degrades the
-    contribution to nothing, the fail-closed parse-failure path. A pathological upstream
-    document is therefore refused, never partially served (security.md invariant 4).
+    {- ^ The response-bound budget enforced on every upstream metadata fetch and decode: the
+    body-size, version-count, and JSON-nesting ceilings of 'Ecluse.Core.Security.Limits'
+    (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@, @ECLUSE_LIMITS__MAX_VERSION_COUNT@,
+    @ECLUSE_LIMITS__MAX_NESTING_DEPTH@). A breach degrades the contribution to nothing, so a
+    pathological upstream document is refused, never partially served (security.md invariant 4).
     -}
     , pdInboundToken :: Maybe Secret
     {- ^ The optional inbound token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@).
@@ -203,20 +177,17 @@ data PackumentDeps = PackumentDeps
     Injected so the time-sensitive age gate is deterministic under test.
     -}
     , pdAdvisoryEtag :: IO (Maybe DbEtag)
-    {- ^ A non-pinning read of the active advisory database's 'DbEtag' for the
-    per-request 'Ecluse.Core.Rules.Types.EvalContext'. It is the same value
-    'Ecluse.Core.Rules.rdCurrentAdvisoryEtag' provides, bridged onto these deps
-    because the serve gate is where the context is built. 'Nothing' when no
-    database is loaded.
+    {- ^ A non-pinning read of the active advisory database's 'DbEtag' for the per-request
+    'Ecluse.Core.Rules.Types.EvalContext'. It is the same value
+    'Ecluse.Core.Rules.rdCurrentAdvisoryEtag' provides. 'Nothing' when no database is loaded.
     -}
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
-    {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest must
-    meet to be admitted (the global @ECLUSE_INTEGRITY__MIN_PUBLIC@ floor, default SHA-256).
-    The public gate refuses a version whose strongest digest is below this. The floor is
-    __hard-floored at SHA-256__ and never lowerable (see "Ecluse.Core.Package.Integrity").
-    The trusted private path consults 'pdMinTrustedIntegrity' instead.
+    {- ^ The floor a __public__ (untrusted) version's strongest digest must meet to be admitted
+    (@ECLUSE_INTEGRITY__MIN_PUBLIC@, default SHA-256). It is hard-floored at SHA-256 and never
+    lowerable (see "Ecluse.Core.Package.Integrity"). The trusted private path consults
+    'pdMinTrustedIntegrity' instead.
     -}
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
@@ -240,9 +211,8 @@ data PackumentDeps = PackumentDeps
         Text ->
         Maybe Secret ->
         MetadataClient
-    {- ^ Build a per-request metadata client for one origin, given the per-fetch
-    parameters. The composition root closes over the ecosystem's raw fetch
-    primitives. The pipeline supplies only the per-request runtime parameters.
+    {- ^ Build a per-request metadata client for one origin. The composition root closes over
+    the ecosystem's raw fetch primitives, and the pipeline supplies the runtime parameters.
     -}
     , pdBuildArtifactRequestByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
     {- ^ Build an artifact request by conventional filename path for the private
@@ -252,10 +222,9 @@ data PackumentDeps = PackumentDeps
     -- ^ Build an artifact request by authoritative URL for the public leg.
     , pdAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
     {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
-    documents. Rebuild the plan-owned keys from the winning sources onto the
-    precedence-winning base document ('Nothing' when there is none). Rewrite each
-    surviving version's artifact URL under the given mount base in the same pass. The
-    adapter reads the documents, and the pipeline threads them opaquely.
+    documents, rebuilding the plan-owned keys from the winning sources onto the
+    precedence-winning base ('Nothing' when there is none). It rewrites each surviving
+    version's artifact URL under the given mount base in the same pass.
     -}
     , pdSerialise :: CachedDoc -> LByteString
     {- ^ Encode an assembled served document ('CachedDoc') to its wire bytes, through the
@@ -263,25 +232,21 @@ data PackumentDeps = PackumentDeps
     without reading the document.
     -}
     , pdEgressUrl :: Text -> Either Text RegistryUrl
-    {- ^ Form the validated egress witness for an artifact URL about to leave the
-    process on a 'Ecluse.Core.Queue.MirrorJob'. The composition root wires the
-    https-only 'Ecluse.Core.Security.Egress.mkRegistryUrl', and the loopback test
-    harness substitutes its flag-gated dev former. On the production path every
-    public artifact URL was already normalised to https at projection, so a 'Left'
-    here is unreachable. It fails the best-effort enqueue closed rather than letting
-    an unwitnessed URL travel to the worker.
+    {- ^ Form the validated egress witness for an artifact URL about to leave the process on a
+    'Ecluse.Core.Queue.MirrorJob'. The composition root wires the https-only
+    'Ecluse.Core.Security.Egress.mkRegistryUrl', and the loopback test harness substitutes its
+    flag-gated dev former. A 'Left' fails the best-effort enqueue closed rather than letting an
+    unwitnessed URL travel to the worker.
     -}
     }
 
 {- | The private upstream base URL. Under @passthrough@, reads forward the client's
-credential. 'Nothing' when the mount has no private upstream (a serve-only pure public
-gate). The private leg is then structurally absent and never fetched, and a tarball
-request is a clean private miss straight to the public leg.
+credential. 'Nothing' when the mount has no private upstream, so the private leg is never
+fetched and a tarball request is a clean private miss straight to the public leg.
 
-A plain function over 'pdUpstreams', not a record field. A caller therefore cannot
-replace a URL while the tarball-host gate beside it keeps the old authorities (see
-"Ecluse.Core.Server.Upstream"). Changing it means rebinding the cluster, which re-derives
-the gate. The same holds for 'pdPublicBaseUrl' and 'pdMirror'.
+A plain function over 'pdUpstreams', not a record field, so a caller cannot replace a URL
+while the tarball-host gate beside it keeps the old authorities. The same holds for
+'pdPublicBaseUrl' and 'pdMirror'.
 -}
 pdPrivateBaseUrl :: PackumentDeps -> Maybe Text
 pdPrivateBaseUrl = upstreamPrivateBaseUrl . pdUpstreams
@@ -298,39 +263,29 @@ pdMirror :: PackumentDeps -> MirrorServePlan
 pdMirror = upstreamMirror . pdUpstreams
 
 {- | The mount-constant inputs to the per-request tarball-host gate
-('Ecluse.Core.Security.TarballHostGate'). They are the canonicalised @host:port@ allowlist
-and the private and public upstream authorities, derived __once__ from the upstream URLs
-when the cluster was bound. The hot artifact path reads the precomputed gate rather than
-rebuilding the allowlist set and re-parsing the base URLs on every request. Only the
-dynamic public @dist.tarball@ authority is parsed per request.
+('Ecluse.Core.Security.TarballHostGate'): the canonicalised @host:port@ allowlist and the
+private and public upstream authorities, derived once when the cluster was bound. The hot
+artifact path parses only the dynamic @dist.tarball@ authority per request.
 -}
 pdTarballHostGate :: PackumentDeps -> TarballHostGate
 pdTarballHostGate = upstreamTarballHostGate . pdUpstreams
 
-{- | Whether an artifact's @dist.tarball@ authority may be fetched, given the
-origin's trust and the authority that served the packument it came from. This connects
-the pure 'Ecluse.Core.Security.tarballHostAllowed' to a mount's precomputed gate. The
-tarball's @host:port@ pair must be on the upstream allowlist and equal to the packument
-origin's pair. The ecosystem's own declared artifact hosts are the one same-host
-equivalence.
+{- | Whether an artifact's @dist.tarball@ authority may be fetched, given the origin's trust
+and the authority that served the packument it came from. The tarball's @host:port@ pair
+must be on the upstream allowlist and equal to the packument origin's pair, with the
+ecosystem's own declared artifact hosts as the one same-host equivalence.
 
-The literal internal-range block is __origin-aware__. An
-'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
-range set plus the operator-configured @additionalBlockedRanges@. An
-'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is
-exempt, since a private registry may legitimately live on an internal address
-(security.md invariant 3). The allowlist and same-authority clauses still gate the
-trusted origin identically.
+The literal internal-range block is origin-aware. An 'Ecluse.Core.Security.UntrustedOrigin'
+is gated against the fixed range set plus the operator-configured @additionalBlockedRanges@.
+An 'Ecluse.Core.Security.TrustedOrigin' is exempt from that block alone, because a private
+registry may legitimately live on an internal address (security.md invariant 3): the
+allowlist and same-authority clauses still gate it identically.
 
-This is the __one__ composition of the host gate over a mount's inputs. The serve
-pipeline applies it before its public artifact fetch. The composition root closes it,
-against the public upstream authority, into the mirror worker's re-evaluation bundle.
-The ingest-time host check can therefore never drift from the serve-time one.
+This is the one composition of the host gate over a mount's inputs. The composition root
+closes it into the mirror worker's re-evaluation bundle, so the ingest-time host check can
+never drift from the serve-time one.
 
-Both authorities are __already extracted__, where 'Nothing' means no dialable authority
-and the gate refuses. The mount-constant ones live in the precomputed
-'pdTarballHostGate', so the hot path parses no base URL and rebuilds no allowlist per
-request. Only the dynamic artifact authority is parsed at the call site.
+'Nothing' for either authority means no dialable host, and the gate refuses.
 -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
@@ -340,24 +295,17 @@ tarballHostHonoured origin deps =
         (thgAllowlist (pdTarballHostGate deps))
         (pdAdditionalBlockedRanges deps)
 
-{- | The per-mount inputs the first-party publish handler needs. They are the
-publication target endpoint and the publish-scope allow-list (the anti-shadowing
-guard). They also include the optional static fallback credential, the edge token, the
-response-bound budget, and the operator help message.
+{- | The per-mount inputs the first-party publish handler needs, from the publication target
+endpoint to the publish-scope allow-list.
 
-The mere __presence__ of these deps is the publish path's opt-in. A mount carries a
-'PublishDeps' only when a publication target is configured. The binding's
-@bindingPublishDeps@ being 'Nothing' is therefore exactly the "no publication target ⇒ a
-@PUT \/{pkg}@ is @405 Method Not Allowed@" rule. The type models that rule, rather than
-the handler re-deriving it (see
-@docs\/architecture\/registry-model.md@ → "Publishing first-party packages").
+The presence of these deps is the publish path's opt-in. A mount carries a 'PublishDeps' only
+when a publication target is configured, so @bindingPublishDeps@ being 'Nothing' is exactly
+the "no publication target means @PUT \/{pkg}@ is @405 Method Not Allowed@" rule.
 
-The credential posture is __passthrough__, symmetric with the private-upstream read
-under @passthrough@. The publisher's own forwarded token reaches the publication
-target. The static 'pubStaticToken' is only a fallback for a client that sends none.
-Unlike the mirror target, Écluse mints no token of its own here, so this record carries
-no 'Ecluse.Core.Credential.CredentialProvider' (see
-@docs\/architecture\/access-model.md@ → "Publishing: the publication target").
+The credential posture is passthrough: the publisher's own forwarded token reaches the
+publication target, and 'pubStaticToken' is only a fallback for a client that sends none.
+Écluse mints no token of its own here, so this record carries no
+'Ecluse.Core.Credential.CredentialProvider' (see @docs\/architecture\/access-model.md@).
 -}
 data PublishDeps = PublishDeps
     { pubTargetUrl :: Text
@@ -374,30 +322,24 @@ data PublishDeps = PublishDeps
     -}
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) forwarded to the
-    publication target __only when the client sends no token of its own__. The default
-    model is passthrough, the publisher's own token, so this is 'Nothing' on the
-    common path.
+    publication target __only when the client sends no token of its own__. It is 'Nothing' on
+    the common path, where the publisher's own token passes through.
     -}
     , pubInboundToken :: Maybe Secret
     {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),
     the same gate the read paths apply. 'Nothing' leaves the edge open.
     -}
     , pubLimits :: Limits
-    {- ^ The response-bound budget enforced on the publication target's response,
-    carried for symmetry with the read paths.
-    -}
+    -- ^ The response-bound budget enforced on the publication target's response.
     , pubBodyBudget :: ByteAdmission
-    {- ^ The process-wide aggregate byte-admission buffered publish bodies are
-    reserved against __before__ the body is read. It is shared by every mount and sized
-    from the memory plan's publish tenant. Exhaustion sheds (503), exactly as the
-    unit-slot admission does on the read path.
+    {- ^ The process-wide byte admission a buffered publish body reserves against __before__ the
+    body is read. Every mount shares it, sized from the memory plan's publish tenant.
+    Exhaustion sheds a @503@.
     -}
     , pubMaxRequestBytes :: Int
-    {- ^ The per-request publish-body cap, in bytes, enforced by the publish route at
-    the read site. A declared Content-Length over it fails closed before any byte is
-    read, and a counted read bounds a chunked body against it. It is also the
-    pessimistic weight a chunked body (no declared length) reserves against the
-    aggregate body-byte budget.
+    {- ^ The per-request publish-body cap, in bytes. A declared Content-Length over it fails
+    closed before any byte is read, and a counted read bounds a chunked body against it. A
+    chunked body also reserves this much against the aggregate body-byte budget.
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
@@ -408,41 +350,17 @@ data PublishDeps = PublishDeps
     it cannot be parsed. Used by the body-name agreement guard.
     -}
     , pubDeclaredNames :: LByteString -> [Text]
-    {- ^ Extract every package name a publish body declares as its own identity, the
-    ecosystem's own reading of its publish-document schema
-    ('Ecluse.Core.Registry.Adapter.Types.publishDeclaredNames'). The body-name
-    agreement guard canonicalises each name and refuses any that disagrees with the
-    URL-path name. The pipeline therefore compares names without knowing the wire
-    schema. A body that declares no readable name yields @[]@.
+    {- ^ Every package name a publish body declares as its own identity, the ecosystem's reading
+    of its publish-document schema ('Ecluse.Core.Registry.Adapter.Types.publishDeclaredNames').
+    The body-name guard refuses a name that disagrees with the URL path. @[]@ means none readable.
     -}
     }
 
 {- | How one matched request is served: by the proxy itself, or through the data plane.
 
-This is the __whole__ of what the web layer knows about a request. A route is an
-ecosystem's own concern. The npm path @\/{pkg}\/-\/{file}.tgz@ and the RubyGems path
-@\/versions@ have nothing in common but the fact that something must be done about them.
-The ecosystem's adapter therefore declares the mapping from a request to an action, as
-its 'MountRouter'. What is shared is only the __kind__ of thing an action can be:
-
-* An 'AnswerLocally' action is a pure value admitted by the route's response contract, so
-  the dispatcher simply responds with it: no upstream round-trip, no effects.
-
-* A 'RunPipeline' action is a data-plane handler awaiting the request and its typed
-  respond continuation. The dispatcher discharges it to 'IO' under the request perimeter,
-  the guard that answers an escaped fault with the route's declared neutral @500@. Those
-  handlers ("Ecluse.Core.Server.Pipeline") are themselves __ecosystem-neutral__: a
-  registry's client, projection, and document assembly reach them as injected
-  capabilities on 'PackumentDeps', never as imports. Two ecosystems whose URL grammars
-  share nothing can therefore route onto the same handler. One with a route the other
-  lacks simply names a different action.
-
-Being a closed sum of exactly these two is what lets the front door serve a request
-without knowing what the request /is/.
-
-It lives here, beside 'MountBinding' and 'Handler', because the three are one
-mutually-recursive knot. A mount carries a router, the router names an action, and an
-action is a handler that reads the mount.
+The dispatcher discharges a 'RunPipeline' handler under the request perimeter, the guard that
+answers an escaped fault with the route's declared neutral @500@. This type lives beside
+'MountBinding' and 'Handler' because the three form one mutually-recursive knot.
 -}
 data ResponseAction response
     = -- | A pure value admitted by the route's response contract.
@@ -454,62 +372,39 @@ data ResponseAction response
       -}
       RunPipeline response (Wai.Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
 
-{- | A matched route's response contract existentially paired with an action that can
-produce only that contract's response type.
-
-The existential is the application boundary's proof. Dispatch can render the action
-without knowing an ecosystem's response sum, and the action cannot be paired with a
-contract for another sum.
+{- | A matched route's response contract paired with an action that produces only that contract's
+response type. Dispatch renders the action without knowing an ecosystem's response sum.
 -}
 data RouteAction = forall response. RouteAction (ResponseContract response) (ResponseAction response)
 
-{- | An ecosystem's __whole routing decision__: what to do with a mount-relative request.
+{- | An ecosystem's whole routing decision: what to do with a mount-relative request.
 
-The adapter supplies one ('Ecluse.Core.Registry.Adapter.Types.serveRouter'), derived
-from its own declarative route table. The ecosystem therefore owns both halves of the
-decision: which of its paths a request names, and what action that names. A path the
-ecosystem does not recognise yields its deny-by-default @404@
-('Ecluse.Core.Server.Pipeline.Shared.notFoundInMount').
-
-The 'Method' is part of the mapping for two reasons. The same path names different
-actions by method (npm's @GET \/{pkg}@ reads, @PUT \/{pkg}@ publishes). A @HEAD@ is also
-a __bodiless variation__ of its @GET@ rather than a distinct action, which the router
-resolves by selecting the head-mode handler. Segments arrive already mount-stripped and
-percent-decoded.
+The adapter supplies one ('Ecluse.Core.Registry.Adapter.Types.serveRouter'). A path it does not
+recognise yields the deny-by-default @404@ ('Ecluse.Core.Server.Pipeline.Shared.notFoundInMount').
+The 'Method' is part of the mapping, and a @HEAD@ resolves to the head-mode handler of its @GET@.
+Segments arrive mount-stripped and percent-decoded.
 -}
 type MountRouter = Method -> [Text] -> RouteAction
 
-{- | A mount: a path prefix bound to a registry, carrying that registry's
-__complete__ ecosystem wiring. Dispatch matches a request's leading path segments
-to 'bindingPrefix', strips them, and routes the remainder through the rest of the
-binding.
+{- | A path prefix bound to a registry, carrying that registry's complete ecosystem wiring.
+Dispatch matches a request's leading segments to 'bindingPrefix' and routes the remainder
+through the rest of the binding.
 
-The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount). Every
-registry is path-mounted, so a root mount is __unrepresentable__ rather than merely
-discouraged. A root mount would force a URL change on every consumer the day a second
-ecosystem is added. Bundling the classifier and serve dependencies into one record means
-a mount cannot be half-wired: there is no default to fall back to.
+The prefix is 'NonEmpty' (@"npm" :| []@), so a root mount is unrepresentable. A root mount would
+force a URL change on every consumer the day a second ecosystem is added.
 -}
 data MountBinding = MountBinding
     { bindingPrefix :: NonEmpty Text
     -- ^ The leading path segments this mount is served under. Never empty.
     , bindingRouter :: MountRouter
-    {- ^ The ecosystem's whole routing decision: what this mount's native path names,
-    and what serving it amounts to (an 'Ecluse.Core.Server.Dispatch.RouteAction'). The
-    adapter derives it from its own route table, so the web layer holds no path grammar
-    of its own.
-    -}
+    -- ^ This mount's routing decision, derived from the adapter's own route table.
     , bindingCredential :: CredentialMapping
-    {- ^ The ecosystem's credential presentation: how a client of this mount presents its
-    credential, and how the proxy carries one upstream. The adapter declares it, so the
-    serve path recovers what this ecosystem's clients send and holds no scheme of its own.
-    The edge gate's comparison and the deny-by-default refusal stay the pipeline's.
+    {- ^ How a client of this mount presents its credential, and how the proxy carries one
+    upstream. The adapter declares it, so the serve path holds no credential scheme of its own.
     -}
     , bindingPackumentDeps :: PackumentDeps
-    {- ^ The packument-serve dependencies. Not optional: a mount exists only for an
-    ecosystem with a registered adapter, and the composition root builds these from
-    that adapter. A bound mount therefore always serves packuments and artifacts. Only
-    /publish/ is a genuine opt-in ('bindingPublishDeps').
+    {- ^ The packument-serve dependencies. A bound mount always serves packuments and artifacts,
+    because a mount exists only for a registered adapter. Only /publish/ is opt-in.
     -}
     , bindingPublishDeps :: Maybe PublishDeps
     {- ^ The first-party publish dependencies, when a publication target is
@@ -518,12 +413,8 @@ data MountBinding = MountBinding
     -}
     }
 
-{- | The context one request is served through: the request runtime 'ServeRuntime'
-paired with the 'MountBinding' the request matched. A concrete record with plain
-accessors ('ctxRuntime' and 'ctxMount'). A handler therefore reads the shared runtime
-and its per-mount wiring from one place, not as explicit arguments.
-
-Dispatch builds it once per request. The handler reads it through the 'Handler' reader.
+{- | The context one request is served through: the request runtime paired with the 'MountBinding'
+the request matched. Dispatch builds it once per request, and 'Handler' reads it through its reader.
 -}
 data RequestCtx = RequestCtx
     { ctxRuntime :: ServeRuntime
@@ -534,20 +425,11 @@ data RequestCtx = RequestCtx
     -- ^ The mount the request matched, carrying its complete ecosystem wiring.
     }
 
-{- | The request hot path's monad: a reader over the per-request 'RequestCtx'
-layered on @katip@'s logging context.
+{- | The request hot path's monad: a reader over the per-request 'RequestCtx' layered on
+@katip@'s logging context.
 
-A @newtype@ over @'ReaderT' 'RequestCtx' ('KatipContextT' 'IO')@, so its instances
-are this module's to control and call sites name one concrete monad. The derived
-instances give reader access to the context ('MonadReader' 'RequestCtx') and arbitrary
-effects ('MonadIO'). They also give the unlift capability ('MonadUnliftIO') the serve
-path's @concurrently@\/@bracket@ need, and the @katip@ classes ('Katip',
-'KatipContext'). A structured log call therefore composes through the ambient context
-the dispatch boundary establishes.
-
-The @katip@ base is a reader, never a 'StateT', so logging context behaves
-correctly across the serve path's concurrent fetches (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions").
+The @katip@ base is a reader, never a 'StateT', so logging context behaves correctly across the
+serve path's concurrent fetches (see @docs\/architecture\/technology-stack.md@).
 -}
 newtype Handler a = Handler
     { unHandler :: ReaderT RequestCtx (KatipContextT IO) a
@@ -563,17 +445,11 @@ newtype Handler a = Handler
         , KatipContext
         )
 
-{- | Run a 'Handler' against the 'RequestCtx' dispatch built for the request. The
-@katip@ logging environment and the initial context come from the dispatch boundary.
-The result is the underlying 'IO' action the server's continuation runs in. This is the
-boundary where the serve path's 'Handler' code is discharged to 'IO'.
+{- | Run a 'Handler' against the request's 'RequestCtx'. This discharges the serve path's
+'Handler' code to 'IO'.
 
-The 'LogEnv' (the structured-log scribes) and the initial context payload are passed
-in rather than read from the runtime. The application therefore owns the log stream and
-the trace-correlation @dd@ enrichment. The application resolves the @dd@ object for the
-request and hands it here as the initial context. Every line a handler emits therefore
-carries @dd@ for trace-to-log correlation. A handler narrows the namespace or adds
-package\/version\/rule context with @katip@'s combinators on top as it logs.
+The caller supplies the 'LogEnv' and the initial context payload, so the application owns the
+log stream and the @dd@ object every line carries for trace-to-log correlation.
 -}
 runHandler :: LogEnv -> SimpleLogPayload -> RequestCtx -> Handler a -> IO a
 runHandler logEnv initialContext ctx action =

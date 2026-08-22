@@ -20,10 +20,8 @@ import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkSe
 dredgerApplication :: ServerConfig -> IO Application
 dredgerApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (pure True)))
 
-{- | The entry point for the Dredger worker mode.
-
-Dredger runs as a standalone HTTP server that exposes only liveness and readiness
-probes. Its worker loop will clean up upstream mirrors.
+{- | The entry point for the Dredger worker mode, an HTTP server that serves only the
+liveness and readiness probes.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do

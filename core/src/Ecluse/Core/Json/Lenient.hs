@@ -27,21 +27,17 @@ import Data.Aeson (
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Parser, parseMaybe)
 
-{- | Decode an optional field __leniently__: an absent, @null@, or
-present-but-undecodable value all yield 'Nothing'. Where @(.:?)@ fails the whole
-decode on a present-but-wrong value, this degrades a hostile value to 'Nothing'
-instead: wrong-typed, fractional, or outside the target's range. Use it for
-__advisory__ fields only, so one poisoned value cannot deny the whole document. A
-load-bearing field keeps @(.:?)@\/@(.:)@.
+{- | Decode an optional field __leniently__: an absent, @null@, or present-but-undecodable
+value all yield 'Nothing'. Use it for __advisory__ fields only, so one poisoned value cannot
+deny the whole document. A load-bearing field keeps @(.:?)@\/@(.:)@.
 -}
 lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
 lenientOptional o k = do
     mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
     pure (mv >>= parseMaybe parseJSON) -- a Value that will not decode becomes Nothing
 
-{- | Fail a lenient string-or-object decoder with a message that names the accepted
-shapes and the JSON kind it found. It keeps the @other ->@ branch of each tolerant
-instance to one line.
+{- | Fail a lenient decoder with a message that names the accepted shapes and the JSON kind
+it found.
 -}
 typeMismatchOneOf :: String -> Value -> Parser a
 typeMismatchOneOf expected actual =

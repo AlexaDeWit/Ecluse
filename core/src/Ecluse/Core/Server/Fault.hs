@@ -27,9 +27,8 @@ import Ecluse.Core.Registry.Fault (ResponseBoundExceeded)
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, RenderFault, UnclassifiedFault))
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | One classified perimeter fault: the bounded cause a metric records and an
-operator triages by, and the rendered escape for the log line. Diagnostic text
-only: it is never parsed, and no decision may branch on it.
+{- | One classified perimeter fault: the bounded cause a metric records and the rendered escape
+for the log line. The detail is diagnostic only, never parsed, and no decision may branch on it.
 -}
 data RequestFault = RequestFault
     { rqCause :: RequestFaultCause
@@ -39,21 +38,17 @@ data RequestFault = RequestFault
     }
     deriving stock (Eq, Show)
 
-{- | The response-assembly leg's escape marker. The assembled-representation render is
-total by contract, a pure assembly over already-validated inputs, so an exception
-escaping it is an invariant break. The one place the render runs wraps that exception
-in this __confined__ typed marker, so the perimeter can name the leg it escaped from.
-The marker never crosses the perimeter: the perimeter classifies it as 'RenderFault'
-and answers the neutral 500.
+{- | The confined marker wrapping an exception that escaped the response-assembly render, which is
+total by contract. It never crosses the perimeter, which folds it to 'RenderFault' and answers the
+neutral 500.
 -}
 newtype RenderEscape = RenderEscape SomeException
     deriving stock (Show)
 
 instance Exception RenderEscape
 
-{- | Fold an escaped exception into the perimeter's vocabulary. The recognised typed
-channels classify by type. Everything else is 'UnclassifiedFault', with its rendering
-carried for the log line.
+{- | Fold an escaped exception into the perimeter's vocabulary. A recognised typed channel
+classifies by type. Everything else is 'UnclassifiedFault'.
 -}
 classifyEscape :: SomeException -> RequestFault
 classifyEscape escape

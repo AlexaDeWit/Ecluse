@@ -49,44 +49,23 @@ import Text.Show (showString, showsPrec)
 
 {- | A short-lived bearer secret (an access token).
 
-__Opaque, and its 'Show' is redacted__: nothing renders the underlying token text,
-so any value can hold a 'Secret' without risking disclosure. An 'AuthToken', a log
-record, or an error can each carry one. Token material must never reach a log, a
-metric, or a trace (see @docs\/architecture\/observability.md@). This redaction is a
-load-bearing security property.
-
-Build one with 'mkSecret' and read the real value back __only__ at the point of use
-with 'unSecret', for example when setting the @Authorization@ header.
-
-__Equality is constant-time__: the 'Eq' instance compares two secrets over their
-UTF-8 bytes with no content-dependent early out. The derived equality would be
-'Data.Text'\'s short-circuiting compare. It returns as soon as two tokens first
-differ, and so leaks the length of a shared prefix through timing. Folding that
-property into the type itself means no comparison on a 'Secret' can accidentally
-become non-constant-time, the inbound edge-auth gate above all. A constant-time
-compare can still reveal the token /length/. Écluse accepts that residual leak, and
-never short-circuits on the /content/.
+Redacted in 'Show' and compared in constant time, so holding one cannot disclose it. Build one
+with 'mkSecret' and recover the text __only__ at the point of use with 'unSecret'.
 -}
 newtype Secret = Secret Text
 
 {- | Constant-time equality over the UTF-8 encoding of the wrapped token.
 
-'BA.constEq' compares every byte regardless of where the inputs first diverge, so the
-compare takes the same time for a near-miss token as for a far-miss one. This is the
-security property the whole type exists to make unmissable. The
-@ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares the client's bearer token against the
-configured one through this instance. A short-circuiting compare there would leak
-the secret's prefix length to a remote attacker.
+The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares a client's bearer token through this instance.
+A short-circuiting compare would leak the secret's prefix length to a remote attacker. The token
+length still leaks, and Écluse accepts that.
 -}
 instance Eq Secret where
     Secret a == Secret b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
-{- | Render a fixed placeholder, __never__ the secret text. This is the whole point
-of the type: it makes accidental disclosure impossible through any @'show'@-based
-signal. That covers a log, an error, and @deriving Show@ on an enclosing record.
-
-Defined through 'showsPrec' (the 'Show' class method) rather than @show@, because
-relude re-exports a polymorphic @show@ that is not the class method.
+{- | Render a fixed placeholder, __never__ the secret text, so no @show@-based signal can
+disclose it. It defines 'showsPrec' because relude re-exports a polymorphic @show@ that is not
+the class method.
 -}
 instance Show Secret where
     showsPrec _ _ = showString "Secret <REDACTED>"
@@ -111,43 +90,28 @@ instance FromJSON Secret where
 
 {- | A bearer token for a registry endpoint, with its expiry when known.
 
-A refresh wrapper schedules against the expiry. Cloud token lifetimes range from
-CodeArtifact's ~12h to ADC's ~1h, so a refresh runs off the token's own
-'authExpiresAt' rather than a fixed interval. A static token has no expiry
-('Nothing').
+Cloud token lifetimes run from CodeArtifact's ~12h to ADC's ~1h, so a refresh schedules off
+'authExpiresAt' rather than a fixed interval.
 -}
 data AuthToken = AuthToken
     { authSecret :: Secret
     -- ^ The bearer secret itself (redacted in 'Show').
     , authExpiresAt :: Maybe UTCTime
-    {- ^ When the token expires, if it does. 'Nothing' for a token that does not
-    expire, such as a static one.
-    -}
+    -- ^ When the token expires. 'Nothing' for a static token, which does not expire.
     }
     deriving stock (Eq, Show)
 
-{- | The credential handle: it yields the bearer token currently valid for the
-mirror target and refreshes that token before expiry __internally__. A caller never
-sees a stale token in the common case, and never blocks on a mint on the request
-hot path.
-
-It is a __record of functions__ (the Handle pattern). The single field is the
-operation, and a backend's smart constructor returns a 'CredentialProvider' whose
-closure captures that backend's private state. 'currentToken' returns __'IO', not
-@App@__, so adapters stay decoupled from the core (see the module header).
+{- | The credential handle: it yields the token currently valid for the mirror target and
+refreshes it before expiry internally, so no caller blocks on a mint on the hot path.
+'currentToken' returns 'IO', not @App@, which keeps adapters decoupled from the core.
 -}
 newtype CredentialProvider = CredentialProvider
     { currentToken :: IO AuthToken
-    {- ^ The bearer token to use now. An adapter refreshes before expiry behind
-    this field, so the caller just uses the token it gets back.
-    -}
+    -- ^ The bearer token to use now. An adapter refreshes it behind this field.
     }
 
-{- | An in-memory 'CredentialProvider' that always returns a fixed token.
-
-This is the @static@ leaf. It never expires and never refreshes, so it fits a
-registry reached with a long-lived credential. It is also the trivial double for a
-test of code that consumes a 'CredentialProvider'.
+{- | A 'CredentialProvider' that always returns the same token, the @static@ leaf. It never
+refreshes, so it fits a registry reached with a long-lived credential.
 -}
 staticProvider :: AuthToken -> CredentialProvider
 staticProvider token = CredentialProvider{currentToken = pure token}

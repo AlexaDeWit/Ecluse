@@ -24,28 +24,19 @@ import Data.Char (isUpper)
 
 import Data.Text qualified as T
 
-{- | Right-biased deep merge of two Aeson Values.
-Objects merge recursively. The right side (the higher precedence value) overwrites
-any other type, Arrays and Strings included.
+{- | Right-biased deep merge of two Aeson Values. Objects merge recursively.
+The right side overwrites any other type, arrays and strings included.
 -}
 deepMerge :: Value -> Value -> Value
 deepMerge (Object l) (Object r) = Object $ KeyMap.unionWith deepMerge l r
 deepMerge _ r = r
 
-{- | Convert a list of environment variables into a nested JSON Object.
-It keeps only keys starting with @ECLUSE_@ and strips the prefix.
-Double underscores (@__@) represent nested object paths.
-Single underscores (@_@) become camelCase for Aeson key matching.
-For example, @ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM@ becomes
-@{"mounts": {"npm": {"privateUpstream": ...}}}@.
-It decodes a value that parses as valid JSON, a number or a boolean say.
-Anything else stays a String.
-
-Two kinds of variable never enter the AST. The first is anything outside the
-@ECLUSE_@ prefix: the composition root reads the ambient SDK environment, @AWS_*@
-included, directly (see "Ecluse.Config.Ambient"). The second is the reserved
-process-level @ECLUSE_CONFIG@, the config-document path override. "Ecluse.Boot"
-consumes it before it reads the document, so it must not double as a document key.
+{- | Convert environment variables into a nested JSON Object. It keeps @ECLUSE_@-prefixed keys
+and strips the prefix. Double underscores nest, single underscores become camelCase, so
+@ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM@ becomes @{"mounts": {"npm": {"privateUpstream": ...}}}@.
+A value that parses as JSON decodes, anything else stays a String. Anything outside the prefix
+is never config: the composition root reads the ambient SDK environment, @AWS_*@ included,
+directly (see "Ecluse.Config.Ambient").
 -}
 buildEnvAst :: [(String, String)] -> Value
 buildEnvAst env =
@@ -58,18 +49,15 @@ configEnvKey name
     | name `elem` reservedProcessKeys = Nothing
     | otherwise = T.stripPrefix "ECLUSE_" name
 
-{- | @ECLUSE_@-prefixed variables that address the boot process, not the config
-document. The boot consumes them before resolution, and they never become document
-keys.
+{- | @ECLUSE_@-prefixed variables that address the boot process, not the config document.
+"Ecluse.Boot" consumes them before resolution, so they never become document keys.
 -}
 reservedProcessKeys :: [Text]
 reservedProcessKeys = ["ECLUSE_CONFIG"]
 
-{- | The secret-typed leaf keys of the config schema, in their document spelling.
-The one source for every site that treats a secret specially. The environment layer
-takes their values verbatim ('buildEnvAst'). The provenance dump renders these leaves
-redacted (see "Ecluse.Config"). Their env spellings are the only file-shaped side
-door for the @*_FILE@ indirection (see "Ecluse.Boot").
+{- | The secret-typed leaf keys of the config schema, in their document spelling. The one source
+for every site that treats a secret specially: verbatim env values, redacted provenance, and the
+@*_FILE@ indirection ("Ecluse.Boot").
 -}
 secretLeafKeys :: [Text]
 secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
@@ -78,9 +66,8 @@ secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
 secretEnvSpellings :: [Text]
 secretEnvSpellings = map envSpellingOf secretLeafKeys
 
-{- | The environment spelling of a camelCase document key (@authToken@ ->
-@AUTH_TOKEN@). It inverts the camelCase reconstruction 'buildEnvAst' applies, so the
-key a boot error tells an operator to set is exactly the key the resolver reads.
+{- | The environment spelling of a camelCase document key (@authToken@ -> @AUTH_TOKEN@).
+It inverts 'buildEnvAst', so a boot error names exactly the key the resolver reads.
 -}
 envSpellingOf :: Text -> Text
 envSpellingOf = T.toUpper . T.concatMap underscoreUpper
@@ -89,11 +76,8 @@ envSpellingOf = T.toUpper . T.concatMap underscoreUpper
         | isUpper c = "_" <> T.singleton c
         | otherwise = T.singleton c
 
-{- | The full environment key of a mount-scoped setting
-(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), assembled from the mount's ecosystem name and
-the setting's already env-spelled suffix. The one home shared by the config-load
-errors ("Ecluse.Config.Types") and the boot-error renderings
-("Ecluse.Composition.BootError").
+{- | The full environment key of a mount-scoped setting, @ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@,
+assembled from the ecosystem name and the setting's already env-spelled suffix.
 -}
 mountEnvKey :: Text -> Text -> Text
 mountEnvKey ecosystem key = "ECLUSE_MOUNTS__" <> T.toUpper ecosystem <> "__" <> key

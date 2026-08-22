@@ -83,12 +83,10 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
-{- | The catalogue of metric instruments Écluse emits: the @ecluse.*@ domain signals
-plus the OpenTelemetry HTTP server semantic convention. Each maps to its wire name
-through 'metricName'. It is a typed enum, so the catalogue is enumerable (and asserted
-whole in the tests) rather than a scatter of string literals.
+{- | The catalogue of metric instruments Écluse emits, each mapped to its wire name
+through 'metricName'.
 
-Queue backlog and DLQ depth are deliberately absent: those are cloud-native metrics
+Queue backlog and DLQ depth are deliberately absent. Those are cloud-native metrics
 (CloudWatch, Cloud Monitoring), not signals Écluse re-emits.
 -}
 data MetricName
@@ -267,9 +265,8 @@ data Tier = Structural | Effectful
 instance Universe Tier where universe = universeGeneric
 
 {- | Why the request perimeter had to answer for an escaped fault
-(@ecluse.serve.perimeter.faults@). The causes are a recognised wiring\/contract fault on
-the gate path, an escape from the response-assembly leg, or anything else. The unbounded
-detail rides the perimeter's log line, never a label.
+(@ecluse.serve.perimeter.faults@). The unbounded detail rides the perimeter's log line,
+never a label.
 -}
 data RequestFaultCause = GateFault | RenderFault | UnclassifiedFault
     deriving stock (Eq, Generic, Show)
@@ -292,9 +289,8 @@ data CacheResult = Hit | Miss
 
 instance Universe CacheResult where universe = universeGeneric
 
-{- | A processed mirror job's result. The idempotent "already present" outcome (a
-registry @409@) is not a distinct value. The worker treats it as a success and counts it
-as 'Published'. A series that could never emit is not published.
+{- | A processed mirror job's result. The worker counts the idempotent "already present"
+outcome (a registry @409@) as 'Published', not as a distinct value.
 -}
 data MirrorResult
     = -- | The artifact reached the mirror target (an already-present version included).
@@ -317,10 +313,9 @@ data CredentialResult = Refreshed | RefreshFailed
 
 instance Universe CredentialResult where universe = universeGeneric
 
-{- | What one advisory sync attempt concluded: the closed result vocabulary that labels
-the @ecluse.advisory.sync.*@ signals and that the advisory sync span records. It mirrors
-the sync step's own outcomes (@Ecluse.Runtime.Cve.Sync@), one bounded value each, so
-each ecosystem emits five series.
+{- | What one advisory sync attempt concluded. The value labels the
+@ecluse.advisory.sync.*@ signals and the advisory sync span, mirroring the outcomes of
+@Ecluse.Runtime.Cve.Sync@.
 -}
 data AdvisorySyncResult
     = -- | The sync verified a new artifact and swapped it into the read path.
@@ -338,8 +333,7 @@ data AdvisorySyncResult
 instance Universe AdvisorySyncResult where universe = universeGeneric
 
 {- | The wire value of an advisory sync result. The metric label and the sync span's
-result attribute must read identically for the two signals to join on it. It is
-therefore a named function, not an inlined case.
+result attribute must read identically, so the two signals join on it.
 -}
 advisorySyncResultName :: AdvisorySyncResult -> Text
 advisorySyncResultName = \case
@@ -363,9 +357,8 @@ data BreakerState = Closed | HalfOpen | Open
 
 instance Universe BreakerState where universe = universeGeneric
 
-{- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open. It is a
-small ordinal, so a dashboard can alarm on "not closed" without a high-cardinality
-label.
+{- | The gauge code for a breaker state. Closed is @0@, so a dashboard alarms on "not
+closed" without a high-cardinality label.
 -}
 breakerStateCode :: BreakerState -> Int64
 breakerStateCode = \case
@@ -481,10 +474,9 @@ labelValue = \case
         RelayOddShape -> "odd_shape"
         RelayNonSuccess -> "non_success"
 
-{- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument is
-recorded with. Every value is bounded. The attribute set an instrument ever sees
-therefore comes from a small fixed product of the label domains, never the unbounded
-space of package identifiers.
+{- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument records
+with. Every label value is bounded, so an instrument's attribute set stays a small fixed
+product of the label domains.
 -}
 metricAttributes :: [Label] -> Attributes
 metricAttributes labels =

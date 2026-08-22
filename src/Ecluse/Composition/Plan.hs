@@ -26,10 +26,8 @@ import Ecluse.Config (
  )
 import Ecluse.Rts (EffectiveRuntimePlan)
 
-{- | Resolve the memory plan and its boot lines from the application config, the
-effective runtime plan, and the resolved mirror runtime. The 'EffectiveRuntimePlan'
-is the one input the two callers deliberately vary: the boot's applied plan against
-the checker's predicted one. This function projects everything else.
+{- | Resolve the memory plan and its boot lines. The 'EffectiveRuntimePlan' is the one
+input the two callers vary: boot passes the applied plan, the checker the predicted one.
 -}
 resolveMemoryPlanFor :: AppConfig -> EffectiveRuntimePlan -> MirrorRuntimePlan -> (MemoryPlan, [Text])
 resolveMemoryPlanFor appConfig effective mirrorRuntime =
