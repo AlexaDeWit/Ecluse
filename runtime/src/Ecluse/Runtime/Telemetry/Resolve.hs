@@ -24,6 +24,13 @@ so no key in the environment can turn into off-cluster egress. The endpoint itse
 a declared destination (like the mirror queue), not an attack surface. This module
 normalises it and uses it as given, never classified or gated.
 
+@OTEL_RESOURCE_ATTRIBUTES@ is read with the __W3C baggage grammar the SDK itself
+uses__. One grammar reads the variable, so a percent-encoded value decodes the same
+way for the @dd@ log object and for the span resource. Blank members are dropped
+first, because operator-authored configuration carries a stray comma often enough.
+A value the grammar still rejects warns at boot and resolves as unset. The SDK
+rejects the same value, so both halves agree on carrying no attributes.
+
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
 the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
 @OTEL_*@ variables the env-driven SDK reads, so a @DD_*@-only deployment still
@@ -71,11 +78,11 @@ module Ecluse.Runtime.Telemetry.Resolve (
     installExportErrorHandler,
 
     -- * Boot wiring
+    telemetryWarnings,
     prepareTelemetry,
 ) where
 
 import Data.List (lookup)
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Data.Version (showVersion)
@@ -84,6 +91,8 @@ import System.Environment (setEnv)
 
 import Katip (LogEnv, Severity (WarningS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
+import OpenTelemetry.Baggage (Baggage)
+import OpenTelemetry.Baggage qualified as Baggage
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
@@ -156,11 +165,13 @@ resolveTelemetry environment =
     lk :: String -> Maybe Text
     lk name = nonBlank . toText =<< lookup name environment
 
-    attrs :: Map Text Text
-    attrs = maybe Map.empty parseResourceAttributes (lk "OTEL_RESOURCE_ATTRIBUTES")
+    attributes :: Baggage
+    attributes = fromRight Baggage.empty (decodeResourceAttributes environment)
 
     attr :: Text -> Maybe Text
-    attr key = nonBlank =<< Map.lookup key attrs
+    attr key = do
+        name <- Baggage.mkToken key
+        nonBlank =<< Baggage.getValue name attributes
 
     serviceName :: Maybe Text
     serviceName = lk "DD_SERVICE" <|> lk "OTEL_SERVICE_NAME" <|> attr "service.name"
@@ -207,60 +218,87 @@ otelEnvironmentOverrides environment =
     [ ("OTEL_SERVICE_NAME", toString (rtServiceName resolved))
     , ("OTEL_EXPORTER_OTLP_ENDPOINT", toString (teUrl (rtEndpoint resolved)))
     , ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-    , ("OTEL_RESOURCE_ATTRIBUTES", toString (renderResourceAttributes (mergedResourceAttributes resolved environment)))
+    , ("OTEL_RESOURCE_ATTRIBUTES", renderResourceAttributes (mergedResourceAttributes resolved environment))
     ]
   where
     resolved :: ResolvedTelemetry
     resolved = resolveTelemetry environment
 
-mergedResourceAttributes :: ResolvedTelemetry -> [(String, String)] -> Map Text Text
+-- Overlay the resolved identity onto the operator's own attributes. An inserted member replaces
+-- an inherited one of the same name, so a stale operator value never overrides the resolution.
+mergedResourceAttributes :: ResolvedTelemetry -> [(String, String)] -> Baggage
 mergedResourceAttributes resolved environment =
-    -- 'Map.union' is left-biased, so the resolved map sits on the left: a resolved attribute must
-    -- win over an inherited OTEL_RESOURCE_ATTRIBUTES value of the same key.
-    resolvedAttrs <> existing
+    foldr insertAttribute inherited (resolvedAttributes resolved)
   where
-    existing :: Map Text Text
-    existing =
-        maybe
-            Map.empty
-            parseResourceAttributes
-            (nonBlank . toText =<< lookup "OTEL_RESOURCE_ATTRIBUTES" environment)
+    inherited :: Baggage
+    inherited = fromRight Baggage.empty (decodeResourceAttributes environment)
 
-    resolvedAttrs :: Map Text Text
-    resolvedAttrs =
-        Map.fromList
-            [ (key, value)
-            | (key, Just value) <-
-                [ ("service.name", Just (rtServiceName resolved))
-                , ("deployment.environment", rtEnvironment resolved)
-                , ("service.version", rtVersion resolved)
-                ]
-            ]
-
--- Lenient by design, because this is operator-authored configuration and not a wire format: a
--- stray trailing comma or extra spacing is tolerated rather than rejected.
-parseResourceAttributes :: Text -> Map Text Text
-parseResourceAttributes raw =
-    Map.fromList
-        [ (key, T.strip (T.drop 1 value))
-        | pair <- T.splitOn "," raw
-        , let (before, value) = T.breakOn "=" pair
-        , let key = T.strip before
-        , not (T.null key)
-        , not (T.null value)
+resolvedAttributes :: ResolvedTelemetry -> [(Text, Text)]
+resolvedAttributes resolved =
+    [ (key, value)
+    | (key, Just value) <-
+        [ ("service.name", Just (rtServiceName resolved))
+        , ("deployment.environment", rtEnvironment resolved)
+        , ("service.version", rtVersion resolved)
         ]
+    ]
 
--- Render a resource-attribute map back to the @key1=value1,key2=value2@ form, in
--- key order so the projection is deterministic.
-renderResourceAttributes :: Map Text Text -> Text
-renderResourceAttributes =
-    T.intercalate "," . map (\(key, value) -> key <> "=" <> value) . Map.toList
+-- A key the W3C token grammar cannot express is dropped, because the SDK's decoder rejects a
+-- whole header over one such member.
+insertAttribute :: (Text, Text) -> Baggage -> Baggage
+insertAttribute (key, value) bag =
+    maybe bag (\name -> Baggage.insert name (Baggage.element value) bag) (Baggage.mkToken key)
+
+{- Decode @OTEL_RESOURCE_ATTRIBUTES@ with the SDK's own W3C baggage parser, which percent-decodes
+every value. Blank members are dropped first, so a trailing comma or stray spacing still parses
+where the grammar alone would reject the whole value. -}
+decodeResourceAttributes :: [(String, String)] -> Either Text Baggage
+decodeResourceAttributes environment = case members of
+    [] -> Right Baggage.empty
+    _ -> first toText (Baggage.decodeBaggageHeader (encodeUtf8 (T.intercalate "," members)))
+  where
+    members :: [Text]
+    members = filter (not . T.null) (map T.strip (T.splitOn "," raw))
+
+    raw :: Text
+    raw = maybe "" toText (lookup "OTEL_RESOURCE_ATTRIBUTES" environment)
+
+-- Render with the SDK's own encoder, so the value the SDK decodes is the one this module
+-- resolved. The encoder percent-encodes every value and applies the W3C size caps.
+renderResourceAttributes :: Baggage -> String
+renderResourceAttributes = decodeUtf8 . Baggage.encodeBaggageHeader
+
+{- | The boot warnings the environment raises, in the order 'prepareTelemetry' surfaces them.
+Exposed as values so a test pins each message without a @katip@ scribe.
+-}
+telemetryWarnings :: [(String, String)] -> [Text]
+telemetryWarnings environment = endpointWarning <> attributeWarning
+  where
+    endpoint :: TelemetryEndpoint
+    endpoint = rtEndpoint (resolveTelemetry environment)
+
+    endpointWarning :: [Text]
+    endpointWarning =
+        [defaultedEndpointMessage (teUrl endpoint) | teSource endpoint == DefaultedEndpoint]
+
+    attributeWarning :: [Text]
+    attributeWarning =
+        either
+            (\reason -> [malformedAttributesMessage reason])
+            (const [])
+            (decodeResourceAttributes environment)
 
 defaultedEndpointMessage :: Text -> Text
 defaultedEndpointMessage url =
     "no telemetry export endpoint configured (DD_AGENT_HOST / OTEL_EXPORTER_OTLP_ENDPOINT unset); defaulting to "
         <> url
         <> "."
+
+malformedAttributesMessage :: Text -> Text
+malformedAttributesMessage reason =
+    "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage ("
+        <> reason
+        <> "). Resolving as unset. The OpenTelemetry SDK rejects the same value."
 
 {- | The throttle state for SDK export-error routing. Exposed so a test asserts the throttle
 decision without wall-clock timing.
@@ -310,15 +348,14 @@ throttleStep interval now st = case tsLastLogged st of
 and normalise the canonical @OTEL_*@ environment the SDK reads. "Ecluse.Runtime.Telemetry" wires
 the export-failure observation later, when the substrate stands up.
 
-A defaulted endpoint, with neither @DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set, warns
-once through @katip@ and falls back to @http:\/\/localhost:4318@. That is never a failure, since
-the OTLP endpoint is an operator-declared destination this module never classifies or gates.
+Every 'telemetryWarnings' message goes through @katip@ first. A defaulted endpoint, with neither
+@DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set, falls back to @http:\/\/localhost:4318@.
+That is never a failure, since the OTLP endpoint is an operator-declared destination this module
+never classifies or gates.
 -}
 prepareTelemetry :: LogEnv -> [(String, String)] -> IO ()
 prepareTelemetry logEnv environment = do
-    let resolved = resolveTelemetry environment
-    when (teSource (rtEndpoint resolved) == DefaultedEndpoint) $
-        logResolve logEnv WarningS (defaultedEndpointMessage (teUrl (rtEndpoint resolved)))
+    mapM_ (logResolve logEnv WarningS) (telemetryWarnings environment)
     mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
 
 {- | The shared export-failure sink: one throttle and one @katip@ target for the span exporter,
