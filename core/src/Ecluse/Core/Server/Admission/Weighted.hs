@@ -58,10 +58,8 @@ import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
-{- | The bounded handle's mutable state and its tuning. The available weight and the
-waiter count are the two 'TVar's the door transaction races over. The room bound and
-wait budget are fixed at construction. The constructor is hidden so only the checked
-acquire\/wait\/release operations can mutate it.
+{- | The bounded handle's mutable state and its tuning. The constructor stays hidden so only
+the checked acquire, wait, and release operations can mutate it.
 -}
 data WeightedAdmission = WeightedAdmission
     { waAvailable :: TVar Int
@@ -142,21 +140,13 @@ acquireOrExpire wa weight deadline = do
             expired <- readTVar deadline
             if expired then pure False else retry
 
-{- | Run an action holding the given weight against the aggregate. 'Nothing' means the
-request was shed: the room was full, or the weight did not fit within the wait budget.
-The caller should refuse it. The weight is used as given, so a per-instance clamp is the
-wrapper's responsibility. Held weight is released on every exit path: normal completion,
-a synchronous throw, and asynchronous cancellation.
+{- | Run an action holding the given weight against the aggregate. 'Nothing' means the request
+was shed: the room was full, or the weight did not fit within the wait budget. The weight is
+used as given, so a per-instance clamp is the wrapper's responsibility. Held weight is released
+on every exit path, including a synchronous throw and asynchronous cancellation.
 
-The masked entry decides a 'Gate' and dispatches. 'shedRecording' refuses, 'admittedRun'
-is the release-protected run, and 'queuedWait' waits briefly for room before that run.
-Each arm's mask and finally reasoning sits with its own code rather than woven through
-one expression.
-
-Marked @INLINE@ so each wrapper's literal 'AdmissionObservers' is eliminated at its call
-site (case-of-known-constructor), which keeps the extraction allocation-neutral on the
-admitted hot path. The arm helpers are @INLINE@ too, so the whole chain folds back into
-that saturated call and the observers record never survives to be allocated.
+Marked @INLINE@, with its arm helpers, so each wrapper's literal 'AdmissionObservers' is
+eliminated at the call site and the admitted hot path stays allocation-neutral.
 -}
 {-# INLINE withWeightedAdmission #-}
 withWeightedAdmission ::
@@ -180,13 +170,10 @@ withWeightedAdmission obs wa weight action =
 shedRecording :: (MonadIO m) => AdmissionObservers -> m (Maybe a)
 shedRecording obs = liftIO (onShed obs) $> Nothing
 
--- The brief wait for room, then the armed run. The wait runs masked, not restored. A
--- blocked retry is still interruptible: a cancellation aborts the transaction, taking
--- nothing. A committed acquire returns with exceptions masked, so the weight reaches
--- the armed run. The room place is surrendered on every path. On acquire the queued
--- record runs through 'admittedRun', after the in-flight increment and under the
--- release 'finally'. A throwing observer therefore releases the held weight instead of
--- leaking it.
+-- The wait runs masked. A blocked STM retry stays interruptible, so a cancellation aborts the
+-- transaction taking nothing, and a committed acquire returns masked with the weight held. The
+-- room place is surrendered on every path. 'onQueued' is passed to 'admittedRun' so a throwing
+-- observer releases the held weight instead of leaking it.
 {-# INLINE queuedWait #-}
 queuedWait ::
     (MonadUnliftIO m) =>
@@ -205,17 +192,11 @@ queuedWait obs wa weight restore action = do
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs
 
--- The release-protected run. The in-flight gauge moves under the enclosing mask, before
--- 'restore', so it is paired with the 'releaseWeight' decrement on every path. Were the
--- increment inside 'restore' (interruptible), a cancellation delivered after unmasking
--- but before it ran would still run 'releaseWeight' via 'finally'. That would decrement
--- a gauge that was never incremented and drift it negative. 'restore' therefore wraps
--- only the interruptible run.
---
--- 'afterArm' runs in that same masked, release-protected step, after the increment. The
--- queued path passes 'onQueued' here and the door path passes nothing, so a throwing
--- queued observer releases the held weight rather than leaking it. Running after the
--- increment, it can never decrement a gauge that was not raised.
+-- The in-flight increment runs under the enclosing mask, before 'restore', so it pairs with
+-- the 'releaseWeight' decrement on every path. Inside 'restore' it would be interruptible: a
+-- cancellation delivered after unmasking but before it ran would still trigger the 'finally',
+-- decrementing a gauge that was never incremented and drifting it negative. 'afterArm' runs in
+-- that same masked step after the increment, so a throwing observer cannot leak the weight.
 {-# INLINE admittedRun #-}
 admittedRun ::
     (MonadUnliftIO m) =>

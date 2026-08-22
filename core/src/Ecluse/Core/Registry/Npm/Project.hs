@@ -147,12 +147,8 @@ import Ecluse.Core.Registry.WireSupport (
 import Ecluse.Core.Text (lastPathSegment)
 import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
-{- The packument as this projection needs to read it: the wire fields plus the
-per-version @_npmUser@ that "Ecluse.Core.Registry.Npm.Wire" intentionally leaves off
-the manifest. Decoding the version objects here (rather than through the wire
-'VersionManifest' alone) is what lets the publisher survive, because the wire manifest
-discards it.
--}
+{- The packument as this projection reads it: the wire fields plus the per-version @_npmUser@
+that "Ecluse.Core.Registry.Npm.Wire" leaves off the manifest, so the publisher survives. -}
 data WirePackument = WirePackument
     { wpName :: Text
     , wpDistTags :: Map Text Text
@@ -179,50 +175,31 @@ instance FromJSON WirePackument where
                   wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
                 }
 
-{- Decode the @versions@ map __element-wise leniently__. Read it as a raw map of
-version key to 'Value', then keep only the entries that project to a 'VersionEntry'.
-Drop any that do not, and record each as an 'InvalidVersionManifest'.
-
-The decode __drops__ a version whose manifest is missing or malformed in a
-required\/security-decisive field, rather than failing the whole packument. That covers
-no @dist@\/@tarball@, or an unusable @version@. That is fail-closed for that version. A
-version that cannot be decoded cannot be evaluated for integrity, CVEs, or rules, so it
-must never be served. Every healthy version still decodes. An absent @versions@ is the
-empty map. A @versions@ that is not an object at all still fails the decode, because
-the document is not a usable packument. -}
+{- Decode @versions@ element-wise, dropping a version whose manifest lacks a required or
+security-decisive field and recording it as an 'InvalidVersionManifest'. A version that does
+not decode cannot be evaluated for integrity, CVEs, or rules, so it must never be served. -}
 lenientVersionMap :: Object -> Parser (Map Text VersionEntry, [InvalidEntry])
 lenientVersionMap o = do
     raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
     pure (partitionLenient InvalidVersionManifest (parseEither parseJSON) raw)
 
-{- Decode the @dist-tags@ map __element-wise leniently__. Read it as a raw map of tag
-name to 'Value'. Keep each entry whose value is a JSON string, and drop any that is
-not, recording it as an 'InvalidDistTag'. A single non-string tag value therefore
-loses only that tag rather than failing the whole document. A string that is not a
-valid version is still kept here. 'mkVersion' is total, so the merge reconciles
-dist-tag /targeting/ later, never a decode failure. -}
+{- Decode @dist-tags@ element-wise: a non-string value is dropped as an 'InvalidDistTag', so one
+bad tag loses only that tag. 'mkVersion' is total, so the merge reconciles tag targeting later. -}
 lenientDistTags :: Object -> Parser (Map Text Text, [InvalidEntry])
 lenientDistTags o = do
     raw <- o .:? "dist-tags" .!= mempty
     pure (partitionLenient InvalidDistTag (parseEither parseJSON) raw)
 
-{- Decode the @time@ map __element-wise leniently__. Read it as a raw map of key to
-'Value'. Keep each entry that decodes as an instant, and drop any that does not. With
-the publish time folded onto each version, a malformed sibling date is simply a version
-with no known publish time, never a document failure. The decode records only a drop
-keyed by a __present version__, as an 'InvalidPublishTime'. The @created@\/@modified@
-bookkeeping keys are package-level, not a version's publish time, so a malformed one is
-not a per-version drop and stays untracked. -}
+{- Decode @time@ element-wise, dropping an entry that is not an instant. Only a key naming a
+present version records an 'InvalidPublishTime'. The @created@ and @modified@ keys are
+package-level bookkeeping, not a version's publish time. -}
 lenientTimeMap :: Set Text -> Object -> Parser (Map Text UTCTime, [InvalidEntry])
 lenientTimeMap versionKeys o = do
     raw <- o .:? "time" .!= mempty
     let (kept, dropped) = partitionLenient InvalidPublishTime (parseEither parseJSON) raw
     pure (kept, filter ((`Set.member` versionKeys) . invalidKey) dropped)
 
-{- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
-publisher. One pass decodes both from the /same/ object, so there is a single
-notion of what a version object is.
--}
+{- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@ publisher. -}
 data VersionEntry = VersionEntry
     { veManifest :: VersionManifest
     , vePublisher :: Maybe Wire.Person
@@ -232,14 +209,8 @@ instance FromJSON VersionEntry where
     parseJSON v =
         withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
 
-{- | The outcome of projecting an upstream packument against the requested package
-name (see the module header, "Name as a validation input").
-
-The requested name validates the document. It never rewrites it. A document whose
-self-reported name agrees with the request is 'Projected'. One that disagrees is a
-'NameMismatch'. The 'PackageInfo' of a 'Projected' carries the name the upstream
-genuinely reported (which, having matched, equals the requested name), never a
-substituted value.
+{- | The outcome of projecting an upstream packument against the requested package name.
+The requested name validates the document and is never substituted into it.
 -}
 data Projection
     = -- | The document decoded and its self-reported name matched the request.
@@ -248,28 +219,15 @@ data Projection
       NameMismatch Text
     deriving stock (Eq, Show)
 
-{- | Project an __already-decoded__ packument @Value@ into a 'Projection' for the
-requested package, without re-parsing any bytes. The serve layer uses this entry point
-when it already decoded the upstream body to a raw @Value@. That @Value@ is the document
-it edits in place to serve, and the layer wants the typed view of the /same/ document.
-Projecting from the @Value@ reuses that one parse rather than tokenising the bytes a
-second time. Pure and total: a @Value@ that is not a decodable npm packument comes back
-as a 'ParseError', never thrown.
-
-The requested name validates the self-reported @name@: a match is 'Projected', a
-disagreement is 'NameMismatch'. The serve layer drops a 'NameMismatch' origin's
-contribution (an untrusted, misreporting upstream) and keeps the served name a value
-some upstream genuinely reported.
+{- | Project an already-decoded packument @Value@ into a 'Projection' for the requested package,
+reusing that parse instead of the bytes. A @Value@ that is not a packument gives a 'ParseError'.
 -}
 parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projection
 parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
 
-{- Project + validate a decoded packument against the requested name. The shared
-'checkNameAgreement' checks the genuine self-reported name against the request, taking
-it from 'projectPackageInfo', which fails an absent\/empty name as a 'ParseError'.
-Agreement yields 'Projected' carrying the genuine 'PackageInfo'. A disagreement yields
-a 'NameMismatch' carrying what the upstream reported. The name is never substituted. -}
+{- Validate a decoded packument's self-reported name against the request. An absent or empty
+upstream name fails as a 'ParseError'. -}
 projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
 projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
@@ -277,10 +235,8 @@ projectValidated requestedName pkmt = do
         NameAgrees -> Projected info
         NameDisagrees reported -> NameMismatch reported
 
--- Project a decoded 'WirePackument' into the domain 'PackageInfo', taking the name
--- from the upstream's self-reported @name@ (validated against the request by
--- 'projectValidated'). Shared by the validating entry points and the version-detail
--- accessor so the projection lives in one place.
+-- Project a 'WirePackument' into 'PackageInfo', taking the upstream's self-reported name.
+-- 'projectValidated' owns checking that name against the request.
 projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
 projectPackageInfo pkmt = do
     name <- projectName (wpName pkmt)
@@ -292,20 +248,9 @@ projectPackageInfo pkmt = do
             , infoInvalidEntries = wpInvalidEntries pkmt
             }
 
-{- | Project a __single version object__ into its 'PackageDetails': one entry of a
-packument's @versions@ map, as a raw 'Value'. Takes the requested package name, the
-version key it sits under, and its publish time (the packument's @time[version]@, if
-present). 'Nothing' when the version object does not decode in a required\/security-
-decisive field, exactly the per-version drop the full packument projection applies.
-
-This is the per-version projection step, factored out so a __selective__
-single-version decode ("Ecluse.Core.Registry.Npm.SelectiveDecode") can reuse it. That
-decode extracts only the one version object and its publish time from the packument
-bytes. It projects them through the __same__ code the whole-packument path runs over
-every version. The resulting 'PackageDetails' is identical to @'Map.lookup'@-ing the
-version out of a full 'parsePackageInfoFromValue' projection. The element-wise leniency
-is identical too: a version object missing its @dist@\/@tarball@ (or otherwise
-unprojectable) yields 'Nothing', a genuine absence, never a half-built snapshot.
+{- | Project one @versions@ entry into its 'PackageDetails', or 'Nothing' when the version
+object lacks a required or security-decisive field. "Ecluse.Core.Registry.Npm.SelectiveDecode"
+reuses this, so a single-version decode matches the whole-packument projection exactly.
 -}
 projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
 projectVersionEntry name version publishedAt value =
@@ -320,26 +265,16 @@ parseVersionList resp = do
     pkmt <- decodePackument resp
     pure (map (mkVersion Npm) (Map.keys (wpVersions pkmt)))
 
-{- Decode a response body into a 'WirePackument', adapting aeson's 'String'
-error into a domain 'ParseError'.
--}
 decodePackument :: RegistryResponse -> Either ParseError WirePackument
 decodePackument =
     first (ParseError . toText) . eitherDecodeStrict . responseBody
 
-{- Project an already-decoded 'Value' into a 'WirePackument' via its 'FromJSON'
-instance, adapting aeson's 'String' error into a domain 'ParseError'. The result is
-identical to 'decodePackument' on the bytes that produced the @Value@. The @aeson@
-decoder builds a 'Value' and then runs the same 'FromJSON' instance either way. This
-reuses the one parse instead of tokenising the bytes again.
--}
+{- Decode an already-parsed 'Value' into a 'WirePackument'. The result matches 'decodePackument'
+on the bytes that produced it, because aeson runs the same 'FromJSON' instance either way. -}
 decodePackumentValue :: Value -> Either ParseError WirePackument
 decodePackumentValue =
     first (ParseError . toText) . parseEither parseJSON
 
-{- Project every entry of the packument's @versions@ map into a
-'PackageDetails', keyed by the raw version string (the packument's own key).
--}
 projectVersions :: PackageName -> WirePackument -> Map Text PackageDetails
 projectVersions name pkmt =
     Map.mapWithKey projectAt (wpVersions pkmt)
@@ -350,9 +285,6 @@ projectVersions name pkmt =
             (mkVersion Npm rawVersion)
             (Map.lookup rawVersion (wpTime pkmt))
 
-{- Build a 'PackageDetails' from one projected version entry and its publish
-time (if the packument's @time@ map carried one).
--}
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
 projectDetails name version publishedAt entry =
     PackageDetails
@@ -375,16 +307,9 @@ licenseText = \case
     LicenseSpdx spdx -> spdx
     LicenseObject name _url -> name
 
-{- Map npm install-script presence onto 'CodeExecSignal', failing closed across
-the two independent wire signals. A version runs code on install when the @scripts@ map
-declares an install hook (@preinstall@\/@install@\/@postinstall@), or when the
-abbreviated form's @hasInstallScript@ flag is @true@. This mapping consults the
-@scripts@ map __even when the flag is present and @false@__. The two fields are
-independent on the wire, so a hostile upstream cannot suppress a manifest's own declared
-install hook by setting @hasInstallScript:false@ beside it. A declared script is
-authoritative. The flag only contributes the abbreviated-form signal, where the wire
-form strips @scripts@, and never overrides a script the manifest itself carries.
--}
+{- Map install-script presence onto 'CodeExecSignal', failing closed across two independent wire
+signals. The @scripts@ map is consulted even when @hasInstallScript@ is @false@, so a hostile
+upstream cannot hide a declared install hook behind the flag. -}
 installCode :: VersionManifest -> CodeExecSignal
 installCode vm
     | not (null hooks) =
@@ -403,14 +328,9 @@ installHooks = ["preinstall", "install", "postinstall"]
 availability :: VersionManifest -> Availability
 availability vm = maybe Available Deprecated (vmDeprecated vm)
 
-{- Project the @dist@ object into an 'Artifact', carrying __both__ integrity
-digests: the legacy SHA-1 @shasum@ and the modern @integrity@ SRI string. Each
-present, non-empty digest becomes an algorithm-tagged 'Hash'. A content-empty digest
-counts as absent, so this projection drops no real digest and fabricates no empty one.
-It carries the @dist.tarball@ URL verbatim. The egress-scheme fold in
-"Ecluse.Core.Package.Filter" normalises its scheme against the https-only egress
-policy afterward.
--}
+{- Project @dist@ into an 'Artifact' carrying both digests, the SHA-1 @shasum@ and the SRI
+@integrity@. The @tarball@ URL stays verbatim, and "Ecluse.Core.Package.Filter" folds its
+scheme against the https-only egress policy afterward. -}
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =
     Artifact
@@ -424,48 +344,30 @@ projectArtifact version dist =
         , artProvenance = Nothing
         }
   where
-    -- Build each present digest through the validating 'mkHash'. A malformed value is
-    -- unconstructable, so it becomes absent rather than a degenerate 'Hash'. Malformed
-    -- covers the empty string (@"shasum":""@ / @"integrity":""@), and equally a
-    -- truncated or non-hex one. A digest that ties the version to no tamper-evident
-    -- fingerprint must not slip past the public-integrity admission gate (security.md
-    -- invariant 5). It must not feed a bogus fingerprint to the cross-upstream
-    -- divergence check either. Dropping it here leaves the now-hashless version for
-    -- Ecluse.Core.Package.Integrity to classify NoIntegrity.
+    -- Build each present digest through the validating 'mkHash', so a malformed value (empty,
+    -- truncated, or non-hex) becomes absent, never a degenerate 'Hash'. A bogus or missing
+    -- fingerprint must not pass the public-integrity admission gate (security.md invariant 5).
     toHash :: HashAlg -> Text -> Maybe Hash
     toHash alg = rightToMaybe . mkHash alg
-    -- 'mkSriHashes' splits a multi-component @integrity@ (rare on npm, legal SRI) into
-    -- one 'Hash' per component. The strongest-digest selection at the admission floor
-    -- and the worker's tamper gate then rank and verify each component exactly. Neither
-    -- reads a joined string two different ways.
+    -- 'mkSriHashes' splits a multi-component @integrity@ into one 'Hash' per component, so the
+    -- admission floor and the worker's tamper gate rank and verify each digest exactly.
     sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
-{- The artifact filename for a tarball: the path segment after the URL's last
-@\'\/\'@, or the whole string when it has none. When that segment is empty (a URL
-ending in a slash), fall back to the conventional @\<version\>.tgz@ form.
--}
+{- The tarball's filename: the URL's last path segment, falling back to
+@\<version\>.tgz@ when the URL ends in a slash or has no segment. -}
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
     fromMaybe (unVersion version <> ".tgz") (lastPathSegment url)
 
-{- Project the @dist-tags@ map (tag to raw version string) into a map of tag
-to parsed 'Version'.
--}
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
 {- | Parse an npm package name into the domain 'PackageName', splitting a scoped
-@\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an
-empty name. A non-scoped or well-formed scoped name always succeeds.
+@\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an empty name.
 
-This is the npm name canonicaliser. Equality on the resulting 'PackageName' is
-ecosystem-aware, because npm is case-sensitive. It is the agreement test both the read
-path and the publish path compare against. The read path checks an upstream's
-self-reported @name@ against the request, and the publish path checks a document body's
-declared @_id@\/@name@\/@versions[].name@ against the URL-path name. Neither compares
-byte-for-byte strings, so an encoding variant of the same name cannot disagree
-silently.
+The read and publish paths both compare names through this canonicaliser, never byte-for-byte,
+so an encoding variant cannot pass an agreement check silently.
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw
@@ -474,11 +376,8 @@ projectName raw
         Just (scope, base) -> Right (mkPackageName Npm (Just scope) base)
         Nothing -> Right (mkPackageName Npm Nothing raw)
 
-{- Split a scoped npm name @\@scope\/name@ into its 'Scope' and bare name, or
-'Nothing' for an unscoped name. An @\'\@\'@-prefixed name with no @\'\/\'@, an
-empty scope, or an empty bare name are all malformed and yield 'Nothing'. The
-caller then treats the whole string as an unscoped name.
--}
+{- Split a scoped @\@scope\/name@ into its 'Scope' and bare name. A malformed scope yields
+'Nothing', so the caller treats the whole string as an unscoped name. -}
 scopeOf :: Text -> Maybe (Scope, Text)
 scopeOf raw = do
     afterAt <- T.stripPrefix "@" raw

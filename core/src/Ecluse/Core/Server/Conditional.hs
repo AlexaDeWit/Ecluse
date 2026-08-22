@@ -53,16 +53,14 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Header, RequestHeaders, Status, statusCode)
 import Network.HTTP.Types.Header (hETag, hIfModifiedSince, hIfNoneMatch)
 
-{- | A strong entity tag for a body we serve: the quoted opaque-tag form
-(@"…"@), as it appears in the @ETag@ header. A 'newtype' so the quoted wire form
-is not confused with the bare digest or any other 'Text'.
+{- | A strong entity tag in the quoted wire form (@"…"@) the @ETag@ header carries. The
+'newtype' keeps that quoted form from being confused with the bare digest.
 -}
 newtype ETag = ETag Text
     deriving stock (Eq, Ord, Show)
 
-{- | Quote a SHA-256 digest as a strong 'ETag': hex-encoded, in the quoted
-opaque-tag wire form. The digest is whatever fingerprint the serving layer stands
-behind. For packuments that is the input fingerprint of
+{- | Quote a SHA-256 digest as a strong 'ETag', hex-encoded in the quoted wire form. The
+digest is whatever fingerprint the serving layer stands behind. For packuments that is
 'Ecluse.Core.Server.Pipeline.Packument.packumentETag'.
 -}
 mkStrongETag :: Digest SHA256 -> ETag
@@ -93,17 +91,13 @@ data Conditional
       Modified ETag
     deriving stock (Eq, Show)
 
-{- | Evaluate a conditional request against our own ETag for a transformed body.
+{- | Evaluate a conditional request against our own 'ETag' for a transformed body. A @*@
+wildcard in @If-None-Match@, or any listed tag whose opaque value equals ours, gives
+'NotModified'. Anything else is 'Modified'. The comparison is __weak__ (RFC 7232), so a
+@W/@ prefix on either side is ignored.
 
-The given tag is matched against the request's @If-None-Match@. A @*@ wildcard, or
-any tag in the comma-separated list whose opaque value equals ours, is a match →
-'NotModified'. The match is __weak__ (RFC 7232). A @W/@ prefix on either side is
-ignored, so a client echoing our tag with a weakness marker still matches. Anything
-else is 'Modified': a stale tag, or no validator.
-
-@If-Modified-Since@ is deliberately not consulted for transformed bodies. A merged
-packument has no single upstream @Last-Modified@ to compare to, and the strong
-ETag is the precise validator.
+@If-Modified-Since@ is deliberately not consulted here. A merged packument has no single
+upstream @Last-Modified@ to compare to, and the strong ETag is the precise validator.
 -}
 evaluateETag :: RequestHeaders -> ETag -> Conditional
 evaluateETag headers etag
@@ -133,19 +127,17 @@ splitTags = filter (not . T.null) . map T.strip . T.splitOn ","
 normaliseTag :: Text -> Text
 normaliseTag t = fromMaybe t (T.stripPrefix "W/" t)
 
-{- | The client's conditional validators to relay upstream for a __pass-through__
-body. Only the request-side conditional headers (@If-None-Match@,
-@If-Modified-Since@) are forwarded, and everything else is dropped. That is the exact
-set that lets upstream answer @304@ for a body we serve unchanged.
+{- | The client's conditional validators to relay upstream for a __pass-through__ body.
+Only @If-None-Match@ and @If-Modified-Since@ are forwarded, so upstream can answer @304@
+without receiving any other client header.
 -}
 forwardValidators :: RequestHeaders -> RequestHeaders
 forwardValidators = filter (isValidator . fst)
   where
     isValidator name = name == hIfNoneMatch || name == hIfModifiedSince
 
-{- | Whether an upstream response is a @304 Not Modified@ to pass straight back to
-the client unchanged. Used on the pass-through path, where upstream's own
-validator decided the conditional request.
+{- | Whether an upstream response is a @304 Not Modified@ to pass straight back to the
+client. Used on the pass-through path, where upstream's own validator decided.
 -}
 isNotModified :: Status -> Bool
 isNotModified s = statusCode s == 304

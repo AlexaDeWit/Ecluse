@@ -84,9 +84,8 @@ data IngestLimits = IngestLimits
     deriving stock (Eq, Show)
 
 {- | Sane defaults for 'IngestLimits': an 8 MiB per-advisory ceiling and a 256-range
-fan-out flag. A real advisory is kilobytes, so the ceiling is generous headroom. A real
-advisory also expands into a small multiple of its affected packages, far below the
-flag.
+fan-out flag. A real advisory is kilobytes and expands into a small multiple of its
+affected packages, so both defaults leave generous headroom.
 -}
 defaultIngestLimits :: IngestLimits
 defaultIngestLimits =
@@ -95,9 +94,8 @@ defaultIngestLimits =
         , ilMaxAdvisoryFanOut = 256
         }
 
-{- | The running tally of one ingest pass: advisories accepted, and entries dropped
-by reason. Read once the stream completes to decide whether the artifact is trustworthy
-enough to publish ('systemicDrop').
+{- | The running tally of one ingest pass. Pilot reads it once the stream completes to
+decide whether the artifact is trustworthy enough to publish ('systemicDrop').
 -}
 data IngestStats = IngestStats
     { statAccepted :: !Int
@@ -115,9 +113,7 @@ emptyIngestStats = IngestStats 0 0 0
 -- | The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
 newtype IngestCounter = IngestCounter (IORef IngestStats)
 
-{- | The context one ingest pass threads through the stream: its bounds and the live
-drop tally it records into.
--}
+-- | The context one ingest pass threads through the stream.
 data OsvIngest = OsvIngest
     { ingestLimits :: IngestLimits
     , ingestCounter :: IngestCounter
@@ -137,11 +133,9 @@ and zeroes the tally alongside it, so the tally reflects only the final attempt.
 resetIngestStats :: (MonadIO m) => OsvIngest -> m ()
 resetIngestStats (OsvIngest _ (IngestCounter ref)) = writeIORef ref emptyIngestStats
 
-{- | Whether a run's drop tally signals /systemic/ corruption (a hostile or broken
-feed) rather than a few poisoned records. Pilot must not publish a systemically
-corrupt run's artifact. It trips only when drops are both absolutely non-trivial and a large
-fraction of all entries. A handful of bad advisories in a healthy feed therefore never
-blocks a build, while a mostly unusable feed does.
+{- | Whether a run's drop tally signals systemic corruption, a hostile or broken feed,
+rather than a few poisoned records. Pilot must not publish a systemically corrupt run's
+artifact.
 -}
 systemicDrop :: IngestStats -> Bool
 systemicDrop s =
@@ -163,8 +157,7 @@ systemicDropPercent :: Int
 systemicDropPercent = 10
 
 {- | Raised after a compile pass whose drop tally 'systemicDrop' judged systemic. The
-compiler abandons the run without publishing, so a consumer keeps its last-good
-artifact rather than adopting a hole-ridden one.
+compiler abandons the run without publishing, so a consumer keeps its last-good artifact.
 -}
 newtype PilotIngestAborted = PilotIngestAborted IngestStats
     deriving stock (Show)
@@ -181,11 +174,9 @@ streamOsvUrl mTracerProvider ingest urlStr = do
         (mapM_ (`endSpan` Nothing))
         ( \mSpan -> do
             forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
-            -- 'setRequestCheckStatus' makes a non-2xx response throw a
-            -- 'StatusCodeException' at the header boundary. The backoff wrapper
-            -- (see 'Ecluse.Core.Osv.Retry') then sees a 502 from osv.dev as a
-            -- retryable fault. Without it the error page would stream into the
-            -- unzip parser and surface as a parse error a retry could not fix.
+            -- 'setRequestCheckStatus' makes a non-2xx response throw at the header boundary,
+            -- so the backoff wrapper ('Ecluse.Core.Osv.Retry') treats a 502 from osv.dev as
+            -- retryable instead of streaming an error page into the unzip parser.
             req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
             httpSource req (\res -> getResponseBody res .| parseOsvStream mTracerProvider ingest)
         )
@@ -233,9 +224,6 @@ handleEntry ingest entry = \case
   where
     cap = ilMaxAdvisoryBytes (ingestLimits ingest)
 
--- Flag an advisory that expands into an anomalous number of ranges. Log-only: the
--- ingest keeps the advisory regardless. It is a "something is odd with this record"
--- signal.
 warnOnFanOut :: (KatipContext m) => OsvIngest -> OsvAdvisory -> [ExtractedOsv] -> m ()
 warnOnFanOut ingest adv extracted =
     when (n > limit) $
@@ -258,11 +246,9 @@ zipEntryNameText entry = case zipEntryName entry of
     Left txt -> txt
     Right bs -> decodeUtf8With lenientDecode bs
 
-{- | Accumulate one zip entry's decompressed bytes, up to @cap@. This checks the cap
-before it retains each chunk, so memory never exceeds the cap plus one chunk. On a
-breach, it drains the entry's remaining chunks to the next entry boundary without
-retaining them, so the following entries stay aligned. It then reports the entry as
-'EntryOversize'.
+{- | Accumulate one zip entry's decompressed bytes, up to @cap@. It checks the cap
+before retaining each chunk, so memory never exceeds the cap plus one chunk. On a breach
+it drains the entry to the next boundary, retains nothing, and reports 'EntryOversize'.
 -}
 collectFile :: (Monad m) => Int -> ConduitT (Either ZipEntry ByteString) o m EntryOutcome
 collectFile cap = go 0 []
@@ -278,9 +264,8 @@ collectFile cap = go 0 []
                  in if seen' > cap
                         then drainOversize seen'
                         else go seen' (bs : acc)
-    -- The entry already exceeds the cap. Keep pulling its chunks to advance the
-    -- stream to the next boundary, but retain none of them (only their size, for the
-    -- log). This frame drops the accumulated prefix.
+    -- Not carrying acc forward frees the accumulated prefix, so the drain to the next
+    -- entry boundary retains only the running size.
     drainOversize !seen =
         await >>= \case
             Nothing -> pure (EntryOversize seen)

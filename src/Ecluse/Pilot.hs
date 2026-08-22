@@ -48,14 +48,8 @@ pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg
 
 {- | The entry point for the Pilot worker mode.
 
-Pilot runs as a standalone HTTP server that exposes only liveness and readiness
-probes, and it runs the OSV export loop concurrently.
-
-'Ecluse.Runtime.Server.raceServerAgainstLoop' races the probe server against the
-export loop (see there for the shutdown invariant). The export loop never returns:
-it idles with no bucket, and with one it supervises every fault as transient. The
-server's graceful return on shutdown must therefore cancel it. A cancelled export
-cycle resumes from the remote artifact on the next boot.
+The export loop never returns, so the server's graceful return on shutdown must cancel
+it. A cancelled export cycle resumes from the remote artifact on the next boot.
 -}
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
@@ -69,16 +63,11 @@ runPilot bootEnv = do
             (liftIO $ runWarp cfg pilotApplication)
             (runExportLoop (beTelemetry bootEnv) (beAmbient bootEnv) (beConfigFull bootEnv))
 
-{- | The Pilot steady-state export loop: compile the npm OSV artifact and upload it
-to the configured S3 bucket. Then wait the configured sync interval and repeat. With
-no bucket configured the loop idles. It orchestrates the OSV producer (the compile in
-"Ecluse.Core.Osv.Compile") and the S3 adapter ("Ecluse.Runtime.Pilot.Export"). It
-lives in the shell because it reads the composed configuration.
+{- | Compile the npm OSV artifact and upload it to the configured bucket, once per sync
+interval, or idle when no bucket is configured.
 
-The cycle runs under the shared supervision combinator. Every fault is transient
-here: the loop retries a failed export, and there is no per-cycle wiring fault to
-fail up on. The backoff is pinned at the sync interval on both ends, so a failing
-export retries at exactly the cadence a succeeding one repeats at.
+Every fault is transient here because a cycle has no wiring fault to fail up on, and the
+backoff is pinned at the sync interval on both ends.
 -}
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> Config -> m ()
 runExportLoop telemetry ambient config = do
@@ -108,9 +97,7 @@ exportNpm telemetry ambient appCfg bucketName = do
     dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (advOsvExportBaseUrl (cfgAdvisories appCfg)) "npm")
     exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucketName dbPath
 
-{- | Options for the one-shot 'runPilotCompile' mode: which ecosystem's export
-to compile, where to fetch it from, and where the artifact lands.
--}
+-- | Options for the one-shot 'runPilotCompile' mode.
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
     , pcoSource :: Maybe String
@@ -119,33 +106,24 @@ data PilotCompileOptions = PilotCompileOptions
     -}
     , pcoOutDir :: FilePath
     , pcoUpload :: Bool
-    {- ^ After compiling, upload the artifact to the configured
-    vulnerability-database bucket, completing one full sync cycle.
-    -}
+    -- ^ Upload the compiled artifact to the configured vulnerability-database bucket.
     }
     deriving stock (Eq, Show)
 
 {- | Requesting an upload without a configured vulnerability-database bucket.
 
-This is a wiring fault at the composition root: there is no per-run decision a
-caller could make about it. It therefore throws, rather than returning a value the
-caller could only re-raise.
+This is a wiring fault at the composition root, so it throws rather than returning a
+value the caller could only re-raise.
 -}
 data PilotUploadUnconfigured = PilotUploadUnconfigured
     deriving stock (Eq, Show)
 
 instance Exception PilotUploadUnconfigured
 
-{- | Run a single OSV compilation, optionally upload it, and return the
-artifact's path.
-
-It is the same bounded-retry pipeline the export loop runs, without the loop or the
-probe server. Point it at an export (or a stub serving a fixture zip) and it writes
-the artifact into the requested directory. It then uploads the artifact when
-'pcoUpload' asks for one full sync cycle.
+{- | Run a single OSV compilation, optionally upload the artifact, and return its path.
 
 A source that cannot be fetched or parsed propagates as an exception, so the process
-exits non-zero. That makes the command safe to script and to schedule.
+exits non-zero and the command stays safe to script.
 -}
 runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry ambient appCfg opts = do

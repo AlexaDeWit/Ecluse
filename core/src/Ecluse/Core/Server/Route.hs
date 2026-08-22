@@ -46,37 +46,30 @@ import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
 import Ecluse.Core.Server.Context (MountRouter, ResponseAction, RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContract)
 
-{- | One route, whole: how it matches, what it does, and what it means.
+{- | One route: how it matches, what it does, and what it documents.
 
-Generic over the ecosystem's capture-value type @v@, which is the only thing about a
-route that is not shared. An npm capture yields a parsed package or an artifact name,
-and another registry's captures would yield its own values.
+The type parameter @v@ is the ecosystem's capture value, the only part of a route that is
+not shared across ecosystems.
 -}
 data Route v = forall response. Route
     { routeName :: RouteName
-    {- ^ This route's name, unique within its ecosystem (@"packument"@). It is the handle
-    a test asserts on when it checks /which/ route a request took. The manifest qualifies
-    it by ecosystem to form OpenAPI's @operationId@, which must be unique across the whole
-    document. Only the manifest sees every mount at once, so only the manifest can
-    guarantee that.
+    {- ^ This route's name, unique within its ecosystem (@"packument"@). The manifest qualifies
+    it by ecosystem to form OpenAPI's @operationId@, which must be unique across the document.
     -}
     , routeMethod :: MethodMatch
     -- ^ The method condition a request must satisfy to match.
     , routeSegs :: [PatternSeg v]
     -- ^ The mount-relative path template: literal segments and named captures, in order.
     , routeBuild :: Method -> [v] -> Maybe (ResponseAction response)
-    {- ^ What serving this route amounts to, given the request method and the captured
-    values (one per 'SegCap', in template order).
+    {- ^ What serving this route amounts to, given the request method and the captured values
+    (one per 'SegCap', in template order).
 
-    'Nothing' __denies__: the route does not claim this request after all. Matching falls
-    through to the next route, and to the @404@ when every route declines. That is where
-    a __cross-capture__ check lives. An artifact file name, for example, must parse for
-    the package captured earlier. The builder refuses a name that addresses some other
-    package's artifact, rather than fabricating it into a coordinate.
+    'Nothing' denies: matching falls through to the next route, and to the @404@ when every
+    route declines. A cross-capture check lives here. An artifact file name, for example, must
+    parse for the package captured earlier.
 
-    The builder receives the 'Method' because a @HEAD@ is a __bodiless variation__ of its
-    @GET@ rather than a distinct route. A @HEAD@ matches the same pattern, and the builder
-    selects the head-mode handler.
+    The builder receives the 'Method' because a @HEAD@ is a bodiless variation of its @GET@,
+    not a distinct route.
     -}
     , routeSummary :: Text
     -- ^ A one-line summary (the OpenAPI operation summary).
@@ -85,16 +78,13 @@ data Route v = forall response. Route
     , routeRequest :: Maybe RequestSpec
     -- ^ The request body a write route accepts. 'Nothing' for a read.
     , routeContract :: ResponseContract response
-    {- ^ The response contract whose indexed value the builder's action can produce.
-    Runtime dispatch renders that value to WAI, and the manifest renders the same
-    contract's response documents. The action and the documentation therefore cannot name
-    different response sets.
+    {- ^ The response contract the builder's action produces a value for. Runtime dispatch and
+    the manifest both read it, so the served responses and the documented ones cannot drift.
     -}
     }
 
-{- | A route's name within its ecosystem (@"packument"@, @"tarball"@). Not qualified,
-because the route already lives in its ecosystem's table. The manifest adds the namespace
-when it needs a globally unique identifier.
+{- | A route's name within its ecosystem (@"packument"@, @"tarball"@). The manifest adds the
+ecosystem namespace when it needs a globally unique identifier.
 -}
 newtype RouteName = RouteName {unRouteName :: Text}
     deriving stock (Eq, Ord, Show)
@@ -106,11 +96,10 @@ data PatternSeg v
     = SegLit Text
     | SegCap (Capture v)
 
-{- | A named path capture: how it parses (the security-critical leaf) and how it
-documents. 'capConsume' may consume __more than one__ segment, which an ecosystem whose
-identifier spans a decoded @\'\/\'@ needs. It returns the unconsumed tail, so captures
-thread left to right. 'Nothing' fails the match, and the request falls through to the
-next route or to the deny-by-default catch-all.
+{- | A named path capture and its parser. 'capConsume' may consume more than one segment,
+which an ecosystem whose identifier spans a decoded @\'\/\'@ needs, and it returns the
+unconsumed tail so captures thread left to right. 'Nothing' fails the match, so the request
+falls through to the next route or to the deny-by-default catch-all.
 -}
 data Capture v = Capture
     { capName :: Text
@@ -121,17 +110,12 @@ data Capture v = Capture
     -- ^ Consume the leading segments this capture claims, yielding its value and the tail.
     }
 
-{- | The method condition on a route: the __read__ methods (@GET@ and @HEAD@), or the one
-client __write__ (@PUT@).
+{- | The method condition on a route: the read methods (@GET@ and @HEAD@), or the one client
+write (@PUT@). A closed vocabulary rather than a predicate, so the manifest can still name
+the documented method.
 
-Any other method matches no route and therefore denies (deny by default). The front door
-answers only the methods it was taught. It answers a @DELETE@ or @POST@ over a package
-path with a @404@, rather than reading it as a package request. This also keeps the
-documented method honest: the manifest says @GET@ for a read, and the proxy serves only a
-@GET@ or its bodiless @HEAD@.
-
-A small closed vocabulary rather than a bare predicate, so the manifest can still name the
-documented method.
+Any other method matches no route and therefore denies. The proxy answers a @DELETE@ or
+@POST@ over a package path with a @404@, rather than reading it as a package request.
 -}
 data MethodMatch
     = -- | The write method (@PUT@).
@@ -145,13 +129,12 @@ methodMatches :: MethodMatch -> Method -> Bool
 methodMatches MethodPut m = m == methodPut
 methodMatches MethodRead m = m == methodGet || m == methodHead
 
-{- | Fold an ecosystem's route table into its mount's router. The first route that claims
-the request decides what happens to it. A request no route claims is the deny-by-default
-@404@ in the mount's own error surface.
+{- | Fold an ecosystem's route table into its mount's router. The first route that claims the
+request decides what happens to it.
 
-Deny-by-default is __structural__ here: 'routerOf' has no other way to answer. There is no
-catch-all branch to forget. The @404@ 'Answer' a mount supplies for a path no route claims
-is its deny-by-default surface (npm's @{"error": "not found"}@).
+A request no route claims gets the mount's @404@ 'Answer' (npm's @{"error": "not found"}@), so
+deny-by-default is structural. 'routerOf' has no other way to answer, and there is no catch-all
+branch to forget.
 -}
 routerOf :: RouteAction -> [Route v] -> MountRouter
 routerOf notFound routes method segments =
@@ -161,13 +144,10 @@ routerOf notFound routes method segments =
         | requested == methodHead = RouteAction (bodilessContract contract) action
         | otherwise = RouteAction contract action
 
-{- | The route that claims a request, and the action it names. That is the first route
-whose method condition holds, whose segments are consumed __exactly__, and whose builder
-accepts the captures. 'Nothing' when none does.
-
-Exported beside 'routerOf' because it makes a routing table testable with no server. Feed
-it a method and segments, then assert /which/ route won (by its 'routeName'), or that none
-did. The action itself is a closure, and the serve path exercises it.
+{- | The route that claims a request, and the action it names: the first route whose method
+condition holds, whose segments are consumed exactly, and whose builder accepts the captures.
+'Nothing' when none does. Exported beside 'routerOf' so a route table is testable with no
+server.
 -}
 matchRoute :: [Route v] -> Method -> [Text] -> Maybe (Route v, RouteAction)
 matchRoute routes method segments =
@@ -184,10 +164,9 @@ matchRoute routes method segments =
         | requested == methodHead = bodilessContract
         | otherwise = id
 
-{- Run a route's segments against a request's segments, collecting one value per capture
-in template order. Requires __exact__ consumption: a leftover request segment, or a
-template segment with nothing to match, fails. A 'SegCap' may consume more than one segment
-(its 'capConsume' decides) and threads the remainder to the rest of the template. -}
+{- Requires exact consumption: a leftover request segment, or a template segment with nothing
+to match, fails. A 'SegCap' may consume more than one segment and threads the remainder to
+the rest of the template. -}
 consumeSegs :: [PatternSeg v] -> [Text] -> Maybe [v]
 consumeSegs [] [] = Just []
 consumeSegs (SegLit l : ps) (s : ss)

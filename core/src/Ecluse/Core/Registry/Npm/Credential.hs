@@ -23,17 +23,13 @@ import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 
 {- | npm's credential mapping: @Bearer@ over @Authorization@ in both directions. The npm
-adapter registers it on its serve slice
-('Ecluse.Core.Registry.Adapter.Types.serveCredential'). The npm request layer attaches
-every outbound credential through it.
+adapter registers it on 'Ecluse.Core.Registry.Adapter.Types.serveCredential'.
 -}
 npmCredential :: CredentialMapping
 npmCredential = credentialMapping recoverBearer hAuthorization renderBearer
 
-{- The client's bearer credential, recovered from the @Authorization: Bearer …@ header as
-the token text alone. This recovery matches the scheme name case-insensitively (npm sends
-@Bearer@) and takes the token verbatim after it. Any other presentation yields 'Nothing':
-another scheme, a bare token, an empty token, or no header at all. -}
+{- The client's bearer credential from @Authorization: Bearer …@, the token text alone.
+Any other presentation yields 'Nothing': another scheme, a bare or empty token, no header. -}
 recoverBearer :: RequestHeaders -> Maybe Secret
 recoverBearer headers = do
     (_, raw) <- find ((== hAuthorization) . fst) headers

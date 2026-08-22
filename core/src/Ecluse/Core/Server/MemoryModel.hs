@@ -32,10 +32,8 @@ arithmetic.
 expandWireBytes :: Int -> Int
 expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
 
-{- | Invert 'expandWireBytes': scale a resident-byte budget back to the wire
-(compact-encoded) byte count it can hold, by the same ratio. A response cap carved
-from a material share is derived through this. The forward expansion and the inverse
-contraction therefore share one ratio and can never drift apart.
+{- | Invert 'expandWireBytes': scale a resident-byte budget back to the wire (compact-encoded)
+byte count it can hold, by the same ratio, so the two can never drift apart.
 -}
 contractResidentBytes :: Int -> Int
 contractResidentBytes residentBytes = residentBytes * residentRatioDenominator `div` residentRatioNumerator
@@ -46,12 +44,9 @@ residentRatioNumerator = 15
 residentRatioDenominator :: Int
 residentRatioDenominator = 2
 
-{- | How many origins one admitted materialisation holds concurrently. The private
-and public packuments are fetched together ('Data.Functor.Concurrently'-style in
-the packument pipeline). An admission slot's envelope is therefore this many wire and
-parsed documents at once. The assembled encode and the public entry's cache residency overlap
-this envelope. The material margin and the cache tenant cover them respectively, and
-they are deliberately not double-counted here.
+{- | How many origins one admitted materialisation holds concurrently: the private and public
+packuments are fetched together. The encode and the cache residency are covered by the material
+margin and the cache tenant, so this deliberately does not count them.
 -}
 packumentOriginFanout :: Int
 packumentOriginFanout = 2

@@ -46,11 +46,8 @@ compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys
 compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
 compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 
-{- | Parse a @Gem::Version@: dot-separated alphanumeric segments, each split into
-maximal digit and letter runs. It first rewrites hyphens to a prerelease marker (a
-global @gsub("-", ".pre.")@, the way @Gem::Version@ canonicalises), so @1.0.0-1@
-parses as @1.0.0.pre.1@ and orders below @1.0.0@. Fails on empty or non-alphanumeric
-segments.
+{- | Parse a @Gem::Version@ into its ordering key. Fails on an empty or non-alphanumeric
+segment.
 -}
 parseGem :: Text -> Maybe GemKey
 parseGem raw = do
@@ -59,9 +56,8 @@ parseGem raw = do
     -- in hostile metadata would therefore be an algorithmic-complexity DoS.
     guard (T.compareLength raw maxVersionLength /= GT)
     let stripped = T.strip raw
-        -- Gem::Version canonicalises hyphens via a global gsub("-", ".pre.") before
-        -- segmenting, so "1.0.0-1" is the prerelease "1.0.0.pre.1" and orders below
-        -- "1.0.0". This leaves non-hyphenated input untouched.
+        -- Gem::Version canonicalises hyphens via a global gsub("-", ".pre.") before segmenting,
+        -- so "1.0.0-1" is the prerelease "1.0.0.pre.1" and orders below "1.0.0".
         segs = T.splitOn "." (T.replace "-" ".pre." stripped)
     guard (not (T.null stripped))
     guard (all validSeg segs)
@@ -73,12 +69,10 @@ parseGem raw = do
     segTokens = map classify . T.groupBy (\c1 c2 -> isDigit c1 == isDigit c2)
     classify g = if T.all isDigit g then VNum (numOr0 g) else VStr g
 
-{- Canonicalise a gem token list the way @Gem::Version#canonical_segments@ does.
-Split it at the first textual (prerelease) token into a numeric release and a
-prerelease tail, drop trailing zeros from /each/ part, then rejoin. So @2.0.a@ keys
-as @[2, "a"]@, dropping the release's trailing zero before the prerelease, which is
-why @2.t > 2.0.a@ and @2.0.a == 2.a@. Comparing the un-canonicalised flat lists would
-instead reach a numeric-vs-textual position and order them the other way.
+{- Mirror @Gem::Version#canonical_segments@: drop trailing zeros from the numeric release
+and from the prerelease tail separately. So @2.0.a@ keys as @[2, "a"]@, which is why
+@2.t > 2.0.a@ and @2.0.a == 2.a@. Comparing the flat, un-canonicalised lists orders them
+the other way.
 -}
 canonicalSegments :: [VToken] -> [VToken]
 canonicalSegments toks =

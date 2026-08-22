@@ -62,8 +62,7 @@ data BackoffSchedule = BackoffSchedule
     deriving stock (Eq, Show)
 
 {- | The delay before the next retry, given how many failures ran consecutively:
-@base * 2^failures@, saturated at the cap. It clamps the exponent, so the doubling
-cannot overflow before the ceiling applies.
+@base * 2^failures@, saturated at the cap.
 -}
 backoffMicros :: BackoffSchedule -> Int -> Int
 backoffMicros schedule consecutiveFailures =
@@ -74,10 +73,8 @@ backoffMicros schedule consecutiveFailures =
 backoffShiftClamp :: Int
 backoffShiftClamp = 12
 
-{- | One loop's supervision policy: the label its log lines carry, how it classifies a
-synchronous fault, and the backoff its transient faults pace at. A loop with wiring
-faults that no retry can fix (an unconfigured handle reached at runtime) classifies
-those 'Permanent'. Everything else defaults to 'Transient'.
+{- | One loop's supervision policy. A loop classifies a fault that no retry can fix, such as
+an unconfigured handle reached at runtime, as 'Permanent', and everything else as 'Transient'.
 -}
 data SupervisionPolicy = SupervisionPolicy
     { spLabel :: Text

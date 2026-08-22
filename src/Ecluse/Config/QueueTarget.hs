@@ -32,16 +32,12 @@ data QueueTarget
       PubSubTarget Text Text
     deriving stock (Eq, Show)
 
-{- | Parse a queue URL into the backend it names, or 'Nothing' for a shape that names
-neither. The caller refuses that loudly rather than guessing a backend.
+{- | Parse a queue URL into the backend it names, or 'Nothing' when it names neither. The
+caller refuses that loudly rather than guessing a backend.
 
-This validates the SQS shape in full, never classifying on the host alone. It accepts
-exactly @https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@, with a
-single-label region, a 12-digit account, one non-empty queue segment, and no query or
-fragment.
-The canonical form carries no port, so this refuses an explicit port, @:443@ included.
-A value that is nearly-but-not an SQS queue URL is a transcription error to surface,
-never to repair. The Pub\/Sub shape is the whole value as a topic resource.
+The SQS form is exactly @https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@, with a
+single-label region, a 12-digit account, one non-empty queue segment, and no port, query, or
+fragment. A nearly-but-not SQS URL is a transcription error to surface, never to repair.
 -}
 parseQueueTarget :: Text -> Maybe QueueTarget
 parseQueueTarget raw = sqsTargetOf raw <|> pubSubTargetOf raw

@@ -41,21 +41,17 @@ checked acquire\/wait\/release operations can mutate its capacity and waiting ro
 -}
 newtype ServeAdmission = ServeAdmission WeightedAdmission
 
-{- | How long an operation waits for a slot when it finds the cap busy, before the
-request is refused. The budget is the shared 'admissionWaitMicros' value, equal to the
-shed path's @Retry-After: 1@ hint.
+{- | How long a serve operation waits for a slot when it finds the cap busy, before the request
+is refused. See 'admissionWaitMicros' for why the budget matches the @Retry-After: 1@ hint.
 -}
 serveAdmissionWaitMicros :: Int
 serveAdmissionWaitMicros = admissionWaitMicros
 
-{- | Allocate a bounded handle with the given positive capacity, a waiting room of the
-same size, and the 'serveAdmissionWaitMicros' budget.
+{- | Allocate a bounded handle with the given positive capacity, a waiting room of the same
+size, and the 'serveAdmissionWaitMicros' budget.
 
-The room equals the capacity, so a burst of twice the cap is absorbed as brief queueing
-while anything deeper gets the instant, cheap refusal. That bounds both the waiting
-memory and the worst-case latency. Configuration parsing enforces the positive-capacity
-precondition. The unchecked integer stays at this internal composition boundary, so
-every request pays only an STM transaction, not another validation step.
+The room equals the capacity, so a burst of twice the cap queues briefly and anything deeper
+is refused at once. That bounds both the waiting memory and the worst-case latency.
 -}
 
 -- The configuration parser guarantees capacity > 0. This bounds check is defence in depth.
@@ -66,23 +62,17 @@ newServeAdmission capacity
     | otherwise = newServeAdmissionTuned capacity capacity serveAdmissionWaitMicros
 
 {- | Allocate a bounded handle with an explicit waiting-room bound and wait budget
-(microseconds), so a test can exercise the queueing behaviour without real-second
-sleeps. Production goes through 'newServeAdmission', which fixes both from the
-capacity. A room of zero reproduces pure acquire-or-refuse admission.
+(microseconds), so a test can exercise the queueing behaviour without real-second sleeps.
+Production goes through 'newServeAdmission'. A room of zero is pure acquire-or-refuse admission.
 -}
 newServeAdmissionTuned :: Int -> Int -> Int -> IO ServeAdmission
 newServeAdmissionTuned capacity room waitMicros =
     ServeAdmission <$> newWeightedAdmission capacity room waitMicros
 
-{- | Run an action within the admission bound. 'Nothing' means the request was refused,
-because the waiting room was full or no slot freed within the wait budget. The caller
-should shed it.
+{- | Run an action within the admission bound. 'Nothing' means the request was refused because
+the waiting room was full or no slot freed within the wait budget. The caller should shed it.
 
-A request that had to wait records @ecluse.serve.admission.queued@ on admission, so the
-queue's work is visible beside the in-flight gauge and the shed decisions.
-
-Inlined so the literal 'AdmissionObservers' folds into the shared core's saturated call
-at each request site. The admitted hot path then allocates no per-request record.
+A request that had to wait records @ecluse.serve.admission.queued@ on admission.
 -}
 {-# INLINE withServeAdmission #-}
 withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)

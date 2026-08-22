@@ -73,10 +73,8 @@ parseScopes = withText "Scopes" $ \t ->
         then pure []
         else traverse parseScopeEntry (T.splitOn "," t)
 
--- Reject a publishAllow segment that no conforming scope can equal: an empty
--- segment from a stray comma, or one bearing a wrong separator. A typo then fails
--- the load rather than seeding a dead allow-list that refuses every publish at
--- request time. Mirrors 'parseBlockedRangeEntry' for the sibling comma list.
+-- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
+-- typo fails the load instead of seeding an allow-list that refuses every publish.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
     let trimmed = T.strip entry
@@ -208,10 +206,8 @@ acceptedDocumentKeys =
     , "rules"
     ]
 
-{- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem
-templates included. "Ecluse.Config" decides which of them are /active/, meaning
-operator-declared, served, and required to be complete. This parser stays a faithful
-projection of the merged document.
+{- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem templates
+included. "Ecluse.Config" decides which of them are active and must be complete.
 -}
 parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
 parseMounts km = Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
@@ -245,10 +241,9 @@ parseSeconds field = \case
     String t -> case readMaybe (T.unpack t) :: Maybe Integer of
         Just n -> boundedSeconds field n
         Nothing -> secondsFailure field (show t)
-    -- 'toBoundedInteger' refuses a fractional or out-of-'Int64'-range value. Its
-    -- exponent guard rejects a pathological 1e999999999999 without ever realising
-    -- the integer. A hostile config or env value therefore fails the load, instead
-    -- of hanging or exhausting memory at boot.
+    -- 'toBoundedInteger' refuses a fractional or out-of-'Int64' value, and its exponent guard
+    -- rejects a pathological 1e999999999999 without ever realising the integer. A hostile config
+    -- value then fails the load instead of hanging or exhausting memory at boot.
     Number n -> case toBoundedInteger n :: Maybe Int64 of
         Just val -> boundedSeconds field (toInteger val)
         Nothing -> secondsFailure field (show n)
@@ -268,9 +263,8 @@ parsePositiveInt field value
     | value > 0 = pure value
     | otherwise = fail (field <> " must be a positive integer")
 
-{- A recurring delay, positive and bounded. Zero would spin the poll without
-yielding. The bound keeps its microsecond conversion inside 'Int', rather than
-wrapping into an invalid negative delay.
+{- A recurring delay, positive and bounded. Zero would spin the poll without yielding, and the
+bound keeps the microsecond conversion inside 'Int' rather than wrapping to a negative delay.
 -}
 parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
 parseDelaySeconds field v = do

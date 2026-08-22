@@ -52,17 +52,14 @@ data ByteAdmission = ByteAdmission
     , baCapacity :: Int
     }
 
-{- | How long an acquisition finding the capacity busy waits before it is shed: the
-shared 'admissionWaitMicros' budget, the same one-retry-interval as the unit-slot
-admission. The reason is the same: a refusal must never be faster than the client was
-told to come back.
+{- | How long an acquisition finding the capacity busy waits before it is shed: the shared
+'admissionWaitMicros' budget, which explains why a refusal never beats the retry hint.
 -}
 byteAdmissionWaitMicros :: Int
 byteAdmissionWaitMicros = admissionWaitMicros
 
-{- | The bounded waiting room, a count of waiters. Publishes are rare and heavy, so a
-short queue absorbs a brush with the capacity. Anything deeper gets the instant, cheap
-refusal.
+{- | The bounded waiting room, a count of waiters. Publishes are rare and heavy, so a short
+queue absorbs a brush with the capacity and anything deeper is refused at once.
 -}
 byteAdmissionWaiterRoom :: Int
 byteAdmissionWaiterRoom = 8
@@ -81,18 +78,12 @@ newByteAdmissionTuned capacity room waitMicros = do
     core <- newWeightedAdmission cap room waitMicros
     pure ByteAdmission{baCore = core, baCapacity = cap}
 
-{- | Run an action holding the given weight against the aggregate. 'Nothing' means the
-request was shed: the room was full, or the weight did not fit within the wait budget.
-The weight is clamped to the capacity defensively: a bound must never deadlock on
-arithmetic it did not make. A request the publish route's bounded read admitted always
-fits the plan's floors. The weight is released on every exit path: normal completion, a
-synchronous throw, and asynchronous cancellation.
+{- | Run an action holding the given weight against the aggregate. 'Nothing' means the request
+was shed: the room was full, or the weight did not fit within the wait budget.
 
-The in-flight gauge (@ecluse.publish.body.in_flight_bytes@) moves with the reserved
-weight, and a shed records @ecluse.publish.body.shed@.
-
-Inlined so the literal 'AdmissionObservers' folds into the shared core's saturated call
-at each request site. The admitted path then allocates no per-request record.
+The weight is clamped to the capacity defensively, since a bound must never deadlock on
+arithmetic it did not make. The in-flight gauge @ecluse.publish.body.in_flight_bytes@ moves
+with the reserved weight, and a shed records @ecluse.publish.body.shed@.
 -}
 {-# INLINE withByteAdmission #-}
 withByteAdmission :: (MonadUnliftIO m) => MetricsPort -> ByteAdmission -> Int -> m a -> m (Maybe a)

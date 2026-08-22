@@ -79,32 +79,22 @@ import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
-{- | The sync transport, as data: how to learn the remote artifact's current
-version and how to fetch its bytes. Injected so 'syncStep' is unit-testable
-without a network. The composition root draws one from a 'newS3CveSource'.
+{- | The sync transport, as data: the remote artifact's current version and its bytes. Injected so
+'syncStep' runs without a network. The composition root draws one from 'newS3CveSource'.
 -}
 data CveFetch = CveFetch
     { fetchHeadEtag :: IO (Either OsvDbFetchFault (Maybe DbEtag))
-    {- ^ The remote artifact's current ETag. @Right Nothing@ when the object does
-    not exist (not yet published for this ecosystem). Every fetch failure, a
-    transport fault included, is the 'Left' value.
+    {- ^ The remote artifact's current ETag. @Right Nothing@ when the object does not exist (not yet
+    published). Every fetch failure, a transport fault included, is the 'Left' value.
     -}
     , fetchDownload :: FilePath -> IO (Either OsvDbFetchFault DbEtag)
-    {- ^ Download the artifact to the given path (byte-bounded) and return the
-    ETag of the bytes actually fetched. That is the download's own ETag rather than an
-    earlier @HEAD@'s, so a publish racing the poll is recorded truthfully.
-    Every fetch failure is the 'Left' value: an overstepped byte cap, a missing
-    ETag, or a transport fault. A 'Left' may leave a partial file at the given
-    path for the caller to discard.
+    {- ^ Download the artifact to the given path, byte-bounded. The ETag is the download's own, so a
+    publish racing the poll is recorded truthfully. A 'Left' may leave a partial file at that path.
     -}
     }
 
-{- | Why an artifact fetch did not yield usable bytes. Either this side refused it,
-or the transport never delivered it. This side refuses when the object oversteps the
-configured byte cap, or when the response carried no ETag to record. A transport
-failure is a fault classified into the core vocabulary at the adapter edge. Every one
-of them is a value on the 'CveFetch' channel, never an exception. The sync task's step
-folds it into its outcome, and the schedule retries.
+{- | Why an artifact fetch did not yield usable bytes. Every one is a value on the 'CveFetch'
+channel, never an exception, and 'syncStep' folds it into its outcome.
 -}
 data OsvDbFetchFault
     = -- | The object exceeds the configured byte cap (carried, in bytes).
@@ -115,11 +105,8 @@ data OsvDbFetchFault
       OsvDbTransport TransportFault
     deriving stock (Eq, Show)
 
-{- | The byte cap's mid-stream escape hatch. 'cappedAt' sits inside a conduit pipeline
-and has no value channel of its own. It reports an overstepped cap by throwing this
-__confined__ typed exception. The adapter boundary ('s3Download')
-catches it and folds it into 'OsvDbTooLarge'. It never crosses the 'CveFetch'
-interface.
+{- | 'cappedAt' sits in a conduit and has no value channel, so it reports an overstepped byte cap
+by throwing this __confined__ exception. 's3Download' catches it and folds it into 'OsvDbTooLarge'.
 -}
 newtype OsvDbCapExceeded = OsvDbCapExceeded Int
     deriving stock (Eq, Show)
@@ -158,10 +145,8 @@ data SyncOutcome
       SyncFetchFaulted OsvDbFetchFault
     deriving stock (Show)
 
-{- | One detect-download-verify-swap cycle against the last seen ETag. Total over
-the fetch and over verification: a failed fetch and a refused artifact are both
-outcomes, not exceptions. The caller's scheduling is therefore a plain fold over
-'SyncOutcome'. See the module header for the file discipline.
+{- | One detect-download-verify-swap cycle against the last seen ETag. Total over the fetch and
+over verification: a failed fetch and a refused artifact are outcomes, not exceptions.
 -}
 syncStep :: SyncEnv -> Maybe DbEtag -> IO SyncOutcome
 syncStep env lastSeen =
@@ -172,9 +157,8 @@ syncStep env lastSeen =
             | Just remote == lastSeen -> pure SyncUnchanged
             | otherwise -> syncNewArtifact env
 
--- The 'onException' guards absorb nothing. They discard the temp file when a fault
--- __below__ the typed channels escapes: a filesystem error writing or opening the
--- temp path. They then re-propagate it as the residue it is.
+-- The 'onException' guards absorb nothing. They discard the temp file when a filesystem fault
+-- escapes below the typed channels, then re-propagate it.
 syncNewArtifact :: SyncEnv -> IO SyncOutcome
 syncNewArtifact env = do
     let temp = syncDbPath env <> ".tmp"
@@ -195,17 +179,12 @@ syncNewArtifact env = do
 
 publishVerified :: SyncEnv -> FilePath -> DbEtag -> CveDb -> IO SyncOutcome
 publishVerified env temp fetched db = mask $ \restore -> do
-    -- The verified connection follows the inode through the rename. The canonical
-    -- name now holds the newest accepted artifact and the temp name is gone. Up to
-    -- here this side still owns the connection, so a failure closes it and discards
-    -- the download.
+    -- The verified connection follows the inode through the rename. This side still owns it,
+    -- so a failure closes the connection and discards the download.
     restore (renameFile temp (syncDbPath env))
         `onException` (cveDbClose db >> discardTemp temp)
-    -- 'swapIn' publishes atomically before it retires the displaced generation, and
-    -- owns the connection from entry. A failure or cancellation while the displaced
-    -- generation drains must never close the newly live database, so no cleanup wraps
-    -- it. The mask pins the ownership handoff. The drain wait inside stays
-    -- interruptible.
+    -- 'swapIn' owns the connection from entry, so nothing wraps it: a failure while the displaced
+    -- generation drains must never close the newly live database. The mask pins the handoff.
     swapIn (syncSlot env) fetched db
     pure (SyncSwapped fetched (cveDbMeta db))
 
@@ -213,9 +192,8 @@ publishVerified env temp fetched db = mask $ \restore -> do
 discardTemp :: FilePath -> IO ()
 discardTemp temp = removeFile temp `catchAny` const pass
 
-{- | The task's timing: the boot burst's backoff delays and the steady poll
-interval, both in microseconds. The composition root ships 'bootBackoffDelays'
-and the configured poll interval. Tests inject tiny values.
+{- | The task's timing: the boot burst's backoff delays and the steady poll interval, both in
+microseconds. The composition root ships 'bootBackoffDelays' and the configured poll interval.
 -}
 data SyncSchedule = SyncSchedule
     { schedBootBackoff :: [Int]
@@ -224,42 +202,21 @@ data SyncSchedule = SyncSchedule
     -- ^ The steady ETag-poll interval.
     }
 
-{- | The shipped boot-burst backoff: an immediate first attempt, then retries
-after each of these, then the burst concedes and the steady poll takes over.
-Constants by design. The poll interval is the operator-facing knob.
+{- | The shipped boot-burst backoff: an immediate first attempt, then a retry after each delay,
+then the burst concedes to the steady poll. The poll interval, not this, is the operator's knob.
 -}
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | The boot-burst backoff schedule compiled to a "Control.Retry" policy. The n-th
-retry waits the n-th delay (microseconds) before it. The policy stops (yields
-'Nothing') once the list is spent, so the list's length is the retry budget. Inspect
-the schedule without sleeping with 'Control.Retry.simulatePolicy'.
+{- | The boot-burst backoff compiled to a "Control.Retry" policy. The n-th retry waits the n-th
+delay in microseconds. The policy stops once the list is spent, so its length is the retry budget.
 -}
 bootBurstPolicy :: (Monad m) => [Int] -> RetryPolicyM m
 bootBurstPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
 
-{- | One ecosystem's sync task: the boot burst, then the steady poll, forever.
-
-The __boot burst__ attempts a sync immediately, then retries per the schedule's
-backoff until an artifact is live. A healthy deployment is therefore rules-engine
-complete within seconds of boot. It concedes early on a __rejected__ artifact,
-since retrying the same bytes cannot end differently, and gives up after the
-schedule with a warning. The proxy serves regardless: an empty slot only ever
-abstains into deny-by-default, and the poll keeps trying.
-
-The advisory-sync span brackets each attempt. The metrics port counts and times it. Both
-records carry the ecosystem and the attempt's bounded result as labels. The ports are
-inert when telemetry is off, so the loop observes every attempt and its scheduling never
-changes.
-
-A fetch fault arrives as a value in the step's outcome, and this task logs it.
-Residue (a filesystem fault on the temp path, a contract escape) propagates to the
-supervision the composition root wraps this task in
-('Ecluse.Core.Supervision.superviseLoop'). That supervision restarts the task. A restart
-simply resumes from the remote artifact. @notifyFirstSync@ runs after each
-successful swap, and its consumer, the readiness signal, is an idempotent
-one-way flip.
+{- | One ecosystem's sync task: the boot burst, then the steady poll, forever. The burst concedes
+early on a refused artifact, because the same bytes cannot end differently. An empty slot denies by
+default. @notifyFirstSync@ runs after every successful swap, so its consumer must be idempotent.
 -}
 runCveSync ::
     (MonadUnliftIO m, KatipContext m) =>
@@ -277,12 +234,8 @@ runCveSync metrics tracing env schedule notifyFirstSync = do
 
     step = observedStep metrics tracing env eco notifyFirstSync
 
-    -- The boot burst under 'Control.Retry': an immediate first attempt, then a retry
-    -- on each not-settled outcome per 'bootBurstPolicy'. It ends when an artifact
-    -- settles the step, or when the schedule is spent. 'lastSeen' is fixed at 'Nothing'
-    -- because the only not-settled outcomes ('SyncAbsent', 'SyncFetchFaulted')
-    -- return it untouched, so it never changes across the burst. 'poll' resumes
-    -- from the settled ETag.
+    -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
+    -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
     burst = do
         (settled, seen') <-
             retrying
@@ -290,12 +243,8 @@ runCveSync metrics tracing env schedule notifyFirstSync = do
                 (\_ (done, _) -> pure (not done))
                 (\_ -> step Nothing)
         unless settled $
-            -- The boot budget is spent without an artifact. This ecosystem stays
-            -- not-ready (the readiness gate reads 'csReady'), so its rules deny by
-            -- default and no traffic is served against a missing advisory database.
-            -- The poll continues in case the artifact appears later. Logged at
-            -- 'ErrorS' because a persistent failure here is a real misconfiguration
-            -- (bucket, object key, or IAM), not a condition a healthy deploy hits.
+            -- The readiness gate reads 'csReady', so this ecosystem denies by default.
+            -- Logged at 'ErrorS' because a persistent failure here is a misconfiguration.
             logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
         pure seen'
 
@@ -304,12 +253,9 @@ runCveSync metrics tracing env schedule notifyFirstSync = do
         (_, seen') <- step lastSeen
         poll seen'
 
-{- One observed step, yielding (the burst may stop, the ETag now last seen). The span
-brackets the attempt, and the two metric signals meter it. 'syncStep' is total over the
-fetch and over verification, so the fold over 'SyncOutcome' catches nothing. Residue
-propagates to the task's supervision at the composition root. The histogram measures the
-attempt the span brackets. The span closes after the two records, so it reads marginally
-longer. -}
+{- One observed step, yielding (the burst may stop, the ETag now last seen). Residue propagates to
+the task's supervision. The span closes after the two records, so it reads marginally longer.
+-}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->
@@ -337,9 +283,7 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
     attempt =
         liftIO (syncStep env lastSeen) >>= \case
             SyncFetchFaulted fault -> do
-                -- The step learned nothing about the remote artifact: keep the
-                -- last seen ETag and let the burst retry (or the poll try again
-                -- next interval).
+                -- The step learned nothing about the remote artifact. The last seen ETag stands.
                 logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
                 pure (AdvisoryFetchFailed, (False, lastSeen))
             SyncSwapped etag meta -> do
@@ -354,36 +298,26 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 pure (AdvisoryNonePublished, (False, lastSeen))
             SyncRejected etag rejection -> do
                 logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
-                -- Remember the ETag so the same bad artifact is not re-downloaded
-                -- every poll. A fixed re-publish carries a new ETag. The burst stops:
-                -- retrying identical bytes cannot end differently.
+                -- Remember the ETag so the same refused artifact is not re-downloaded.
+                -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
                 pure (AdvisoryRefused, (True, Just etag))
 
-{- | An S3-backed advisory-fetch source. 'newS3CveSource' builds the @amazonka@
-'AWS.Env' once and captures it, so 's3CveFetchFor' yields a 'CveFetch' per (bucket,
-object key, byte cap) without re-discovering credentials per mount. This is the
-runtime adapter that seals the SDK env behind the sync's transport, matching
-'Ecluse.Runtime.Queue.Sqs.newSqsQueue'. The composition shell never handles the env.
+{- | An S3-backed advisory-fetch source. 'newS3CveSource' captures one @amazonka@ 'AWS.Env', so
+every mount's 'CveFetch' shares one credential discovery. The composition shell never sees it.
 -}
 newtype S3CveSource = S3CveSource
     { s3CveFetchFor :: Text -> Text -> Int -> CveFetch
     -- ^ A 'CveFetch' against one bucket, object key, and byte cap, over the captured env.
     }
 
-{- | Build an 'S3CveSource', building the S3 @amazonka@ env once (honouring the
-pre-parsed endpoint override) and capturing it, so every ecosystem's 'CveFetch'
-shares one credential discovery.
--}
+-- | Build an 'S3CveSource' over one S3 @amazonka@ env, honouring the pre-parsed endpoint override.
 newS3CveSource :: Maybe (Bool, Text, Int) -> IO S3CveSource
 newS3CveSource mEndpoint = do
     awsEnv <- buildS3Env mEndpoint
     pure (S3CveSource (s3CveFetch awsEnv))
 
-{- | The real transport over the captured env: S3 @HEAD@ for the ETag, bounded
-streaming @GET@ for the bytes, against one bucket and key. Internal to the adapter,
-sealed by 'newS3CveSource'. A @404@ on @HEAD@ is the honest @Right Nothing@ (not yet
-published). Every other service or transport fault is the 'Left' value, classified
-into the core vocabulary at this edge.
+{- | The real transport over the captured env: S3 @HEAD@ for the ETag, bounded streaming @GET@ for
+the bytes. A @404@ on @HEAD@ is @Right Nothing@, and every other fault is the classified 'Left'.
 -}
 s3CveFetch :: AWS.Env -> Text -> Text -> Int -> CveFetch
 s3CveFetch awsEnv bucket key maxBytes =
@@ -410,11 +344,8 @@ s3Download awsEnv bucket key maxBytes dest = classified . runResourceT $ do
     AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
     pure (maybe (Left OsvDbNoEtag) (Right . dbEtag) (resp ^. S3L.getObjectResponse_eTag))
   where
-    -- The adapter boundary: fold the two typed escapes into the value channel.
-    -- The amazonka error sum ('AWS.send' throws it) becomes 'OsvDbTransport'. The
-    -- streaming cap's confined 'OsvDbCapExceeded' becomes 'OsvDbTooLarge'. Nothing
-    -- else is caught: a filesystem fault writing the destination propagates as
-    -- residue for the sync task's supervision to log.
+    -- The adapter boundary: fold the two typed escapes into the value channel. Nothing else
+    -- is caught, so a filesystem fault writing the destination propagates as residue.
     classified :: IO (Either OsvDbFetchFault DbEtag) -> IO (Either OsvDbFetchFault DbEtag)
     classified act =
         act
@@ -429,11 +360,8 @@ isNotFound = \case
     AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
     _ -> False
 
-{- | A pass-through conduit that refuses to stream past the byte cap. This is the
-enforcement behind the source's bounded download, where the declared content length is
-only the fast-fail. A breach throws the confined 'OsvDbCapExceeded',
-because a conduit has no value channel of its own. The adapter boundary folds it
-into 'OsvDbTooLarge'.
+{- | A pass-through conduit that refuses to stream past the byte cap. A breach throws the confined
+'OsvDbCapExceeded', which the adapter boundary folds into 'OsvDbTooLarge'.
 -}
 cappedAt :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
 cappedAt maxBytes = go 0

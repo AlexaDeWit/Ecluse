@@ -123,13 +123,11 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
  )
 
-{- | The WAI server-span middleware for the request stack: one server span per
-request, built over the handle's tracer and meter providers. When telemetry is
-disabled it is 'id'. The stack is unchanged and no span opens, so the middleware is
-additive and inert exactly as the substrate's off posture requires.
+{- | Build the WAI server-span middleware for the request stack, or 'id' when telemetry is
+disabled.
 
-It belongs __outermost__ in the stack so the span covers the whole request,
-including the other middlewares (see "Ecluse.Runtime.Server").
+It belongs __outermost__ in the stack so the span covers the whole request, including the
+other middlewares (see "Ecluse.Runtime.Server").
 -}
 telemetryWaiMiddleware :: Telemetry -> IO Middleware
 telemetryWaiMiddleware telemetry =
@@ -139,17 +137,11 @@ telemetryWaiMiddleware telemetry =
             newOpenTelemetryWaiMiddleware' tracerProvider meter
         _ -> pure id
 
-{- | Instrument a data-plane 'ManagerSettings' so every upstream fetch through the
-resulting manager opens a client span and carries W3C trace-context headers. Return the
-settings untouched when telemetry is disabled.
+{- | Instrument a data-plane 'ManagerSettings' so upstream fetches open a client span and
+carry W3C trace-context headers. Return the settings untouched when telemetry is disabled.
 
-The gate is the handle, not a per-request check. When telemetry is enabled, the
-substrate holds the process-global providers the http-client instrumentation reads.
-The spans then hang off the same tracer as everything else. When disabled the settings
-come back verbatim and the data plane runs exactly as it would without this layer.
-
-The configuration is 'dataPlaneInstrumentationConfig', which records no headers, so a
-forwarded client token never reaches a span.
+'dataPlaneInstrumentationConfig' records no headers, so a forwarded client token never
+reaches a span.
 -}
 instrumentDataPlaneManagerSettings :: Telemetry -> ManagerSettings -> IO ManagerSettings
 instrumentDataPlaneManagerSettings telemetry settings =
@@ -157,21 +149,14 @@ instrumentDataPlaneManagerSettings telemetry settings =
         Nothing -> pure settings
         Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig settings
 
-{- | The http-client instrumentation configuration the data plane uses: the default,
-which records __no__ request or response headers. This is the secret-scrub guarantee at
-the configuration boundary, since an @Authorization@ header is never lifted onto a
-span. It is named rather than inlined, and the scrub test pins that same value.
+{- | The http-client instrumentation configuration for the data plane. It records __no__
+request or response headers, so an @Authorization@ header never reaches a span.
 -}
 dataPlaneInstrumentationConfig :: HttpClientInstrumentationConfig
 dataPlaneInstrumentationConfig = httpClientInstrumentationConfig
 
-{- | Run a rule-evaluation domain span around an action that yields its result and
-the verdict to record. The span carries the package and version, and from the verdict
-the decision. On a denial it also carries the deciding rule, the reason class, and the
-human-readable message, so a refusal is explainable from the trace alone.
-
-Inert when telemetry is disabled: the action runs against no span and its result is
-returned unchanged.
+{- | Run a rule-evaluation domain span around an action that yields its result and the
+verdict to record ('ruleVerdictFields'). Inert when telemetry is disabled.
 -}
 withRuleEvalSpan ::
     (MonadUnliftIO m) =>
@@ -187,23 +172,13 @@ withRuleEvalSpan telemetry name version action =
         recordFields mSpan (ruleVerdictFields verdict)
         pure result
 
-{- | Run a mirror-enqueue domain span around the serve-time hand-off to the
-asynchronous mirror, carrying the package, version, and the authority the artifact is
-fetched from. A 'Producer' span, since it produces the work the worker later consumes.
+{- | Run a mirror-enqueue 'Producer' span around the serve-time hand-off to the asynchronous
+mirror, handing the body this span's trace context to stamp onto the job so the worker's span
+links back. Inert when telemetry is disabled.
 
-The artifact URL arrives whole. The span records @ecluse.mirror.artifact_host@, the host
-and port alone ('authorityLabel'). The location comes from upstream and its userinfo or
-query string can carry a credential, so the URL itself never reaches a span.
-
-The body is handed this span's own W3C trace context ('RemoteSpanContext') to stamp
-onto the mirror job, or 'Nothing' when telemetry is disabled. The worker's per-job span
-can then __link__ back to this producer span across the asynchronous hop. The @project@
-function maps the body's result onto an optional failure detail. A 'Just' sets the span
-status to 'Error', so the trace still explains a swallowed best-effort enqueue
-failure.
-
-Inert when telemetry is disabled: the body runs against no span and is handed no trace
-context.
+The span records the artifact authority alone ('authorityLabel'), never the URL, whose
+userinfo or query string can carry a credential. A 'Just' from @project@ sets the span status
+to 'Error', so the trace still explains a swallowed best-effort enqueue failure.
 -}
 withMirrorEnqueueSpan ::
     (MonadUnliftIO m) =>
@@ -222,17 +197,9 @@ withMirrorEnqueueSpan telemetry name version artifactUrl project body =
         whenJust mSpan $ \theSpan -> whenJust (project result) (setStatus theSpan . Error)
         pure result
 
-{- | Run a mirror-worker-job domain span around the worker's fetch → verify →
-publish, carrying the package and version and, once the job finishes, its outcome.
-A 'Consumer' span, since it consumes the enqueued work. The outcome projection names
-the bounded outcome label and, for a non-success, the detail that sets the span status
-to 'Error'.
-
-The carried trace context ('RemoteSpanContext') re-establishes the cross-async
-relationship as a span __link__ to the enqueueing producer span.
-'withMirrorEnqueueSpan' captures it and the job threads it through, so a trace
-navigates from the request to the mirror it triggered and back. A 'Nothing' context, or
-one that does not parse, yields no link. Inert when telemetry is disabled.
+{- | Run a mirror-worker-job 'Consumer' span around the worker's fetch, verify, and publish,
+linking back to the enqueueing producer span through the carried trace context
+('mirrorJobLinks'). Inert when telemetry is disabled.
 -}
 withMirrorJobSpan ::
     (MonadUnliftIO m) =>
@@ -252,16 +219,11 @@ withMirrorJobSpan telemetry name version remoteContext project action =
         whenJust mSpan $ \theSpan -> whenJust mDetail (setStatus theSpan . Error)
         pure result
 
-{- | Run an advisory-sync domain span around one sync attempt, carrying the ecosystem it
-syncs and, once the attempt finishes, the projected bounded result. An 'Internal' span:
-the attempt is background work on a schedule, parented on no request.
+{- | Run an advisory-sync 'Internal' span around one sync attempt, carrying the ecosystem and
+the projected result alone. Inert when telemetry is disabled.
 
-The attributes are exactly the ecosystem and the result. That is the bounded vocabulary
-the @ecluse.advisory.sync.*@ metrics carry as labels, so a trace and a series join on one
-value. The artifact's bucket, key, ETag, and provenance stay off the span.
-
-Inert when telemetry is disabled: the attempt runs against no span and returns its
-result unchanged.
+Those two are the bounded vocabulary the @ecluse.advisory.sync.*@ metrics label with, so a
+trace and a series join on one value.
 -}
 withAdvisorySyncSpan ::
     (MonadUnliftIO m) =>
@@ -296,13 +258,8 @@ withMetadataDecodeSpan telemetry name action =
         recordFields mSpan [("ecluse.package", renderPackageName name)]
         action
 
-{- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
-serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
-verdict and the serve-time mirror-enqueue hand-off. Each field is the matching
-@with*Span@ bracket closed over the 'Telemetry' handle. The port is therefore exactly
-this module's tracing behind the core interface, inert when telemetry is off. The worker's
-mirror-job span is projected separately by 'workerTracingPortOf' onto a
-'WorkerTracingPort', so this port carries only the two serve-path spans.
+{- | Project this module's serve-path spans onto the core 'TracingPort' that
+"Ecluse.Core.Server.Pipeline" brackets through. Inert when telemetry is disabled.
 -}
 tracingPortOf :: Telemetry -> TracingPort
 tracingPortOf telemetry =
@@ -318,10 +275,8 @@ tracingPortOf telemetry =
             withMetadataDecodeSpan telemetry n (runInIO action)
         }
 
-{- | Project the OpenTelemetry-backed mirror-job span onto the core 'WorkerTracingPort'
-the worker loop ("Ecluse.Core.Worker") brackets through. The single field is
-'withMirrorJobSpan' closed over the 'Telemetry' handle. The port is therefore exactly
-this module's tracing behind the core interface, inert when telemetry is off.
+{- | Project 'withMirrorJobSpan' onto the core 'WorkerTracingPort' that "Ecluse.Core.Worker"
+brackets through. Inert when telemetry is disabled.
 -}
 workerTracingPortOf :: Telemetry -> WorkerTracingPort
 workerTracingPortOf telemetry =
@@ -329,11 +284,8 @@ workerTracingPortOf telemetry =
         { wtpMirrorJobSpan = withMirrorJobSpan telemetry
         }
 
-{- | Project the OpenTelemetry-backed advisory-sync span onto the core
-'AdvisorySyncTracingPort' the sync loop ("Ecluse.Runtime.Cve.Sync") brackets through. The
-single field is 'withAdvisorySyncSpan' closed over the 'Telemetry' handle. The port is
-therefore exactly this module's tracing behind the core interface, inert when telemetry
-is off.
+{- | Project 'withAdvisorySyncSpan' onto the core 'AdvisorySyncTracingPort' that
+"Ecluse.Runtime.Cve.Sync" brackets through. Inert when telemetry is disabled.
 -}
 advisorySyncTracingPortOf :: Telemetry -> AdvisorySyncTracingPort
 advisorySyncTracingPortOf telemetry =
@@ -341,13 +293,10 @@ advisorySyncTracingPortOf telemetry =
         { astpSyncAttemptSpan = withAdvisorySyncSpan telemetry
         }
 
-{- | Map a serve verdict to the rule-evaluation span's attribute fields. Pure and
-total.
+{- | Map a serve verdict to the rule-evaluation span's attribute fields.
 
-An 'Admit' records only the decision. A 'Reject' records the decision, the bounded
-reason class, the human-readable message, and, for a policy denial, the deciding
-'RuleName'. None of these fields can carry a secret. The rule name and reason class
-are a closed vocabulary, and the message is the rendered decision, never a credential.
+None of these fields can carry a secret. The rule name and reason class are a closed
+vocabulary, and the message is the rendered decision, never a credential.
 -}
 ruleVerdictFields :: ServeDecision -> [(Text, Text)]
 ruleVerdictFields = \case
@@ -372,13 +321,9 @@ ruleVerdictFields = \case
         ByPolicy (RuleName ruleName) -> [("ecluse.rule.name", ruleName)]
         _ -> []
 
-{- Run an action within a domain span of the given kind and links. The action gets the
-live 'Span' when telemetry is enabled, and 'Nothing' when it is disabled. The disabled
-branch opens no span and creates no tracer, so the helper is genuinely inert off, not a
-recording span that is later dropped. The span is parented on the ambient context (the
-WAI server span on the request path), so a domain span nests under the request. The
-links are independent cross-trace references (the producer→consumer mirror hop), set at
-creation. -}
+{- Run an action within a domain span of the given kind and links, or against 'Nothing' when
+telemetry is disabled, which creates no tracer and opens no span. The span is parented on the
+ambient context, so a domain span nests under the WAI server span on the request path. -}
 withDomainSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -394,11 +339,8 @@ withDomainSpan telemetry spanKind spanLinks name body =
             let tracer = makeTracer tracerProvider ecluseScope tracerOptions
              in inSpan' tracer name defaultSpanArguments{kind = spanKind, links = spanLinks} (body . Just)
 
--- Capture a live span's W3C trace context as the carrier stamped onto the mirror job, so
--- the worker can re-establish the link. The carrier is the standard
--- @traceparent@\/@tracestate@ wire encoding, the same one the http-client
--- instrumentation injects on outbound requests. The propagation is W3C all the way
--- through, with no Écluse-private format.
+-- Capture a live span's trace context as the carrier stamped onto the mirror job, so the
+-- worker can link back. The encoding is the standard W3C @traceparent@\/@tracestate@ pair.
 captureRemoteContext :: (MonadIO m) => Span -> m RemoteSpanContext
 captureRemoteContext theSpan = do
     (traceparent, tracestate) <- liftIO (encodeSpanContext theSpan)
@@ -408,12 +350,9 @@ captureRemoteContext theSpan = do
             , rscTracestate = decodeUtf8 tracestate
             }
 
--- The span links for a worker-job span, decoded from the carried trace context. The
--- link is the single producer (enqueue) span the job points back to. There is no link
--- when the job carried none, or when the carrier does not parse as a W3C context. An
--- untrusted carrier never fails the job. It just loses the link. The link target is a
--- remote span context, so the worker job stays the root of its own trace while still
--- referencing the originating request.
+-- The span links for a worker-job span, decoded from the carried trace context: the single
+-- producer (enqueue) span the job points back to. A missing or unparsable carrier yields no
+-- link and never fails the job. The link target is remote, so the job roots its own trace.
 mirrorJobLinks :: Maybe RemoteSpanContext -> [NewLink]
 mirrorJobLinks Nothing = []
 mirrorJobLinks (Just remote) =
@@ -442,8 +381,7 @@ coordinateFields name version =
     , ("ecluse.version", renderVersion version)
     ]
 
--- The instrumentation scope the hand-added spans and the WAI meter are created under:
--- this service's name. The spans are then attributed to Écluse rather than to a
--- third-party instrumentation library.
+-- The instrumentation scope the hand-added spans and the WAI meter are created under, so
+-- they are attributed to Écluse rather than to a third-party instrumentation library.
 ecluseScope :: (IsString s) => s
 ecluseScope = "ecluse"

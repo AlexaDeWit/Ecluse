@@ -52,10 +52,8 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordMirrorEnqueueFailure,
  )
 
-{- | A 'Metrics' handle that may not exist yet: empty until the telemetry substrate has
-built the instruments, then live. The pre-telemetry boot phase builds providers that
-record through reporters closed over this. They can therefore be wired before the meter
-exists, and become live once it does. A record through it while empty is a no-op.
+{- | A 'Metrics' handle that may not exist yet, so a reporter can be wired before the boot phase
+builds the instruments. A record through it while empty is a no-op.
 -}
 newtype DeferredMetrics = DeferredMetrics (IORef (Maybe Metrics))
 
@@ -63,9 +61,8 @@ newtype DeferredMetrics = DeferredMetrics (IORef (Maybe Metrics))
 newDeferredMetrics :: IO DeferredMetrics
 newDeferredMetrics = DeferredMetrics <$> newIORef Nothing
 
-{- | Install the live instruments, making every reporter over this handle record through
-them from now on. Called once by the composition root after 'newMetrics' has built the
-instruments (which are themselves inert when telemetry is off).
+{- | Install the live instruments, so every reporter over this handle records through them.
+The composition root calls this once, after 'newMetrics'.
 -}
 installMetrics :: DeferredMetrics -> Metrics -> IO ()
 installMetrics (DeferredMetrics ref) = writeIORef ref . Just
@@ -74,19 +71,15 @@ installMetrics (DeferredMetrics ref) = writeIORef ref . Just
 withDeferredMetrics :: DeferredMetrics -> (Metrics -> IO ()) -> IO ()
 withDeferredMetrics (DeferredMetrics ref) record = readIORef ref >>= maybe pass record
 
-{- | A 'BreakerReporter' that records a breaker's state to @ecluse.rule.breaker.state@
-under the given source, through the deferred handle (inert until it is installed).
--}
+-- | Record a breaker's state to @ecluse.rule.breaker.state@ under the given source.
 deferredBreakerReporter :: DeferredMetrics -> BreakerSource -> BreakerReporter
 deferredBreakerReporter deferred source =
     BreakerReporter $ \breaker ->
         withDeferredMetrics deferred $ \metrics ->
             recordBreakerState metrics source (breakerStateOf breaker)
 
-{- | A 'RefreshReporter' that records each refresh outcome to @ecluse.credential.refresh@
-(by result) and the reported remaining lifetime to @ecluse.credential.token.ttl.seconds@,
-both under the given provider. It records through the deferred handle, inert until it
-is installed.
+{- | A 'RefreshReporter' that records each refresh outcome to @ecluse.credential.refresh@ and the
+reported remaining lifetime to @ecluse.credential.token.ttl.seconds@ under the given provider.
 -}
 deferredRefreshReporter :: DeferredMetrics -> Provider -> RefreshReporter
 deferredRefreshReporter deferred provider =
@@ -101,11 +94,9 @@ deferredRefreshReporter deferred provider =
             recordCredentialRefresh metrics provider result
             whenJust mTtlSeconds (recordCredentialTokenTtl metrics provider)
 
-{- | An action recording one mirror enqueue failure to @ecluse.mirror.enqueue.failures@,
-through the deferred handle (inert until it is installed). The composition root hangs
-it on the enqueue buffer's drop and delivery-failure callbacks
-('Ecluse.Core.Queue.newEnqueueBuffer'). Those are wired before the instruments exist
-but cannot fire until the server is serving, well after 'installMetrics'.
+{- | An action recording one mirror enqueue failure to @ecluse.mirror.enqueue.failures@.
+The composition root hangs it on the enqueue buffer's callbacks
+('Ecluse.Core.Queue.newEnqueueBuffer'), which cannot fire before 'installMetrics' runs.
 -}
 deferredMirrorEnqueueFailure :: DeferredMetrics -> IO ()
 deferredMirrorEnqueueFailure deferred =

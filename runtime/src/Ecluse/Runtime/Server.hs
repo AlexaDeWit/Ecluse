@@ -139,68 +139,43 @@ import Ecluse.Runtime.Server.Middleware (
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
 
-{- | The server's own settings: the values the 'Application' and 'runServer' need
-that the composition-root 'Env' does not carry. Those are the listen port and the
-served mount bindings. Backend selection is a composition-root concern. This is the minimal
-shape the web layer needs to route. The request-body cap is not here: it is a route
-concern, enforced by the only body-consuming route (publish) against its own
+{- | The settings the web layer needs to serve that the composition-root 'Env' does not
+carry. The request-body cap is not here: the publish route bounds its own body against
 'Ecluse.Core.Server.Context.pubMaxRequestBytes'.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
     -- ^ The TCP port @warp@ listens on.
     , scMounts :: [MountBinding]
-    {- ^ The mounts served, tried in order. The first whose prefix matches the
-    request's leading segments wins. A deployment with no mounts serves nothing beyond
-    the health probes: every other path is the neutral @404@.
+    {- ^ The mounts served. The first whose prefix matches the request's leading segments
+    wins, and a path under no mount is the neutral @404@.
     -}
     , scDrain :: DrainSignal
-    {- ^ The shared shutdown-drain flag the front door observes. Once raised, the
-    readiness probe fails and responses carry @Connection: close@ (the going-away
-    middleware). A load balancer then stops routing new traffic to this instance, and
-    clients stop reusing keep-alive sockets to it. Defaults to
-    'neverDraining'. 'runWarp' allocates a live signal per launch and builds the
-    'Application' over it, through the config it hands the builder. A shutdown signal
-    raises it.
+    {- ^ The shutdown-drain flag the front door observes. Once raised, the readiness probe
+    fails and every response carries @Connection: close@. Defaults to 'neverDraining'.
     -}
     , scDrainTimeout :: ShutdownDrainTimeout
     {- ^ How long the graceful drain waits for in-flight requests and in-progress
     artifact streams to finish before the process exits ('defaultShutdownDrainTimeout').
     -}
     , scCheckReady :: IO Bool
-    {- ^ A second readiness gate the composition root installs, ANDed with
-    the drain check by @\/readyz@. Today it is the advisory database's first-sync
-    signal, a one-way flip per configured ecosystem, so readiness never flaps on it.
-    It is @'pure' True@ (the 'mkServerConfig' default) when no advisory bucket is
-    configured. The listener serves regardless, since an absent
-    advisory database only ever abstains into deny-by-default. This gates what a load
-    balancer routes, not whether the process answers.
+    {- ^ A second readiness gate the composition root installs, ANDed with the drain check by
+    @\/readyz@. It must be a one-way flip (today the advisory database's first sync), so readiness
+    never flaps a pod out of rotation. It gates routing, not whether the process answers.
     -}
     , scCheckLive :: IO Bool
-    {- ^ The liveness check @\/livez@ answers from, beyond the listener itself.
-    The composition root wires the mirror worker's consume-loop heartbeat here
-    exactly when a worker runs (a mirroring deployment). The 'mkServerConfig' default
-    is @'pure' True@ (the listener alone), so a serve-only deployment can never go
-    unhealthy over a worker it never started.
+    {- ^ The liveness check @\/livez@ answers from, beyond the listener itself. A worker
+    heartbeat is wired here only when a worker runs, so a serve-only deployment stays live.
     -}
     , scOnException :: Maybe Request -> SomeException -> IO ()
-    {- ^ @warp@'s exception hook. It fires for a fault that escapes to the server
-    itself: a post-commit teardown the request perimeter rethrew, or a fault in
-    warp's connection handling. The composition root wires it to the
-    process's structured logger (filtered through
-    'Warp.defaultShouldDisplayException', so routine client disconnects stay quiet).
-    The 'mkServerConfig' default is inert, so a bare config never surprises a test with
-    logging.
+    {- ^ @warp@'s exception hook, for a post-commit escape the request perimeter rethrew or a
+    fault in warp's own connection handling. The 'mkServerConfig' default is inert.
     -}
     }
 
-{- | Build a 'ServerConfig' over the given mount bindings, taking the default
-listen port ('defaultPort').
-
-The composition root supplies the bindings, each a mount's complete ecosystem wiring,
-and overrides the port by record update where a deployment needs to. There is no
-built-in mount. The web layer carries no ecosystem of its own: it serves an ecosystem
-only after the composition root passes that ecosystem's binding here.
+{- | Build a 'ServerConfig' over the given mount bindings, taking the default listen port
+('defaultPort'). There is no built-in mount: the web layer serves only the ecosystems the
+composition root binds here.
 -}
 mkServerConfig :: [MountBinding] -> ServerConfig
 mkServerConfig mounts =
@@ -218,34 +193,22 @@ mkServerConfig mounts =
 defaultPort :: Int
 defaultPort = 4873
 
-{- | Build the proxy's WAI 'Application' over a 'ServerConfig' and the
-composition-root 'Env', with the middleware stack composed around it.
-
-The bare app dispatches a request. The top level answers a control-plane health probe
-(@\/livez@ \/ @\/readyz@). Otherwise the leading path segment matches a mount, dispatch
-strips the prefix, and the mount's router classifies the remainder. The returned
-'Application' has the middleware applied (body cap, client-IP recovery, timeout).
+{- | The proxy's WAI 'Application': the request dispatch under the cross-cutting
+middleware stack ('serverMiddleware').
 -}
 application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
 
-{- | Build the proxy 'Application' with the OpenTelemetry server-span middleware
-wrapped __outermost__ around 'application', so one server span covers the whole
-request, the other middlewares included. When telemetry is disabled the wrapper is
-'id', so this is exactly 'application': additive and inert off (see
-"Ecluse.Runtime.Telemetry.Tracing"). 'runServer' serves through this. A caller
-embedding the proxy that wants the request trace builds its application here rather
-than through the bare 'application'.
+{- | 'application' with the OpenTelemetry server-span middleware wrapped __outermost__, so
+one server span covers the whole request. The wrapper is 'id' when telemetry is off.
 -}
 tracedApplication :: ServerConfig -> Env -> IO Application
 tracedApplication cfg env = do
     traceMiddleware <- telemetryWaiMiddleware (envTelemetry env)
     pure (traceMiddleware (application cfg env))
 
-{- Dispatch a request to its handler. Top-level health probes answer first, above any
-mount. Otherwise the leading path segments match a mount. A match routes the remainder
-through that mount's binding. No match is the neutral @404@, since there is no
-ecosystem to render it.
+{- Route a request: the first matching mount wins, and every other path falls to the
+health probes, which answer @\/livez@ and @\/readyz@ and give the rest the neutral @404@.
 -}
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
@@ -253,26 +216,13 @@ dispatch cfg env request respond =
         Just (binding, action) -> serve env binding action request respond
         Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg) request respond
 
-{- Carry out the action the matched mount's router named.
-
-That router decided the route ('bindingRouter', which the mount's ecosystem adapter
-supplies). This function knows only the two kinds of action it can return. An
-'AnswerLocally' action is a pure value interpreted through the route contract. A
-'RunPipeline' action is discharged to 'IO' under the typed request perimeter. It runs
-over the per-request 'RequestCtx' built once here: the request runtime
-'serveRuntimeOf' paired with the matched 'MountBinding'. The handler therefore reads
-its mount's serve dependencies from context rather than as threaded arguments. The
-deps-or-stub decision is the handler's. A mount with no packument dependencies answers
-the recognised-but-unwired @501@, and one with no publication target answers a publish
-with @405@.
+{- Carry out the action the matched mount's router named. A 'RunPipeline' action runs
+under the typed request perimeter, over the 'RequestCtx' this function builds once.
 -}
 serve :: Env -> MountBinding -> RouteAction -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding (RouteAction contract action) request respond =
     case action of
         AnswerLocally answer -> send answer
-        -- The data-plane handler under the typed request perimeter. 'run' discharges
-        -- it, and the perimeter observes a fault on the bounded
-        -- @ecluse.serve.perimeter.faults@ metric plus the audit log line.
         RunPipeline fallback handler -> perimeterGuard observeFault send fallback (run . handler request)
   where
     send value = respond (responseToWai contract value)
@@ -282,20 +232,16 @@ serve env binding (RouteAction contract action) request respond =
         run . katipAddContext (perimeterPayload fault) $
             logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
 
-    -- The perimeter audit payload: the request path, the bounded classified cause,
-    -- and the rendered detail. These mirror the denial audit line's fields, so an
-    -- operator triages both surfaces with one vocabulary.
+    -- The fields mirror the denial audit line, so an operator triages both surfaces with one
+    -- vocabulary.
     perimeterPayload fault =
         sl "module" ("Ecluse.Runtime.Server" :: Text)
             <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
             <> sl "perimeterCause" (show (rqCause fault) :: Text)
             <> sl "perimeterDetail" (rqDetail fault)
 
-    -- Discharge a 'Handler' to 'IO' over the per-request context, establishing the
-    -- @katip@ logging context the application owns. That context is the composition
-    -- root's 'LogEnv' (scribes) plus the resolved trace-correlation @dd@ object, so
-    -- every serve-path line carries @dd@. The request runtime the handler reads is
-    -- projected from 'Env' ('serveRuntimeOf').
+    -- Discharge a 'Handler' to 'IO' over the per-request context. Resolving @dd@ here is what
+    -- makes every serve-path log line carry its trace correlation.
     run handlerAction = do
         dd <- ddPayloadNow (envDdContext env)
         runHandler (envLogEnv env) dd ctx handlerAction
@@ -306,22 +252,13 @@ serve env binding (RouteAction contract action) request respond =
     ctx :: RequestCtx
     ctx = RequestCtx runtime binding
 
-{- | The typed request perimeter over one effectful route: run the handler with a
-commit-tracking respond, catching only __synchronous__ escapes. Asynchronous
-cancellation is not caught and tears the request down like any thread. The handlers
-report every routine failure as a value, so what arrives here is an escape from some
-dependency's typed contract.
+{- | Run one route's handler behind a commit-tracking respond, catching __synchronous__
+escapes only. Asynchronous cancellation tears the request down like any other thread.
 
-Pre-commit, the perimeter classifies the escape
-('Ecluse.Core.Server.Fault.classifyEscape') and hands it to the injected observation
-channel. The composition wires that channel to the bounded
-@ecluse.serve.perimeter.faults@ metric and the audit log line. The perimeter then
-answers with the route's declared neutral 500. No fault detail ever reaches the
-client.
-
-Post-commit, when the wrapped respond has already begun the response, there is no
-second response to give. The escape rethrows, warp tears the connection down, and the
-'scOnException' hook logs it. Exported for its spec. 'serve' wires it per request.
+Pre-commit, the perimeter classifies the escape, hands it to the observation channel, and
+answers the route's neutral fallback, so no fault detail ever reaches the client.
+Post-commit there is no second response to give: the escape rethrows and 'scOnException'
+logs it.
 -}
 perimeterGuard ::
     -- | Observe a classified pre-commit fault (the metric and the audit line).
@@ -346,29 +283,22 @@ perimeterGuard observeFault respond fallback handlerOn = do
                 observeFault (classifyEscape escape)
                 respond fallback
 
-{- Match a request path to a mount: the first binding whose prefix the path begins
-with. The result pairs that binding with the action its ecosystem's router names for
-the remainder. 'Nothing' when no mount's prefix matches, and the caller answers the neutral
-@404@ (a path under no mount has no ecosystem to render it). A mount prefix is
-accepted with or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both
-match the @\/npm@ mount.
+{- Match a request path to a mount: the first binding whose prefix the path begins with,
+paired with the action its router names for the remainder. A prefix matches with or
+without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both hit the @\/npm@ mount.
 -}
 matchMount :: Method -> [MountBinding] -> [Text] -> Maybe (MountBinding, RouteAction)
 matchMount method mounts segments = asum (map match mounts)
   where
-    -- The binding whose prefix the path begins with, paired with its router's verdict
-    -- on the remainder. The method is threaded through because it is part of the
-    -- mapping. The npm router tells a @PUT@ publish from a @GET@ read over the same
-    -- path, and a @HEAD@ from the @GET@ it varies. 'Nothing' for a non-matching prefix.
+    -- The method is part of the mapping: the npm router tells a @PUT@ publish from a @GET@
+    -- read over the same path, and a @HEAD@ from the @GET@ it varies.
     match :: MountBinding -> Maybe (MountBinding, RouteAction)
     match binding =
         (binding,) . bindingRouter binding method
             <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
-{- Strip a mount's prefix segments off the front of a request path. The root mount
-(an empty prefix) consumes nothing and always matches. The strip also drops trailing
-empty segments, so the trailing slash of a bare @\/npm\/@ or @\/npm\/\/@ never reads
-as an empty ecosystem path component.
+{- Strip a mount's prefix segments off the front of a request path. The root mount (an
+empty prefix) consumes nothing and always matches.
 -}
 stripPrefixSegments :: [Text] -> [Text] -> Maybe [Text]
 stripPrefixSegments [] segs = Just (dropTrailingSlashes segs)
@@ -376,43 +306,24 @@ stripPrefixSegments (p : ps) (s : ss)
     | p == s = stripPrefixSegments ps ss
 stripPrefixSegments _ _ = Nothing
 
--- Drop every trailing empty segment, the trailing slash or slashes of a bare-mount
--- path (@\/npm\/@ arrives as @["npm",""]@, @\/npm\/\/@ as @["npm","",""]@). A run of
--- them normalises to the empty path rather than a spurious empty component. An
--- /internal/ empty segment is left untouched for the router to reject.
+-- A trailing slash arrives as an empty final segment (@\/npm\/@ as @["npm",""]@). An
+-- internal empty segment is left untouched for the router to reject.
 dropTrailingSlashes :: [Text] -> [Text]
 dropTrailingSlashes = dropWhileEnd (== "")
 
-{- | The cross-cutting middleware stack composed around the proxy 'Application':
-correct client-IP recovery behind a load balancer (@X-Forwarded-For@ \/ @X-Real-IP@),
-and a per-request timeout. The pieces live in "Ecluse.Runtime.Server.Middleware". This
-composes them over the 'ServerConfig'.
+{- | The cross-cutting middleware stack composed around the proxy 'Application': client-IP
+recovery behind a load balancer (@X-Forwarded-For@ \/ @X-Real-IP@), a per-request timeout,
+and the going-away header. While the drain is raised that header stamps @Connection:
+close@, so a keep-alive pool stops reusing a socket into an instance that is shutting down
+(@docs\/architecture\/web-layer.md@).
 
-The request-body cap is __not__ a middleware. Only one route (publish) consumes a
-request body, and it bounds that body at the source as a value. A declared
-Content-Length over the cap fails closed before a byte is read, and a counted read
-('Ecluse.Core.Security.boundedRead') bounds a chunked body. The route answers each as
-its own @413@. A body-cap middleware would instead have to wrap the reader and
-__throw__ across the request perimeter, which is untracked control flow. The bound
-therefore lives at the read site ('Ecluse.Core.Server.Pipeline.Publish') rather than
-here.
+The request-body cap is __not__ a middleware. A middleware would have to throw across the
+request perimeter, so the publish route bounds its own body as a value
+('Ecluse.Core.Server.Pipeline.Publish').
 
-A third middleware, the __going-away__ header, is active only during a graceful
-drain. While the 'ServerConfig''s 'DrainSignal' is raised it stamps @Connection:
-close@ on every response. An HTTP\/1.1 keep-alive pool (a client's, or a service mesh's
-connection pool) then does not reuse a socket on an instance that is shutting down.
-That reuse is the cause of the 503-on-rollover this guards against (see
-@docs\/architecture\/web-layer.md@ → "Graceful shutdown").
-
-Two @wai-extra@ middlewares are deliberately __not__ used. The @Autohead@ middleware
-answers a HEAD by running the GET handler and discarding the body. On a tarball route
-that would open the upstream and stream a whole artifact to nowhere. Instead 'serve'
-handles a HEAD on the tarball or packument route explicitly, gating exactly as the GET
-path does but suppressing the body. The tarball probes the upstream as a HEAD, so a bodiless HEAD
-can never trigger a full-artifact upstream fetch. The packument emits the same status
-and headers as the GET, with the locally-built body withheld. The @Gzip@ middleware
-would re-compress already compressed artifacts and fight the streaming backpressure the
-serve path relies on.
+@wai-extra@'s @Autohead@ and @Gzip@ stay out on purpose. @Autohead@ would answer a HEAD by
+running the GET handler, streaming a whole tarball to nowhere, and @Gzip@ would re-compress
+artifacts and fight the streaming backpressure the serve path relies on.
 -}
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
@@ -420,28 +331,15 @@ serverMiddleware cfg =
         . timeout timeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
-{- | Serve the proxy's HTTP front door. Allocate the launch's live 'DrainSignal', then
-build the 'Application' by handing the supplied builder a 'ServerConfig' whose
-'scDrain' is that signal. Start @warp@ on the config's port with it. The
-composition root supplies the 'ServerConfig', in particular its mount bindings
-('scMounts'), each a mount's complete ecosystem wiring. That root is where the served
-ecosystems are mounted (see @Ecluse@).
+{- | Serve the proxy's HTTP front door. This allocates the launch's live 'DrainSignal' and
+hands the builder a 'ServerConfig' carrying it, so the readiness probe and the going-away
+middleware read the same drain the shutdown handler raises.
 
-__Graceful shutdown.__ The fresh live 'DrainSignal' allocated per launch is wired into
-both the request path and the @warp@ shutdown handler. The 'Application' builder takes
-a 'ServerConfig' carrying that signal, so the readiness probe and the going-away
-middleware read exactly the drain the handler raises. On @SIGTERM@ or @SIGINT@
-the handler raises the drain, so the readiness probe begins failing and responses gain
-@Connection: close@. It then closes the listen socket, which puts @warp@ into
-graceful-shutdown mode. Warp stops accepting new connections and waits for in-flight
-requests __and in-progress artifact streams__ to finish before the process exits,
-bounded by 'scDrainTimeout'. The handler is a 'CatchOnce', so a second signal during
-the drain hard-stops the server rather than being swallowed.
+@warp@ stops accepting on that signal and waits for in-flight requests and in-progress
+artifact streams, bounded by 'scDrainTimeout'.
 
-__Local-dev quit key.__ The whole run is wrapped in 'withInteractiveHalt'. It arms a
-watcher __only when attached to an interactive terminal__. That watcher forces an
-immediate halt on Ctrl-D (end of standard input), bypassing the drain like a second
-Ctrl-C. Outside a TTY (production) no watcher is installed and this changes nothing.
+Attached to an interactive terminal, 'withInteractiveHalt' also makes Ctrl-D force an
+immediate halt, bypassing the drain. Outside a TTY it installs nothing.
 -}
 runWarp :: ServerConfig -> (ServerConfig -> IO Application) -> IO ()
 runWarp cfg0 getApp = do
@@ -452,15 +350,10 @@ runWarp cfg0 getApp = do
             Warp.setPort (scPort cfg)
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
-                -- The composition root's exception hook: post-commit teardowns the
-                -- request perimeter rethrew, and warp's own connection faults, reach
-                -- the structured logger rather than warp's stderr default.
                 . Warp.setOnException (scOnException cfg)
-                -- Defence-in-depth for a fault with no mount context (middleware,
-                -- warp itself): a neutral JSON 500 (no exception detail) rather than
-                -- warp's default body. A pre-commit handler escape never reaches
-                -- this. The typed request perimeter ('serve') answers it first,
-                -- route-shaped.
+                -- Defence in depth for a fault with no mount context, from a middleware or warp
+                -- itself: a neutral JSON 500 carrying no exception detail. A handler escape answers
+                -- through the request perimeter instead and never reaches here.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp cfg
@@ -471,11 +364,9 @@ runWarp cfg0 getApp = do
 onExceptionResponse :: Response
 onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
-{- Install the OS shutdown handler @warp@ asks for. On @SIGTERM@\/@SIGINT@, raise the
-drain: readiness flips to @503@ and responses start carrying @Connection: close@. Then
-run @warp@'s @closeSocket@, which begins the graceful drain of in-flight work. Each
-signal is caught __once__ ('CatchOnce') so a second signal falls through to the
-runtime's default and hard-stops a drain that is taking too long.
+{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the listen socket, so
+readiness fails and responses carry @Connection: close@ before @warp@ stops accepting.
+'CatchOnce' leaves a second signal to the runtime default, which hard-stops a slow drain.
 -}
 installShutdownHandler :: DrainSignal -> IO () -> IO ()
 installShutdownHandler drain closeSocket =
@@ -483,19 +374,13 @@ installShutdownHandler drain closeSocket =
   where
     install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
 
-{- | Race a server arm (the first argument) against a never-returning background loop
-(the second): the shutdown shape the single-process composition roots share. The proxy
-races its HTTP server against the mirror worker, and the pilot races its probe server
-against the OSV export loop.
+{- | Race a server arm against a never-returning background loop, the shutdown shape the
+single-process composition roots share.
 
-Choosing 'race_' over 'concurrently_' is the shutdown invariant. The background loop
-never returns, so a 'concurrently_' would keep waiting on it after the server drained
-gracefully and returned. That leaves the surrounding telemetry and resource brackets
-un-unwound: no exporter flush, and the process hanging until a second signal or the
-orchestrator's kill. 'race_' lets the server's graceful return cancel the loop and
-unwind those brackets, flushing and exiting cleanly. A fault thrown by either arm still
-propagates, since 'race_' re-raises it, so a genuine failure fails the process up
-rather than being swallowed.
+'race_' rather than 'concurrently_' is the invariant: the loop never returns, so
+'concurrently_' would keep waiting after the server drained and leave the surrounding
+telemetry and resource brackets un-unwound, with no exporter flush. A fault from either arm
+still propagates.
 -}
 raceServerAgainstLoop :: (MonadUnliftIO m) => m () -> m () -> m ()
 raceServerAgainstLoop = race_

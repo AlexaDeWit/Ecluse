@@ -30,10 +30,8 @@ module Ecluse.Core.Fault (
 
 import Data.Text qualified as T
 
-{- | One classified transport failure: the closed cause a consumer branches on, and
-the rendered client-library detail for its log line. Build it with 'transportFault'
-so the detail stays bounded. The module exports the constructor for pattern matches
-and test fixtures.
+{- | One classified transport failure. Build it with 'transportFault' so the detail stays
+bounded.
 -}
 data TransportFault = TransportFault
     { tfCause :: TransportCause
@@ -45,9 +43,8 @@ data TransportFault = TransportFault
     }
     deriving stock (Eq, Show)
 
-{- | Why the transport could not deliver: the closed, bounded cause set. Coarse on
-purpose: each constructor is a distinction an operator reads differently in a log or
-metric, and anything finer belongs in 'tfDetail'.
+{- | Why the transport could not deliver. Coarse on purpose: each constructor is a
+distinction an operator reads differently, and anything finer belongs in 'tfDetail'.
 -}
 data TransportCause
     = -- | The peer did not answer in time (a connect or response timeout).
@@ -65,16 +62,14 @@ data TransportCause
       TransportProtocol
     deriving stock (Eq, Show)
 
-{- | Build a 'TransportFault' with the detail truncated to the log-line budget. A
-pathological rendered exception (an embedded response body, a long certificate chain)
-therefore cannot bloat a log line or a held error value.
+{- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
+pathological rendered exception cannot bloat a log line or a held error value.
 -}
 transportFault :: TransportCause -> Text -> TransportFault
 transportFault cause detail = TransportFault cause (boundedDetail detail)
 
-{- | Truncate a rendered detail to the shared log-line budget. Every fault vocabulary
-that carries diagnostic text (this one, the queue's, the request perimeter's) bounds
-it identically.
+{- | Truncate a rendered detail to the shared log-line budget. Every fault vocabulary that
+carries diagnostic text bounds it identically.
 -}
 boundedDetail :: Text -> Text
 boundedDetail = T.take maxDetailChars

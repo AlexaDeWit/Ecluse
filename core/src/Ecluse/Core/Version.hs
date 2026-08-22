@@ -51,16 +51,12 @@ import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver)
 
 {- | A package version.
 
-It keeps the raw text verbatim for a faithful round-trip, because version strings
-are embedded in artifact URLs and re-served. Ordering uses the parsed, canonical
-'VersionKey' instead, which is present only when the raw text parses for its
-ecosystem. Build a version with 'mkVersion', which is total. An unparseable version
-is still represented, just with no key, so the proxy never drops a version over a
-parser gap. Use 'parseVersionKey' when you want the parse error.
+It keeps the raw text verbatim, because version strings are embedded in artifact URLs
+and re-served. Ordering instead uses the parsed 'VersionKey'.
 
 There is deliberately __no__ 'Ord' on 'Version'. Comparison goes through
-'compareVersions', which is defined only on parsed keys, so non-canonical text can
-never reach the comparator.
+'compareVersions', which is defined only on parsed keys, so non-canonical text can never
+reach the comparator.
 -}
 data Version = Version
     { -- The version as published: for rendering and round-tripping only, never
@@ -88,27 +84,14 @@ unVersion = versionRaw
 renderVersion :: Version -> Text
 renderVersion = versionRaw
 
-{- | Compare two versions by their canonical keys. 'Nothing' if either version did
-not parse and so has no key. An ordering-based rule then abstains, like the other
-"unknown signal" cases (@CodeExecUnknown@, @TrustUnknown@).
+{- | Compare two versions by their canonical keys. 'Nothing' when either version has no
+key, in which case an ordering-based rule abstains.
 -}
 compareVersions :: Version -> Version -> Maybe Ordering
 compareVersions a b = compare <$> versionKey a <*> versionKey b
 
-{- | Whether a parsed version is a __stable__ (final, non-prerelease) release.
-The notion is ecosystem-specific, dispatched on the key's constructor:
-
-* __semver (npm)__: stable iff there is no @-prerelease@ component (the
-  prerelease is 'SemverFinal'). So @1.0.0@ is stable. @1.0.0-rc.1@ and
-  @2.0.0-beta@ are not.
-* __PEP 440 (PyPI)__: stable iff it is neither a pre-release (@a@\/@b@\/@rc@)
-  nor a dev release. Post-releases /are/ stable. So @1.0@ and @1.0.post1@ are
-  stable. @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
-* __RubyGems__: stable iff no segment contains a letter (the version is
-  all-numeric). So @1.0.0@ is stable. @1.0.0.pre@ and @1.2.0.rc1@ are not.
-
-'selectLatest' uses it to prefer a stable release when @dist-tags.latest@ must
-be repointed.
+{- | Whether a parsed version is a __stable__ (final, non-prerelease) release. The notion
+is ecosystem-specific: see 'isSemverStable', 'isPep440Stable' and 'isGemStable'.
 
 >>> isStable <$> parseVersionKey Npm "1.0.0"
 Right True
@@ -127,27 +110,20 @@ isStable = \case
     PyPIKey k -> isPep440Stable k
     RubyGemsKey k -> isGemStable k
 
-{- | Resolve @dist-tags.latest@ for a packument once the caller has filtered out the
-denied and undecidable versions. This is the __keep-unless-denied,
-stable-preferring__ rule from @docs\/architecture\/rules-engine.md@ ("Applying
-verdicts to a packument"). The @chosen@ argument is the source's currently-tagged
-@latest@, if any. The @survivors@ argument is the surviving versions. The result, when
-present, is always one of @survivors@, so the caller can use its 'unVersion' as the tag
-string.
+{- | Resolve @dist-tags.latest@ once the caller has filtered out the denied and
+undecidable versions. This is the keep-unless-denied, stable-preferring rule from
+@docs\/architecture\/rules-engine.md@. The result, when present, is always one of
+@survivors@.
 
 The resolution, in order:
 
-* If @survivors@ is empty, there is nothing to point at: 'Nothing'.
-* Keep: if @chosen@ survives (by raw text), return it unchanged. This is the identity
-  on a single-input packument, and it never /promotes/ a prerelease over a maintainer's
-  chosen stable @latest@.
-* Repoint, only when the chosen @latest@ did not survive: among survivors with a
-  parseable key, prefer the maximum __stable__ one. If none are stable, take the
-  maximum __prerelease__ one. Within one ecosystem parseable keys are totally ordered,
-  so 'compareVersions' is total over them.
-* No parseable survivor: fall back to the lexicographically-smallest survivor by
-  'unVersion', so the result still names a present version. An unparseable version
-  never outranks a parseable one.
+* No survivors: 'Nothing'.
+* Keep: if @chosen@ survives by raw text, return it unchanged, so a prerelease never
+displaces a maintainer's stable @latest@.
+* Repoint: among survivors with a parseable key, take the greatest stable one, else the
+greatest prerelease one.
+* No parseable survivor: fall back to the lexicographically smallest survivor by
+'unVersion', so the result still names a present version.
 -}
 selectLatest :: Maybe Version -> [Version] -> Maybe Version
 selectLatest chosen survivors = case nonEmpty survivors of
@@ -180,12 +156,10 @@ newtype VersionError = VersionError
     }
     deriving stock (Eq, Show)
 
-{- | The parsed, canonical, comparable form of a version. The type is __opaque__.
-'parseVersionKey' is the only way to obtain one, so a 'VersionKey' always holds a
-well-formed, normalised version. The comparator therefore structurally cannot see
-non-canonical input (parse, don't validate). Its 'Ord' is meaningful only within a
-single ecosystem, which is the only case that arises, because one compares the
-versions of one package.
+{- | The parsed, canonical, comparable form of a version. The type is __opaque__ and
+'parseVersionKey' is its only constructor, so the comparator structurally cannot see
+non-canonical input. Its 'Ord' is meaningful only within one ecosystem, the only case
+that arises.
 -}
 data VersionKey
     = NpmKey SemverKey
@@ -193,9 +167,8 @@ data VersionKey
     | RubyGemsKey GemKey
     deriving stock (Eq, Ord, Show)
 
-{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or
-report why it did not parse. This is the parsing boundary: downstream code
-holds a 'VersionKey' and relies on it being valid.
+{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or report
+why it did not parse.
 -}
 parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
 parseVersionKey eco raw = case eco of

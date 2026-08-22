@@ -67,16 +67,10 @@ import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
-{- | A resolved upstream contribution:
-
-* the parsed packument the pipeline decides over
-* the raw document ('CachedDoc') the served body is rebuilt from
-* the origin body's 'ContentDigest' for the derived validator
-
-Pairing the views is the decision-surface and served-surface contract. Every stage carries
-the raw document next to the typed view, so nothing is lost across the pipeline. The raw
-document travels opaquely. The pipeline hands it to the injected adapter capabilities and
-never reads it.
+{- | A resolved upstream contribution: the parsed packument the pipeline decides over, the
+raw document its served body is rebuilt from, and the origin body's digest for the derived
+validator. The raw document travels opaquely, so the pipeline never reads it and only hands
+it to the injected adapter capabilities.
 -}
 data Contribution = Contribution
     { srcProvenance :: Provenance
@@ -85,19 +79,15 @@ data Contribution = Contribution
     , srcDigest :: ContentDigest
     }
 
-{- | One source's slice of the derived validator: its provenance, its origin body's
-digest, and the version keys that survived its gate. With the mount base URL and the
-package name, these are exactly the inputs the assembled document is a deterministic
-function of. The plan itself derives from them.
+{- | One source's slice of the derived validator. With the mount base URL and the package
+name, these are exactly the inputs the assembled document is a deterministic function of.
 -}
 fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [Text])
 fingerprintPiece s = (srcProvenance s, srcDigest s, Map.keys (infoVersions (srcInfo s)))
 
-{- | The outcome of resolving one upstream origin for a packument, beyond the plain
-"resolved or not" the merge consumes. A name mismatch stays distinct from a plain
-non-resolution. The no-valid-origin terminal status can then render a @502@: a responding
-upstream returned a packument for a different package. That stays apart from a transient
-outage or a genuine absence.
+{- | The outcome of resolving one upstream origin for a packument. A name mismatch stays
+distinct, so the no-valid-origin terminal status can render a @502@ instead of treating a
+wrong-package answer as a transient outage.
 -}
 data OriginResult
     = -- | A packument that decoded and whose self-reported name matched the request.
@@ -118,9 +108,7 @@ data OriginResult
       -}
       OriginAbsent
 
-{- | The resolved manifest an origin contributed, if any. A name mismatch, a plain
-non-resolution, and an absent origin alike contribute no document to the merge.
--}
+-- | The resolved manifest an origin contributed, if any.
 originManifest :: OriginResult -> Maybe Manifest
 originManifest = \case
     OriginResolved manifest -> Just manifest
@@ -128,15 +116,9 @@ originManifest = \case
     OriginUnresolved -> Nothing
     OriginAbsent -> Nothing
 
-{- Classify a per-origin full-manifest fetch into an 'OriginResult'. Every fetch outcome,
-an unreachable upstream included, arrives typed in the 'MetadataError' channel and
-degrades to no contribution. A 'MetadataNameMismatch' stays distinct as
-'OriginNameMismatch'. The no-valid-origin terminal status can then render a @502@ for a
-responding upstream that answered for a different package. That stays apart from a
-transient outage, an undecodable body, or a bound breach. The 'tryAny' arm is the
-per-origin degrade boundary for an __invariant break only__, since the fetch is total by
-type. A handle that escapes its contract still costs one origin's contribution, never the
-whole merge. -}
+{- Every fetch outcome arrives typed in the 'MetadataError' channel, so the exception arm
+catches an invariant break only. A handle that escapes its contract costs one origin's
+contribution, never the whole merge. -}
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
     Left _ -> OriginUnresolved
@@ -144,21 +126,15 @@ originResultOf = \case
     Right (Left _) -> OriginUnresolved
     Right (Right manifest) -> OriginResolved manifest
 
-{- | Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
-own credential (the default @passthrough@ posture). Returns its coherent pair of parsed
-packument and raw @Value@, or 'Nothing' when the origin is unavailable or its body does
-not parse. A failed fetch is a degraded contribution, not an error: the merge serves the
-best-effort union of whatever resolved (partial-upstream availability).
+{- | Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's own
+credential (the default @passthrough@ posture). A failed fetch degrades to no contribution
+rather than an error.
 
-Under @passthrough@ the private upstream is the per-client authority for who may read
-what, so its metadata is __not__ shared across clients. The proxy fetches and parses it on
-__every__ request with that client's own forwarded token, so the upstream re-authorises
-each client itself. A cache would key on the base URL alone, with no credential dimension.
-Within the TTL, one client's cache hit would then skip the fetch and serve another
-client's private document, bypassing the upstream's authorisation. The private origin is
-therefore kept out of the metadata cache deliberately, and only the anonymous public
-origin is cached. A non-@passthrough@ strategy can share the private origin safely
-through the serve-time authorisation it adds: see @docs\/architecture\/access-model.md@.
+Under @passthrough@ the private upstream is the per-client authority for who may read what.
+The metadata cache keys on the base URL alone, with no credential dimension, so a cached
+private document would let one client's hit serve another client's document and bypass that
+authorisation. See @docs\/architecture\/access-model.md@ for the non-@passthrough@ strategies
+that share it safely.
 -}
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
 fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
@@ -173,18 +149,10 @@ fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
                     fetchFullManifest client name
         pure (originResultOf resolved)
 
-{- | Resolve the public (gated, anonymous) upstream origin through the metadata cache,
-keyed by the origin's base URL as its 'Source'. Returns its coherent pair of parsed
-packument and raw @Value@, or 'Nothing' when the origin is unavailable or its body does
-not parse. A failed fetch is a degraded contribution, not an error.
-
-The public origin is anonymous (no client credential), so a single cached entry serves
-every client without crossing any trust boundary. There is no per-client authority to
-preserve, only one shared anonymous document. A hit returns the cached pair: the typed
-view and the exact bytes it was decoded from. The served document and the decision over
-it therefore stay coherent across the TTL. Concurrent resolutions of a popular package
-__collapse to one upstream call__, as does the tarball gate's single-version read, which
-shares that same cache entry ('fetchVersionMetadata').
+{- | Resolve the public (gated, anonymous) upstream origin through the metadata cache, keyed
+by the origin's base URL as its 'Source'. The origin carries no client credential, so one
+entry serves every client without crossing a trust boundary, and a hit keeps the typed view
+coherent with the bytes it decoded from.
 -}
 fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
 fetchPublicOrigin deps rt name = do
@@ -195,22 +163,14 @@ fetchPublicOrigin deps rt name = do
                 fetchFullManifest client name
     pure (originResultOf resolved)
 
-{- Construct a per-request read handle for one origin and run an action over it, with the
-ambient @katip@ context captured into the handle's failure log.
+{- Construct a per-request read handle for one origin and run an action over it. The handle's
+operations run the fetch in plain 'IO', so 'withRunInIO' captures the request's
+trace-correlated @katip@ context into the handle's failure logs.
 
-The handle's operations run the fetch in plain 'IO' (the public origin's cache leader runs
-under @mask@). 'withRunInIO' discharges the 'Handler' logs to 'IO' while capturing the
-request's trace-correlated context. A breach, decode, or name-mismatch warning still rides
-that context, as does the dropped-entry warning a successful-but-degraded projection emits
-('logInvalidEntries'). The npm origin's credential posture, manager, base URL, and
-response budget are the per-fetch 'NpmClientConfig'. The 'ManifestCaching' decides whether
-the origin resolves through the shared metadata cache.
-
-The handle's fetch enforces every response bound (security.md invariant 4) against the
-mount's 'Limits' budget. A body-size, nesting-depth, or version-count breach becomes a
-'MetadataBoundExceeded'. It is logged once at a 'WarningS' naming the package and the
-ceiling crossed, before it degrades the contribution fail-closed. An operator can then
-tell a hostile or oversized upstream from an ordinary parse failure. -}
+The fetch enforces every response bound (security.md invariant 4) against the mount's
+'Limits' budget. A body-size, nesting-depth, or version-count breach becomes a
+'MetadataBoundExceeded', logged once at 'WarningS' before the contribution degrades
+fail-closed. -}
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
@@ -239,10 +199,9 @@ withMetadataClient rt deps upstream caching limits manager baseUrl token k =
                 baseUrl
                 token
 
-{- | The public origin's read handle: anonymous (no token), resolved through the shared
-metadata cache under the base URL's 'Source'. Both the packument fetch
-('fetchFullManifest') and the tarball gate's single-version read ('fetchVersionMetadata')
-go through this handle, so they share one cache entry.
+{- | The public origin's read handle: anonymous, resolved through the shared metadata cache
+under the base URL's 'Source'. Both 'fetchFullManifest' and the tarball gate's
+'fetchVersionMetadata' go through it, so they share one cache entry.
 -}
 withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> Text -> (MetadataClient -> IO a) -> Handler a
 withPublicMetadataClient rt deps baseUrl =

@@ -44,10 +44,8 @@ import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 
-{- | npm's capability record. The artifact builders ignore the response-bound and
-manager parameters, because npm request formation needs neither. The publish slice
-contributes protocol only: the composition root supplies the mirror-write codec's
-transport (manager, credential mint, response bound) at its marriage.
+{- | npm's capability record. The artifact builders ignore the response-bound and manager
+parameters, because npm request formation needs neither.
 -}
 npmAdapter :: RegistryAdapter
 npmAdapter =

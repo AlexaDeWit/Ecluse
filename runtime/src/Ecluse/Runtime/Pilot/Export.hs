@@ -32,13 +32,9 @@ import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
-{- | Upload a compiled OSV artifact to the given S3 bucket, dialling an optional
-custom endpoint (the pre-parsed @(secure, host, port)@ resolved from configuration).
-
-The @PutObject@ runs inside an @ecluse.pilot.osv.upload@ client span (inert when
-telemetry is off) carrying the bucket, object key, and byte count. A failed upload is
-logged at the call site and marks the span errored before it propagates to the export
-loop's supervisor. That supervisor otherwise sees only an opaque restart.
+{- | Upload an OSV artifact to @bucketName@, using the optional @(secure, host, port)@ endpoint. A
+failed upload logs and marks its span errored, so the export loop's supervisor sees more than a
+restart.
 -}
 exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe (Bool, Text, Int) -> Text -> FilePath -> m ()
 exportToS3 mTracerProvider mEndpoint bucketName dbPath = do

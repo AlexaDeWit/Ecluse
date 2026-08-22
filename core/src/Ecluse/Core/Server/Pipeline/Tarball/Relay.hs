@@ -47,11 +47,8 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Core.Version (Version, renderVersion)
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 
--- The artifact serve mode: a full GET that streams the body through, or a HEAD that
--- probes the upstream bodiless and relays only the headers. It threads through the
--- artifact path, so the two share the gating and the upstream-request construction
--- verbatim. They differ only in the upstream method, in whether the proxy pumps a body,
--- and in whether an admit enqueues a mirror job.
+-- The artifact serve mode. Threading it through the artifact path keeps GET and HEAD on the
+-- same gating and the same upstream-request construction.
 data ArtifactServe
     = -- A GET: stream the artifact body through, enqueuing a mirror job on a public
       -- admit (the demand-driven back-fill).
@@ -60,27 +57,21 @@ data ArtifactServe
       -- enqueuing nothing, because it serves no bytes and so has nothing to mirror.
       ServeHead
 
-{- Tag an upstream artifact request with the serve mode's method. A 'ServeFull' fetch
-keeps the request's default @GET@. A 'ServeHead' probe is marked @HEAD@, so the upstream
-sees a bodiless request and the proxy never pumps the body. -}
+{- Tag an upstream artifact request with the serve mode's method. 'ServeFull' keeps the request's
+default @GET@. -}
 withMethod :: ArtifactServe -> HTTP.Request -> HTTP.Request
 withMethod = \case
     ServeFull -> id
     ServeHead -> \req -> req{HTTP.method = methodHead}
 
-{- Relay the client's conditional validators onto an upstream artifact request, so
-upstream can answer a @304 Not Modified@ for a pass-through body we serve unchanged. The
-validators are the @If-None-Match@ \/ @If-Modified-Since@ 'forwardValidators' filtered. An
-empty validator set (the client sent none) leaves the request unconditional. -}
+{- Relay the client's conditional validators ('forwardValidators') onto an upstream artifact
+request, so upstream can answer a @304 Not Modified@ instead of resending an unchanged body. -}
 withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
 withValidators validators req =
     req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
 
-{- Relay an upstream artifact response in the serve mode. 'ServeFull' streams the body
-through with bounded memory ('streamUpstreamWhen'). 'ServeHead' probes bodiless, relaying
-the status and headers with no body ('probeUpstreamWhen'). Both keep the same
-recoverable-miss and committed split, so a HEAD falls through a private miss to the public
-origin exactly as a GET does. -}
+{- Relay an upstream artifact response in the serve mode. Both modes keep the same recoverable-miss
+and committed split, so a HEAD falls through a private miss to the public origin as a GET does. -}
 relayUpstreamWhen ::
     ArtifactServe ->
     Manager ->
@@ -93,22 +84,14 @@ relayUpstreamWhen = \case
     ServeFull -> streamUpstreamWhen
     ServeHead -> probeUpstreamWhen
 
-{- The private relay accepts two kinds of upstream artifact status back to the client: a
-@2xx@ success and a @304 Not Modified@. The @2xx@ is the streamed artifact. The @304@ is
-the pass-through conditional-GET relay. The client's relayed validators matched
-upstream's, so 'streamUpstreamWhen' answers the unchanged artifact as a bodiless @304@
-rather than re-downloading it. Any other status is a clean private miss the caller falls
-through on. The public relay accepts every status, since it relays whatever the public
-origin returns verbatim, so it needs no predicate of its own. -}
+{- The private relay accepts a @2xx@ and a @304 Not Modified@, because a @304@ says the client's
+relayed validators matched. Any other status is a clean private miss the caller falls through. -}
 acceptArtifact :: Status -> Bool
 acceptArtifact s = statusIsSuccessful s || isNotModified s
 
-{- The relay for an artifact stream: forward the upstream status and headers. It drops
-only the hop-by-hop framing headers (@Transfer-Encoding@, @Connection@), whose values
-describe the upstream hop, not the artifact. The body is opaque binary streamed verbatim,
-so the content headers (type, length, encoding) and the upstream's @ETag@ pass through
-unchanged. The client verifies the artifact's own @dist.integrity@ over exactly these
-bytes. -}
+{- Forward the upstream status and headers, dropping only the hop-by-hop framing headers, whose
+values describe the upstream hop, not the artifact. The content headers and the @ETag@ pass through
+unchanged, so the client verifies @dist.integrity@ over exactly the relayed bytes. -}
 relayArtifact :: Status -> ResponseHeaders -> (Status, ResponseHeaders)
 relayArtifact status headers =
     (status, filter (not . isHopByHop . fst) headers)
@@ -116,14 +99,9 @@ relayArtifact status headers =
     isHopByHop name = name == "Transfer-Encoding" || name == "Connection"
 
 {- | What the public leg relayed, judged at relay time from the status and headers alone.
-The body always relays verbatim, and client-side plus worker @dist.integrity@ verification
-stay the guarantors of the bytes. Header-only by design: nothing here hashes, buffers, or
-inspects a body, and the private leg computes no verdict at all.
-
-On the consumer side, a non-'RelayedArtifact' is logged and counted
-(@ecluse.serve.relay.anomalies@), and only a 'RelayedArtifact' enqueues the demand-driven
-mirror job. Enqueuing on a relayed upstream miss would give the worker a doomed job it
-could only drop after a metadata round trip.
+Header-only by design: nothing here hashes, buffers, or inspects a body. Only a 'RelayedArtifact'
+enqueues the demand-driven mirror job, because a relayed upstream miss would give the worker a job
+it could only drop.
 -}
 data RelayVerdict
     = {- | A success whose headers look like the admitted artifact (a relayed
@@ -136,17 +114,10 @@ data RelayVerdict
       RelayedNonSuccess Status
     deriving stock (Eq, Show)
 
-{- | Judge one public relay from its status and headers. A @304@ is a clean pass-through,
-because the relayed validators matched. Any other non-2xx is the relayed non-success. A
-2xx whose @Content-Type@ is textual (@text\/*@, or JSON where a tarball was admitted) is
-the odd shape. The upstream answered a success that is visibly not the artifact. An absent
-or binary content type counts as the artifact, because this is a header-only tripwire, not
-a validator, and integrity verification owns the bytes.
-
-The admitted metadata's declared size is deliberately __not__ compared against
-@Content-Length@. For npm the declared size is the unpacked-tree size
-(@dist.unpackedSize@), which never equals the transfer length, so the comparison would flag
-every healthy relay.
+{- | Judge one public relay from its status and headers alone. An absent or binary content type
+counts as the artifact, because this is a header-only tripwire and integrity verification owns
+the bytes. Do not compare the admitted metadata's declared size against @Content-Length@: npm's
+@dist.unpackedSize@ is the unpacked-tree size, so the comparison would flag every healthy relay.
 -}
 relayVerdict :: Status -> ResponseHeaders -> RelayVerdict
 relayVerdict status headers
@@ -160,11 +131,8 @@ relayVerdict status headers
     textualContentType raw =
         "text/" `BS.isPrefixOf` raw || "application/json" `BS.isPrefixOf` raw
 
-{- Observe one public-relay verdict on its consumer side. A clean artifact relay is
-silent. An anomaly is counted on the bounded @ecluse.serve.relay.anomalies@ metric and
-logged WARNING with the package coordinates. The unbounded detail stays on the log line,
-never on a label. The verdict never changes what the client received, because the body
-already relayed verbatim. -}
+{- Observe one public-relay verdict. An anomaly counts on the bounded @ecluse.serve.relay.anomalies@
+metric. The unbounded detail stays on the log line, never on a label. -}
 observeRelayAnomaly :: forall m. (KatipContext m) => MetricsPort -> PackageName -> Version -> RelayVerdict -> m ()
 observeRelayAnomaly metrics name version = \case
     RelayedArtifact -> pass

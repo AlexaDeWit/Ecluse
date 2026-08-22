@@ -38,15 +38,12 @@ import Ecluse.Core.Rules.Types (
     EvalContext,
  )
 
-{- | The admission verdict for one requested artifact of one public version. It is the
-shared vocabulary that the serve gate and the worker's ingest re-evaluation each project
-onto their own surface.
+{- | The admission verdict for one requested artifact of one public version, shared by the
+serve gate and the worker's ingest re-evaluation.
 
-The constructors separate the /deliberate/ refusals from the /inability/ to decide
-('AdmissionUndecidable'), because the two consumers act on that split differently. A
-deliberate refusal is a rule denial, an integrity-policy refusal, or an absent file.
-Serve renders a denial @403@ and an inability @503@\/@500@. The worker retires a
-denied job (ack, never publish) and leaves an undecidable one to redeliver.
+A deliberate refusal and an inability to decide ('AdmissionUndecidable') stay separate:
+serve renders a denial @403@ and an inability @503@\/@500@, and the worker acks a denied job
+but leaves an undecidable one to redeliver.
 -}
 data ArtifactAdmission
     = {- | The rules admitted the version, the requested filename selected an
@@ -88,20 +85,12 @@ data ArtifactAdmission
     deriving stock (Show)
 
 {- | Decide one requested artifact of one public version under current policy. The rules
-decide the version first, and the engine's first decisive verdict wins. The requested
-filename then selects the artifact. The integrity-floor admission policy then judges
-that artifact.
+decide the version first, then the requested filename selects the artifact, then the
+integrity floor judges that selected artifact.
 
-The rules run first, so an artifact-level refusal never masks a version-level
-denial and a version a rule already denies costs no integrity classification. The
-floor applies to the __selected__ artifact only: the one whose bytes would be served
-or mirrored.
-
-This is the one admission decision for both contexts. The serve pipeline calls it on
-a public tarball request. The mirror worker calls it at ingest with the same prepared
-rules, the same clock, the same configured floor, and the job's own filename. The
-enqueue → process window can therefore only ever /narrow/ what the worker mirrors, when
-policy tightens or a file is withdrawn. It never admits past the serve gate.
+Both the serve pipeline and the mirror worker call this with the same prepared rules, clock,
+and floor, so the enqueue to process window can only ever /narrow/ what the worker mirrors.
+It never admits past the serve gate.
 -}
 admitArtifact ::
     EvalContext ->
@@ -118,11 +107,8 @@ admitArtifact ctx rules minIntegrity file details = do
             Nothing -> AdmissionFileAbsent
             Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of
                 MeetsFloor ->
-                    -- 'MeetsFloor' guarantees a digest is present, but 'artHashes'
-                    -- is a plain list. The unreachable empty case therefore fails
-                    -- closed here, in the one place that extracts the digest set. It
-                    -- yields the same refusal a digest-less artifact receives.
-                    -- Neither consumer re-derives or re-guards the set.
+                    -- 'MeetsFloor' guarantees a digest is present, but 'artHashes' is a plain list.
+                    -- The unreachable empty case fails closed, as if no digest existed.
                     maybe AdmissionIntegrityMissing (AdmissionAdmit artifact) (nonEmpty (artHashes artifact))
                 BelowFloor -> AdmissionBelowFloor
                 NoIntegrity -> AdmissionIntegrityMissing
@@ -130,11 +116,9 @@ admitArtifact ctx rules minIntegrity file details = do
         BlockedByDefault{} -> AdmissionDenied decision
         Undecidable{} -> AdmissionUndecidable decision
 
-{- | Select the artifact a request's filename names from a version's distribution
-files. An npm version has exactly one artifact, so the match is that single file. A
-many-per-version ecosystem (PyPI) would select the wheel\/sdist whose filename the
-client requested. 'Nothing' when no artifact carries the requested filename: a
-forwarded miss, never a fabricated location.
+{- | Select the artifact a request's filename names from a version's distribution files.
+'Nothing' when no artifact carries that filename: a forwarded miss, never a fabricated
+location.
 -}
 artifactFor :: Text -> PackageDetails -> Maybe Artifact
 artifactFor file details =

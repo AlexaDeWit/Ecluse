@@ -24,11 +24,7 @@ import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tr
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | Classify an @amazonka@ error into the core transport vocabulary. The
-transport channel goes through the shared @http-client@ classification.
-Everything else (service and serialisation errors) becomes 'TransportProtocol',
-carrying the rendered detail for the log line.
--}
+-- | Classify an @amazonka@ error into the core transport vocabulary.
 classifyAwsTransport :: AWS.Error -> TransportFault
 classifyAwsTransport = \case
     AWS.TransportError httpErr -> classifyTransport httpErr

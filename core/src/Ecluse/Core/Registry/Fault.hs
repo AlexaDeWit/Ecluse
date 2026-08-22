@@ -20,12 +20,8 @@ module Ecluse.Core.Registry.Fault (
 import Ecluse.Core.Security (LimitError)
 
 {- | The typed exception form of a response-bound breach: a body that crossed the
-'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its
-'Ecluse.Core.Security.LimitError'. The worker's bounded artifact fetch
-("Ecluse.Core.Worker.Fetch") types its fetch channel with it. The request perimeter
-("Ecluse.Core.Server.Fault") recognises it as a typed gate fault. A breach that
-reaches an exception-shaped boundary stays a classified refusal, never a truncated
-body.
+'Ecluse.Core.Security.maxBodyBytes' ceiling, carried as its 'Ecluse.Core.Security.LimitError'.
+A breach at an exception-shaped boundary stays a classified refusal, never a truncated body.
 -}
 newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
     deriving stock (Eq, Show)

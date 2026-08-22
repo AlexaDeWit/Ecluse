@@ -47,27 +47,13 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkRegistryUrl, registryUrlText)
 
-{- | Resolve a packument's @dist.tarball@ URL against the https-only egress policy,
-given the bare host the packument itself was served from.
+{- | Resolve a packument's @dist.tarball@ URL against the https-only egress policy, given the bare
+host the packument was served from.
 
-An upstream's @dist.tarball@ is server-chosen data, so this normalises its scheme
-before the proxy will dial it.
-
-* An @https:\/\/@ target is kept, validated through 'mkRegistryUrl'.
-* An @http:\/\/@ target on the same host as the packument is upgraded to @https:\/\/@.
-  That is the legacy case of an older registry that still advertises plaintext
-  artifact URLs on its own host.
-* An @http:\/\/@ target on any other host is refused with a 'Left' carrying a reason.
-  A foreign plaintext artifact location is dropped rather than dialled.
-* Anything that is not an @http(s)@ URL is refused.
-
-The 'Left' reason feeds the per-entry drop record. The 'Right' is the https
-'RegistryUrl' the artifact is fetched from. Hosts compare on the bare host
-('Ecluse.Core.Security.hostAddress'): the upgrade decision is a scheme normalisation
-and not an authorisation, so the port plays no part here. This composes with, and never
-replaces, the @host:port@ allowlist and the same-authority tarball policy that still
-gate the resolved target at serve time. An upgraded-but-nonstandard-port target is
-refused there.
+An @http:\/\/@ target on the packument's own host is upgraded to https, the legacy case of a
+registry that still advertises plaintext artifact URLs on its own host. Any other plaintext target
+is refused. This normalises a scheme and authorises nothing: the @host:port@ allowlist and the
+same-authority tarball policy still gate the resolved target at serve time.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url
@@ -79,8 +65,6 @@ resolveTarballUrl upstreamHost url
     | otherwise = Left ("dist.tarball is not an https URL: " <> url)
   where
     lowered = T.toLower url
-    -- The character length of the "http://" scheme prefix being re-schemed to https.
-    -- It is a fixed literal count, written directly rather than through an O(n)
-    -- 'T.length' on the constant. Dropping it from the original 'url' (not 'lowered')
-    -- rewrites only the scheme and preserves the rest of the URL verbatim.
+    -- The character count of the "http://" prefix. Dropping it from the original @url@, not
+    -- @lowered@, rewrites the scheme and preserves the rest of the URL verbatim.
     httpSchemeChars = 7 :: Int

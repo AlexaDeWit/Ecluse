@@ -136,9 +136,8 @@ run = do
         RunDredger -> runDredger bootEnv
         RunCheckConfig -> pass
 
-{- | How one whole service run ended: the typed outer perimeter of the process.
-Each constructor owns one exit code ('exitCodeFor'), so an orchestrator reads the
-ending from the status alone.
+{- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
+an orchestrator reads the ending from the status alone.
 -}
 data ProcessOutcome
     = -- | The services drained and returned (a graceful shutdown): exit 0.
@@ -153,29 +152,15 @@ data ProcessOutcome
       RunCancelled
     deriving stock (Eq, Show)
 
-{- | Run the whole service under the typed process perimeter and classify its
-ending as a 'ProcessOutcome'. This is the one place that reads the process's
-exception channel, so nothing above it interprets exceptions.
+{- | Run the whole service under the typed process perimeter and classify its ending. This is
+the one place that reads the process's exception channel, so nothing above it interprets
+exceptions.
 
-The classification, in order:
-
-* A normal return is 'ShutdownRequested' (warp's graceful drain returns).
-* 'BootAborted' is 'BootFault'.
-* An 'ExitCode' rethrows, so a deliberate exit request keeps its code, the
-  local-dev halt's 130 included.
-* The recognised kill deliveries ('ThreadKilled', 'UserInterrupt') are
-  'RunCancelled'.
-* Any __other__ asynchronous exception is not ours to interpret and propagates, so
-  a 'System.Timeout.timeout' or an @async@ cancellation a test wraps around 'run'
-  keeps its own semantics.
-* Every remaining synchronous escape is 'ServiceExited' with its rendered detail.
-
-This is the one deliberate base-'Exception.try' in the codebase: the process
-perimeter must observe asynchronous delivery to classify a kill. The
-async-hygienic @unliftio@ catches refuse to hand it over on purpose, because they
-would rethrow the kill and the classification arm could never run. The rethrows go
-through the base 'Exception.throwIO' for the same reason: what leaves here
-async must leave async.
+An 'ExitCode' and any unrecognised asynchronous exception rethrow, so a deliberate exit keeps
+its code and a 'System.Timeout.timeout' or @async@ cancellation around 'run' keeps its own
+semantics. The base 'Exception.try' and 'Exception.throwIO' are deliberate. The
+async-hygienic @unliftio@ catches would rethrow a kill before the classification arm could
+run, and what leaves here async must leave async.
 -}
 superviseProcess :: IO () -> IO ProcessOutcome
 superviseProcess service =

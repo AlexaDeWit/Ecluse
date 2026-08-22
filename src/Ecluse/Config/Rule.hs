@@ -123,9 +123,8 @@ buildRule name ty entry = case ty of
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
-{- | Extract a rule type's required field, running @validate@ on it, or report the
-type is missing it (@"<ruleType>" requires "<field>"@). Unifies the required-field
-decode across every builder that has one.
+{- | Extract a rule type's required field and validate it, or report the type is missing it
+(@"<ruleType>" requires "<field>"@).
 -}
 requireField :: Text -> Text -> Text -> (a -> Either [PolicyError] b) -> Maybe a -> Either [PolicyError] b
 requireField name ruleType field =
@@ -143,10 +142,8 @@ validateMinSeverity name s
     | s >= 0 && s <= 10 = Right s
     | otherwise = Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
 
-{- | Decode 'DenyIfCve''s parameters. The @minSeverity@ key (a CVSS base score, 0 to
-10) is required, so an operator states the threshold consciously. The
-@onUnavailable@ key is optional and defaults to @deny@ (fail-closed): the rule
-refuses a package the advisory database cannot vet.
+{- | Decode 'DenyIfCve''s parameters. @minSeverity@ is required, so an operator states the CVSS
+threshold consciously. @onUnavailable@ defaults to @deny@, which fails closed.
 -}
 buildDenyIfCveParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfCveParams
 buildDenyIfCveParams name entry =
@@ -188,11 +185,8 @@ checkRestatedType name entry rule = case entryType entry of
         | ty `elem` knownRuleTypes -> Left [MalformedRule name ("\"type\" " <> quote ty <> " does not match the default rule it patches")]
         | otherwise -> Left [UnknownRuleType name ty]
 
-{- | The rule type names the diagnostics recognise: the vocabulary
-'checkRestatedType' treats as a real-but-mismatched type (a 'MalformedRule')
-rather than an unknown one (an 'UnknownRuleType'). Exported so a test can pin it
-against drift from the 'Ecluse.Core.Rules.Types.Rule' constructors, their
-'buildRule' branches, and 'Ecluse.Core.Rules.Types.ruleName'.
+{- | The rule type names the diagnostics recognise. 'checkRestatedType' reports one of these as a
+mismatched 'MalformedRule', and anything else as an 'UnknownRuleType'.
 -}
 knownRuleTypes :: [Text]
 knownRuleTypes =

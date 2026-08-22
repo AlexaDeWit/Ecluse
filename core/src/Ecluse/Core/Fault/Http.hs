@@ -36,11 +36,8 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Text (displayExceptionT)
 
 {- | Classify an @http-client@ exception into the core transport vocabulary
-("Ecluse.Core.Fault"), at the one edge where the library's exception type is in
-scope. Coarse by design: a consumer or an operator branches on the 'TransportCause',
-and the rendered exception rides along as the bounded detail. It recognises a TLS
-refusal by the typed @tls@ exception @http-client@ wraps in its internal-exception
-channel, never by matching rendered text.
+("Ecluse.Core.Fault"), at the one edge where the library's exception type is in scope.
+It recognises a TLS refusal by the typed @tls@ exception, never by matching rendered text.
 -}
 classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
