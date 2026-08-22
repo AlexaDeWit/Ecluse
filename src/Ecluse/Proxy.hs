@@ -65,6 +65,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterEcosystem,
     adapterFor,
     adapterServe,
+    serveCredential,
     serveRouter,
  )
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
@@ -416,6 +417,7 @@ mountOf adapter packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor (adapterEcosystem adapter)
         , bindingRouter = serveRouter (adapterServe adapter)
+        , bindingCredential = serveCredential (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps
         }

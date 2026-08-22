@@ -73,6 +73,11 @@ modes ship:
 
 Validating cloud IAM at the npm edge is out, since the npm client can't speak it.
 
+The form the credential arrives in belongs to the mount's ecosystem: an npm mount accepts `Bearer`
+(`_authToken`) because that is what npm tooling sends, and reads nothing else as a credential. The
+comparison is the same for every mount, constant-time against the configured token, and a request
+carrying no credential the mount recognises is refused.
+
 ## Publishing: the publication target (passthrough write)
 
 The one client-driven write, `npm publish` to the

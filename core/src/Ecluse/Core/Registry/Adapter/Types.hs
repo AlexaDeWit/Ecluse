@@ -53,6 +53,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -95,7 +96,8 @@ stands alone rather than sharing shape with the protocol slices.
 Both routing fields are __derived by the adapter from one declarative route table__
 (npm's is "Ecluse.Core.Registry.Npm.Route"), so the surface the server routes and the
 surface the manifest documents are two interpretations of a single declaration and
-cannot drift apart.
+cannot drift apart. The credential presentation joins them here because it is the same
+kind of fact: what this ecosystem's clients put on the wire.
 -}
 data AdapterServe = AdapterServe
     { serveRouter :: MountRouter
@@ -109,6 +111,13 @@ data AdapterServe = AdapterServe
     patterns 'serveRouter' routes on, one per served route. The capability manifest
     ("Ecluse.Manifest") renders this rather than re-describing the path grammar, so the
     documented surface cannot drift from what is routed.
+    -}
+    , serveCredential :: CredentialMapping
+    {- ^ The ecosystem's __credential presentation__: how a client's credential is
+    recovered from the headers it presents, and how one is carried on a request Écluse
+    makes upstream. A mount accepts exactly the form its ecosystem presents, so the
+    neutral pipeline spells no scheme of its own while keeping the constant-time edge
+    compare and the deny-by-default refusal.
     -}
     }
 

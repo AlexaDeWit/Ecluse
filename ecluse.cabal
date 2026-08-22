@@ -130,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
+    Ecluse.Core.Registry.Npm.Credential
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
@@ -588,6 +589,7 @@ test-suite ecluse-core-unit
     Ecluse.Registry.AdapterSpec
     Ecluse.Registry.CachedDocumentSpec
     Ecluse.Registry.NpmSpec
+    Ecluse.Registry.Npm.CredentialSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec
     Ecluse.Registry.Npm.ProjectSpec

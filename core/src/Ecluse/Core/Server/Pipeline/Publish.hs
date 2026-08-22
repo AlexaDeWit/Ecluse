@@ -23,6 +23,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status413, status500, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength)
 
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (
     PackageName,
     Scope,
@@ -61,21 +62,25 @@ servePublish ::
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 servePublish replies name request respond = do
-    asks (bindingPublishDeps . ctxMount) >>= \case
+    mount <- asks ctxMount
+    case bindingPublishDeps mount of
         Nothing -> liftIO (respond (publishDisabled replies))
-        Just deps -> publishWithDeps replies deps name request respond
+        Just deps -> publishWithDeps replies deps (forwardedCredential mount request) name request respond
 
 -- Serve a publish once the mount's publication target is known: the edge gate, the
 -- anti-shadowing scope guard, then the body-name agreement check (all before any write),
--- then the relay to the publication target with the publisher's forwarded credential.
+-- then the relay to the publication target with the publisher's forwarded credential. The
+-- credential is the one the mount's ecosystem presentation recovered, scanned out of the
+-- headers once at the entry point.
 publishWithDeps ::
     PublishReplies response ->
     PublishDeps ->
+    Maybe Secret ->
     PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-publishWithDeps replies deps name request respond
+publishWithDeps replies deps clientToken name request respond
     | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
         liftIO (respond (publishError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
     | not (inPublishScope (pubScopes deps) name) =
@@ -121,10 +126,6 @@ publishWithDeps replies deps name request respond
                             <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name body)
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
-    -- The publisher's bearer, scanned out of the headers once: the edge gate
-    -- compares it and the relay forwards it (falling back to the static token).
-    clientToken = forwardedToken request
-
     -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
     -- 'maxBodyBytes', so the response budget's other 'Limits' fields are immaterial
     -- here; this keeps the request cap named in one place ('pubMaxRequestBytes').

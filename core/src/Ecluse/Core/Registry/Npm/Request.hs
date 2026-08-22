@@ -22,8 +22,9 @@ Three details of the wire protocol are load-bearing and handled here:
 * __Streaming and buffering.__ The artifact builders ('artifactRequestByFile',
   'artifactRequestByUrl') mark their request __non-decompressing__ so a @.tgz@ is opaque
   binary that reaches the client byte-for-byte (its @dist.integrity@ stays valid);
-  'artifactRequestByUrl' composes npm's bearer attach with the shared
-  'Ecluse.Core.Registry.Request.artifactRequestByUrl'.
+  'artifactRequestByUrl' forms its request through the shared
+  'Ecluse.Core.Registry.Request.artifactRequestByUrl' under npm's own credential
+  presentation ("Ecluse.Core.Registry.Npm.Credential").
 -}
 module Ecluse.Core.Registry.Npm.Request (
     -- * Content negotiation
@@ -47,13 +48,14 @@ module Ecluse.Core.Registry.Npm.Request (
     parseRequestEither,
 ) where
 
-import Network.HTTP.Client (Request (decompress, requestHeaders), applyBearerAuth)
+import Network.HTTP.Client (Request (decompress, requestHeaders))
 import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
 
-import Ecluse.Core.Credential (Secret, unSecret)
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
-import Ecluse.Core.Registry.Request (Validators (..), addValidators, finaliseRequest, joinPath, noValidators, parseRequestEither)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
+import Ecluse.Core.Registry.Request (Validators (..), addValidators, attachCredential, joinPath, noValidators, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -152,8 +154,8 @@ artifactRequestByFile baseUrl token name filename = do
 
 {- | Build npm's artifact @GET@ request addressing a tarball at its __authoritative
 upstream location__: the absolute @url@ the projection preserved from the upstream's
-@dist.tarball@. The @baseUrl@ is ignored (the location is absolute); npm's bearer
-credential is attached through the shared
+@dist.tarball@. The @baseUrl@ is ignored (the location is absolute); the credential is
+attached under npm's presentation by the shared
 'Ecluse.Core.Registry.Request.artifactRequestByUrl', which marks the request
 non-decompressing and pins the redirect count. See that symbol for the opaque-bytes
 rationale.
@@ -165,7 +167,7 @@ artifactRequestByUrl ::
     Maybe Secret ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByUrl _baseUrl = Request.artifactRequestByUrl . attachBearer
+artifactRequestByUrl _baseUrl = Request.artifactRequestByUrl npmCredential
 
 {- The metadata/publish URL for a package: @{baseUrl}/{encoded-name}@, with
 the scoped-name separator percent-encoded (@\@scope/name@ -> @\@scope%2Fname@).
@@ -204,15 +206,11 @@ encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
 
-{- npm's data-plane request finalisation: attach npm's @Bearer@ credential (when a token
-is injected) through the shared 'finaliseRequest', which pins @redirectCount = 0@. The
-redirect invariant and its full rationale live with 'finaliseRequest'; this composes npm's
-scheme onto it, so every npm builder reaches the wire through the shared pin.
+{- npm's data-plane request finalisation: attach the injected credential under npm's own
+presentation ('Ecluse.Core.Registry.Npm.Credential.npmCredential') through
+'Ecluse.Core.Registry.Request.attachCredential', which pins @redirectCount = 0@. The
+redirect invariant and its full rationale live with that attach; every npm builder reaches
+the wire through it, anonymous requests included.
 -}
 withToken :: Maybe Secret -> Request -> Request
-withToken = finaliseRequest . attachBearer
-
--- Attach npm's @Bearer@ credential to a request, or leave it unchanged when anonymous.
-attachBearer :: Maybe Secret -> Request -> Request
-attachBearer Nothing = id
-attachBearer (Just secret) = applyBearerAuth (encodeUtf8 (unSecret secret))
+withToken = attachCredential npmCredential
