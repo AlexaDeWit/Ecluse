@@ -12,7 +12,7 @@ function Para(elem)
       local content = file:read("*all")
       file:close()
       embedded = true
-      return pandoc.CodeBlock((content:gsub("\n$", "")), "yaml")
+      return pandoc.CodeBlock((content:gsub("\n$", "")), pandoc.Attr("", { "yaml" }))
     end
   end
   return elem

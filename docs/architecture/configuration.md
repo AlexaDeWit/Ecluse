@@ -119,13 +119,13 @@ unchanged.
 This top-level policy applies to every mount. A multi-ecosystem deployment may give an individual
 mount its own [refinement](web-layer.md#multi-ecosystem-mounts) that merges over it.
 
-```json
-{
-  "rules": {
-    "min-age":      { "ageSeconds": 1209600 },
-    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 }
-  }
-}
+```yaml
+rules:
+  min-age:
+    ageSeconds: 1209600
+  deny-scripts:
+    type: DenyInstallTimeExecution
+    precedence: 200
 ```
 
 Here `min-age` names a default rule, so it overrides that rule's value. `deny-scripts` is a new name
