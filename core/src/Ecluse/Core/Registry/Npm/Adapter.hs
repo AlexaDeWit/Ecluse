@@ -6,16 +6,19 @@
 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' assembled from the existing
 npm modules.
 
-Pure assembly, no protocol logic of its own: every field is a function an npm
-module already exports -- the path grammar ("Ecluse.Core.Registry.Npm.Route"), the
-denial renderer ("Ecluse.Core.Registry.Npm.Serve"), the credential presentation
-("Ecluse.Core.Registry.Npm.Credential"), the metadata client and served
-packument assembly ("Ecluse.Core.Registry.Npm.Metadata",
-"Ecluse.Core.Registry.Npm.Filter"), the artifact request builders
-("Ecluse.Core.Registry.Npm.Request"), the publish relay
-("Ecluse.Core.Registry.Npm"), and the mirror-write codec with the body-name
-extractor the anti-shadowing guard reads through ("Ecluse.Core.Registry.Npm.Publish"),
-with the name canonicaliser from "Ecluse.Core.Registry.Npm.Project".
+Pure assembly, with no protocol logic of its own. Every field is a function an npm
+module already exports:
+
+* The path grammar ("Ecluse.Core.Registry.Npm.Route").
+* The denial renderer ("Ecluse.Core.Registry.Npm.Serve").
+* The credential presentation ("Ecluse.Core.Registry.Npm.Credential").
+* The metadata client and the served packument assembly
+  ("Ecluse.Core.Registry.Npm.Metadata", "Ecluse.Core.Registry.Npm.Filter").
+* The artifact request builders ("Ecluse.Core.Registry.Npm.Request").
+* The publish relay ("Ecluse.Core.Registry.Npm").
+* The mirror-write codec, with the body-name extractor the anti-shadowing guard
+  reads through ("Ecluse.Core.Registry.Npm.Publish").
+* The name canonicaliser ("Ecluse.Core.Registry.Npm.Project").
 -}
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
@@ -42,9 +45,9 @@ import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 
 {- | npm's capability record. The artifact builders ignore the response-bound and
-manager parameters (npm request formation needs neither), and the publish slice
-contributes protocol only: the mirror-write codec's transport (manager, credential
-mint, response bound) is supplied at the composition root's marriage.
+manager parameters, because npm request formation needs neither. The publish slice
+contributes protocol only: the composition root supplies the mirror-write codec's
+transport (manager, credential mint, response bound) at its marriage.
 -}
 npmAdapter :: RegistryAdapter
 npmAdapter =
@@ -67,8 +70,8 @@ npmAdapter =
             AdapterArtifact
                 { artifactByFile = \_ _ baseUrl token -> NpmRequest.artifactRequestByFile baseUrl token
                 , artifactByUrl = \_ _ baseUrl token -> NpmRequest.artifactRequestByUrl baseUrl token
-                , -- npm serves tarball bytes from the registry host itself; there is
-                  -- no canonical separate files host to admit.
+                , -- npm serves tarball bytes from the registry host itself, so there
+                  -- is no separate canonical files host to admit.
                   artifactHosts = []
                 }
         , adapterPublish =

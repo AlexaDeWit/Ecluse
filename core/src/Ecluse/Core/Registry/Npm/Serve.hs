@@ -4,17 +4,17 @@
 
 {- | npm's client-facing error body, as a codec.
 
-The agnostic serve layer decides the HTTP /status/ of a refusal; the /body/ shape is
+The agnostic serve layer decides the HTTP /status/ of a refusal. The /body/ shape is
 npm's, and it lives here as one 'NpmError' type with an @autodocodec@ codec. That codec
-is the single source of truth: the serve path encodes the wire denial from it, and the
-capability manifest renders the /same/ codec to the documented schema (in its own tier,
-so @openapi3@ never reaches the proxy). npm clients read the human-facing reason from a
-JSON @{"error": …}@ object, matching npm's own denial bodies.
+is the single source of truth. The serve path encodes the wire denial from it, and the
+capability manifest renders the /same/ codec to the documented schema. The manifest runs
+in its own tier, so @openapi3@ never reaches the proxy. An npm client reads the
+human-facing reason from a JSON @{"error": …}@ object, matching npm's own denial bodies.
 
 There is no separate renderer handle. A route's abstract
-'Ecluse.Core.Server.Contract.ResponseContract' pairs each status with its body codec, the
-handler receives only constructors for values admitted by that contract, and the emitted
-body is therefore the documented body by construction.
+'Ecluse.Core.Server.Contract.ResponseContract' pairs each status with its body codec. The
+handler receives only constructors for values that contract admits, so the emitted body is
+the documented body by construction.
 -}
 module Ecluse.Core.Registry.Npm.Serve (
     NpmError (..),
@@ -48,7 +48,7 @@ npmErrorCodec :: JSONCodec NpmError
 npmErrorCodec = codec
 
 {- | Build an npm error body from the human-facing reason and the operator help message,
-appending the help (if any) as the serve path has always done.
+appending the help message when one is present.
 -}
 npmError :: Maybe HelpMessage -> Text -> NpmError
 npmError help message = NpmError (appendHelp help message)

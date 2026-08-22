@@ -3,27 +3,27 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Request shaping and URL building for the npm data plane. The ecosystem-agnostic
-mechanics (the redirect-pin finaliser, conditional-GET validators, URL parsing, the
-path join, the opaque-artifact request core) live in "Ecluse.Core.Registry.Request";
-this module holds only npm's own protocol facts and composes them through that shared home.
+mechanics (the redirect-pin finaliser, conditional-GET validators, URL parsing, the path
+join, the opaque-artifact request core) live in "Ecluse.Core.Registry.Request". This
+module holds only npm's own protocol facts and composes them through that shared home.
 
 Three details of the wire protocol are load-bearing and handled here:
 
-* __Content negotiation.__ Metadata comes in two forms selected by @Accept@: the
-  __abbreviated__ install view (@application/vnd.npm.install-v1+json@), which the
-  proxy treats as primary, and the __full__ packument (@application/json@),
-  needed when a rule reasons over publish age (the abbreviated form drops the
-  @time@ map). 'MetadataForm' selects between them; both request
-  @Accept-Encoding: gzip@, since popular packuments are megabytes.
-* __Scoped-name path encoding.__ A scoped name @\@scope/name@ is encoded on the
-  wire as @\@scope%2Fname@: the scope separator is percent-encoded but the
-  leading @\@@ is not. 'metadataRequest' builds this from an
-  __already-parsed__ 'PackageName', never from raw client path segments.
-* __Streaming and buffering.__ The artifact builders ('artifactRequestByFile',
-  'artifactRequestByUrl') mark their request __non-decompressing__ so a @.tgz@ is opaque
-  binary that reaches the client byte-for-byte (its @dist.integrity@ stays valid);
-  'artifactRequestByUrl' forms its request through the shared
-  'Ecluse.Core.Registry.Request.artifactRequestByUrl' under npm's own credential
+* __Content negotiation__. Metadata comes in two forms selected by @Accept@. The
+  __abbreviated__ install view (@application/vnd.npm.install-v1+json@) is the proxy's
+  primary view. A rule that reasons over publish age needs the __full__ packument
+  (@application/json@), because the abbreviated form drops the @time@ map.
+  'MetadataForm' selects between them. Both request @Accept-Encoding: gzip@, because
+  popular packuments are megabytes.
+* __Scoped-name path encoding__. The wire form of a scoped name @\@scope/name@ is
+  @\@scope%2Fname@: the scope separator is percent-encoded, the leading @\@@ is
+  not. 'metadataRequest' builds this from an __already-parsed__ 'PackageName',
+  never from raw client path segments.
+* __Streaming and buffering__. The artifact builders ('artifactRequestByFile',
+  'artifactRequestByUrl') mark their request __non-decompressing__. A @.tgz@ is
+  opaque binary that reaches the client byte-for-byte, so its @dist.integrity@ stays
+  valid. 'artifactRequestByUrl' forms its request through the shared
+  'Ecluse.Core.Registry.Request.artifactRequestByUrl', under npm's own credential
   presentation ("Ecluse.Core.Registry.Npm.Credential").
 -}
 module Ecluse.Core.Registry.Npm.Request (
@@ -87,14 +87,14 @@ metadataAccept = \case
     Abbreviated -> "application/vnd.npm.install-v1+json"
     Full -> "application/json"
 
-{- | Build the metadata @GET@ request for a package: the URL is
-@{baseUrl}/{encoded-name}@ with the @Accept@ header for the chosen
-'MetadataForm', @Accept-Encoding: gzip@, an optional bearer token, and any
-relayed conditional-GET 'Validators'.
+{- | Build the metadata @GET@ request for a package. The URL is
+@{baseUrl}/{encoded-name}@. The request carries the @Accept@ header for the chosen
+'MetadataForm', @Accept-Encoding: gzip@, an optional bearer token, and any relayed
+conditional-GET 'Validators'.
 
-The package path is derived from an __already-parsed__ 'PackageName', then the
-scope separator is percent-encoded (@\@scope/name@ -> @\@scope%2Fname@). Fails
-with a 'UrlFormationError' only when the URL cannot be formed (an empty base URL).
+The package path comes from an __already-parsed__ 'PackageName', with the scope
+separator percent-encoded (@\@scope/name@ -> @\@scope%2Fname@). Fails with a
+'UrlFormationError' only when the URL cannot be formed (an empty base URL).
 -}
 metadataRequest ::
     Text ->
@@ -119,14 +119,14 @@ metadataRequest baseUrl token form validators name = do
 {- | Build the artifact @GET@ request addressing a tarball by its __preserved
 on-the-wire filename__, at @{baseUrl}/{encoded-pkg}/-/{filename}@.
 
-The serve path fetches an artifact by the exact filename the client requested:
-the authoritative name for the bytes: rather than reconstructing it from
-@(package, version)@, so a registry whose tarball naming differs from the proxy's
-own convention still resolves. The @filename@ is taken verbatim (the classifier
-has already passed it through the component-safety gate), and the package segment
+The serve path fetches an artifact by the exact filename the client requested, never a
+name rebuilt from @(package, version)@. That filename is the authoritative name for the
+bytes. A registry whose tarball naming differs from the proxy's own convention
+therefore still resolves. The @filename@ is taken verbatim, because the
+classifier already passed it through the component-safety gate. The package segment
 is the same scope-percent-encoded path 'metadataRequest' builds. The request is
-marked __non-decompressing__: a @.tgz@ is opaque binary streamed byte-for-byte so
-its @dist.integrity@ verifies. Exposed so the web layer can bracket it for
+__non-decompressing__: a @.tgz@ is opaque binary, streamed byte-for-byte so its
+@dist.integrity@ verifies. Exported so the web layer can bracket it for
 bounded-memory streaming.
 
 Fails with a 'UrlFormationError' only when the URL cannot be formed.
@@ -143,19 +143,19 @@ artifactRequestByFile baseUrl token name filename = do
     pure
         . withToken token
         $ base
-            { -- A tarball must never be gunzipped in flight: it is opaque binary
-              -- whose integrity the client verifies, so stream the raw bytes. We
-              -- deliberately advertise no @Accept-Encoding@ here: a @.tgz@ is
-              -- already-compressed application data, and requesting a transport
-              -- encoding we then refuse to decode ('decompress' is 'False') would
-              -- risk a doubly-gzipped body that fails its @dist.integrity@.
+            { -- Never gunzip a tarball in flight: it is opaque binary whose
+              -- integrity the client verifies, so stream the raw bytes. This builder
+              -- deliberately advertises no @Accept-Encoding@: a @.tgz@ is
+              -- already-compressed application data. Requesting a transport encoding
+              -- it then refuses to decode ('decompress' is 'False') would risk a
+              -- doubly-gzipped body that fails its @dist.integrity@.
               decompress = const False
             }
 
 {- | Build npm's artifact @GET@ request addressing a tarball at its __authoritative
 upstream location__: the absolute @url@ the projection preserved from the upstream's
-@dist.tarball@. The @baseUrl@ is ignored (the location is absolute); the credential is
-attached under npm's presentation by the shared
+@dist.tarball@. This builder ignores the @baseUrl@, because the location is absolute.
+It attaches the credential under npm's presentation through the shared
 'Ecluse.Core.Registry.Request.artifactRequestByUrl', which marks the request
 non-decompressing and pins the redirect count. See that symbol for the opaque-bytes
 rationale.
@@ -178,10 +178,10 @@ packageUrl baseUrl name =
 
 {- | The artifact (tarball) URL addressing a __preserved filename__:
 @{baseUrl}/{encoded-name}/-/{encoded-filename}@. The filename is the exact
-on-the-wire name (not @{base}-{version}.tgz@ rebuilt from the coordinate), so the
-bytes are fetched by the name the client requested; it is percent-encoded as a
-single component ('Ecluse.Core.Server.Route.encodeComponent') so a once-decoded escape
-in it cannot reach the upstream raw. Exposed so the serve path can record the
+on-the-wire name, not @{base}-{version}.tgz@ rebuilt from the coordinate, so the
+proxy fetches the bytes by the name the client requested. It is percent-encoded as a
+single component ('Ecluse.Core.Server.Route.encodeComponent'), so a once-decoded
+escape in it cannot reach the upstream raw. Exported so the serve path can record the
 public artifact location on a mirror job (the same URL its public fetch targets).
 
 Fails with a 'UrlFormationError' only when the URL cannot be formed.
@@ -192,14 +192,13 @@ artifactFileUrl baseUrl name filename =
 
 {- Encode a package name as its on-the-wire path segment. Each name component
 (scope, base name) is percent-encoded ('Ecluse.Core.Server.Route.encodeComponent')
-around the structural delimiters this builder writes: a scoped @\@scope/name@
-becomes @\@{enc-scope}%2F{enc-base}@: the leading @\@@ and the @%2F@ separator
-are written here, never derived from a component, so a legitimate scoped name
-yields exactly one @%2F@: and an unscoped name is its single encoded component.
-Encoding each component is the defence in depth that keeps a @'%'@, @'/'@, or
-other reserved byte inside a decoded name from reaching the upstream URL raw (a
-once-decoded @%2e%2e%2f@ is re-encoded to @%252e%252e%252f@), without
-double-encoding the structural separator.
+around the structural delimiters this builder writes. A scoped @\@scope/name@ becomes
+@\@{enc-scope}%2F{enc-base}@. This builder writes the leading @\@@ and the @%2F@
+separator, never derives them from a component. A legitimate scoped name therefore
+yields exactly one @%2F@, and an unscoped name is its single encoded component. Encoding
+each component is the defence in depth: a @'%'@, @'/'@, or other reserved byte inside a
+decoded name never reaches the upstream URL raw. A once-decoded @%2e%2e%2f@ is
+re-encoded to @%252e%252e%252f@, without double-encoding the structural separator.
 -}
 encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
@@ -209,8 +208,8 @@ encodePackagePath name = case pkgNamespace name of
 {- npm's data-plane request finalisation: attach the injected credential under npm's own
 presentation ('Ecluse.Core.Registry.Npm.Credential.npmCredential') through
 'Ecluse.Core.Registry.Request.attachCredential', which pins @redirectCount = 0@. The
-redirect invariant and its full rationale live with that attach; every npm builder reaches
-the wire through it, anonymous requests included.
+redirect invariant and its full rationale live with that attach. Every npm builder
+reaches the wire through it, anonymous requests included.
 -}
 withToken :: Maybe Secret -> Request -> Request
 withToken = attachCredential npmCredential

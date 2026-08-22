@@ -4,74 +4,77 @@
 
 {- | Projection of npm wire JSON into the ecosystem-agnostic domain model.
 
-This module is the second half of the npm protocol boundary. Where
+This module is the second half of the npm protocol boundary.
 "Ecluse.Core.Registry.Npm.Wire" captures /what the registry said/ as faithful wire
-types, this module turns those into the domain vocabulary of "Ecluse.Core.Package" --
+types. This module turns those into the domain vocabulary of "Ecluse.Core.Package":
 'PackageInfo' (the packument-level view) and 'PackageDetails' (the per-version
 snapshot the rules engine evaluates). Together they realise the @parse*@ fields
-of the "Ecluse.Core.Registry" handle: nothing above the adapter ever sees npm wire
+of the "Ecluse.Core.Registry" handle, so nothing above the adapter ever sees npm wire
 data.
 
-The projection is __pure and total__ (it returns 'Either' 'ParseError', never
-throws), the execution half of /parse, don't validate/ -- once a response has
-been projected, downstream code holds precise domain types and never re-inspects
-the wire shape.
+The projection is __pure and total__: it returns 'Either' 'ParseError' and never
+throws. That is the execution half of /parse, don't validate/. Once the projection
+runs, downstream code holds precise domain types and never re-inspects the wire shape.
 
 == Per-version graceful degradation
 
-The @versions@, @dist-tags@, and @time@ maps are decoded __element-wise__: a
-version whose manifest is missing or malformed in a required\/security-decisive
-field (no @dist@ or @tarball@, an unusable @version@), a @dist-tags@ entry whose
-value is not a string, or a @time@ entry that is not a decodable instant is
-__dropped__ rather than failing the whole packument. Because presence in the
-decision surface is what makes a version a serve-candidate, a dropped version is
-automatically never served -- fail-closed for that one version (a version that
-cannot be decoded cannot be evaluated for integrity, CVEs, or rules) while every
-healthy version still resolves; a dropped date is simply a version with no known
-publish time, and a dropped tag loses only that one tag. Only a document whose
-/top-level/ structure is unusable (a @versions@ that is not an object, an
-absent\/empty @name@) is denied wholesale. A version's purely __advisory__ fields
-degrade in the wire layer ("Ecluse.Core.Registry.Npm.Wire") without dropping the
-version. Every drop is __recorded__ as an 'Ecluse.Core.Package.InvalidEntry' in
-'Ecluse.Core.Package.infoInvalidEntries' (a version-manifest, dist-tag, or
-publish-time drop, each carrying its key and reason), so the serve path can log
-what an upstream served malformed rather than dropping it silently.
+The projection decodes the @versions@, @dist-tags@, and @time@ maps
+__element-wise__. It __drops__ three kinds of entry rather than failing the whole
+packument:
+
+* A version whose manifest is missing or malformed in a required\/security-decisive
+  field: no @dist@ or @tarball@, an unusable @version@.
+* A @dist-tags@ entry whose value is not a string.
+* A @time@ entry that is not a decodable instant.
+
+Presence in the decision surface is what makes a version a serve-candidate, so a dropped
+version is never served. That is fail-closed for that one version. A version that cannot
+be decoded cannot be evaluated for integrity, CVEs, or rules, while every healthy
+version still resolves. A dropped date is a version with no known publish time, and a
+dropped tag loses only that one tag. The projection denies a document wholesale only
+when its /top-level/ structure is unusable: a @versions@ that is not an object, an
+absent\/empty @name@. A version's purely __advisory__ fields degrade in the wire layer
+("Ecluse.Core.Registry.Npm.Wire") without dropping the version.
+
+The projection __records__ every drop as an 'Ecluse.Core.Package.InvalidEntry' in
+'Ecluse.Core.Package.infoInvalidEntries'. Each entry carries its key and reason, so the
+serve path can log what an upstream served malformed rather than dropping it
+silently.
 
 == Signal mapping
 
 The npm-specific fields collapse onto the normalised, ecosystem-blind signals:
 
-* install-script presence → 'CodeExecSignal', read __fail-closed__ across two
-  independent wire signals. A version runs code on install when /either/ the
-  abbreviated form's @hasInstallScript@ flag is @true@ /or/ the @scripts@ map
-  declares any of @preinstall@\/@install@\/@postinstall@ (matching what npm
-  itself sets the flag from). The two fields are independent on the wire, so the
-  @scripts@ map is consulted __even when @hasInstallScript@ is present and
-  @false@__: a hostile upstream must not be able to mask a real install hook by
-  lying in the sibling flag, so a declared script is authoritative and the
-  signal is the union of the two, never the flag overriding a script. A version
-  with neither signal maps to 'NoCodeOnInstall' (both metadata forms always
-  carry the @scripts@\/@hasInstallScript@ information, so its absence is a
-  determination, not an unknown).
-* @deprecated@ → 'Availability': a notice yields 'Deprecated' (carrying the
-  message), its absence 'Available'. npm has no per-version yank, so @Yanked@
-  never arises here.
-* @dist@ → a single-element 'NonEmpty' of 'Artifact' (npm publishes exactly one
-  tarball per version). __Both__ integrity digests survive when present and
-  __well-formed__: @dist.shasum@ as a 'SHA1' 'Hash' /and/ @dist.integrity@ as an
-  'SRI' 'Hash'. Carrying both is load-bearing -- a cross-upstream merge compares the
-  same version's integrity across the private and public registries to detect a
-  supply-chain divergence, which dropping either digest would blind. Each digest is
-  built through the validating 'mkHash', so a __malformed__ one -- empty
-  (@"shasum":""@ \/ @"integrity":""@), truncated, non-hex, or bad-base64 -- is
-  unconstructable and so treated as __absent__, never as a degenerate 'Hash': a
-  digest that ties the version to no tamper-evident fingerprint must not slip past
-  the public-integrity admission gate.
-* @_npmUser@ → 'pkgPublisher' (who pushed this version -- provenance). It rides
-  on the version object but is not modelled by the wire manifest, so the
-  projection reads it directly from the version object here.
-* @time[version]@ → 'pkgPublishedAt'. The publish timestamp lives in the
-  packument's @time@ map, not the manifest; a version with no @time@ entry (or
+* Install-script presence → 'CodeExecSignal', read __fail-closed__ across two
+  independent wire signals. A version runs code on install when the abbreviated form's
+  @hasInstallScript@ flag is @true@, or when the @scripts@ map declares any of
+  @preinstall@\/@install@\/@postinstall@. That matches what npm itself sets the flag
+  from. The two fields are independent on the wire, so the projection consults the
+  @scripts@ map __even when @hasInstallScript@ is present and @false@__. A hostile
+  upstream must not be able to mask a real install hook by lying in the sibling flag. A
+  declared script is authoritative, and the signal is the union of the two, never the
+  flag overriding a script. A version with neither signal maps to 'NoCodeOnInstall'.
+  Both metadata forms always carry the @scripts@\/@hasInstallScript@ information, so its
+  absence is a determination, not an unknown.
+* The @deprecated@ notice → 'Availability'. A notice yields 'Deprecated' (carrying
+  the message), its absence 'Available'. The npm protocol has no per-version yank, so
+  @Yanked@ never arises here.
+* The @dist@ object → a single-element 'NonEmpty' of 'Artifact', because npm
+  publishes exactly one tarball per version. Both integrity digests survive when
+  present and __well-formed__: @dist.shasum@ as a 'SHA1' 'Hash' /and/
+  @dist.integrity@ as an 'SRI' 'Hash'. Carrying both is load-bearing. A cross-upstream
+  merge compares the same version's integrity across the private and public registries
+  to detect a supply-chain divergence. Dropping either digest would blind it. The
+  projection builds each digest through the validating 'mkHash', so a __malformed__
+  one is unconstructable and therefore __absent__, never a degenerate 'Hash'.
+  Malformed covers empty (@"shasum":""@ \/ @"integrity":""@), truncated, non-hex, and
+  bad-base64. A digest that ties the version to no tamper-evident fingerprint must not
+  slip past the public-integrity admission gate.
+* The @_npmUser@ field → 'pkgPublisher': who pushed this version, the provenance. It
+  rides on the version object, but the wire manifest does not model it. The projection
+  therefore reads it directly from the version object here.
+* The @time[version]@ entry → 'pkgPublishedAt'. The publish timestamp lives in the
+  packument's @time@ map, not the manifest. A version with no @time@ entry (or
   an abbreviated document, which omits @time@) projects to 'Nothing'.
 
 Trust is left 'TrustUnknown': establishing it needs signature verification
@@ -79,16 +82,16 @@ against npm's published keys, a fetch this pure projection does not perform.
 
 == Name as a validation input
 
-The requested 'PackageName' -- the identity the proxy resolved from the route -- is
-the __validation authority__ for the served packument's name, never a rewrite of
-it. The packument projection takes the requested name and checks the upstream's
-self-reported top-level @name@ against it: a document whose self-report agrees is a
-'Projected' 'PackageInfo' carrying the name the upstream genuinely reported; a
-document whose self-report __disagrees__ is a 'NameMismatch', so the caller can
-treat that origin as untrusted for this request and drop its contribution. The
-served name is therefore always a value an upstream genuinely reported, never a
-substituted or manufactured one. An /absent/ or otherwise undecodable name remains
-a 'ParseError', as before -- distinct from a present-but-different name.
+The requested 'PackageName', the identity the proxy resolved from the route, is the
+__validation authority__ for the served packument's name, never a rewrite of it. The
+packument projection takes the requested name and checks the upstream's self-reported
+top-level @name@ against it. A document whose self-report agrees is a 'Projected'
+'PackageInfo' carrying the name the upstream genuinely reported. A document whose
+self-report __disagrees__ is a 'NameMismatch', so the caller can treat that origin as
+untrusted for this request and drop its contribution. The served name is therefore
+always a value an upstream genuinely reported, never a substituted or manufactured
+one. An /absent/ or otherwise undecodable name is a 'ParseError', distinct from a
+present-but-different name.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -147,8 +150,8 @@ import Ecluse.Core.Version (Version, mkVersion, unVersion)
 {- The packument as this projection needs to read it: the wire fields plus the
 per-version @_npmUser@ that "Ecluse.Core.Registry.Npm.Wire" intentionally leaves off
 the manifest. Decoding the version objects here (rather than through the wire
-'VersionManifest' alone) is what lets the publisher survive, since the wire manifest
-has already discarded it.
+'VersionManifest' alone) is what lets the publisher survive, because the wire manifest
+discards it.
 -}
 data WirePackument = WirePackument
     { wpName :: Text
@@ -176,39 +179,40 @@ instance FromJSON WirePackument where
                   wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
                 }
 
-{- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
-version key to 'Value', then keep only the entries that project to a 'VersionEntry',
-dropping any that do not and recording each as an 'InvalidVersionManifest'. A version
-whose manifest is missing or malformed in a required\/security-decisive field (no
-@dist@\/@tarball@, an unusable @version@) is __dropped from the decision surface__
-rather than failing the whole packument: fail-closed for that version (a version that
-cannot be decoded cannot be evaluated for integrity, CVEs, or rules, so it must never
-be served) while every healthy version still decodes. An absent @versions@ is the empty
-map; a @versions@ that is not an object at all still fails the decode (the document is
-not a usable packument). -}
+{- Decode the @versions@ map __element-wise leniently__. Read it as a raw map of
+version key to 'Value', then keep only the entries that project to a 'VersionEntry'.
+Drop any that do not, and record each as an 'InvalidVersionManifest'.
+
+The decode __drops__ a version whose manifest is missing or malformed in a
+required\/security-decisive field, rather than failing the whole packument. That covers
+no @dist@\/@tarball@, or an unusable @version@. That is fail-closed for that version. A
+version that cannot be decoded cannot be evaluated for integrity, CVEs, or rules, so it
+must never be served. Every healthy version still decodes. An absent @versions@ is the
+empty map. A @versions@ that is not an object at all still fails the decode, because
+the document is not a usable packument. -}
 lenientVersionMap :: Object -> Parser (Map Text VersionEntry, [InvalidEntry])
 lenientVersionMap o = do
     raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
     pure (partitionLenient InvalidVersionManifest (parseEither parseJSON) raw)
 
-{- Decode the @dist-tags@ map __element-wise leniently__: read it as a raw map of tag
-name to 'Value', keeping each entry whose value is a JSON string and dropping any that
-is not (recording it as an 'InvalidDistTag'). A single non-string tag value therefore
+{- Decode the @dist-tags@ map __element-wise leniently__. Read it as a raw map of tag
+name to 'Value'. Keep each entry whose value is a JSON string, and drop any that is
+not, recording it as an 'InvalidDistTag'. A single non-string tag value therefore
 loses only that tag rather than failing the whole document. A string that is not a
-valid version is still kept here ('mkVersion' is total, so dist-tag /targeting/ is
-reconciled later, never a decode failure). -}
+valid version is still kept here. 'mkVersion' is total, so the merge reconciles
+dist-tag /targeting/ later, never a decode failure. -}
 lenientDistTags :: Object -> Parser (Map Text Text, [InvalidEntry])
 lenientDistTags o = do
     raw <- o .:? "dist-tags" .!= mempty
     pure (partitionLenient InvalidDistTag (parseEither parseJSON) raw)
 
-{- Decode the @time@ map __element-wise leniently__: read it as a raw map of key to
-'Value', keeping each entry that decodes as an instant and dropping any that does not.
-With the publish time folded onto each version, a malformed sibling date is simply a
-version with no known publish time, never a document failure. Only a drop keyed by a
-__present version__ is recorded (as an 'InvalidPublishTime'); the @created@\/@modified@
+{- Decode the @time@ map __element-wise leniently__. Read it as a raw map of key to
+'Value'. Keep each entry that decodes as an instant, and drop any that does not. With
+the publish time folded onto each version, a malformed sibling date is simply a version
+with no known publish time, never a document failure. The decode records only a drop
+keyed by a __present version__, as an 'InvalidPublishTime'. The @created@\/@modified@
 bookkeeping keys are package-level, not a version's publish time, so a malformed one is
-not a per-version drop and is left untracked. -}
+not a per-version drop and stays untracked. -}
 lenientTimeMap :: Set Text -> Object -> Parser (Map Text UTCTime, [InvalidEntry])
 lenientTimeMap versionKeys o = do
     raw <- o .:? "time" .!= mempty
@@ -216,8 +220,8 @@ lenientTimeMap versionKeys o = do
     pure (kept, filter ((`Set.member` versionKeys) . invalidKey) dropped)
 
 {- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
-publisher. Both are decoded from the /same/ object in one pass, so there is a
-single notion of what a version object is.
+publisher. One pass decodes both from the /same/ object, so there is a single
+notion of what a version object is.
 -}
 data VersionEntry = VersionEntry
     { veManifest :: VersionManifest
@@ -231,10 +235,10 @@ instance FromJSON VersionEntry where
 {- | The outcome of projecting an upstream packument against the requested package
 name (see the module header, "Name as a validation input").
 
-The requested name validates the document; it never rewrites it. A document whose
-self-reported name agrees with the request is 'Projected'; one that disagrees is a
+The requested name validates the document. It never rewrites it. A document whose
+self-reported name agrees with the request is 'Projected'. One that disagrees is a
 'NameMismatch'. The 'PackageInfo' of a 'Projected' carries the name the upstream
-genuinely reported (which, having matched, equals the requested name) -- never a
+genuinely reported (which, having matched, equals the requested name), never a
 substituted value.
 -}
 data Projection
@@ -245,12 +249,12 @@ data Projection
     deriving stock (Eq, Show)
 
 {- | Project an __already-decoded__ packument @Value@ into a 'Projection' for the
-requested package, without re-parsing any bytes. This is the entry point the serve
-layer uses when it has already decoded the upstream body to a raw @Value@ (the
-document it edits in place to serve) and wants the typed view of the /same/
-document: projecting from the @Value@ reuses that one parse rather than tokenising
-the bytes a second time. Pure and total -- a @Value@ that is not a decodable npm
-packument is reported as a 'ParseError', never thrown.
+requested package, without re-parsing any bytes. The serve layer uses this entry point
+when it already decoded the upstream body to a raw @Value@. That @Value@ is the document
+it edits in place to serve, and the layer wants the typed view of the /same/ document.
+Projecting from the @Value@ reuses that one parse rather than tokenising the bytes a
+second time. Pure and total: a @Value@ that is not a decodable npm packument comes back
+as a 'ParseError', never thrown.
 
 The requested name validates the self-reported @name@: a match is 'Projected', a
 disagreement is 'NameMismatch'. The serve layer drops a 'NameMismatch' origin's
@@ -261,11 +265,11 @@ parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projectio
 parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
 
-{- Project + validate a decoded packument against the requested name. The genuine
-self-reported name (from 'projectPackageInfo', which fails an absent\/empty name as a
-'ParseError') is checked against the request by the shared 'checkNameAgreement': agreement
-yields 'Projected' carrying the genuine 'PackageInfo', a disagreement a 'NameMismatch'
-carrying what the upstream reported. The name is never substituted. -}
+{- Project + validate a decoded packument against the requested name. The shared
+'checkNameAgreement' checks the genuine self-reported name against the request, taking
+it from 'projectPackageInfo', which fails an absent\/empty name as a 'ParseError'.
+Agreement yields 'Projected' carrying the genuine 'PackageInfo'. A disagreement yields
+a 'NameMismatch' carrying what the upstream reported. The name is never substituted. -}
 projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
 projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
@@ -288,20 +292,20 @@ projectPackageInfo pkmt = do
             , infoInvalidEntries = wpInvalidEntries pkmt
             }
 
-{- | Project a __single version object__ -- one entry of a packument's @versions@ map,
-as a raw 'Value' -- into its 'PackageDetails', given the requested package name, the
+{- | Project a __single version object__ into its 'PackageDetails': one entry of a
+packument's @versions@ map, as a raw 'Value'. Takes the requested package name, the
 version key it sits under, and its publish time (the packument's @time[version]@, if
 present). 'Nothing' when the version object does not decode in a required\/security-
 decisive field, exactly the per-version drop the full packument projection applies.
 
-This is the per-version projection step factored out so a __selective__ single-version
-decode (see "Ecluse.Core.Registry.Npm.SelectiveDecode"), which extracts only the one
-version object and its publish time from the packument bytes, projects it through the
-__same__ code the whole-packument path runs over every version -- so the resulting
-'PackageDetails' is identical to @'Map.lookup'@-ing the version out of a full
-'parsePackageInfoFromValue' projection. The element-wise leniency is identical too: a version object missing
-its @dist@\/@tarball@ (or otherwise unprojectable) yields 'Nothing', i.e. a genuine
-absence, never a half-built snapshot.
+This is the per-version projection step, factored out so a __selective__
+single-version decode ("Ecluse.Core.Registry.Npm.SelectiveDecode") can reuse it. That
+decode extracts only the one version object and its publish time from the packument
+bytes. It projects them through the __same__ code the whole-packument path runs over
+every version. The resulting 'PackageDetails' is identical to @'Map.lookup'@-ing the
+version out of a full 'parsePackageInfoFromValue' projection. The element-wise leniency
+is identical too: a version object missing its @dist@\/@tarball@ (or otherwise
+unprojectable) yields 'Nothing', a genuine absence, never a half-built snapshot.
 -}
 projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
 projectVersionEntry name version publishedAt value =
@@ -325,9 +329,9 @@ decodePackument =
 
 {- Project an already-decoded 'Value' into a 'WirePackument' via its 'FromJSON'
 instance, adapting aeson's 'String' error into a domain 'ParseError'. The result is
-identical to 'decodePackument' on the bytes that produced the @Value@: aeson decodes
-to a 'Value' and then runs the same 'FromJSON' instance either way, so this reuses
-the one parse instead of tokenising the bytes again.
+identical to 'decodePackument' on the bytes that produced the @Value@. The @aeson@
+decoder builds a 'Value' and then runs the same 'FromJSON' instance either way. This
+reuses the one parse instead of tokenising the bytes again.
 -}
 decodePackumentValue :: Value -> Either ParseError WirePackument
 decodePackumentValue =
@@ -372,15 +376,14 @@ licenseText = \case
     LicenseObject name _url -> name
 
 {- Map npm install-script presence onto 'CodeExecSignal', failing closed across
-the two independent wire signals: a version runs code on install when /either/
-the @scripts@ map declares an install hook
-(@preinstall@\/@install@\/@postinstall@) /or/ the abbreviated form's
-@hasInstallScript@ flag is @true@. The @scripts@ map is consulted __even when
-the flag is present and @false@__ -- the two fields are independent on the wire,
-so a hostile upstream cannot suppress a manifest's own declared install hook by
-setting @hasInstallScript:false@ beside it. A declared script is authoritative;
-the flag only contributes the abbreviated-form signal (where @scripts@ is
-stripped), it never overrides a script the manifest itself carries.
+the two independent wire signals. A version runs code on install when the @scripts@ map
+declares an install hook (@preinstall@\/@install@\/@postinstall@), or when the
+abbreviated form's @hasInstallScript@ flag is @true@. This mapping consults the
+@scripts@ map __even when the flag is present and @false@__. The two fields are
+independent on the wire, so a hostile upstream cannot suppress a manifest's own declared
+install hook by setting @hasInstallScript:false@ beside it. A declared script is
+authoritative. The flag only contributes the abbreviated-form signal, where the wire
+form strips @scripts@, and never overrides a script the manifest itself carries.
 -}
 installCode :: VersionManifest -> CodeExecSignal
 installCode vm
@@ -402,11 +405,11 @@ availability vm = maybe Available Deprecated (vmDeprecated vm)
 
 {- Project the @dist@ object into an 'Artifact', carrying __both__ integrity
 digests: the legacy SHA-1 @shasum@ and the modern @integrity@ SRI string. Each
-present, non-empty digest becomes an algorithm-tagged 'Hash'; a content-empty
-digest is treated as absent, so neither a real digest is dropped nor an empty one
-fabricated. The @dist.tarball@ URL is carried verbatim here; its scheme is normalised
-against the https-only egress policy afterward by the egress-scheme fold in
-"Ecluse.Core.Package.Filter".
+present, non-empty digest becomes an algorithm-tagged 'Hash'. A content-empty digest
+counts as absent, so this projection drops no real digest and fabricates no empty one.
+It carries the @dist.tarball@ URL verbatim. The egress-scheme fold in
+"Ecluse.Core.Package.Filter" normalises its scheme against the https-only egress
+policy afterward.
 -}
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =
@@ -421,26 +424,26 @@ projectArtifact version dist =
         , artProvenance = Nothing
         }
   where
-    -- Build each present digest through the validating 'mkHash'; a malformed value (the
-    -- empty string @"shasum":""@ / @"integrity":""@, but equally a truncated or non-hex
-    -- one) is unconstructable, so it becomes absent rather than a degenerate 'Hash'. A
-    -- digest that ties the version to no tamper-evident fingerprint must not slip past the
-    -- public-integrity admission gate (security.md invariant 5) or feed a bogus fingerprint
-    -- to the cross-upstream divergence check; dropping it here leaves the now-hashless
-    -- version to be classified NoIntegrity by Ecluse.Core.Package.Integrity.
+    -- Build each present digest through the validating 'mkHash'. A malformed value is
+    -- unconstructable, so it becomes absent rather than a degenerate 'Hash'. Malformed
+    -- covers the empty string (@"shasum":""@ / @"integrity":""@), and equally a
+    -- truncated or non-hex one. A digest that ties the version to no tamper-evident
+    -- fingerprint must not slip past the public-integrity admission gate (security.md
+    -- invariant 5). It must not feed a bogus fingerprint to the cross-upstream
+    -- divergence check either. Dropping it here leaves the now-hashless version for
+    -- Ecluse.Core.Package.Integrity to classify NoIntegrity.
     toHash :: HashAlg -> Text -> Maybe Hash
     toHash alg = rightToMaybe . mkHash alg
-    -- A multi-component @integrity@ (rare on npm, legal SRI) is split into one
-    -- 'Hash' per component ('mkSriHashes'), so the strongest-digest selection at
-    -- the admission floor and the worker's tamper gate rank and verify each
-    -- component exactly -- never a joined string read two different ways.
+    -- 'mkSriHashes' splits a multi-component @integrity@ (rare on npm, legal SRI) into
+    -- one 'Hash' per component. The strongest-digest selection at the admission floor
+    -- and the worker's tamper gate then rank and verify each component exactly. Neither
+    -- reads a joined string two different ways.
     sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
 {- The artifact filename for a tarball: the path segment after the URL's last
-@\'\/\'@ (the whole string when it has none), or the conventional
-@\<version\>.tgz@ form as a fallback when that segment is empty (a URL ending in
-a slash).
+@\'\/\'@, or the whole string when it has none. When that segment is empty (a URL
+ending in a slash), fall back to the conventional @\<version\>.tgz@ form.
 -}
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
@@ -454,14 +457,15 @@ projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
 {- | Parse an npm package name into the domain 'PackageName', splitting a scoped
 @\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an
-empty name; a non-scoped or well-formed scoped name always succeeds.
+empty name. A non-scoped or well-formed scoped name always succeeds.
 
-This is the npm name canonicaliser: equality on the resulting 'PackageName' is
-ecosystem-aware (npm is case-sensitive), so it is the agreement test both the read
-path (an upstream's self-reported @name@ against the request) and the publish path (a
-document body's declared @_id@\/@name@\/@versions[].name@ against the URL-path name)
-compare against -- never a byte-for-byte string compare, so an encoding variant of the
-same name cannot disagree silently.
+This is the npm name canonicaliser. Equality on the resulting 'PackageName' is
+ecosystem-aware, because npm is case-sensitive. It is the agreement test both the read
+path and the publish path compare against. The read path checks an upstream's
+self-reported @name@ against the request, and the publish path checks a document body's
+declared @_id@\/@name@\/@versions[].name@ against the URL-path name. Neither compares
+byte-for-byte strings, so an encoding variant of the same name cannot disagree
+silently.
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw
@@ -472,8 +476,8 @@ projectName raw
 
 {- Split a scoped npm name @\@scope\/name@ into its 'Scope' and bare name, or
 'Nothing' for an unscoped name. An @\'\@\'@-prefixed name with no @\'\/\'@, an
-empty scope, or an empty bare name are all malformed and yield 'Nothing' (the
-caller then treats the whole string as an unscoped name).
+empty scope, or an empty bare name are all malformed and yield 'Nothing'. The
+caller then treats the whole string as an unscoped name.
 -}
 scopeOf :: Text -> Maybe (Scope, Text)
 scopeOf raw = do
