@@ -6,24 +6,24 @@
 mirrored packages.
 
 The worker is the consumer end of the demand-driven mirror queue (see
-"Ecluse.Core.Queue"). The consume loop long-polls the queue, resolves each received
-job's __ecosystem bundle__ ('WorkerPolicy', keyed by the job's own ecosystem; a job
-whose ecosystem carries none is fail-closed), and through that bundle:
+"Ecluse.Core.Queue"). The consume loop long-polls the queue and resolves each received
+job's __ecosystem bundle__ ('WorkerPolicy', keyed by the job's own ecosystem). A job
+whose ecosystem carries no bundle is fail-closed. Through that bundle the loop:
 
-1. __probes__ the mirror target for the job's version, acking a confirmed-present
-   duplicate outright (demand-driven enqueue means a fleet-wide install of a novel
-   version enqueues many jobs for it; only the first has work to do),
+1. __probes__ the mirror target for the job's version and acks a confirmed-present
+   duplicate outright. Demand-driven enqueue means a fleet-wide install of a novel
+   version enqueues many jobs for it, and only the first has work to do.
 2. __re-evaluates current policy__ for the version through the same rules and
-   single-version fetch the serve path gates with, so a version denied since its
-   serve-time admit is dropped rather than mirrored,
-3. fetches the artifact bytes from the public upstream named on the job,
+   single-version fetch the serve path gates with. It drops a version denied since
+   its serve-time admit rather than mirroring it.
+3. fetches the artifact bytes from the public upstream named on the job.
 4. __verifies__ those bytes against the integrity digests of the artifact the
-   re-evaluation re-admitted (the floor-checked, current-metadata set; the queue
-   payload carries no digest at all),
+   re-evaluation re-admitted. That is the floor-checked, current-metadata set, since
+   the queue payload carries no digest at all.
 5. assembles the ecosystem's publish document from the re-admitted artifact's
-   descriptor and publishes it to the mirror target (the bundle's married publish
-   capability, resolved at the composition root with the bearer from the
-   "Ecluse.Core.Credential" provider), and
+   descriptor and publishes it to the mirror target. That is the bundle's married
+   publish capability, resolved at the composition root with the bearer from the
+   "Ecluse.Core.Credential" provider.
 6. acknowledges the job.
 
 See individual modules for detailed behaviour:
