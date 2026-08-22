@@ -3,15 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Work-per-request benches for packument merging ("Ecluse.Core.Package.Merge"): the
-union of a trusted and a gated upstream's versions into one document, with the
-shared-algorithm integrity divergence check.
+union of a trusted and a gated upstream's versions into one document. The merge runs
+the shared-algorithm integrity divergence check over that union.
 
-The realistic benches merge two copies of each corpus package (the collision-heavy
-case the divergence check works on), so the merge cost is reported across the real
-distribution of version-set sizes; a synthetic bench scales the version count and
-asserts the merge stays linear, the guard against an accidentally-quadratic union
-(issues #373\/#374\/#299). The synthetic generator is retained __only__ for this
-complexity-scaling assertion.
+The realistic benches merge two copies of each corpus package, the collision-heavy case
+the divergence check works on. They report the merge cost across the real distribution of
+version-set sizes. A synthetic bench scales the version count and asserts the merge stays
+linear, the guard against an accidentally quadratic union. The synthetic generator serves
+__only__ this complexity-scaling assertion.
 -}
 module Ecluse.Core.MergeBench (
     benchmarks,
@@ -47,9 +46,9 @@ benchmarks loaded =
                     mergeDepth
                ]
 
-{- | Merge a packument with a second (gated) copy of itself and force the resolved
-plan by counting its survivors. Two overlapping sources is the collision-heavy case
-the divergence check actually works on.
+{- | Merge a packument with a second (gated) copy of itself and force the resolved plan
+by counting its survivors. Two overlapping sources is the collision-heavy case the
+divergence check works on.
 -}
 mergeDepth :: PackageInfo -> Int
 mergeDepth info =

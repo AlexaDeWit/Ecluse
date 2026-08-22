@@ -3,15 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Work-per-request benches for the response-bound guards ("Ecluse.Core.Security"):
-the bounded body read that caps an upstream response, the JSON nesting-depth guard,
-and the version-count guard -- the cheap checks that protect the proxy from a hostile
-or oversized upstream document.
+the bounded body read that caps an upstream response, the JSON nesting-depth guard, and
+the version-count guard. These cheap checks protect the proxy from a hostile or oversized
+upstream document.
 
-The bounded read runs over a multi-megabyte body; the structural guards run over each
-corpus document (so the cost is reported across the real distribution) and over a
-synthetic packument scaled toward @100k@ versions, the size at which a guard that was
-accidentally super-linear would bite. The synthetic generator is retained __only__ for
-that stress case.
+The bounded read runs over a multi-megabyte body. The structural guards run over each
+corpus document, so the benches report their cost across the real distribution. They also
+run over a synthetic packument scaled toward @100k@ versions, the size at which an
+accidentally super-linear guard would bite. The synthetic generator serves __only__ that
+stress case.
 -}
 module Ecluse.Core.SecurityBench (
     benchmarks,
@@ -57,8 +57,8 @@ benchmarks loaded =
         )
 
 {- | Drain a chunked body through 'boundedRead', forcing the assembled length (or an
-error code). A fresh cursor is built per run so each measured iteration reads the
-whole body from the start.
+error code). Each run builds a fresh cursor, so every measured iteration reads the whole
+body from the start.
 -}
 boundedReadDepth :: [ByteString] -> IO Int
 boundedReadDepth chunks = do
@@ -70,7 +70,7 @@ boundedReadDepth chunks = do
         [] -> ([], BS.empty)
         (c : cs) -> (cs, c)
 
-{- | An 8 MiB body presented as 64 KiB chunks. The chunk bytes are shared, so the
+{- | An 8 MiB body presented as 64 KiB chunks. Every chunk shares one buffer, so the
 input is compact while 'boundedRead' still accumulates the full eight megabytes.
 -}
 bodyChunks :: [ByteString]
@@ -84,6 +84,8 @@ nestingDepth value = either limitErrorCode (const 1) (checkNestingDepth defaultL
 versionCountDepth :: PackageInfo -> Int
 versionCountDepth info = either limitErrorCode (const 1) (checkVersionCount defaultLimits info)
 
--- | A sentinel for the (not-expected) limit-exceeded branch, so the result is a forced 'Int'.
+{- | A sentinel for the limit-exceeded branch the benches never expect, so the result is
+a forced 'Int'.
+-}
 limitErrorCode :: LimitError -> Int
 limitErrorCode _ = -1

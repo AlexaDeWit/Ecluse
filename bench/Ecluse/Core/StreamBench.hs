@@ -6,24 +6,24 @@
 ("Ecluse.Core.Server.Stream").
 
 The shipped 'pumpBody' writes and __flushes after every upstream chunk__. On the real
-serve path each flush is a socket send, so the flush cadence is a syscall-count knob:
-batching several chunks per flush trades a little first-byte latency for fewer, larger
-sends. That end-to-end (syscall) effect only shows over a real socket and is the load
-harness's job (@bench-load@); this micro-bench isolates the __CPU side__ so the two are
-not conflated.
+serve path each flush is a socket send, so the flush cadence is a syscall-count knob.
+Batching several chunks per flush trades a little first-byte latency for fewer, larger
+sends. That end-to-end syscall effect only shows over a real socket, and pricing it is the
+load harness's job (@bench-load@). This micro-bench isolates the __CPU side__, so the two
+are never conflated.
 
 To make the flush cadence drive measurable work __without__ a socket, the sink models
-Warp's output buffer: each @write@ appends the chunk's 'Builder' to an accumulator, and
-each @flush@ __commits__ that accumulator -- runs it to strict bytes, the copy Warp makes
-when it sends -- and resets it. Fewer flushes therefore mean fewer, larger commits, so the
-three strategies (flush-per-chunk, flush-on-threshold, flush-once-at-end) genuinely differ
-in the bench, exactly as they differ in commit granularity on the wire.
+Warp's output buffer. Each @write@ appends the chunk's 'Builder' to an accumulator. Each
+@flush@ __commits__ that accumulator and resets it: the commit runs the accumulator to
+strict bytes, the copy Warp makes when it sends. Fewer flushes mean fewer, larger commits.
+The three strategies (flush-per-chunk, flush-on-threshold, flush-once-at-end) therefore
+differ in the bench exactly as they differ in commit granularity on the wire.
 
-The pump takes its reader and sink as plain actions, so the shipped 'pumpBody' and the two
-bench-local variants ('pumpThreshold', 'pumpEndOnly') run over the identical synthetic body
-with no upstream and no proxy -- the comparison is the flush policy alone. This measures
-whether changing the shipped cadence has any CPU cost to weigh against the load harness's
-syscall figures; it does not, on its own, justify a change.
+The pump takes its reader and sink as plain actions. The shipped 'pumpBody' and the two
+bench-local variants ('pumpThreshold', 'pumpEndOnly') therefore run over the identical
+synthetic body, with no upstream and no proxy. The comparison is the flush policy alone.
+This measures whether changing the shipped cadence has any CPU cost to weigh against the
+load harness's syscall figures. On its own it does not justify a change.
 -}
 module Ecluse.Core.StreamBench (
     benchmarks,
@@ -37,8 +37,9 @@ import Ecluse.Core.Server.Stream (pumpBody)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 {- | The flush-strategy benches: the shipped flush-per-chunk pump against a
-threshold-batched pump and a flush-once-at-end pump, over a synthetic multi-megabyte body
-at three chunk sizes (so the interaction of chunk size and flush cadence is visible).
+threshold-batched pump and a flush-once-at-end pump. Each runs over a synthetic
+multi-megabyte body at three chunk sizes, so the interaction of chunk size and flush
+cadence shows.
 -}
 benchmarks :: Benchmark
 benchmarks =
@@ -88,9 +89,9 @@ runPump pump chunks = do
     pump readChunk write flush
     readIORef committed
 
-{- | A threshold-batched pump: write every chunk, but flush only once at least @threshold@
-bytes have accumulated since the last flush (and once more for the tail). The same
-constant-memory shape as 'pumpBody', with a coarser commit cadence.
+{- | A threshold-batched pump: write every chunk, and flush once the bytes written since
+the last flush reach @threshold@ (plus once more for the tail). The same constant-memory
+shape as 'pumpBody', with a coarser commit cadence.
 -}
 pumpThreshold :: Int -> IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
 pumpThreshold threshold readChunk write flush = go 0
@@ -106,8 +107,8 @@ pumpThreshold threshold readChunk write flush = go 0
                     then flush >> go 0
                     else go pending'
 
-{- | A flush-once pump: write every chunk, flush a single time at end of body. The coarsest
-cadence -- one commit for the whole stream.
+{- | A flush-once pump: write every chunk, flush a single time at end of body. The
+coarsest cadence: one commit for the whole stream.
 -}
 pumpEndOnly :: IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
 pumpEndOnly readChunk write flush = go
@@ -118,9 +119,9 @@ pumpEndOnly readChunk write flush = go
             then flush
             else write (byteString chunk) >> go
 
-{- | Split a synthetic body of @total@ bytes into equal @chunkSize@ chunks (a final short
-chunk carries any remainder), the shape an upstream 'BodyReader' yields. Built once, before
-the measured window.
+{- | Split a synthetic body of @total@ bytes into equal @chunkSize@ chunks, the shape an
+upstream 'BodyReader' yields. A final short chunk carries any remainder. The split runs
+once, before the measured window.
 -}
 bodyChunks :: Int -> Int -> [ByteString]
 bodyChunks total chunkSize =

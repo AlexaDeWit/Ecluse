@@ -3,27 +3,28 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The pure attribution and saturation maths behind the load benchmarks harness's two
-analysis views, kept apart from the live measurement shell so they are exercised
+analysis views. It sits apart from the live measurement shell, so the tests exercise it
 deterministically.
 
 Two complementary views split a measured latency into parts a capacity planner can act
 on:
 
-  * __service-time attribution__ ('attribute') -- at concurrency one (no queuing), a
-    measured latency is @upstream baseline + Écluse overhead@. The baseline is the real
-    public-registry round trip; the overhead is everything Écluse adds on top of just
-    hitting the public registry (the private leg, the merge, the decode, the
-    re-serialise). Reported absolute and as a fraction of the total, so the
-    upstream-bound floor is told apart from the achievable-gain portion;
+  * __service-time attribution__ ('attribute'): at concurrency one, where no request
+    queues, a measured latency is @upstream baseline + Écluse overhead@. The baseline is
+    the real public-registry round trip. The overhead is everything Écluse adds on top of
+    hitting the public registry: the private leg, the merge, the decode, the re-serialise.
+    The view reports both absolute and as a fraction of the total, so a reader tells the
+    upstream-bound floor apart from the achievable-gain portion.
 
-  * __load saturation__ ('deriveSaturation') -- under concurrent load the same latency
-    grows by a queuing delay that is neither upstream nor per-request overhead but a
-    capacity signal. It is recovered as @loaded p50 − concurrency-one service p50@ and
-    flagged when it dominates the loaded latency, alongside the achieved throughput and
-    the deadline-abort count.
+  * __load saturation__ ('deriveSaturation'): under concurrent load the same latency grows
+    by a queuing delay that is neither upstream nor per-request overhead, but a capacity
+    signal. 'deriveSaturation' recovers it as @loaded p50 − concurrency-one service p50@.
+    It flags the delay when it dominates the loaded latency, alongside the achieved
+    throughput and the deadline-abort count.
 
-Both operate on plain scalars lifted out of a scenario's report, so this module carries
-none of the harness's socket or load-generator dependencies and stays unit-testable.
+Both operate on plain scalars lifted out of a scenario's report. This module therefore
+carries none of the harness's socket or load-generator dependencies, and stays
+unit-testable.
 -}
 module Ecluse.BenchLoad.Normalise (
     -- * The public-leg baseline
@@ -48,23 +49,24 @@ import Data.Text qualified as T
 import Numeric (showFFloat)
 
 {- | The per-request upstream wait as a multiple of the public-registry round trip. The
-two origin legs are fetched concurrently and the public leg is single-flight amortised,
-so a request waits one round trip on the upstream, whichever scenario it is. A scenario
-that ever fetched its legs serially would wait two; this single multiple holds for every
-npm scenario and is re-checked when another ecosystem's fixtures land.
+proxy fetches the two origin legs concurrently and amortises the public leg through
+single-flight. A request therefore waits one round trip on the upstream, whichever
+scenario it is. A scenario that fetched its legs serially would wait two. This single
+multiple holds for every npm scenario, and another ecosystem's fixtures must re-check it
+when they land.
 -}
 publicLegMultiple :: Double
 publicLegMultiple = 1.0
 
 {- | Where the upstream baseline subtracted from each measured latency came from: a live
-probe of the public registry (its mean round trip and the number of timed samples), or
-the configured injected latency used as a fallback when the probe was unavailable. Only
-the label differs; the arithmetic is the same.
+probe of the public registry (its mean round trip and the number of timed samples), or the
+configured injected latency as a fallback when the probe was unavailable. Only the label
+differs. The arithmetic is the same.
 -}
 data BaselineSource
     = -- | A live probe: the mean round trip in milliseconds and how many samples it averaged.
       MeasuredRtt Double Int
-    | -- | The probe was unavailable; the configured injected latency (ms) stood in.
+    | -- | The probe was unavailable, so the configured injected latency (ms) stood in.
       InjectedFallback Double
     deriving stock (Eq, Show)
 
@@ -83,7 +85,7 @@ data Attribution = Attribution
     , attrUpstreamMs :: Double
     -- ^ The upstream baseline: the public round trip, capped at the total.
     , attrOverheadMs :: Double
-    -- ^ The Écluse overhead: the remainder once the upstream baseline is removed.
+    -- ^ The Écluse overhead: what remains after the upstream baseline.
     , attrUpstreamFraction :: Double
     -- ^ The upstream share of the total, in @[0, 1]@.
     , attrOverheadFraction :: Double
@@ -93,8 +95,8 @@ data Attribution = Attribution
 
 {- | Split a measured latency into its upstream baseline and the Écluse overhead. The
 baseline is the public round trip times 'publicLegMultiple', capped at the total so the
-overhead is never negative (a measurement below the baseline -- noise, or a path faster
-than the live registry -- attributes the whole latency to upstream and zero overhead).
+overhead is never negative. A measurement below the baseline, from noise or a path faster
+than the live registry, attributes the whole latency to upstream and zero overhead.
 -}
 attribute :: Double -> Double -> Attribution
 attribute rttMs totalMs =
@@ -122,9 +124,9 @@ data NormalisedRow = NormalisedRow
     deriving stock (Eq, Show)
 
 {- | Render the service-time attribution as a Markdown section: a header naming the
-baseline source and the concurrency-one pass, then a row per scenario with the p50
-(primary) split into total \/ upstream \/ overhead, and the p99 (tail, GC included) split
-alongside.
+baseline source and the concurrency-one pass, then a row per scenario. Each row splits the
+p50 (primary) into total \/ upstream \/ overhead, and carries the p99 (tail, GC included)
+split alongside.
 -}
 renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
 renderNormalised source rows =
@@ -165,17 +167,17 @@ renderRow rttMs row =
             ]
     split ms frac = msCell ms <> " (" <> pctCell frac <> ")"
 
-{- | The fraction of the loaded latency above which the queuing delay is judged to
-dominate it -- the point where the latency a client sees is mostly the request waiting in
-line, not upstream and not Écluse's per-request work.
+{- | The fraction of the loaded latency above which the queuing delay dominates it. Past
+that point the latency a client sees is mostly the request waiting in line, neither
+upstream nor Écluse's per-request work.
 -}
 queuingDominanceThreshold :: Double
 queuingDominanceThreshold = 0.5
 
-{- | The scalars one scenario's saturation view is derived from: its name, the achieved
-throughput and deadline-abort count under load, and the p50 latency from each pass (the
-concurrency-one service pass and the loaded pass), both at the same injected upstream
-latency so their difference is the queuing delay alone.
+{- | The scalars 'deriveSaturation' builds one scenario's saturation view from: its name,
+the achieved throughput and deadline-abort count under load, and the p50 latency from each
+pass (the concurrency-one service pass and the loaded pass). Both passes run at the same
+injected upstream latency, so their difference is the queuing delay alone.
 -}
 data SaturationInput = SaturationInput
     { siName :: Text
@@ -201,19 +203,19 @@ data Saturation = Saturation
     , satC1ServiceP50Ms :: Maybe Double
     , satLoadedP50Ms :: Maybe Double
     , satQueuingDelayMs :: Maybe Double
-    -- ^ @loaded p50 − concurrency-one service p50@, floored at zero; 'Nothing' when either p50 is absent.
+    -- ^ @loaded p50 − concurrency-one service p50@, floored at zero. 'Nothing' when either p50 is absent.
     , satQueuingFraction :: Maybe Double
-    -- ^ The queuing delay's share of the loaded p50, in @[0, 1]@; 'Nothing' when undefined.
+    -- ^ The queuing delay's share of the loaded p50, in @[0, 1]@. 'Nothing' when undefined.
     , satQueuingDominates :: Bool
     -- ^ Whether the queuing fraction exceeds the given threshold.
     }
     deriving stock (Eq, Show)
 
-{- | Derive a scenario's saturation view from its scalars. The queuing delay is the
-loaded p50 less the concurrency-one service p50 (floored at zero), its fraction is that
-delay over the loaded p50, and it dominates when the fraction exceeds the threshold. A
-missing p50 leaves the delay, the fraction, and the dominance undefined (not a breach --
-an absent measurement, not a slow one).
+{- | Derive a scenario's saturation view from its scalars. The queuing delay is the loaded
+p50 less the concurrency-one service p50, floored at zero. Its fraction is that delay over
+the loaded p50, and it dominates when the fraction exceeds the threshold. A missing p50
+leaves the delay, the fraction, and the dominance undefined: an absent measurement, never
+a breach and never a slow one.
 -}
 deriveSaturation :: Double -> SaturationInput -> Saturation
 deriveSaturation threshold si =
@@ -234,9 +236,9 @@ deriveSaturation threshold si =
         loaded <- siLoadedP50Ms si
         if loaded > 0 then Just (d / loaded) else Nothing
 
-{- | Render the saturation view as a Markdown section: a header, a per-scenario table
-(throughput, deadline aborts, the two p50s, the queuing delay and its share, and a
-per-row flag), then a loud summary line when any scenario is queuing-bound.
+{- | Render the saturation view as a Markdown section: a header, then a per-scenario
+table with the throughput, the deadline aborts, the two p50s, the queuing delay and its
+share, and a per-row flag. A loud summary line follows when any scenario is queuing-bound.
 -}
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =

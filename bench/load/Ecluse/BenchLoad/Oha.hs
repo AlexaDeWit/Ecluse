@@ -2,21 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @oha@ load-generator driver: spawn @oha@ as a subprocess against a URL and
-parse its JSON report into the throughput and latency-distribution figures the load
+{- | The @oha@ load-generator driver. It spawns @oha@ as a subprocess against a URL. It
+parses the JSON report into the throughput and latency-distribution figures the load
 harness records.
 
-@oha@ (single static binary, in the pin) is driven with @--output-format json@, whose
-report carries a request-rate summary, a latency-percentile table, and the status\/error
-distributions. This module knows that schema and nothing about any ecosystem: it is
-part of the reusable harness core, shared unchanged across every upstream a scenario
-might target.
+The driver runs @oha@ (a single static binary, in the pin) with @--output-format json@.
+That report carries a request-rate summary, a latency-percentile table, and the
+status\/error distributions. This module knows that schema and nothing about any
+ecosystem. It is part of the reusable harness core, shared unchanged across every upstream
+a scenario might target.
 
-The driver is deliberately tolerant of a degraded run -- a low success rate or non-2xx
-responses are reported, not thrown -- because the load benchmarks tier is inform-only and characterises
+The driver tolerates a degraded run on purpose: it reports a low success rate or a non-2xx
+response and never throws on one. The load benchmarks tier is inform-only and characterises
 behaviour rather than asserting a pass\/fail (see @docs\/architecture\/performance.md@).
-A genuinely broken run (the subprocess cannot start, or its output does not parse) does
-throw, since that is a literal harness failure, the one red state the layer recognises.
+A genuinely broken run does throw: the subprocess cannot start, or its output does not
+parse. That is a literal harness failure, the one red state the layer recognises.
 -}
 module Ecluse.BenchLoad.Oha (
     OhaReport (..),
@@ -33,11 +33,7 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.BenchLoad.Error (benchFail)
 
-{- | The fields of an @oha@ JSON report the harness records: the achieved request rate,
-the fraction of requests that succeeded, the run's wall-clock duration, the latency
-percentiles (in seconds, absent when no request succeeded), and the status-code and
-error distributions.
--}
+-- | The fields of an @oha@ JSON report the load harness records.
 data OhaReport = OhaReport
     { ohaRequestsPerSec :: Double
     -- ^ Achieved throughput over the run, requests per second.
@@ -46,7 +42,7 @@ data OhaReport = OhaReport
     , ohaElapsedSeconds :: Double
     -- ^ The run's wall-clock duration, in seconds.
     , ohaP50, ohaP90, ohaP99, ohaP999 :: Maybe Double
-    -- ^ Latency percentiles in seconds; 'Nothing' when no request succeeded.
+    -- ^ Latency percentiles in seconds. 'Nothing' when no request succeeded.
     , ohaStatusCounts :: Map Text Int
     -- ^ Response counts keyed by HTTP status code (e.g. @"200"@).
     , ohaErrorCounts :: Map Text Int
@@ -80,35 +76,34 @@ instance FromJSON OhaReport where
                 , ohaErrorCounts = errorCounts
                 }
 
-{- | Drive @oha@ against a URL at the given concurrency for the given number of
-seconds, returning its parsed report. The subprocess output is captured (never the
-harness's stdout, which carries only the machine-readable per-scenario report), so a
+{- | Drive @oha@ against a URL at the given concurrency for the given number of seconds,
+returning its parsed report. The driver captures the subprocess output and keeps it off
+the harness's stdout, which carries only the machine-readable per-scenario report. A
 caller renders the figures itself.
 
-Throws if @oha@ cannot be started or its JSON does not parse -- a literal harness
-failure. A merely degraded run (errors, non-2xx) parses cleanly and is returned for the
-caller to report.
+Throws when @oha@ cannot start or its JSON does not parse, a literal harness failure. A
+merely degraded run (errors, non-2xx) parses cleanly and comes back for the caller to
+report.
 -}
 runOha :: Int -> Int -> Text -> IO OhaReport
 runOha concurrency durationSeconds url =
     runOhaArgs concurrency durationSeconds [toString url]
 
 {- | Drive @oha@ against a __weighted list of URLs__ at the given concurrency for the
-given number of seconds, returning its parsed report. The list is written to a
-temporary file and passed via @--urls-from-file@; @oha@ spreads requests across the
-file in proportion to each URL's multiplicity, so repeating a URL @w@ times gives it
-weight @w@ in the served mix -- the mechanism the load harness uses to drive a realistic
-heavy-headed (Zipfian) package mix (a few hot packages, a long one-shot tail).
+given number of seconds, returning its parsed report. The driver writes the list to a
+temporary file and passes it via @--urls-from-file@. Then @oha@ spreads requests across
+the file in proportion to each URL's multiplicity. Repeating a URL @w@ times therefore
+gives it weight @w@ in the served mix. That is how the load harness drives a realistic
+heavy-headed (Zipfian) package mix: a few hot packages, a long one-shot tail.
 
-The same literal-failure contract as 'runOha': throws if @oha@ cannot be started or
-its JSON does not parse, returns a degraded run for the caller to report.
+The same literal-failure contract as 'runOha'. It throws when @oha@ cannot start or its
+JSON does not parse, and returns a degraded run for the caller to report.
 -}
 runOhaUrls :: Int -> Int -> [Text] -> IO OhaReport
 runOhaUrls = runOhaUrlsWith []
 
-{- | 'runOhaUrls' with fixed extra request headers on every request -- the
-revalidation scenario's @If-None-Match@. Each pair becomes an @-H "name: value"@
-argument.
+{- | 'runOhaUrls' with fixed extra request headers on every request: the revalidation
+scenario's @If-None-Match@. Each pair becomes an @-H "name: value"@ argument.
 -}
 runOhaUrlsWith :: [(Text, Text)] -> Int -> Int -> [Text] -> IO OhaReport
 runOhaUrlsWith headers concurrency durationSeconds urls =

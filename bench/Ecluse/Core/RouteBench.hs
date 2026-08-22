@@ -3,13 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Work-per-request bench for request routing: the npm classifier
-("Ecluse.Core.Registry.Npm.Route") that turns a request's method and path segments
-into a typed 'Route' on every request, before any metadata work happens.
+("Ecluse.Core.Registry.Npm.Route") that turns a request's method and path segments into
+a typed 'Route'. It runs on every request, before any metadata work.
 
-The input is a representative mix of the request shapes the proxy sees -- bare and
-scoped packuments, tarball coordinates, the @ping@ probe, search, first-party
-publishes (@PUT@), and unrecognised paths -- so the bench reflects the real
-classifier branch distribution rather than one hot path.
+The input is a representative mix of the request shapes the proxy sees: bare and scoped
+packuments, tarball coordinates, the @ping@ probe, search, first-party publishes
+(@PUT@), and unrecognised paths. The bench therefore reflects the real classifier branch
+distribution rather than one hot path.
 -}
 module Ecluse.Core.RouteBench (
     benchmarks,
@@ -50,9 +50,9 @@ requests = concat (replicate 1000 sample)
         , (methodPut, ["express", "-", "express-4.18.2.tgz"]) -- a PUT to a non-publish path
         ]
 
-{- | Route every request, summing the length of the matched route's identifier so each
-result is forced (an unmatched request contributes nothing). The route's action is a
-closure, so its identifier is what the benchmark forces the match down to.
+{- | Route every request, summing the length of the matched route's identifier so the
+fold forces each result (an unmatched request contributes nothing). The route's action is
+a closure, so its identifier is what the bench forces the match down to.
 -}
 classifyDepth :: [(Method, [Text])] -> Int
 classifyDepth = foldl' (\acc (method, segments) -> acc + matchDepth method segments) 0

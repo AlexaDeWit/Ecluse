@@ -6,10 +6,10 @@
 a raw version string into its canonical ordering key, ordering versions by the
 semantic comparator, and resolving @dist-tags.latest@ over a candidate set.
 
-The inputs are the real version strings of each corpus package, so the parse, order,
-and latest-selection cost is reported across the real distribution of version-set
-sizes (a few versions for @is-odd@, thousands for @\@types\/node@) the proxy parses
-and orders on a metadata request.
+The inputs are the real version strings of each corpus package. The benches therefore
+report the parse, order, and latest-selection cost across the real distribution of
+version-set sizes. That runs from a few versions for @is-odd@ to thousands for
+@\@types\/node@. The proxy parses and orders those sets on a metadata request.
 -}
 module Ecluse.Core.VersionBench (
     benchmarks,
@@ -38,9 +38,10 @@ benchmarks loaded =
         | le@(_, _, value) <- loaded
         ]
 
-{- | The version read pipeline over a packument's raw version keys: parse every key
-into its ordering key, order the parsed versions by the semantic comparator, and
-resolve @latest@ -- summed to a forced 'Int' so the whole pipeline is evaluated.
+{- | The version read pipeline over a packument's raw version keys: parse every key into
+its ordering key, order the parsed versions by the semantic comparator, and resolve
+@latest@. The three results sum to a forced 'Int', so the bench evaluates the whole
+pipeline.
 -}
 versionPipelineDepth :: [Text] -> Int
 versionPipelineDepth raws =
@@ -51,8 +52,8 @@ versionPipelineDepth raws =
     ordered = length (List.sortBy semanticCompare versions)
     latest = maybe 0 (T.length . unVersion) (selectLatest Nothing versions)
 
-{- | The semantic comparator, treating an unorderable pair as equal (the comparator
-is total over the parsed npm versions here; this only keeps 'List.sortBy' total).
+{- | The semantic comparator, treating an unorderable pair as equal. The comparator is
+total over the parsed npm versions here, so this only keeps 'List.sortBy' total.
 -}
 semanticCompare :: Version -> Version -> Ordering
 semanticCompare a b = fromMaybe EQ (compareVersions a b)

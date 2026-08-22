@@ -6,9 +6,9 @@
 {- | The one failure type the load benchmarks harness raises.
 
 The load benchmarks tier is inform-only: it never fails on a slow or degraded result. Its
-only red state is a __literal failure__ -- the harness cannot boot, @oha@ cannot run, a
-report does not parse, or a scenario served nothing. That is surfaced as this typed
-exception (a non-zero exit), rather than a stringly throw, per @STYLE.md@ section 11.
+only red state is a __literal failure__: the harness cannot boot, @oha@ cannot run, a
+report does not parse, or a scenario served nothing. The harness raises that as this typed
+exception (a non-zero exit) rather than a stringly throw, per @STYLE.md@ section 11.
 -}
 module Ecluse.BenchLoad.Error (
     BenchLoadError (..),
