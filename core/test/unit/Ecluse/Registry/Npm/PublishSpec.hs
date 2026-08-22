@@ -14,9 +14,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
 import Ecluse.Core.Registry (
+    FetchFault (FetchTransport),
     MirrorArtifact (..),
     PublishError (publishErrorMessage),
-    PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
+    PublishFault (PublishFetch, PublishRejected),
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
@@ -82,9 +83,9 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
             outcome `shouldSatisfy` isLeft
 
-    it "reports a transport failure as a PublishTransport value, never thrown" $ do
+    it "reports a transport failure as a PublishFetch value, never thrown" $ do
         -- No server listens on this port, so the write throws a connection failure. The transport
-        -- must fold it into a retryable PublishTransport value, never throw.
+        -- must fold it into a retryable PublishFetch value, never throw.
         publish <- publishAt "http://127.0.0.1:1"
         outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
@@ -127,12 +128,12 @@ Forcing the message exercises the error-construction path.
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
-    Left (PublishTransport fault) -> Just (tfDetail fault)
-    Left (PublishUrlUnformable _) -> Nothing
+    Left (PublishFetch (FetchTransport fault)) -> Just (tfDetail fault)
+    Left (PublishFetch _) -> Nothing
     Right _ -> Nothing
 
 -- | Whether a publish outcome is the retryable transport fault (a value, not a throw).
 isTransport :: Either PublishFault a -> Bool
 isTransport = \case
-    Left (PublishTransport _) -> True
+    Left (PublishFetch (FetchTransport _)) -> True
     _ -> False

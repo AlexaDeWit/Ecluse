@@ -43,8 +43,9 @@ import Ecluse.Core.Package.Merge (
     MergePlan (mpDivergences),
     integrityHashes,
  )
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
+    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), authorityLabel)
 import Ecluse.Core.Server.Context (Handler)
@@ -64,8 +65,9 @@ logMetadataFailure name baseUrl = \case
     MetadataBoundExceeded err -> logBreach name err
     MetadataUndecodable -> logDecodeFailure name
     MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
-    MetadataUrlUnformable urlErr -> logUpstreamUnformable name baseUrl urlErr
-    MetadataUnreachable fault -> logUpstreamUnreachable name baseUrl fault
+    MetadataFetch (FetchBoundExceeded err) -> logBreach name err
+    MetadataFetch (FetchUrlUnformable urlErr) -> logUpstreamUnformable name baseUrl urlErr
+    MetadataFetch (FetchTransport fault) -> logUpstreamUnreachable name baseUrl fault
 
 {- Log a response-bound breach at 'WarningS' before the contribution degrades fail-closed. A
 breach means a hostile or oversized upstream, or a too-tight cap. The package and the observed

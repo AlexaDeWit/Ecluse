@@ -39,10 +39,10 @@ import Ecluse.Config (
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
-    QueueFault (qfDetail),
     retiringDelivery,
  )
 import Ecluse.Core.Text (nonBlank)
@@ -147,13 +147,13 @@ is due. Pass the built handle's budget, not the plan's configured floor, so the 
 states what the worker will do. The memory backend stays silent because
 'memoryQueueBootWarning' already says the mirror sheds jobs.
 -}
-deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either QueueFault DeadLetterTerminus -> Maybe Text
+deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either TransportFault DeadLetterTerminus -> Maybe Text
 deadLetterTerminusWarning plan budget probed = case plan of
     MemoryBackend -> Nothing
     SqsBackend{} -> case probed of
         Right TerminusAttached{} -> Nothing
         Right TerminusAbsent -> Just (noDeadLetterTerminusWarning budget)
-        Left fault -> Just (terminusUnprobedWarning (qfDetail fault))
+        Left fault -> Just (terminusUnprobedWarning (tfDetail fault))
 
 -- The no-terminus warning. It names the budget that stands in for the missing
 -- dead-letter queue, so an operator sees what happens to a poison message.

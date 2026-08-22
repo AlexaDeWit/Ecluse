@@ -28,18 +28,14 @@ module Ecluse.Core.Worker.Loop (
 import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Queue (MirrorQueue (receive), qfDetail)
+import Ecluse.Core.Fault (tfDetail)
+import Ecluse.Core.Queue (MirrorQueue (receive))
 import Ecluse.Core.Supervision (SupervisionPolicy, superviseLoop)
 import Ecluse.Core.Worker.Job (processBatch)
 import Ecluse.Core.Worker.Types
 
-{- | The continuous consume loop: long-poll for a batch, process it, repeat, under the
-given supervision policy.
-
-A failed poll arrives as a typed 'Ecluse.Core.Queue.QueueFault' that the step logs and
-backs off from, so a queue outage cannot kill the worker thread. The heartbeat advances
-only on demonstrated progress, so a worker stuck on a persistently faulting @receive@
-goes stale and fails @\/livez@ for the orchestrator to restart.
+{- | The continuous consume loop: long-poll, process, repeat, under the supervision policy. The
+heartbeat advances only on progress, so a persistently faulting @receive@ goes stale on @\/livez@.
 -}
 workerLoop :: SupervisionPolicy -> WorkerM Void
 workerLoop policy = superviseLoop policy pollAndProcess
@@ -51,7 +47,7 @@ workerLoop policy = superviseLoop policy pollAndProcess
             Left fault -> do
                 -- No heartbeat advance: the loop is retrying, not healthy-idle. The supervisor
                 -- backs off only on residue, so this step paces the typed-fault channel itself.
-                logFM ErrorS (ls ("worker receive failed, backing off: " <> qfDetail fault))
+                logFM ErrorS (ls ("worker receive failed, backing off: " <> tfDetail fault))
                 backoff
             Right messages -> do
                 case messages of

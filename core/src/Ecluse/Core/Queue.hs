@@ -70,10 +70,6 @@ module Ecluse.Core.Queue (
     MirrorQueue (..),
     noMirrorQueue,
 
-    -- * Faults
-    QueueFault (..),
-    queueTransportFault,
-
     -- * Payloads
     MirrorJob (..),
     RemoteSpanContext (..),
@@ -107,7 +103,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, rea
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault (TransportFault), transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -200,28 +196,6 @@ data QueueMessage = QueueMessage
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
 
-{- | Why the handle could not deliver a queue operation to the backend, reported as a value
-on every handle field rather than on the exception channel. The cause vocabulary is
-"Ecluse.Core.Fault"'s 'TransportCause': a backend's service-level refusal (a throttle, an
-access denial) classifies as 'TransportProtocol'.
--}
-data QueueFault = QueueFault
-    { qfCause :: TransportCause
-    -- ^ The closed classification a consumer or an operator reads.
-    , qfDetail :: Text
-    {- ^ The backend's rendered detail, bounded to a log-line-sized budget.
-    Diagnostic text only: it is never parsed, and no decision may branch on it.
-    -}
-    }
-    deriving stock (Eq, Show)
-
-{- | Adopt an already-classified 'TransportFault' as a 'QueueFault'.
-'Ecluse.Core.Fault.transportFault' has already truncated the detail to the shared log-line
-budget, so the two vocabularies cannot drift on what bounded means.
--}
-queueTransportFault :: TransportFault -> QueueFault
-queueTransportFault (TransportFault cause detail) = QueueFault cause detail
-
 {- | How many deliveries of one message a queue grants before the worker itself
 retires it. A 'newtype', so no caller confuses a count of receives with some other
 'Int'.
@@ -276,30 +250,28 @@ message through its terminal path rather than letting it cycle. A backend suppli
 deliveryBudgetSpent :: DeliveryBudget -> QueueMessage -> Bool
 deliveryBudgetSpent budget message = msgReceiveCount message >= retiringDelivery budget
 
-{- | The mirror-queue handle: a record of functions over a backend whose private state the
-closures capture. Each operation reports backend failure as a 'QueueFault' value, so no queue
-outage rides the exception channel through a caller. See the module header for the
-best-effort @enqueue@, retry-by-not-acking, and no-@nack@ conventions.
+{- | The mirror-queue handle: a record of functions over a backend whose state the closures
+capture. Every operation reports failure as an 'Ecluse.Core.Fault.TransportFault' value.
 -}
 data MirrorQueue = MirrorQueue
-    { enqueue :: MirrorJob -> IO (Either QueueFault ())
+    { enqueue :: MirrorJob -> IO (Either TransportFault ())
     {- ^ Producer. Best-effort: the caller counts and logs a 'Left' and never fails the client
     response, since a later pull re-enqueues (see the header).
     -}
-    , receive :: IO (Either QueueFault [QueueMessage])
+    , receive :: IO (Either TransportFault [QueueMessage])
     {- ^ Consumer. One long-poll for a batch, with @Right []@ on timeout: an empty, healthy poll
     the worker simply repeats. A 'Left' is a failed poll and does not advance the liveness
     heartbeat, so a persistently failing backend surfaces through @\/livez@.
     -}
-    , ack :: ReceiptHandle -> IO (Either QueueFault ())
+    , ack :: ReceiptHandle -> IO (Either TransportFault ())
     {- ^ Acknowledge a processed message so the backend does not redeliver it. The caller logs
     a 'Left' and absorbs it, since idempotent publishing makes the repeat harmless.
     -}
-    , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either QueueFault ())
+    , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either TransportFault ())
     {- ^ Extend a received message's visibility window to hold a long publish. An optimisation,
     not correctness-critical, so the caller absorbs a 'Left' silently.
     -}
-    , deadLetter :: ReceiptHandle -> IO (Either QueueFault ())
+    , deadLetter :: ReceiptHandle -> IO (Either TransportFault ())
     {- ^ Realise a terminal fault: a job that can never succeed, decided as a verdict at the
     read site. Each backend routes it to its own dead-letter terminus (see the header). The
     caller logs a 'Left' and absorbs it, like 'ack'.
@@ -309,7 +281,7 @@ data MirrorQueue = MirrorQueue
     ('deliveryBudgetSpent'). The backend settles it once at construction with
     'effectiveDeliveryBudget', so judging a delivery costs no per-message work.
     -}
-    , deadLetterTerminus :: Either QueueFault DeadLetterTerminus
+    , deadLetterTerminus :: Either TransportFault DeadLetterTerminus
     {- ^ What this backend's dead-letter probe found at construction, or the fault that stopped
     the probe. The composition root reads it once to decide its boot warning. A 'Left' leaves
     the configured budget standing and never blocks boot.
@@ -333,9 +305,7 @@ noMirrorQueue =
         , deadLetterTerminus = Right TerminusAbsent
         }
   where
-    inertFault =
-        queueTransportFault
-            (transportFault TransportProtocol "no mount mirrors, so no mirror queue is built")
+    inertFault = transportFault TransportProtocol "no mount mirrors, so no mirror queue is built"
 
 {- | Hand a job to a bounded queue inside the caller's transaction. At the cap it drops the newest
 job and returns the running drop total, a safe loss because the next demand re-enqueues it.
@@ -415,7 +385,7 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
   where
     go consecutiveFailures = do
         job <- atomically (readTBQueue buffer)
-        -- The backend reports delivery failures as 'QueueFault' values, so this match is total. An
+        -- Delivery failures arrive as 'TransportFault' values, so this match is total. An
         -- exception escaping here is an invariant break, left to the loop's supervisor.
         enqueue backend job >>= \case
             Right () -> go 0
@@ -423,7 +393,7 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
                 n <- atomically (bumpCount failureCount)
                 -- 'onDeliveryFailure' is a best-effort observer. Guard it so a throwing
                 -- observer can never escape the loop and tear down the composition root.
-                void (tryAny (onDeliveryFailure n (qfDetail fault)))
+                void (tryAny (onDeliveryFailure n (tfDetail fault)))
                 threadDelay (backoffMicros drainBackoff consecutiveFailures)
                 go (consecutiveFailures + 1)
 

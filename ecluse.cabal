@@ -127,7 +127,6 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
-    Ecluse.Core.Registry.Fault
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter

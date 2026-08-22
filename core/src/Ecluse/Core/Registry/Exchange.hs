@@ -2,30 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared bounded registry exchanges: run one formed 'Request' and read its
-response under a response-bound budget. Every failure folds into the typed channel at
-this edge. Two shapes live here, one per whole-buffered response the proxy reads.
-'boundedFetch' returns the body as a 'RegistryResponse'. 'boundedRelay' pairs the
-bounded body with the status the target answered as a 'PublishRelayResponse'.
-
-The npm read data plane ("Ecluse.Core.Registry.Npm") and the mirror-write transport
-("Ecluse.Core.Registry.Publish") fetch through 'boundedFetch'. The first-party
-publish relay ("Ecluse.Core.Registry.Npm") relays through 'boundedRelay'. Each
-performs the identical fail-closed exchange: run the request, then read the body
-chunk-by-chunk against the budget. A bound breach or a transport fault comes back as
-a typed __value__, never an exception. Both live here once, so a hardening change to
-the response bound touches one implementation, not copies that can drift.
-
-Ecosystem-agnostic: this forms no request and speaks no registry protocol, only the
-bounded read of a 'Request' the caller has already shaped. Request formation, and its
-own typed fault, stays with the caller.
+{- | The shared bounded registry exchange: run one formed request and read its response
+under a response-bound budget. One implementation serves every whole-buffered exchange the
+proxy runs, so callers differ only in what they project out of the answered status and the
+bounded body. Every failure, a bound breach and a transport fault included, comes back as a
+typed 'FetchFault' __value__, and this is the one place a registry path classifies an
+@http-client@ exception. 'formThen' folds a caller's own 'UrlFormationError' into that same
+channel. Ecosystem-agnostic: this forms no request and speaks no registry protocol.
 -}
 module Ecluse.Core.Registry.Exchange (
-    -- * Bounded response fetch
+    -- * The bounded exchange
+    boundedExchange,
     boundedFetch,
-
-    -- * Bounded publish relay
     boundedRelay,
+
+    -- * Request formation
+    formThen,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -44,47 +36,45 @@ import UnliftIO (try)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport),
-    PublishRelayFault (RelayBoundExceeded, RelayTransport),
     PublishRelayResponse (..),
     RegistryResponse (RegistryResponse),
+    UrlFormationError,
  )
 import Ecluse.Core.Security (LimitError, Limits, boundedRead)
 
-{- | Run a formed 'Request' over the manager and read its response body bounded against the
-budget. The transport wrap covers the whole exchange, the bounded body read included, so a
-connection lost mid-body is a typed 'FetchFault', never a half-read response.
+{- | Run a formed request and project its status and bounded body onto the caller's result.
+The transport wrap covers the body read, so a connection lost mid-body is a typed fault.
 -}
-boundedFetch :: Manager -> Limits -> Request -> IO (Either FetchFault RegistryResponse)
-boundedFetch manager limits request =
-    try (withResponse request manager (readBoundedBody limits . responseBody))
+boundedExchange :: (Int -> ByteString -> a) -> Manager -> Limits -> Request -> IO (Either FetchFault a)
+boundedExchange project manager limits request =
+    try (withResponse request manager (readBounded project limits))
         <&> \case
             Left httpErr -> Left (FetchTransport (classifyTransport httpErr))
             Right (Left limitErr) -> Left (FetchBoundExceeded limitErr)
-            Right (Right response) -> Right response
+            Right (Right projected) -> Right projected
 
-{- | Run a formed publish 'Request' and buffer the target's response bounded against the budget.
-The transport wrap covers the whole exchange, the bounded body read included. A connection lost
-mid-body is therefore a typed 'PublishRelayFault', never a half-relayed response.
+-- | The exchange keeping the body alone, as a 'RegistryResponse'.
+boundedFetch :: Manager -> Limits -> Request -> IO (Either FetchFault RegistryResponse)
+boundedFetch = boundedExchange (\_status body -> RegistryResponse body)
+
+-- | The exchange keeping the answered status alongside the body, for the first-party relay.
+boundedRelay :: Manager -> Limits -> Request -> IO (Either FetchFault PublishRelayResponse)
+boundedRelay =
+    boundedExchange $ \status body ->
+        PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
+
+{- | Run an exchange over a formed request, or fold the formation failure into the same
+channel, so formation and exchange reach the caller as one 'Either'.
 -}
-boundedRelay :: Manager -> Limits -> Request -> IO (Either PublishRelayFault PublishRelayResponse)
-boundedRelay manager limits request =
-    try (withResponse request manager (readRelayResponse limits))
-        <&> \case
-            Left httpErr -> Left (RelayTransport (classifyTransport httpErr))
-            Right relayed -> relayed
+formThen ::
+    (UrlFormationError -> fault) ->
+    (Request -> IO (Either fault a)) ->
+    Either UrlFormationError Request ->
+    IO (Either fault a)
+formThen unformable = either (pure . Left . unformable)
 
 {- An overstep yields the 'LimitError' as a value, never a truncated body. -}
-readBoundedBody :: Limits -> BodyReader -> IO (Either LimitError RegistryResponse)
-readBoundedBody limits bodyReader =
-    fmap RegistryResponse <$> boundedRead limits (brRead bodyReader)
-
-readRelayResponse :: Limits -> Response BodyReader -> IO (Either PublishRelayFault PublishRelayResponse)
-readRelayResponse limits response =
-    readBoundedBody limits (responseBody response) <&> \case
-        Left limitErr -> Left (RelayBoundExceeded limitErr)
-        Right (RegistryResponse body) ->
-            Right
-                PublishRelayResponse
-                    { relayStatus = statusCode (responseStatus response)
-                    , relayBody = LBS.fromStrict body
-                    }
+readBounded :: (Int -> ByteString -> a) -> Limits -> Response BodyReader -> IO (Either LimitError a)
+readBounded project limits response =
+    fmap (project (statusCode (responseStatus response)))
+        <$> boundedRead limits (brRead (responseBody response))

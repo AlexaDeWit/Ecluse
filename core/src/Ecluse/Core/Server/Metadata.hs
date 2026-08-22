@@ -35,10 +35,11 @@ module Ecluse.Core.Server.Metadata (
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable, MetadataUnreachable, MetadataUrlUnformable),
+    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
  )
 
 import Ecluse.Core.Server.Cache (
@@ -171,5 +172,6 @@ metadataErrorCause = \case
     MetadataUndecodable -> Metric.Decode
     MetadataNameMismatch _ -> Metric.Decode
     MetadataBoundExceeded _ -> Metric.OtherCause
-    MetadataUrlUnformable _ -> Metric.OtherCause
-    MetadataUnreachable _ -> Metric.Connection
+    MetadataFetch (FetchUrlUnformable _) -> Metric.OtherCause
+    MetadataFetch (FetchBoundExceeded _) -> Metric.OtherCause
+    MetadataFetch (FetchTransport _) -> Metric.Connection

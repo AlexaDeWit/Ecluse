@@ -62,9 +62,8 @@ import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
     digestOf,
-    fetchFaultError,
  )
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmBaseUrl, npmLimits),
@@ -126,7 +125,7 @@ strict body that read produced, the one place the wire bytes exist.
 fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing config name =
     spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
-        Left fault -> pure (Left (fetchFaultError fault))
+        Left fault -> pure (Left (MetadataFetch fault))
         Right response ->
             let body = responseBody response
              in spanMetadataDecode tracing name $
@@ -169,7 +168,7 @@ a forwarded miss.
 fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing config name version =
     spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
-        Left fault -> pure (Left (fetchFaultError fault))
+        Left fault -> pure (Left (MetadataFetch fault))
         Right response ->
             spanMetadataDecode tracing name $
                 pure ((>>= enforceArtifactSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))

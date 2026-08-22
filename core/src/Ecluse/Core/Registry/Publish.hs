@@ -38,28 +38,19 @@ module Ecluse.Core.Registry.Publish (
     newMirrorPublish,
 ) where
 
-import Network.HTTP.Client (
-    HttpException,
-    Manager,
-    Request,
-    Response (responseStatus),
-    httpLbs,
- )
-import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (try)
+import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
     MirrorArtifact,
     ParseError,
-    PublishFault (PublishTransport, PublishUrlUnformable),
+    PublishFault (PublishFetch),
     RegistryResponse,
     UrlFormationError,
  )
-import Ecluse.Core.Registry.Exchange (boundedFetch)
+import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Version (Version)
 
@@ -91,7 +82,7 @@ data MirrorTransport = MirrorTransport
     policy live behind the action ("Ecluse.Core.Credential.Refresh").
     -}
     , ptLimits :: Limits
-    -- ^ The response bound the probe's metadata read is held to (fail-closed).
+    -- ^ The response bound every exchange with the mirror target is held to (fail-closed).
     }
 
 {- | The mirror-write capability one worker bundle carries, bound to one mirror-target endpoint
@@ -127,17 +118,24 @@ newMirrorPublish transport targetUrl codec =
 probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault RegistryResponse)
 probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
-    case pcProbeRequest codec targetUrl token name of
-        Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
-        Right request ->
-            boundedFetch (ptManager transport) (ptLimits transport) request
+    formThen
+        FetchUrlUnformable
+        (boundedFetch (ptManager transport) (ptLimits transport))
+        (pcProbeRequest codec targetUrl token name)
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name version artifact bytes = do
     token <- ptMintToken transport
-    case pcPublishRequest codec targetUrl token name version artifact bytes of
-        Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
-        Right request ->
-            try (httpLbs request (ptManager transport)) <&> \case
-                Left (err :: HttpException) -> Left (PublishTransport (classifyTransport err))
-                Right response -> pcPublishOutcome codec (statusCode (responseStatus response))
+    formThen
+        (PublishFetch . FetchUrlUnformable)
+        (writeArtifact transport codec)
+        (pcPublishRequest codec targetUrl token name version artifact bytes)
+
+-- Read the codec's verdict from the answered status. The 'const' projection drops the
+-- target's body, which the write has no use for, and the exchange bounds it either way.
+writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
+writeArtifact transport codec request =
+    boundedExchange const (ptManager transport) (ptLimits transport) request
+        <&> \case
+            Left fault -> Left (PublishFetch fault)
+            Right status -> pcPublishOutcome codec status

@@ -307,6 +307,19 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 409
             simpleBody resp `shouldBe` "{\"error\":\"version already exists\"}"
 
+    -- An unformable target URL is this proxy's own misconfiguration (500). A target that
+    -- never answers is an upstream outage (502). Both legs of that split are pinned here.
+    it "500s a publish whose publication target URL cannot be formed (a misconfiguration, not an outage)" $ do
+        app <- proxyWith (Just (\budget -> (publishDepsAt 1 Nothing budget){pubTargetUrl = ""}))
+        resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        status resp `shouldBe` 500
+
+    it "502s a publish the publication target never answers (an outage, not a misconfiguration)" $ do
+        -- Port 1 is an unconnectable placeholder, so the relay reports a transport fault.
+        app <- proxyWith (Just (publishDepsAt 1 Nothing))
+        resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        status resp `shouldBe` 502
+
     -- The body-name agreement leg of the anti-shadowing guard. An in-scope URL whose body
     -- declares a different package would publish a name the scope guard never authorised, so
     -- the guard checks @_id@, top-level @name@, and @versions[].name@, and 403s before any relay.

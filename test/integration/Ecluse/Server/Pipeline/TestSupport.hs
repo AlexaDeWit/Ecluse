@@ -38,7 +38,6 @@ import Ecluse.Core.Queue (
     MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
-    queueTransportFault,
  )
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
@@ -860,4 +859,4 @@ newFailingQueue = do
     queue <- newTestMemoryQueue
     -- The typed producer channel: a backend fault is the 'Left' value the serve
     -- path's best-effort enqueue counts and swallows.
-    pure queue{enqueue = \_ -> pure (Left (queueTransportFault (transportFault TransportUnreachable "enqueue failed (test double)")))}
+    pure queue{enqueue = \_ -> pure (Left (transportFault TransportUnreachable "enqueue failed (test double)"))}

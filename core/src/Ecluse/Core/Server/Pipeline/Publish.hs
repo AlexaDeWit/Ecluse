@@ -34,7 +34,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderPackageName,
  )
-import Ecluse.Core.Registry (PublishRelayFault (RelayBoundExceeded, RelayTransport, RelayUrlUnformable), PublishRelayResponse (PublishRelayResponse))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
@@ -106,8 +106,8 @@ publishWithDeps replies deps clientToken name request respond
                 -- otherwise write a name the guard never saw. Refuse before the relay.
                 Right body -> case bodyNameDisagreement (pubDeclaredNames deps) (pubCanonicaliseName deps) name (LBS.fromStrict body) of
                     Just declared -> pure (bodyNameMismatch replies deps name declared)
-                    -- The relay reports failures as the typed 'PublishRelayFault' value, so
-                    -- the render below is total and nothing is caught here.
+                    -- The relay reports failures as the typed 'FetchFault' value, so the
+                    -- render below is total and nothing is caught here.
                     Nothing ->
                         renderRelay replies deps
                             <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name body)
@@ -139,16 +139,18 @@ status and body, so the registry's own @409@ or @403@ reaches the client unchang
 renderRelay ::
     PublishReplies response ->
     PublishDeps ->
-    Either PublishRelayFault PublishRelayResponse ->
+    Either FetchFault PublishRelayResponse ->
     response
 renderRelay replies deps = \case
     Right (PublishRelayResponse code relayed) ->
         publishRelayed replies (mkStatus code "") [] relayed
-    Left (RelayUrlUnformable _urlErr) ->
+    -- An unformable target URL is this proxy's own misconfiguration, so it answers 500. The
+    -- other two are the target's failure to answer, so they answer 502.
+    Left (FetchUrlUnformable _urlErr) ->
         publishError replies status500 [] (appendHelp (pubHelp deps) "the publication target URL is misconfigured")
-    Left (RelayTransport _fault) ->
+    Left (FetchTransport _fault) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
-    Left (RelayBoundExceeded _limit) ->
+    Left (FetchBoundExceeded _limit) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
 
 -- A @503@ for a publish shed at the aggregate body-byte budget: server capacity, not client

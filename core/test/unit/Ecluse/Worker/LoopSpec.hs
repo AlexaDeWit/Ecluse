@@ -16,9 +16,8 @@ spec :: Spec
 spec = do
     describe "workerLoop -- supervision (one bad iteration must not kill the loop)" $ do
         it "survives a faulting receive: logs the typed fault, backs off, and polls again" $ do
-            -- Every poll reports the handle's typed 'QueueFault'. The loop must log it and retry
-            -- after a backoff, never escape and tear the worker thread down. More than one receive
-            -- proves it retried.
+            -- Every poll reports the handle's typed 'TransportFault'. The loop must log it and
+            -- back off rather than escape, and more than one receive proves it retried.
             calls <- newIORef (0 :: Int)
             queue <- faultingReceiveQueue calls
             withQueueRuntime queue $ \runtime -> do

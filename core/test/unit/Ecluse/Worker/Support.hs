@@ -38,7 +38,6 @@ import Ecluse.Core.Queue (
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
-    queueTransportFault,
  )
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
@@ -498,7 +497,7 @@ faultingReceiveQueue calls = do
         base
             { receive = do
                 atomicModifyIORef' calls (\n -> (n + 1, ()))
-                pure (Left (queueTransportFault (transportFault TransportUnreachable "receive: simulated queue outage")))
+                pure (Left (transportFault TransportUnreachable "receive: simulated queue outage"))
             }
 
 {- | A queue whose @receive@ always throws, counting each call. The throw breaks the handle's

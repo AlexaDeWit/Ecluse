@@ -28,6 +28,7 @@ import Katip (Severity (DebugS, ErrorS, InfoS, WarningS), katipAddNamespace, log
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Fault (tfCause, tfDetail)
 import Ecluse.Core.Package (Artifact (artFilename, artSize), Hash, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -40,8 +41,13 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, qfDetail, retiringDelivery)
-import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable))
+import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, retiringDelivery)
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
+    PublishFault (PublishFetch, PublishRejected),
+    renderUrlFormationError,
+ )
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
@@ -51,7 +57,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Core.Worker.Fetch (ArtifactFetchFault (ArtifactOverCap, ArtifactUnavailable), fetchArtifactBytes)
+import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Types
 
@@ -127,7 +133,7 @@ ackMessage receipt = do
     queue <- asks wrQueue
     acked <- liftIO (ack queue receipt)
     whenLeft_ acked $ \fault ->
-        logFM WarningS (ls ("ack failed; the processed message will redeliver (harmless, publishing is idempotent): " <> qfDetail fault))
+        logFM WarningS (ls ("ack failed; the processed message will redeliver (harmless, publishing is idempotent): " <> tfDetail fault))
 
 -- Hand the message to the queue's dead-letter terminus, never a plain delete, which would
 -- silently discard it on a durable queue.
@@ -136,7 +142,7 @@ deadLetterMessage receipt = do
     queue <- asks wrQueue
     outcome <- liftIO (deadLetter queue receipt)
     whenLeft_ outcome $ \fault ->
-        logFM WarningS (ls ("dead-letter realisation failed; the message redelivers and re-fails terminally (harmless): " <> qfDetail fault))
+        logFM WarningS (ls ("dead-letter realisation failed; the message redelivers and re-fails terminally (harmless): " <> tfDetail fault))
 
 {- | The terminal outcome of processing one mirror job. It decides whether the worker
 acks the message or leaves it to redeliver.
@@ -149,19 +155,12 @@ data JobOutcome
       presence confirmed by the pre-fetch probe, before any bytes moved.
       -}
       Succeeded
-    | {- | A __non-retryable__ rejection: the bytes did not match the re-admitted
-      artifact's digest (tamper), or the publish URL was unformable
-      (misconfiguration). Redelivery cannot help, so the job is acked to retire it
-      after alarming. Carries the reason.
+    | {- | A __non-retryable__ rejection (a tampered artifact, an unformable request URL).
+      Redelivery cannot help, so the job is acked to retire it after alarming.
       -}
       Dropped Text
-    | {- | A __terminal__ fault the backend dead-letters. An artifact past the
-      plan-sized byte cap can never succeed and re-fetches identical over-cap bytes
-      on every redelivery. It is therefore not acked, since a plain delete would
-      silently discard it on a durable queue, but handed to the queue's
-      'Ecluse.Core.Queue.deadLetter' terminus. The in-memory backend drops it, and a
-      durable queue rides it to the dead-letter queue for forensic retention. Carries
-      the reason.
+    | {- | A __terminal__ fault handed to 'Ecluse.Core.Queue.deadLetter' rather than acked,
+      because a plain delete would silently discard it on a durable queue.
       -}
       DeadLettered Text
     | {- | A __transient__ fault: a fetch failure, or a registry rejection worth
@@ -295,18 +294,18 @@ readmittedDescriptor artifact digests =
         , maSize = artSize artifact
         }
 
+{- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
+The artifact fetch and the mirror write read this one table, so no fault splits between them.
+-}
+outcomeOfFetchFault :: Text -> FetchFault -> JobOutcome
+outcomeOfFetchFault reason = \case
+    FetchUrlUnformable _ -> Dropped reason
+    FetchBoundExceeded _ -> DeadLettered reason
+    FetchTransport _ -> Retried reason
+
 -- Verify the fetched bytes against the re-admitted digests, since the queue payload carries none.
 -- A tampered or corrupt artifact must never reach the private upstream, which later serves it
 -- without the rules, so a mismatch fails the job with no publish.
-
-{- | Classify a fetch fault. An artifact over the byte cap is terminal and dead-lettered, since
-every redelivery re-fetches the same over-cap bytes, while any other fetch fault is a retry.
--}
-outcomeOfFetchFault :: ArtifactFetchFault -> JobOutcome
-outcomeOfFetchFault = \case
-    ArtifactOverCap reason -> DeadLettered reason
-    ArtifactUnavailable reason -> Retried reason
-
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
@@ -314,13 +313,29 @@ mirrorArtifact policy receipt job admitted = do
     case fetched of
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and
         -- 'processMessage' logs the reason at the queue-realisation site.
-        Left fault -> pure (outcomeOfFetchFault fault)
+        Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job fault) fault)
         Right bytes ->
             case verifyIntegrity (maHashes admitted) bytes of
                 IntegrityMismatch detail -> do
                     logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
                     pure (Dropped ("integrity mismatch: " <> detail))
                 IntegrityVerified -> publishVerified policy receipt job admitted bytes
+
+-- The client's rendered exception would print the request path, query, and headers, so a
+-- transport reason names only the authority and the cause.
+artifactFetchReason :: MirrorJob -> FetchFault -> Text
+artifactFetchReason job = \case
+    FetchUrlUnformable urlErr -> "unformable artifact URL: " <> renderUrlFormationError urlErr
+    FetchBoundExceeded limitErr -> "artifact exceeded the response bound: " <> show limitErr
+    FetchTransport fault -> "artifact fetch from " <> jobArtifactAuthority job <> " failed: " <> show (tfCause fault)
+
+-- The mirror target is operator-configured, so its rendered transport detail is diagnosable
+-- rather than attacker-supplied.
+publishFaultReason :: FetchFault -> Text
+publishFaultReason = \case
+    FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
+    FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
+    FetchTransport fault -> "publish transport failure: " <> show fault
 
 -- Publish already-verified bytes to the mirror target. The publish document is assembled from the
 -- re-admitted descriptor, so no queue-payload text reaches the trusted-tier packument.
@@ -339,13 +354,13 @@ publishVerified policy receipt job admitted bytes = do
         Left (PublishRejected err) -> do
             releaseForRetry receipt
             pure (Retried ("registry rejected publish: " <> show err))
-        Left (PublishTransport fault) -> do
-            releaseForRetry receipt
-            pure (Retried ("publish transport failure: " <> show fault))
-        Left (PublishUrlUnformable urlErr) ->
-            -- Non-retryable: 'processMessage' acks this to retire it, so there is no
-            -- redelivery to hasten. Leave the hold be.
-            pure (Dropped ("unformable publish URL: " <> show urlErr))
+        Left (PublishFetch fault) -> case outcomeOfFetchFault (publishFaultReason fault) fault of
+            -- Reset the hold only when a redelivery is actually coming. A terminal outcome is
+            -- acked or dead-lettered, so there is nothing to hasten and the hold can stand.
+            Retried reason -> do
+                releaseForRetry receipt
+                pure (Retried reason)
+            outcome -> pure outcome
 
 -- Hold the message past its visibility window before a publish that may run long. A mid-publish
 -- redelivery only wastes a re-fetch, so a failed extend is swallowed, never failing the job.

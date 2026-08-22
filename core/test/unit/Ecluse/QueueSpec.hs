@@ -21,7 +21,6 @@ import Ecluse.Core.Queue (
     effectiveDeliveryBudget,
     mkReceiptHandle,
     newEnqueueBuffer,
-    queueTransportFault,
  )
 import Ecluse.Queue.Support (otherJob, sampleJob, thirdJob, unwrap)
 
@@ -56,7 +55,7 @@ spec = do
             let flaky job = do
                     failNow <- atomicModifyIORef' failFirst (False,)
                     if failNow
-                        then pure (Left (queueTransportFault (transportFault TransportUnreachable "backend unavailable")))
+                        then pure (Left (transportFault TransportUnreachable "backend unavailable"))
                         else Right () <$ modifyIORef' delivered (<> [job])
             (q, drainLoop) <-
                 newEnqueueBuffer
