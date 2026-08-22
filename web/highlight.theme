@@ -12,7 +12,7 @@
       "underline": false
     },
     "Annotation": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
@@ -47,14 +47,14 @@
       "underline": false
     },
     "Comment": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
       "underline": false
     },
     "CommentVar": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
@@ -75,7 +75,7 @@
       "underline": false
     },
     "DataType": {
-      "text-color": "#3f6058",
+      "text-color": "#2e4a45",
       "background-color": null,
       "bold": false,
       "italic": false,
@@ -89,7 +89,7 @@
       "underline": false
     },
     "Documentation": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
@@ -117,7 +117,7 @@
       "underline": false
     },
     "Function": {
-      "text-color": "#3f6058",
+      "text-color": "#2e4a45",
       "background-color": null,
       "bold": false,
       "italic": false,
@@ -131,7 +131,7 @@
       "underline": false
     },
     "Information": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
@@ -187,7 +187,7 @@
       "underline": false
     },
     "Variable": {
-      "text-color": "#3f6058",
+      "text-color": "#2e4a45",
       "background-color": null,
       "bold": false,
       "italic": false,
@@ -201,7 +201,7 @@
       "underline": false
     },
     "Warning": {
-      "text-color": "#4f4b43",
+      "text-color": "#5f5a50",
       "background-color": null,
       "bold": false,
       "italic": true,
