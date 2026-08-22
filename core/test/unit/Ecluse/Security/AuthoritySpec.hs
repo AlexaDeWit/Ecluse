@@ -183,9 +183,8 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
 
-{- The rule every operator-configured URL clears at load. Boot echoes each resolved key, so a
-value that survives this refusal is one the echo can print as written. The subject the caller
-passes is what the reason names. -}
+{- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
+value that survives the refusal is one the echo can print as written. -}
 refuseCredentialMaterialSpec :: Spec
 refuseCredentialMaterialSpec = describe "refuseCredentialMaterial" $ do
     it "accepts an ordinary configured URL" $

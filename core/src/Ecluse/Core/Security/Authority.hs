@@ -17,8 +17,8 @@ here carries no policy of its own.
 attribute reduces a URL through it before it names one.
 
 'refuseCredentialMaterial' is the load-time counterpart. It refuses an
-operator-configured URL that carries a credential, so the boot-time configuration echo
-can print such a URL as the operator wrote it.
+operator-configured URL that carries a credential. The boot-time configuration echo prints
+every configured URL as written, so a credential must never reach it.
 -}
 module Ecluse.Core.Security.Authority (
     -- * The dialled authority

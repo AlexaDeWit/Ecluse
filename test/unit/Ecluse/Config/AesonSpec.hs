@@ -396,9 +396,8 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
 
     describe "non-registry configured URLs (the same boot echo prints these keys)" $ do
-        -- server.publicUrl and advisories.osvExportBaseUrl are not registry endpoints, so
-        -- the mount-side refusal above never sees them. The provenance dump prints both as
-        -- given, so each carries the refusal under its own key.
+        -- server.publicUrl and advisories.osvExportBaseUrl are not registry endpoints, so the
+        -- mount-side refusal above never sees them. Each carries the refusal under its own key.
         it "rejects server.publicUrl carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://deploy:hunter2@registry.example.test")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry userinfo"
