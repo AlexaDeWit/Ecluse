@@ -44,22 +44,29 @@ how a request flows, then build down to deployment, configuration, and operation
 
 ## What it gates
 
-The policy is deny by default: a public version reaches a build only when a rule admits it, and
-any deny outranks any allow. The shipped policy has two rules on. Every public version older than
-seven days is admitted. A version that a synced advisory names as the exact fix for a
-vulnerability is admitted at once, as long as no other advisory still affects it.
+The policy is deny by default: a public version reaches a build only when a rule admits it.
+Rules run in precedence order and the first decisive one wins. The revoke and the install-time
+deny sit above every allow by default. The shipped policy has two rules on. Every public version
+older than seven days is admitted. A version that a synced advisory names as the exact fix for a
+vulnerability is admitted at once. That holds as long as no other advisory still affects it.
 
-Everything else you turn on by name: an allow-list for your own scopes, a pin for one package or
-version, a deny for one package or version (the revoke), a deny for packages that run code at
-install time, and a deny for versions with a known vulnerability above a severity you choose.
-Versions your private registry already holds are trusted and never re-gated. The rule names and
-their knobs are under [Rule policy](#rule-policy).
+Everything else you turn on by name:
+
+- an allow-list for your own scopes
+- a pin for one package or version
+- a deny for one package or version (the revoke)
+- a deny for packages that run code at install time
+- a deny for versions with a known vulnerability above a severity you choose
+
+No rule re-gates a version your private registry already holds. Only the trusted integrity floor
+still applies to it. The rule names and their knobs are under [Rule policy](#rule-policy).
 
 ## How a request flows
 
 npm asks Écluse for a package's version listing (the packument), then for a tarball. For the
 listing, Écluse fetches the private registry and the public one in parallel. It trusts every
-private version, gates every public version through the policy, and serves the merged listing.
+private version that meets the trusted integrity floor, gates every public version through the
+policy, and serves the merged listing.
 A public version the policy did not admit is absent from it, so a resolver never picks it.
 
 For a tarball, a private hit streams through unfiltered. A private miss is gated on its public

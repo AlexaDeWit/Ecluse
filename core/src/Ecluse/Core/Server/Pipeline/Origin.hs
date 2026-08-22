@@ -127,7 +127,7 @@ originResultOf = \case
     Right (Right manifest) -> OriginResolved manifest
 
 {- | Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's own
-credential (the default @passthrough@ posture). A failed fetch degrades to no contribution
+credential (the @passthrough@ posture). A failed fetch degrades to no contribution
 rather than an error.
 
 Under @passthrough@ the private upstream is the per-client authority for who may read what.
