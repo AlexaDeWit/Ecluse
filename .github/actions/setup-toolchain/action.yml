@@ -64,6 +64,18 @@ inputs:
       quota than the raw figure suggests. Do not read the cap as a quota budget.
     default: "10G"
 
+outputs:
+  cabal-cache-hit:
+    description: >-
+      "true" only on an exact key match on the cabal store restore below: the
+      restored package index already covers cabal.project's pinned
+      index-state, so a caller can skip `cabal update` (which otherwise hits
+      Hackage's TUF metadata over the network on every run, including its
+      flaky mirror fallback). "false" on a restore-keys prefix fallback or a
+      full miss. Empty when the caller passed cabal-cache: "false" (the
+      restore step never ran).
+    value: ${{ steps.restore-cabal-store.outputs.cache-hit }}
+
 runs:
   using: composite
   steps:
@@ -184,6 +196,7 @@ runs:
     # resolved dependency set.
     - name: Restore cabal store
       if: inputs.cabal-cache == 'true'
+      id: restore-cabal-store
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ github.workspace }}/.cabal

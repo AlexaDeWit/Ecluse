@@ -70,6 +70,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           # Restore the warm cabal store (this job compiles the harness).
@@ -79,7 +80,12 @@ jobs:
           # save here would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"
 
+      # Skipped on an exact cabal-store cache hit: the restored index already covers
+      # cabal.project's pinned index-state. `cabal update` otherwise hits Hackage's
+      # TUF metadata over the network every run, including its occasional
+      # dead-mirror fallback.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       # The harness renders its per-scenario tables to the run summary itself, via

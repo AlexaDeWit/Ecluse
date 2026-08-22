@@ -96,6 +96,7 @@ jobs:
       # serialises it, so Pages is this cache's single writer: restore here, save
       # below (main only).
       - name: Restore doc-variant cabal store
+        id: restore-docs-cabal
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
@@ -115,7 +116,12 @@ jobs:
           restore-keys: |
             dist-docs-${{ runner.os }}-
 
+      # Skipped on an exact doc-variant cabal-store cache hit: the restored index
+      # already covers cabal.project's pinned index-state. `cabal update` otherwise
+      # hits Hackage's TUF metadata over the network every run, including its
+      # occasional dead-mirror fallback.
       - name: Update package index
+        if: steps.restore-docs-cabal.outputs.cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       # Assembles the Pages site into ./_site: the home page at the root and the

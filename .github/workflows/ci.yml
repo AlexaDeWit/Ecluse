@@ -65,11 +65,17 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
 
+      # Skipped on an exact cabal-store cache hit: the restored index already
+      # covers cabal.project's pinned index-state, so there is nothing to
+      # refresh. `cabal update` otherwise fetches Hackage's TUF metadata over
+      # the network every run, including its occasional dead-mirror fallback.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       # Warm the pinned Docker Hub images the integration coverage tier builds FROM
@@ -172,6 +178,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
@@ -179,7 +186,9 @@ jobs:
           # writer.
           save-nix-store: "false"
 
+      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       - name: Smoke tests
@@ -219,6 +228,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
@@ -229,7 +239,9 @@ jobs:
           # entry. See setup-toolchain's caching policy.
           save-nix-store: "false"
 
+      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       # Warm the pinned Docker Hub images the e2e data plane pulls (ministack, the
@@ -382,6 +394,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
@@ -405,7 +418,10 @@ jobs:
       # This job and the stan job below run on separate runners, so each still pays
       # for its own build. Sharing the builddir buys nothing here. It saves a build
       # only in `task check` locally, where the two run in one checkout.
+      #
+      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       - name: weeder (fails on findings)
@@ -445,6 +461,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
@@ -459,7 +476,10 @@ jobs:
       # 132 observations against a true floor of 35 findings. The dependency closure
       # comes warm from the cabal-store cache, so a fresh builddir is only the
       # first-party packages.
+      #
+      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
       - name: stan (fails on findings)
