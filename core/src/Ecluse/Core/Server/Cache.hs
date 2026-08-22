@@ -28,9 +28,9 @@ so the cache stores nothing derived from a caller's credential. Whether a given
 origin is handed to it, and so shared across clients, is the serve path's decision.
 
 Only the anonymous public origin is cached. The trusted private upstream is the per-client
-authority: it re-authorises each request with that client's own forwarded credential. The serve path therefore
-fetches it per request and never hands it here. Were a private entry cached under
-@passthrough@, the credential-free key would let one client's entry serve another
+authority: it re-authorises each request with that client's own forwarded credential. The
+serve path therefore fetches it per request and never hands it here. Were a private entry
+cached under @passthrough@, the credential-free key would let one client's entry serve another
 client's private document within the TTL. That bypasses the upstream's authorisation.
 The public origin is anonymous, so one shared entry serves every client without
 crossing a trust boundary. The private origin is never cached (see
