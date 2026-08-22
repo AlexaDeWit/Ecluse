@@ -9,8 +9,8 @@ The core pipeline and the mirror worker record through abstract ports rather tha
 telemetry backend, so a suite can drive them over inert or recording doubles with no
 OpenTelemetry SDK. These are the shared doubles every suite reaches for: an inert metrics
 port, a metrics port that captures the signals it is handed (to assert what was
-recorded), and a pass-through tracing port that simply runs the bracketed body -- one set
-for the serve path, one for the worker.
+recorded), and a pass-through tracing port that simply runs the bracketed body: one set
+for the serve path, one for the worker, and one for the advisory sync task.
 -}
 module Ecluse.Test.Port (
     -- * Serve-path ports
@@ -23,11 +23,18 @@ module Ecluse.Test.Port (
     noopWorkerMetricsPort,
     recordingWorkerMetricsPort,
     passthroughWorkerTracingPort,
+
+    -- * Advisory sync ports
+    noopAdvisorySyncMetricsPort,
+    recordingAdvisorySyncMetricsPort,
+    passthroughAdvisorySyncTracingPort,
+    recordingAdvisorySyncTracingPort,
 ) where
 
-import Ecluse.Core.Telemetry.Metrics (Decision, MirrorResult)
-import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..))
-import Ecluse.Core.Telemetry.Span (TracingPort (..), WorkerTracingPort (..))
+import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult, Decision, MirrorResult)
+import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
+import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), TracingPort (..), WorkerTracingPort (..))
 
 {- | A 'MetricsPort' whose every field discards its measurement -- the inert double for a
 spec that drives the serve path but asserts nothing about metrics.
@@ -121,3 +128,61 @@ passthroughWorkerTracingPort =
           -- outcome projection, just running the job body.
           wtpMirrorJobSpan = \_ _ _ _ action -> action
         }
+
+{- | An 'AdvisorySyncMetricsPort' whose every field discards its measurement: the inert
+double for a spec that drives the advisory sync loop but asserts nothing about metrics.
+-}
+noopAdvisorySyncMetricsPort :: AdvisorySyncMetricsPort
+noopAdvisorySyncMetricsPort =
+    AdvisorySyncMetricsPort
+        { asmpSyncAttempt = \_ _ -> pass
+        , asmpSyncDuration = \_ _ _ -> pass
+        }
+
+{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it
+is handed (in record order), alongside a reader for each. Lets a spec assert that one sync
+attempt recorded exactly one attempt and one duration under the expected ecosystem and
+result. The latency reader carries the seconds so a spec can check the sample is a real
+measurement rather than a placeholder.
+-}
+recordingAdvisorySyncMetricsPort ::
+    IO
+        ( AdvisorySyncMetricsPort
+        , IO [(Ecosystem, AdvisorySyncResult)]
+        , IO [(Ecosystem, AdvisorySyncResult, Double)]
+        )
+recordingAdvisorySyncMetricsPort = do
+    attempts <- newTVarIO []
+    durations <- newTVarIO []
+    let port =
+            AdvisorySyncMetricsPort
+                { asmpSyncAttempt = \eco result -> atomically (modifyTVar' attempts (<> [(eco, result)]))
+                , asmpSyncDuration = \eco result seconds -> atomically (modifyTVar' durations (<> [(eco, result, seconds)]))
+                }
+    pure (port, readTVarIO attempts, readTVarIO durations)
+
+{- | An 'AdvisorySyncTracingPort' that opens no span and simply runs the bracketed
+attempt: the inert double for a spec that drives the sync loop without a tracer.
+-}
+passthroughAdvisorySyncTracingPort :: AdvisorySyncTracingPort
+passthroughAdvisorySyncTracingPort =
+    AdvisorySyncTracingPort
+        { astpSyncAttemptSpan = \_ _ action -> action
+        }
+
+{- | An 'AdvisorySyncTracingPort' that records one entry per bracketed attempt, the
+ecosystem and the result the attempt projected, alongside a reader for the entries seen so
+far (in record order). It records __after__ the body returns, as the real bracket closes
+its span, so a spec that waits on this reader also sees the attempt's metrics settled.
+-}
+recordingAdvisorySyncTracingPort :: IO (AdvisorySyncTracingPort, IO [(Ecosystem, AdvisorySyncResult)])
+recordingAdvisorySyncTracingPort = do
+    seen <- newTVarIO []
+    let port =
+            AdvisorySyncTracingPort
+                { astpSyncAttemptSpan = \eco project action -> do
+                    result <- action
+                    atomically (modifyTVar' seen (<> [(eco, project result)]))
+                    pure result
+                }
+    pure (port, readTVarIO seen)

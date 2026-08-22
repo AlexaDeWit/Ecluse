@@ -35,6 +35,7 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * The core recording ports
     metricsPortOf,
     workerMetricsPortOf,
+    advisorySyncMetricsPortOf,
 
     -- * Timing
     timedSeconds,
@@ -70,6 +71,10 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * Credentials
     recordCredentialRefresh,
     recordCredentialTokenTtl,
+
+    -- * Advisory sync
+    recordAdvisorySyncAttempt,
+    recordAdvisorySyncDuration,
 ) where
 
 import OpenTelemetry.Metric.Core (
@@ -88,14 +93,16 @@ import OpenTelemetry.Metric.Core (
     noopMeterProvider,
  )
 
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisorySyncResult,
     BreakerSource,
     BreakerState,
     CacheResult,
     Cause,
     CredentialResult,
     Decision,
-    Label (LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LTier, LUpstream),
+    Label (LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LTier, LUpstream),
     MetricName (..),
     MirrorResult,
     Provider,
@@ -109,7 +116,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
-import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
 {- | The live metric instruments, one per @ecluse.*@ signal, created against a single
@@ -119,8 +126,8 @@ instruments.
 
 @http.server.request.duration@ is __not__ here: the WAI instrumentation emits it from
 the server-span meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would double the
-series. Advisory-sync and breaker instruments the catalogue names are present; their
-wiring is layered on as the subsystems that own them are built.
+series. The breaker instrument the catalogue names is present; its wiring is layered on as
+the subsystem that owns it is built.
 -}
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
@@ -148,6 +155,8 @@ data Metrics = Metrics
     , mMirrorPublishDuration :: Histogram
     , mCredentialRefresh :: Counter Int64
     , mCredentialTokenTtlSeconds :: Gauge Int64
+    , mAdvisorySyncAttempts :: Counter Int64
+    , mAdvisorySyncDuration :: Histogram
     }
 
 {- | Build the metric instruments from a 'Telemetry' handle. When telemetry is enabled
@@ -189,6 +198,8 @@ newMetrics telemetry = do
         <*> histogram meter MirrorPublishDuration "mirror publish latency"
         <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
         <*> gauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
+        <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
+        <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
 counter meter name unit description =
@@ -256,6 +267,19 @@ workerMetricsPortOf m =
     WorkerMetricsPort
         { wmpMirrorJobProcessed = recordMirrorJobProcessed m
         , wmpMirrorPublishDuration = recordMirrorPublishDuration m
+        }
+
+{- | Project the OpenTelemetry-backed instruments onto the core 'AdvisorySyncMetricsPort'
+the advisory sync task ("Ecluse.Runtime.Cve.Sync") records through. Each field is the
+matching @record*@ helper partially applied to the instrument handle, so the port is
+exactly this module's recording behaviour behind the core interface, inert when telemetry
+is off since the instruments are.
+-}
+advisorySyncMetricsPortOf :: Metrics -> AdvisorySyncMetricsPort
+advisorySyncMetricsPortOf m =
+    AdvisorySyncMetricsPort
+        { asmpSyncAttempt = recordAdvisorySyncAttempt m
+        , asmpSyncDuration = recordAdvisorySyncDuration m
         }
 
 -- | Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
@@ -389,6 +413,20 @@ gauge decays towards zero.
 recordCredentialTokenTtl :: (MonadIO m) => Metrics -> Provider -> Int -> m ()
 recordCredentialTokenTtl m provider seconds =
     set (mCredentialTokenTtlSeconds m) (fromIntegral seconds) [LProvider provider]
+
+{- | Record one advisory sync attempt (@ecluse.advisory.sync.attempts@) by the ecosystem
+synced and the attempt's bounded result.
+-}
+recordAdvisorySyncAttempt :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> m ()
+recordAdvisorySyncAttempt m eco result =
+    addOne (mAdvisorySyncAttempts m) [LEcosystem eco, LAdvisorySyncResult result]
+
+{- | Record one advisory sync attempt's latency in seconds
+(@ecluse.advisory.sync.duration@) by ecosystem and result.
+-}
+recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> Double -> m ()
+recordAdvisorySyncDuration m eco result seconds =
+    record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]
 
 -- Add one to a counter under the given bounded labels.
 addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()
