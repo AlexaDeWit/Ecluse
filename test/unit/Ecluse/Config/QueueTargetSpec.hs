@@ -49,6 +49,12 @@ spec = describe "parseQueueTarget" $ do
     it "rejects anything after the queue segment" $
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com/123456789012/mirror/extra" `shouldBe` Nothing
 
+    it "rejects userinfo in the authority (the canonical form carries none)" $ do
+        parseQueueTarget "https://user@sqs.us-east-1.amazonaws.com/123456789012/mirror"
+            `shouldBe` Nothing
+        parseQueueTarget "https://user:pass@sqs.us-east-1.amazonaws.com/123456789012/mirror"
+            `shouldBe` Nothing
+
     it "rejects a query or fragment" $ do
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com/123456789012/mirror?attr=1" `shouldBe` Nothing
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com/123456789012/mirror#frag" `shouldBe` Nothing

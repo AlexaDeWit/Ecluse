@@ -22,8 +22,8 @@ module Ecluse.Config.Ambient (
 import Data.List (lookup)
 import Data.Text qualified as T
 
-import Ecluse.Core.Security (splitHostPort)
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Config.Parser (HttpScheme (..), splitHttpScheme)
+import Ecluse.Core.Security (HostPort (..), hostPortAddressWithDefault)
 
 {- | The @AWS_*@ values Écluse consults directly: region scoping and endpoint overrides. A
 field is 'Nothing' when its variable is unset, and each consumer handles a blank value itself.
@@ -58,18 +58,23 @@ ambientAwsFromEnv env =
     look name = T.pack <$> lookup name env
 
 {- | Parse an endpoint override URL into its (TLS flag, host, port). The scheme picks the TLS
-flag and the default port, 443 or 80, when the URL writes none. An absent scheme or a
-non-numeric port yields 'Nothing'. A bracketed IPv6 literal (@[::1]:4566@) splits on its
-closing bracket, and the host comes back without its brackets.
+flag, and the port a URL that writes none dials, 443 or 80.
+
+It reads the authority the way the egress gate reads one
+("Ecluse.Core.Security.Authority"). A written port takes the gate's grammar: decimal
+digits, no leading zero, a value in 1..65535. A bracketed IPv6 literal (@[::1]:4566@)
+comes back without its brackets. An absent scheme, a host the extraction cannot recover,
+or a port outside that grammar yields 'Nothing'.
 -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do
-    (secure, afterScheme) <-
-        ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
-    let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-    (hostText, portText) <- splitHostPort authority
-    host <- nonBlank hostText
-    port <- case T.stripPrefix ":" portText of
-        Nothing -> Just (if secure then 443 else 80)
-        Just digits -> readMaybe (toString digits)
-    pure (secure, host, port)
+    (scheme, _) <- splitHttpScheme raw
+    let (secure, portless) = schemeDial scheme
+    HostPort host port <- hostPortAddressWithDefault portless raw
+    pure (secure, host, fromIntegral port)
+
+-- The TLS flag and the port a scheme dials when the URL writes no port.
+schemeDial :: HttpScheme -> (Bool, Word16)
+schemeDial = \case
+    Https -> (True, 443)
+    Http -> (False, 80)

@@ -1,9 +1,14 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
+{- | The aeson helpers every configuration key is decoded through: the secret-key and
+unknown-key refusals, enumerations, ports, durations, and the URL shapes.
+
+A malformed key fails at load with the key named, never at its first use. The URL parsers run
+'refuseCredentialMaterial' ahead of any refusal that quotes the value, because boot echoes every
+resolved key as written.
+-}
 module Ecluse.Config.Parser (
     rejectSecretKeys,
     parseRegistryUrl,
@@ -12,6 +17,8 @@ module Ecluse.Config.Parser (
     rejectUnknownKeys,
     parseUrl,
     parseHttpUrl,
+    HttpScheme (..),
+    splitHttpScheme,
     parsePort,
     parseCodeArtifactDuration,
 ) where
@@ -117,11 +124,25 @@ parseHttpUrl field = \case
     String t -> httpUrlOf field (T.strip t)
     other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
+-- | The scheme a configured @http(s)@ URL writes.
+data HttpScheme = Http | Https
+    deriving stock (Eq, Show)
+
+{- | Split a URL into the scheme it writes and the text that follows the scheme separator, or
+'Nothing' when it writes neither @http@ nor @https@.
+
+It is the one scheme check the configuration layer shares. The http-URL keys, the ambient endpoint
+override, and the queue URL cannot drift on what counts as a scheme.
+-}
+splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
+splitHttpScheme raw =
+    ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
+
 -- The credential refusal runs first, because the two refusals under it quote the value.
 httpUrlOf :: String -> Text -> Parser Url
 httpUrlOf field trimmed
     | Left reason <- refuseCredentialMaterial (T.pack field) trimmed = fail (T.unpack reason)
-    | not (any (`T.isPrefixOf` trimmed) ["http://", "https://"]) =
+    | isNothing (splitHttpScheme trimmed) =
         fail (field <> " must be an http:// or https:// URL (got " <> T.unpack trimmed <> ")")
     | isNothing (hostPortAddress trimmed) =
         fail

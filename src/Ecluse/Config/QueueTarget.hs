@@ -22,6 +22,8 @@ module Ecluse.Config.QueueTarget (
 import Data.Text qualified as T
 
 import Ecluse.Config.MirrorCredential (isAccountId)
+import Ecluse.Config.Parser (HttpScheme (Https), splitHttpScheme)
+import Ecluse.Core.Security (splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 
 -- | A recognised mirror-queue destination, parsed from the queue URL's shape.
@@ -45,12 +47,17 @@ parseQueueTarget raw = sqsTargetOf raw <|> pubSubTargetOf raw
 -- The region slot must be a single host label. A dotted "region" means the host is
 -- some other AWS endpoint shape, never an SQS queue's, so this does not mis-parse it.
 sqsTargetOf :: Text -> Maybe QueueTarget
-sqsTargetOf url = do
-    rest <- T.stripPrefix "https://" (T.strip url)
+sqsTargetOf raw = do
+    let url = T.strip raw
+    (scheme, rest) <- splitHttpScheme url
+    guard (scheme == Https)
     guard (T.all (\c -> c /= '?' && c /= '#') rest)
     let (authority, slashPath) = T.breakOn "/" rest
-    guard (T.all (/= ':') authority)
-    region <- nonBlank =<< T.stripSuffix ".amazonaws.com" =<< T.stripPrefix "sqs." (T.toLower authority)
+    -- The canonical form writes no port, so the authority is the host. Userinfo survives
+    -- the split, and leaves the host without the "sqs." prefix the region parse needs.
+    (host, port) <- splitHostPort authority
+    guard (T.null port)
+    region <- nonBlank =<< T.stripSuffix ".amazonaws.com" =<< T.stripPrefix "sqs." (T.toLower host)
     guard (T.all (/= '.') region)
     case T.splitOn "/" (T.drop 1 slashPath) of
         [account, queueName]

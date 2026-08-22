@@ -15,6 +15,7 @@ import Ecluse.Core.Security (
     authorityLabel,
     hostAddress,
     hostPortAddress,
+    hostPortAddressWithDefault,
     isAllowedUpstreamHost,
     isBlockedTarget,
     refuseCredentialMaterial,
@@ -39,6 +40,7 @@ spec :: Spec
 spec = do
     hostAddressSpec
     hostPortAddressSpec
+    hostPortAddressWithDefaultSpec
     authorityLabelSpec
     refuseCredentialMaterialSpec
     splitHostPortSpec
@@ -154,6 +156,23 @@ hostPortAddressSpec = describe "hostPortAddress" $ do
         hostPortAddress "" `shouldBe` Nothing
         hostPortAddress ":8443" `shouldBe` Nothing
 
+{- The same extraction with the caller's own portless default, which an http endpoint override
+reads through. The port grammar on a written port does not move with the default. -}
+hostPortAddressWithDefaultSpec :: Spec
+hostPortAddressWithDefaultSpec = describe "hostPortAddressWithDefault" $ do
+    it "stands the caller's port in for a URL that writes none" $
+        hostPortAddressWithDefault 80 "http://localhost/thing" `shouldBe` Just (hpAt "localhost" 80)
+    it "leaves a written port alone" $
+        hostPortAddressWithDefault 80 "http://localhost:4566/thing"
+            `shouldBe` Just (hpAt "localhost" 4566)
+    it "refuses a port outside the grammar rather than falling back to the default" $ do
+        hostPortAddressWithDefault 80 "http://localhost:080/" `shouldBe` Nothing
+        hostPortAddressWithDefault 80 "http://localhost:/" `shouldBe` Nothing
+        hostPortAddressWithDefault 80 "http://localhost:65536/" `shouldBe` Nothing
+    it "is 'hostPortAddress' at 443" $
+        hostPortAddressWithDefault 443 "https://registry.npmjs.org/x"
+            `shouldBe` hostPortAddress "https://registry.npmjs.org/x"
+
 {- The log-safe reduction every log line and span attribute applies to a URL. Userinfo and the
 query string can carry a credential, and a malformed authority yields no host at all. -}
 authorityLabelSpec :: Spec
@@ -211,9 +230,8 @@ refuseCredentialMaterialSpec = describe "refuseCredentialMaterial" $ do
         refuseCredentialMaterial "registry URL" "https://deploy:hunter2@repo.internal.example.test/npm"
             `shouldBe` Left "registry URL must not carry userinfo (a credential belongs in its own configuration key)"
 
--- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS endpoint parser.
--- The split is purely structural and gates nothing: the OTLP and SQS endpoints are trusted,
--- operator-declared destinations.
+-- The bracket-aware @host[:port]@ split the extractors above and the shell's SQS queue-URL
+-- parser share, so the gate and the configuration layer cannot drift on an IPv6 authority.
 splitHostPortSpec :: Spec
 splitHostPortSpec = describe "splitHostPort" $ do
     it "splits a bracketed IPv6 literal with a port on the closing bracket" $
