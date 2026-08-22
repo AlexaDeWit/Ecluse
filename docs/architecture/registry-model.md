@@ -116,12 +116,12 @@ The **private leg is a conventional stable read**. It fetches the tarball at
 and never fetches the private packument first. A lockfile fan-out then pays one artifact
 round-trip instead of a per-tarball packument fetch it would discard. The proxy forwards the
 client's credential and disables redirect-following, so the leg never follows a `3xx`
-([credential-redirect invariant](security.md#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)).
+([Security posture](security.md#trust-assumptions--credential-posture)).
 A `2xx` streams. Anything else is a clean private miss to the public leg. The leg applies **no
 serve-time integrity floor**: it fast-tracks a lockfile-pinned version from a trusted registry.
 The client and the mirror worker still verify those bytes, so the leg gives up the proactive
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
-floor, [invariant 5](security.md#invariants), stays in force. A private upstream that serves
+floor ([Integrity floors](security.md#integrity-floors)) stays in force. A private upstream that serves
 tarballs off-convention (a separate files host, or a presigned CDN URL the `/-/` path cannot
 rebuild) becomes a private miss.
 
@@ -132,7 +132,7 @@ declares such hosts and the same-host gate admits them, with no operator knob to
 surface. The proxy never trusts that location. The allowlist and the same-host gate bound where
 it may fetch the bytes, and https-only egress with certificate validation authenticates the host.
 The proxy upgrades a legacy `http` tarball on the same host, or drops it (see
-[Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
+[Securing network egress](../../USAGE.md#securing-network-egress-required)).
 
 On a private miss the proxy gates that one version, streams from public, and enqueues a
 demand-driven mirror job. The enqueue does not block, so the proxy serves the client immediately.
@@ -201,7 +201,7 @@ track which input a survivor came from, so the serve layer can index back to the
   `ECLUSE_INTEGRITY__MIN_PUBLIC` (hard-floored at SHA-256) and `ECLUSE_INTEGRITY__MIN_TRUSTED`
   (loosenable, refinable per mount: see
   [`config/default.yaml`](../../config/default.yaml)). This is
-  [security invariant 5](security.md#invariants).
+  [Integrity floors](security.md#integrity-floors).
 - **Reconcile over the union.** `dist-tags.latest` follows the
   [keep-unless-denied, stable-preferring rule](rules-engine.md#applying-verdicts-to-a-packument):
   kept when it survives, else repointed to the highest stable survivor. The merge drops other tags
@@ -355,6 +355,6 @@ how trusted and gated provenances combine.
 The proxy core is registry-agnostic. An ecosystem contributes a protocol adapter, and the
 environment supplies the transport and a [`CredentialProvider`](cloud-backends.md#credential-provider)
 that mints its token. AWS CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio or
-Nexus all speak the same npm protocol and differ only in how Écluse obtains a bearer token. The
+Nexus all speak the same npm protocol. They differ only in how Écluse obtains a bearer token. The
 backend matrix is therefore the product of ecosystem and credential provider. Only npm ships.
 See [Cloud backends](cloud-backends.md#cloud-backends).

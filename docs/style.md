@@ -383,7 +383,7 @@ FailUp, or Graceful for the process. Then pick the matching shape:
 
 ## 12. Tests
 
-Test style lives beside the tier strategy: [`docs/testing.md` → Style](testing.md#style).
+Test style lives beside the tier strategy: [`docs/testing.md`, Style](testing.md#style).
 
 ---
 

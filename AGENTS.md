@@ -51,7 +51,7 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 
 ## Project structure and code conventions
 
-- The layout is in [`README.md` → Project structure](README.md#project-structure). Tests mirror
+- The layout is in [`README.md`, Project structure](README.md#project-structure). Tests mirror
   library paths (`src/Foo/Bar.hs` -> `test/Foo/BarSpec.hs`).
 - Follow [`docs/style.md`](docs/style.md) for Haskell and [`docs/haddock.md`](docs/haddock.md) for
   Haddock. Organise vertically by capability. Keep effects at the application edge.
@@ -63,7 +63,7 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 ## Build and tooling
 
 - Nix with flakes is mandatory in every environment, hosted agents included. There is no Nix-less
-  path ([README → Development](README.md#development)). Run work through `task` inside the flake.
+  path ([README, Development](README.md#development)). Run work through `task` inside the flake.
   When the ambient shell may be stale, invoke it as:
 
   ```bash
@@ -78,7 +78,7 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
   BRANCH=<branch>` to retire. The lifecycle detail lives in
   [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md).
 - Automation scripts are Bash in `scripts/`
-  ([CONTRIBUTING → Automation scripting](CONTRIBUTING.md#automation-scripting)).
+  ([CONTRIBUTING, Automation scripting](CONTRIBUTING.md#automation-scripting)).
 - Use `hoogle`, HLS, `cabal-plan`, and `ghcid` to discover types and behaviour instead of guessing.
   Start the HLS MCP bridge with the worktree root before semantic requests.
 
@@ -88,7 +88,7 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
   `gate` job is the branch-protection authority.
 - The repository rules (SHA-pinned Actions, injection-free workflows, no Semgrep or Stan ignores
   without repo-owner approval, SPDX headers, Mermaid diagrams) are in
-  [CONTRIBUTING → Repository requirements](CONTRIBUTING.md#repository-requirements).
+  [CONTRIBUTING, Repository requirements](CONTRIBUTING.md#repository-requirements).
 - Keep the threat model in `threat-modelling/ecluse.json`. Do not create a competing prose risk
   register.
 - The version authority is `ecluse.cabal`'s `version:` field ([`VERSIONING.md`](VERSIONING.md)).

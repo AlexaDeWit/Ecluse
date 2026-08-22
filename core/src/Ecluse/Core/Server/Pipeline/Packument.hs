@@ -23,8 +23,7 @@ It reads its mount's serve dependencies and the request runtime
 == Credential authority
 
 This handler applies the @passthrough@ credential posture (see
-@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). The invariant that holds under __every__ strategy
-is the __public strip__: the client's credential is __stripped before any public-upstream
+@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). The invariant is the __public strip__: the client's credential is __stripped before any public-upstream
 fetch__, which is always anonymous. Sending an internal token to the public registry
 would be a credential disclosure, so the public-upstream fetch carries no token at all.
 Under @passthrough@ the handler additionally __forwards the client's own credential

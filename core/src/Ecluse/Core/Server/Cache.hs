@@ -27,8 +27,7 @@ The key carries __no credential dimension__ and the value is a canonical documen
 so the cache stores nothing derived from a caller's credential. Whether a given
 origin is handed to it, and so shared across clients, is the serve path's decision.
 
-Under the default @passthrough@ access strategy only the anonymous public origin is
-cached. The trusted private upstream is the per-client authority: it re-authorises
+Only the anonymous public origin is cached. The trusted private upstream is the per-client authority: it re-authorises
 each request with that client's own forwarded credential. The serve path therefore
 fetches it per request and never hands it here. Were a private entry cached under
 @passthrough@, the credential-free key would let one client's entry serve another

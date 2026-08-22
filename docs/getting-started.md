@@ -76,14 +76,14 @@ section records the current layout and one project-specific pattern.
   running proxy: config, the `Env` composition root, logging, the WAI app, and telemetry.
   `app/Main.hs` is the executable. The build enforces the boundary: the core's unit suite cannot
   depend on the app library. See
-  [README → Project structure](../README.md#project-structure).
+  [README, Project structure](../README.md#project-structure).
 - **Handles are records of functions, selected at one composition root.** A swappable backend
   (registry protocol, mirror queue, credential provider) is a record whose fields are functions: the
   *Handle pattern*. A per-backend smart constructor builds it (e.g.
   `newSqsQueue :: SqsConfig -> IO MirrorQueue`). Adding a backend means a new constructor behind the
   *existing* record, wired into the single composition root, never provider selection smeared across
   call sites. See
-  [Cloud Backends → Handles](architecture/cloud-backends.md#handles-records-of-functions).
+  [Cloud backends](architecture/cloud-backends.md#cloud-backends).
 
 For the module list, read the [published Haddock](https://ecluse-proxy.com/api/) module index and the
 root [`Ecluse`](../src/Ecluse.hs) synopsis. Tests mirror this hierarchy (e.g.
