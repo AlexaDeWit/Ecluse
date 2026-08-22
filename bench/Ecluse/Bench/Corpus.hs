@@ -4,36 +4,36 @@
 
 {- | The input corpus for the work-per-request benchmarks.
 
-Two sources feed the benches, with distinct jobs:
+Two sources feed the benches, each with its own job:
 
-  * a __curated real-world packument corpus__ ('corpus') -- a pinned set of real npm
-    captures of substantial, many-version packages spanning the medium (@lodash@,
+  * a __curated real-world packument corpus__ ('corpus'): a pinned set of real npm
+    captures of substantial, many-version packages. It spans the medium (@lodash@,
     @request@) to heavy (@typescript@, @\@types\/node@, an @aws-sdk@-class package)
-    size\/shape spectrum, so the work-per-request figures sample the real distribution
-    of large package sizes and shapes rather than one anchor (trivial few-version
-    packages stress nothing, so they are deliberately excluded). The captures live under
-    @bench\/corpus\/npm\/@ (plus the
-    pre-existing untrimmed @express@ anchor reused in place under
-    @core\/test\/unit\/fixtures\/npm\/@); they are __frozen data__ -- committed captures
-    pinned in @bench\/corpus\/pins.json@ and re-captured deliberately with
-    @make gen-bench-corpus@ (not dependency-tracked; see
-    @docs\/architecture\/performance.md@). Each retains its real heterogeneous shape --
+    size\/shape spectrum. The work-per-request figures then sample the real
+    distribution of large package sizes and shapes rather than one anchor. Trivial
+    few-version packages stress nothing, so the corpus leaves them out. The captures
+    live under @bench\/corpus\/npm\/@, plus the pre-existing untrimmed @express@
+    anchor reused in place under @core\/test\/unit\/fixtures\/npm\/@. They are
+    __frozen data__: committed captures pinned in @bench\/corpus\/pins.json@ and
+    re-captured deliberately with @make gen-bench-corpus@ (not dependency-tracked, see
+    @docs\/architecture\/performance.md@). Each keeps its real heterogeneous shape:
     varied dependency sets, @peerDependencies@\/@engines@\/@deprecated@, many
-    @dist-tags@, large per-version manifests -- trimmed only of pure noise; and
+    @dist-tags@, and large per-version manifests. The capture trims pure noise only.
 
   * a __synthetic packument generator__, 'syntheticPackumentValue', which builds an
-    npm full-metadata document with an arbitrary number of versions so a bench can
-    scale version count up to the order of @100k@ and a complexity assertion can fit
-    the curve. It is retained __only__ for the complexity-scaling (O(n) fit) case -- a
-    stress input, not a realistic one: its versions are structurally identical, so it
-    is deliberately degenerate where the real corpus is heterogeneous.
+    npm full-metadata document with an arbitrary number of versions. A bench can then
+    scale the version count to the order of @100k@, and a complexity assertion can fit
+    the curve. It serves only the complexity-scaling (O(n) fit) case. It is a stress
+    input, not a realistic one: its versions are structurally identical, deliberately
+    degenerate where the real corpus is heterogeneous.
 
-The generator emits a genuine npm-shaped 'Value' -- name, @dist-tags@, a @versions@
-object, @time@, and @maintainers@ -- so it round-trips through the real wire decode
-("Ecluse.Core.Registry.Npm.Wire"), the projection ("Ecluse.Core.Registry.Npm.Project"),
-and the serve-time URL rewrite ("Ecluse.Core.Registry.Npm.Filter"). Its invariants are
-checked by the benchmark's own test cases (see @bench\/Main.hs@), so a malformed
-generator fails the run rather than silently benching a degenerate input.
+The generator emits a genuine npm-shaped 'Value': name, @dist-tags@, a @versions@
+object, @time@, and @maintainers@. It therefore round-trips through the real wire
+decode ("Ecluse.Core.Registry.Npm.Wire"), the projection
+("Ecluse.Core.Registry.Npm.Project"), and the serve-time URL rewrite
+("Ecluse.Core.Registry.Npm.Filter"). The benchmark's own test cases check its
+invariants (see @bench\/Main.hs@), so a malformed generator fails the run rather than
+silently benching a degenerate input.
 -}
 module Ecluse.Bench.Corpus (
     -- * The curated real-world corpus
@@ -95,15 +95,15 @@ import Ecluse.Test.Package (validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
-{- | A size\/shape tier for a corpus entry, ordering the corpus small-to-heavy and
-labelling the rendered benchmark groups so a reader can see where on the distribution
-a figure sits.
+{- | A size\/shape tier for a corpus entry. It orders the corpus small-to-heavy and
+labels the rendered benchmark groups, so a reader can see where on the distribution a
+figure sits.
 -}
 data CorpusTier = Medium | Large | Heavy
     deriving stock (Eq, Show)
 
-{- | One curated real-world packument capture: the name the projection validates the
-capture against, the file it was captured to, and its size tier.
+{- | One curated real-world packument capture: the name the projection validates it
+against, its file, and its size tier.
 -}
 data CorpusEntry = CorpusEntry
     { ceLabel :: Text
@@ -117,16 +117,15 @@ data CorpusEntry = CorpusEntry
     }
 
 {- | Where the curated corpus captures live, relative to the package root Cabal runs
-the benchmark from (the same package-root-relative convention the unit suite reads its
-fixtures by).
+the benchmark from. The unit suite reads its fixtures by the same convention.
 -}
 corpusRoot :: FilePath
 corpusRoot = "bench/corpus/npm/"
 
 {- | The curated corpus, ordered small-to-heavy. Every entry but @express@ is a pinned
-capture under @bench\/corpus\/npm\/@ (refreshed by @make gen-bench-corpus@); @express@
-is the pre-existing untrimmed anchor under @core\/test\/unit\/fixtures\/npm\/@, reused
-in place and shared with the unit suite.
+capture under @bench\/corpus\/npm\/@, refreshed by @make gen-bench-corpus@. The
+@express@ entry is the pre-existing untrimmed anchor under
+@core\/test\/unit\/fixtures\/npm\/@, reused in place and shared with the unit suite.
 -}
 corpus :: [CorpusEntry]
 corpus =
@@ -149,11 +148,12 @@ corpus =
 type LoadedEntry = (CorpusEntry, ByteString, Value)
 
 {- | Load every corpus capture as its raw bytes and decoded 'Value', in 'corpus'
-order, for use as a benchmark @env@. Fails loudly if a capture is missing, does not
+order, for use as a benchmark @env@. Fails loudly when a capture is missing, does not
 decode, projects to zero versions, or self-reports a name that does not match its
-'cePackage' -- so a corrupt or mis-pinned corpus stops the run rather than benching
-nothing. Returns just the loaded pairs (the entry metadata is the pure 'corpus', zipped
-back on by 'withLoaded') so the @env@ value needs no @NFData@ beyond the bytes and value.
+'cePackage'. A corrupt or mis-pinned corpus then stops the run rather than benching
+nothing. Returns only the loaded pairs, so the @env@ value needs no @NFData@ beyond the
+bytes and the value. The entry metadata is the pure 'corpus', which 'withLoaded' zips
+back on.
 -}
 loadCorpus :: IO [(ByteString, Value)]
 loadCorpus = traverse loadOne corpus
@@ -175,8 +175,8 @@ loadCorpus = traverse loadOne corpus
     label :: CorpusEntry -> String
     label ce = "corpus capture " <> toString (ceLabel ce)
 
-{- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order -- the
-inverse of the split 'loadCorpus' performs so its @env@ value carries no 'PackageName'.
+{- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order. This
+inverts the split 'loadCorpus' performs to keep 'PackageName' out of its @env@ value.
 -}
 withLoaded :: [(ByteString, Value)] -> [LoadedEntry]
 withLoaded = zipWith (\ce (raw, value) -> (ce, raw, value)) corpus
@@ -198,9 +198,9 @@ entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> 
 fixtureBytes :: FilePath -> IO ByteString
 fixtureBytes = readFileBS
 
-{- | The package name the synthetic generator labels its document with. Chosen so
-every structural component is safe to interpolate into a rewritten tarball path
-(see "Ecluse.Core.Registry.Npm.Filter"), so the serve-time rewrite exercises the real
+{- | The package name the synthetic generator labels its document with. Every
+structural component is safe to interpolate into a rewritten tarball path (see
+"Ecluse.Core.Registry.Npm.Filter"). The serve-time rewrite therefore exercises the real
 path rather than bailing out.
 -}
 benchPackageText :: Text
@@ -210,22 +210,21 @@ benchPackageText = "bench-pkg"
 benchPackageName :: PackageName
 benchPackageName = mkPackageName Npm Nothing benchPackageText
 
-{- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto --
-standing in for a deployment's own public origin.
+{- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto. It
+stands in for a deployment's own public origin.
 -}
 syntheticProxyBase :: Text
 syntheticProxyBase = "https://ecluse.example"
 
 {- | Build a synthetic npm packument 'Value' carrying @versionCount@ versions
-(@1.0.0@ .. @1.0.{n-1}@), each with a rewritable @dist.tarball@, a well-formed
-integrity digest, a small dependency set, and an install script -- the fields the
-hot paths actually touch. The document is a faithful npm shape, so it decodes,
-projects, filters, and re-serialises exactly as a real packument would, but its
-versions are structurally identical: it is the complexity-scaling stress input, not a
-realistic one (the real distribution is 'corpus').
+(@1.0.0@ .. @1.0.{n-1}@). Each version has a rewritable @dist.tarball@, a well-formed
+integrity digest, a small dependency set, and an install script: the fields the hot
+paths touch. The document is a faithful npm shape, so it decodes, projects, filters,
+and re-serialises exactly as a real packument would. Its versions are structurally
+identical, which makes it the complexity-scaling stress input rather than a realistic
+one. The real distribution is 'corpus'.
 
-@versionCount@ is expected to be positive; the benches only ever pass positive
-sizes.
+@versionCount@ must be positive. The benches only ever pass positive sizes.
 -}
 syntheticPackumentValue :: Int -> Value
 syntheticPackumentValue versionCount =
@@ -286,8 +285,8 @@ tarballUrl i =
         <> versionText i
         <> ".tgz"
 
-{- | The version keys of a packument 'Value' -- the keys of its @versions@ object,
-in 'KeyMap' order. Empty for a value that is not an object with a @versions@ object.
+{- | The version keys of a packument 'Value': the keys of its @versions@ object, in
+'KeyMap' order. Empty for a value that is not an object with a @versions@ object.
 -}
 versionKeysOf :: Value -> [Text]
 versionKeysOf = \case
@@ -301,10 +300,9 @@ syntheticPackumentBytes :: Int -> ByteString
 syntheticPackumentBytes = encodeStrict . syntheticPackumentValue
 
 {- | Project a packument 'Value' into the agnostic 'PackageInfo' for the named
-package. A value that does not project (a tested-impossible case for the corpus
-here) yields the empty document for that name, so the function stays total without a
-partial 'error' -- the benchmark's own generator tests and 'loadCorpus' guarantee a
-real projection.
+package. A value that does not project yields the empty document for that name, so the
+function stays total without a partial 'error'. The benchmark's own generator tests and
+'loadCorpus' guarantee a real projection, so that case cannot arise for this corpus.
 -}
 projectInfo :: PackageName -> Value -> PackageInfo
 projectInfo name value = case parsePackageInfoFromValue name value of
@@ -327,9 +325,9 @@ the age-based rule is deterministic across runs.
 benchEvalContext :: EvalContext
 benchEvalContext = EvalContext (UTCTime (fromGregorian 2026 6 27) (secondsToDiffTime 0)) Nothing
 
-{- | A representative rule set spanning all three pure rule types -- an allow-list, an
-install-time-execution deny, and an age quarantine -- so the rule sweep exercises
-every evaluation arm rather than one.
+{- | A representative rule set spanning all three pure rule types: an allow-list, an
+install-time-execution deny, and an age quarantine. The rule sweep then exercises every
+evaluation arm rather than one.
 -}
 benchRules :: [PrecededRule]
 benchRules =

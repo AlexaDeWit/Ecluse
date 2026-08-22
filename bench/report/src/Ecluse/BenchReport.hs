@@ -2,30 +2,31 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The pure rendering core behind the @bench-report@ executable: it turns the
+{- | The pure rendering core behind the @bench-report@ executable. It turns the
 work-per-request benchmark CSV (@tasty-bench --csv@) into the structured Markdown
-report the CI run summary shows, kept apart from the file-reading shell so the parse,
-the grouping, and the rendering are exercised deterministically.
+report the CI run summary shows. It stays apart from the file-reading shell, so the
+tests exercise the parse, the grouping, and the rendering deterministically.
 
-The CSV is @tasty-bench@'s own format: a @Name,Mean (ps),2*Stdev (ps)@ header
-(extended with @Allocated,Copied,Peak Memory@ when the RTS runs with @-T@, as the
-benchmark component bakes in), then one row per bench. The @Name@ column is the
-dot-joined tasty path, quoted RFC-4180 style only when it carries a comma or a
-quote. Two of its quirks shape this module:
+The CSV is @tasty-bench@'s own format: a @Name,Mean (ps),2*Stdev (ps)@ header, then
+one row per bench. The header gains @Allocated,Copied,Peak Memory@ when the RTS runs
+with @-T@, as the benchmark component bakes in. The @Name@ column is the dot-joined
+tasty path, quoted RFC-4180 style only when it carries a comma or a quote. Two of its
+quirks shape this module:
 
   * __The dot-joined path is ambiguous.__ Group names contain dots
-    (@rules.evalRules@) but no current leaf bench name does, so 'splitName' takes the
-    last dot segment as the bench and everything before it as the group. A future
-    bench whose own name contains a dot would fold its head into the group heading --
-    a cosmetic misfiling, never lost data.
+    (@rules.evalRules@) but no current leaf bench name does. 'splitName' therefore
+    takes the last dot segment as the bench and everything before it as the group. A
+    future bench whose own name contains a dot would fold its head into the group
+    heading: a cosmetic misfiling, never lost data.
 
   * __Peak Memory is not a per-bench figure.__ It is the RTS's process-wide
-    high-water mark at megabyte granularity, so it only ever rises down the file; the
-    report's reading notes say so, because a per-bench reading would mislead.
+    high-water mark, at megabyte granularity. The column therefore only ever rises
+    down the file. The report's reading notes say so, because a per-bench reading
+    would mislead.
 
-The generator tests and complexity assertions that share the benchmark tree are
-HUnit cases, which @tasty-bench@ omits from the CSV; their verdicts survive only in
-the raw console output, which the report carries in a collapsed section.
+The generator tests and complexity assertions that share the benchmark tree are HUnit
+cases, which @tasty-bench@ omits from the CSV. Their verdicts survive only in the raw
+console output, which the report carries in a collapsed section.
 -}
 module Ecluse.BenchReport (
     -- * The parsed CSV
@@ -50,12 +51,13 @@ import Data.Text qualified as T
 import Numeric (showFFloat)
 
 {- | One bench's CSV row: its group and bench name (see 'splitName'), the measured
-mean and the achieved two-standard-deviation bound (both picoseconds per iteration),
-and the GC-stats columns -- absent when the run lacked @+RTS -T@.
+mean, the achieved two-standard-deviation bound, and the GC-stats columns. Mean and
+bound are both picoseconds per iteration. The GC-stats columns are absent when the run
+lacked @+RTS -T@.
 -}
 data BenchRow = BenchRow
     { rowGroup :: Text
-    -- ^ The tasty path above the bench: the group heading it is reported under.
+    -- ^ The tasty path above the bench: the group heading it appears under.
     , rowBench :: Text
     -- ^ The bench's own name: the path's last dot segment.
     , rowMeanPs :: Integer
@@ -72,16 +74,16 @@ data BenchRow = BenchRow
     deriving stock (Eq, Show)
 
 -- The tasty path prefix shared by every bench in the tree: the root tasty-bench
--- inserts plus the single top-level group Main declares. Stripped from every name so
--- group headings carry only the distinguishing path.
+-- inserts plus the single top-level group Main declares. Removing it leaves group
+-- headings with only the distinguishing path.
 tierPrefix :: Text
 tierPrefix = "All.ecluse-core (work-per-request)."
 
-{- | Split a CSV @Name@ into its group heading and bench name. The shared tier
-prefix (or, failing that, the bare @All.@ root) is stripped, then the last dot
-segment is the bench and the rest is the group -- correct for every current bench
-name, since groups contain dots but no leaf does (the module header has the caveat).
-A name with no dot at all lands under an explicit ungrouped heading.
+{- | Split a CSV @Name@ into its group heading and bench name. Strip the shared tier
+prefix, or the bare @All.@ root when that prefix is absent. The last dot segment is
+then the bench and the rest is the group. That is correct for every current bench
+name: groups contain dots but no leaf does. The module header has the caveat. A name
+with no dot at all lands under an explicit ungrouped heading.
 -}
 splitName :: Text -> (Text, Text)
 splitName name =
@@ -92,9 +94,9 @@ splitName name =
     stripped = fromMaybe name (T.stripPrefix tierPrefix name <|> T.stripPrefix "All." name)
 
 {- | Parse the @tasty-bench --csv@ output. Accepts the six-column GC-stats shape
-(@+RTS -T@, the CI posture) and the plain three-column shape; anything else -- a
-missing header, a row of the wrong arity, an unreadable number -- is a @Left@ with
-the offending content, which the renderer surfaces as a loud note.
+(@+RTS -T@, the CI posture) and the plain three-column shape. Anything else yields a
+@Left@ with the offending content: a missing header, a row of the wrong arity, or an
+unreadable number. The renderer surfaces that @Left@ as a loud note.
 -}
 parseCsv :: Text -> Either Text [BenchRow]
 parseCsv raw =
@@ -105,7 +107,7 @@ parseCsv raw =
             traverse (parseRow gcStats) rows
 
 -- Whether the header is the GC-stats shape (True) or the plain time-only shape
--- (False); any other header is malformed.
+-- (False). Any other header counts as malformed.
 parseHeader :: Text -> Either Text Bool
 parseHeader header = do
     fields <- splitRecord header
@@ -165,9 +167,8 @@ splitRecord line = go line
             Just rest' -> first ((chunk <> "\"") <>) <$> quoted rest'
             Nothing -> Right (chunk, T.drop 1 rest)
 
-{- | Group parsed rows under their group headings, preserving both the groups'
-first-appearance order and the row order within each -- the tree order the bench run
-reported in.
+{- | Group parsed rows under their group headings. Both the groups' first-appearance
+order and the row order within each survive: the tree order the bench run reported in.
 -}
 groupRows :: [BenchRow] -> [(Text, NonEmpty BenchRow)]
 groupRows rows =
@@ -176,9 +177,10 @@ groupRows rows =
     , grouped <- maybeToList (nonEmpty (filter ((== grp) . rowGroup) rows))
     ]
 
-{- | What the renderer works from: the CSV parse outcome (a @Left@ is rendered as a
-loud note, never dropped) and the raw console output when it was captured (the only
-carrier of the generator-test and complexity-assertion verdicts).
+{- | What the renderer works from: the CSV parse outcome and the raw console output,
+when the run captured it. The renderer turns a @Left@ into a loud note and never drops
+it. The console output is the only carrier of the generator-test and
+complexity-assertion verdicts.
 -}
 data ReportInput = ReportInput
     { riCsv :: Either Text [BenchRow]
@@ -186,11 +188,11 @@ data ReportInput = ReportInput
     }
     deriving stock (Eq, Show)
 
-{- | Render the full Markdown report: the inform-only preamble, an operating-point
-table, an at-a-glance table (one row per group, anchor-linked to its section), a
-detail table per group, the raw console output in a collapsed section, and closing
-reading notes. A failed or empty CSV renders the loud note in place of the tables so
-the summary never silently shows nothing.
+{- | Render the full Markdown report. It opens with the inform-only preamble, an
+operating-point table, and an at-a-glance table of one row per group, each anchor-linked
+to its section. Then comes a detail table per group, the raw console output in a
+collapsed section, and closing reading notes. A failed or empty CSV renders the loud
+note in place of the tables, so the summary never silently shows nothing.
 -}
 renderReport :: ReportInput -> Text
 renderReport input =
@@ -379,6 +381,6 @@ stripAnsi t = case T.breakOn "\ESC[" t of
     (before, "") -> before
     (before, rest) -> before <> stripAnsi (dropSequence (T.drop 2 rest))
   where
-    -- A CSI sequence ends at its first final byte (the @ to ~ range); everything
+    -- A CSI sequence ends at its first final byte (the @ to ~ range). Everything
     -- before it is parameter and intermediate bytes.
     dropSequence = T.drop 1 . T.dropWhile (\c -> c < '@' || c > '~')

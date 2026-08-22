@@ -4,19 +4,19 @@
 
 {- | The complexity-assertion helpers shared by the version-count-scaled benches.
 
-A scaled bench is not only timed; its /growth/ is fitted with @tasty-bench-fit@ and
-checked to be no worse than linear. This is the guard against the accidentally
-quadratic class of regression -- a fold that becomes @O(n^2)@ in version count --
-which a single-size timing would never reveal.
+A scaled bench reports a time. @tasty-bench-fit@ also fits its /growth/ and requires
+that growth to be no worse than linear. That is the guard against the accidentally
+quadratic class of regression, a fold that becomes @O(n^2)@ in version count. A
+single-size timing would never reveal it.
 
 Unlike a perf-regression comparison (machine-dependent, noisy, never gated), an
-algorithmic-class assertion is a real correctness signal: a packument merge or rule
-sweep going quadratic in version count is a bug, not a slow machine. A failure here
-is therefore a genuine benchmark failure (a non-zero exit), which is the one red
-state the benchmark workflow recognises.
+algorithmic-class assertion is a real correctness signal. A packument merge or rule
+sweep going quadratic in version count is a bug, not a slow machine. A failure here is
+therefore a genuine benchmark failure (a non-zero exit), the one red state the
+benchmark workflow recognises.
 
-Two variants: 'notWorseThanLinear' for a pure operation, 'notWorseThanLinearIO' for
-one whose result is computed in 'IO' (the rule engine evaluates effectfully).
+Two variants: 'notWorseThanLinear' for a pure operation, and 'notWorseThanLinearIO'
+for one that computes its result in 'IO' (the rule engine evaluates effectfully).
 -}
 module Ecluse.Bench.Fit (
     notWorseThanLinear,
@@ -33,19 +33,19 @@ import Test.Tasty.Bench.Fit (
  )
 import Test.Tasty.HUnit (assertBool, testCase)
 
-{- | The exponent ceiling a fitted complexity must stay under to pass. Set above
-linear and linearithmic (whose fitted variable power is @1@) and below quadratic
-(@2@), so a linear or @n log n@ growth passes while an accidentally-quadratic one
-is flagged. The slack also absorbs the measurement noise a real fit carries.
+{- | The exponent ceiling a fitted complexity must stay under to pass. It sits above
+linear and linearithmic, whose fitted variable power is @1@, and below quadratic
+(@2@). A linear or @n log n@ growth therefore passes, and an accidentally-quadratic one
+trips. The slack also absorbs the measurement noise a real fit carries.
 -}
 linearCeiling :: Double
 linearCeiling = 1.5
 
 {- | Assert that a pure operation's running time grows no worse than linearly in the
-input size. The size-to-input function runs once per measured size (its result is
-shared across the iterations at that size), so only the operation -- not the input
-construction -- is fitted. The operation is summarised to a forced 'Int' so the whole
-result is evaluated.
+input size. The size-to-input function runs once per measured size, and its result
+serves every iteration at that size. The fit therefore covers the operation alone,
+never the input construction. Summarise the operation to a forced 'Int' so the
+measurement evaluates the whole result.
 -}
 notWorseThanLinear ::
     -- | Test label.
@@ -66,10 +66,10 @@ notWorseThanLinear label (low, high) build operation =
             ("expected growth no worse than linear, but the fit is " <> show complexity)
             (cmplVarPower complexity < linearCeiling)
 
-{- | Like 'notWorseThanLinear', but for an operation whose result is computed in
-'IO' -- the rule engine prepares rules once, then evaluates each version effectfully,
-so the per-request sweep is an 'IO' action. The action is run per measurement and its
-'Int' result forced.
+{- | Like 'notWorseThanLinear', but for an operation that computes its result in 'IO'.
+The rule engine prepares rules once, then evaluates each version effectfully, so the
+per-request sweep is an 'IO' action. Each measurement runs the action and forces its
+'Int' result.
 -}
 notWorseThanLinearIO ::
     String ->
@@ -85,8 +85,8 @@ notWorseThanLinearIO label (low, high) build operation =
             (cmplVarPower complexity < linearCeiling)
 
 {- | The shared 'FitConfig': measure the given size-to-'Benchmarkable' over the size
-range, sharing each size's input across iterations so construction is not folded into
-the fit.
+range. Every iteration at a size reuses that size's input, so construction never folds
+into the fit.
 -}
 fitConfig :: (Word, Word) -> (Word -> Benchmarkable) -> FitConfig
 fitConfig (low, high) toBench =
