@@ -652,7 +652,7 @@
                   "title": "Docker Hub Static Credential Leakage",
                   "type": "Information disclosure",
                   "description": "Docker Hub does not support OIDC, forcing the CI release workflow to rely on a static, long-lived DOCKERHUB_TOKEN.",
-                  "mitigation": "The workflow was migrated to GitHub Container Registry (GHCR), completely removing Docker Hub static secrets in favor of the ephemeral, OIDC-backed GITHUB_TOKEN.",
+                  "mitigation": "The release workflow publishes to GitHub Container Registry, authenticating with the ephemeral, repository-scoped GITHUB_TOKEN that exists only for the duration of the publish job. Provenance and SBOM attestations are signed keylessly through GitHub OIDC, with no stored key. No static registry credential is held by the workflow or configured on the release environment.",
                   "modelType": "STRIDE",
                   "id": "006c7e3d-71f3-414f-87a5-901def6bf71e"
                 }
