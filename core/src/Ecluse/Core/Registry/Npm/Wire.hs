@@ -18,7 +18,7 @@ fixtures under @core\/test\/unit\/fixtures\/npm\/@ are those captures.
 == Lenient on input
 
 The public registry drifted from its own spec and is inconsistent across endpoints.
-Every decoder here is forgiving in five specific ways, matching the documented reality:
+Every decoder here is forgiving in four specific ways, matching the documented reality:
 
 * __Unknown keys__. Manifests carry arbitrary author keys (@gitHead@, @exports@,
   tool-config blocks like @is-odd@'s @verb@) and registry bookkeeping
@@ -26,23 +26,18 @@ Every decoder here is forgiving in five specific ways, matching the documented r
   decoders already ignore extra keys, so this falls out of using @(.:?)@\/@(.:)@ rather
   than enumerating the whole object.
 * __String-or-object scalars__. Some slots arrive as /either/ a bare string /or/ an
-  object, depending on the package's age and tooling. They are @license@, @bugs@,
-  @repository@, and the @author@\/maintainer person fields. Each corresponding
-  type ('License', 'Bugs', 'Repository', 'Person') therefore parses both shapes.
-* __The bare-string error body__. The per-version 404 from npm is a bare JSON
-  __string__ (@"version not found: ^3.0.0"@), not the documented
-  @{error|message}@ object. 'ErrorResponse' tolerates both.
+  object, depending on the package's age and tooling. They are @license@ and the
+  @author@\/maintainer person fields. Each corresponding type ('License', 'Person')
+  therefore parses both shapes.
 * __The string-or-boolean @deprecated@ flag__. The @deprecated@ key is conventionally
   the deprecation message string. Some published versions carry a boolean instead:
   @true@ = deprecated without a message, @false@ = not deprecated. 'vmDeprecated'
   reads every form, so a boolean never fails the whole packument decode. A real
   packument such as react's mixes the string and boolean forms across versions.
-* __Advisory @dist@ sub-fields degrade rather than deny__. The @fileCount@,
-  @unpackedSize@, and @signatures@ fields are advisory: they decide no rule and no
-  serve. A hostile value in one (a fractional\/huge\/@Int@-overflowing number, a
-  wrong-typed field, or a malformed\/non-array @signatures@) reads as absent\/empty
-  rather than failing the version. One poisoned value therefore cannot deny the whole
-  packument ('Dist').
+* __The advisory @unpackedSize@ degrades rather than denies__. The @unpackedSize@ field
+  decides no rule and no serve. A hostile value (a fractional\/huge\/@Int@-overflowing
+  number, or a wrong-typed field) reads as absent rather than failing the version. One
+  poisoned value therefore cannot deny the whole packument ('Dist').
 
 == Faithful on the rule-decisive fields
 
@@ -58,32 +53,23 @@ This module models only the decode path (@FromJSON@).
 module Ecluse.Core.Registry.Npm.Wire (
     -- * Shared scalars
     Person (..),
-    Repository (..),
-    Bugs (..),
     License (..),
 
     -- * The @dist@ object
     Dist (..),
-    Signature (..),
 
     -- * Per-version manifest
     VersionManifest (..),
-
-    -- * Errors
-    ErrorResponse (..),
-    ErrorBody (..),
 ) where
 
 import Data.Aeson (
     FromJSON (parseJSON),
-    Object,
-    Value (Array, Bool, Object, String),
+    Value (Bool, Object, String),
     withObject,
     (.!=),
     (.:),
     (.:?),
  )
-import Data.Aeson.Types (Parser, parseMaybe)
 
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 
@@ -114,50 +100,6 @@ instance FromJSON Person where
                 <*> o .:? "url"
         other -> typeMismatchOneOf "Person (object or string)" other
 
-{- | An SCM location for a package.
-
-__Lenient:__ npm sends @repository@ as either an object @{type?, url}@ or a bare shorthand
-URL string (@"github:user\/repo"@) that fills 'repoUrl' and leaves 'repoType' 'Nothing'.
--}
-data Repository = Repository
-    { repoType :: Maybe Text
-    -- ^ The SCM type (e.g. @"git"@), if given.
-    , repoUrl :: Text
-    -- ^ The repository URL, as sent.
-    }
-    deriving stock (Eq, Ord, Show)
-
-instance FromJSON Repository where
-    parseJSON = \case
-        String url -> pure (Repository Nothing url)
-        Object o ->
-            Repository
-                <$> o .:? "type"
-                <*> o .:? "url" .!= ""
-        other -> typeMismatchOneOf "Repository (object or string)" other
-
-{- | The issue tracker for a package.
-
-__Lenient:__ npm sends @bugs@ as /either/ an object @{url?, email?}@ /or/ a bare
-string (just the tracker URL). The bare-string form fills 'bugsUrl'.
--}
-data Bugs = Bugs
-    { bugsUrl :: Maybe Text
-    -- ^ The issue-tracker URL, if given.
-    , bugsEmail :: Maybe Text
-    -- ^ A contact email, if given as an object field.
-    }
-    deriving stock (Eq, Ord, Show)
-
-instance FromJSON Bugs where
-    parseJSON = \case
-        String url -> pure (Bugs (Just url) Nothing)
-        Object o ->
-            Bugs
-                <$> o .:? "url"
-                <*> o .:? "email"
-        other -> typeMismatchOneOf "Bugs (object or string)" other
-
 {- | A declared license.
 
 __Lenient:__ modern packages send a bare SPDX __string__ ('LicenseSpdx'), legacy packages
@@ -183,23 +125,6 @@ instance FromJSON License where
                 <*> o .:? "url"
         other -> typeMismatchOneOf "License (object or string)" other
 
-{- | One registry ECDSA signature over a published artifact. Clients verify it against
-npm's published public keys (@GET \/-\/npm\/v1\/keys@), the basis of @npm audit signatures@.
--}
-data Signature = Signature
-    { sigSig :: Text
-    -- ^ The base64-encoded signature value.
-    , sigKeyid :: Text
-    -- ^ The id of the signing key (e.g. @"SHA256:jl3bwswu80…"@).
-    }
-    deriving stock (Eq, Ord, Show)
-
-instance FromJSON Signature where
-    parseJSON = withObject "Signature" $ \o ->
-        Signature
-            <$> o .: "sig"
-            <*> o .: "keyid"
-
 {- | The @dist@ object: the artifact descriptor carried by every version manifest, full and
 abbreviated.
 
@@ -207,10 +132,9 @@ The integrity triple ('distTarball', 'distShasum', 'distIntegrity') is rule-deci
 serving-decisive. A client __fails the install__ when the downloaded bytes do not match
 @integrity@\/@shasum@, so any mirror or URL rewrite must preserve these byte for byte.
 
-The remaining sub-fields are __advisory__ and read __leniently__. An undecodable number
-(fractional, huge, or 'Int'-overflowing) reads as 'Nothing', a malformed signature element
-is skipped, and a non-array @signatures@ reads as empty, so a hostile value in one version
-degrades that field alone instead of denying the whole packument.
+'distUnpackedSize' is __advisory__ and reads __leniently__. An undecodable number
+(fractional, huge, or 'Int'-overflowing) reads as 'Nothing', so a hostile value in one
+version degrades that field alone instead of denying the whole packument.
 -}
 data Dist = Dist
     { distTarball :: Text
@@ -221,12 +145,8 @@ data Dist = Dist
     {- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
     @"sha512-…"@). The modern integrity check, preferred over the shasum.
     -}
-    , distFileCount :: Maybe Int
-    -- ^ Number of files in the tarball, if reported.
     , distUnpackedSize :: Maybe Int
     -- ^ Unpacked size in bytes, if reported.
-    , distSignatures :: [Signature]
-    -- ^ Registry ECDSA signatures, empty when none are present.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -236,19 +156,7 @@ instance FromJSON Dist where
             <$> o .: "tarball"
             <*> o .:? "shasum"
             <*> o .:? "integrity"
-            <*> lenientOptional o "fileCount"
             <*> lenientOptional o "unpackedSize"
-            <*> lenientSignatures o
-
-{- Skip an element that does not parse rather than failing the array, and read a non-array
-or absent @signatures@ as none, so one bad signature cannot deny the version. The
-'Signature' instance itself stays strict. -}
-lenientSignatures :: Object -> Parser [Signature]
-lenientSignatures o = do
-    mv <- o .:? "signatures"
-    pure $ case mv of
-        Just (Array xs) -> mapMaybe (parseMaybe parseJSON) (toList xs)
-        _ -> []
 
 {- | A single version's manifest: the package's @package.json@ at publish time plus
 registry-injected fields. One type decodes all three wire forms, a full packument's
@@ -305,38 +213,3 @@ deprecatedNotice = \case
     Just (String message) -> Just message
     Just (Bool True) -> Just ""
     _ -> Nothing
-
-{- | An npm error body. Clients read @message@ first, then @error@.
-
-__Lenient:__ the documented shape is an object @{ message?, error?, ok?: false }@, but the
-registry's per-version 404 is a bare JSON __string__ (@"version not found: ^3.0.0"@). The
-object form keeps its fields in an 'ErrorBody', and a bare string arrives whole as
-'ErrorString'.
--}
-data ErrorResponse
-    = -- | The documented object form @{ message?, error? }@.
-      ErrorObject ErrorBody
-    | -- | A bare JSON string body (npm's per-version 404), captured whole.
-      ErrorString Text
-    deriving stock (Eq, Show)
-
-{- | The fields of npm's object-form error body. A separate product keeps its selectors
-__total__: inline on 'ErrorResponse' they would be partial over the 'ErrorString' case.
--}
-data ErrorBody = ErrorBody
-    { errMessage :: Maybe Text
-    -- ^ The @message@ field: the preferred human-facing reason.
-    , errError :: Maybe Text
-    -- ^ The @error@ field: the fallback reason.
-    }
-    deriving stock (Eq, Show)
-
-instance FromJSON ErrorResponse where
-    parseJSON = \case
-        String msg -> pure (ErrorString msg)
-        Object o ->
-            fmap ErrorObject $
-                ErrorBody
-                    <$> o .:? "message"
-                    <*> o .:? "error"
-        other -> typeMismatchOneOf "ErrorResponse (object or string)" other
