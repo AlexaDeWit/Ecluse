@@ -12,14 +12,16 @@ controlled passage every dependency clears before it reaches your build.
 
 Start with [Why Écluse? (`MOTIVATION.md`)](MOTIVATION.md) for the problem and the design
 reasoning, and [`ALTERNATIVES.md`](ALTERNATIVES.md) for other tools in this space.
-[Verifying the image](#verifying-the-image) covers how to check a release rather than trust
-it: the keyless provenance and SBOM attestations, and the bit-for-bit reproducible rebuild.
+[Verifying the image](#verifying-the-image) covers how to verify a release instead of
+trusting it: the keyless provenance and SBOM attestations, and the bit-for-bit reproducible
+rebuild.
 
 > **Status: pre-launch, no GA release yet.** The npm packument, tarball, and publish paths
-> run today. An AWS-backed deployment runs end to end: an SQS mirror queue, a demand-driven
-> worker, and writes under a container-role credential. The GCP backends and the deployment
-> runbook are still to come. Release candidates are published and attested. Expect breaking
-> changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the deployment contract.
+> run today. An AWS-backed deployment is wired end to end: an SQS mirror queue, a
+> demand-driven worker, and writes under a container-role credential. The GCP backends and
+> the deployment runbook are still to come. The release workflow publishes and attests
+> release candidates. Expect breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the
+> deployment contract.
 
 [Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
 
@@ -35,16 +37,16 @@ and sheds excess load rather than queueing it. npm is the first supported ecosys
 core is registry-agnostic: each ecosystem registers as a self-contained adapter
 (`Ecluse.Core.Registry.Adapter`), and PyPI is on the roadmap.
 
-Each ecosystem route carries an abstract response contract. Écluse reads that contract as
-both the runtime wire behaviour and the OpenAPI capability documentation. A handler
-receives only the matching typed responder, so its declared status and body cannot drift
-from what it emits.
+Each ecosystem route carries an abstract response contract. That one contract drives both
+the runtime wire behaviour and the OpenAPI capability documentation. A handler receives
+only the matching typed responder, so its declared status and body cannot drift from what
+it emits.
 
 [`docs/architecture.md`](docs/architecture.md) has the full design: the four-role registry
 model, the rules engine, the mirror queue, and the configuration reference. The threat model
 (OWASP Threat Dragon, STRIDE) lives in
-[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json) and generates a readable
-[register](https://ecluse-proxy.com/threat-model.html).
+[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as
+a readable [register](https://ecluse-proxy.com/threat-model.html).
 
 ## Using Écluse
 
@@ -55,19 +57,20 @@ observability endpoints. The [`docs/architecture/`](docs/architecture.md) docume
 
 Écluse publishes to GitHub Container Registry and nowhere else: `ghcr.io/alexadewit/ecluse`,
 one immutable tag per version, no `latest`. Pin a deployment by digest and verify what you
-pin ([Verifying the image](#verifying-the-image)). The publish flow is in
-[Release and supply-chain operations](docs/architecture/release-supply-chain.md#releases-and-container-image).
+pin ([Verifying the image](#verifying-the-image)).
+[Release and supply-chain operations](docs/architecture/release-supply-chain.md#releases-and-container-image)
+covers the publish flow.
 
 ## Verifying the image
 
-> **Pre-release.** No GA release is cut yet. Release candidates (e.g. `0.1.0-rc.2`) are
-> published to GitHub Container Registry (`ghcr.io/alexadewit/ecluse`) and already carry the
-> attestations below.
+> **Pre-release.** No GA release yet. The release workflow publishes release candidates
+> (e.g. `0.1.0-rc.2`) to GitHub Container Registry (`ghcr.io/alexadewit/ecluse`). They
+> already carry the attestations below.
 
 Each tag is a single multi-arch image (`linux/amd64` + `linux/arm64`) carrying keyless
-(Sigstore) provenance and SBOM attestations in the public Rekor log. The
-[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases) for a version carries that
-version's digest. Verify with the GitHub CLI:
+(Sigstore) provenance and SBOM attestations in the public Rekor log. Each
+[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases) publishes the digest for its
+version. Verify with the GitHub CLI:
 
 ```bash
 IMAGE=ghcr.io/alexadewit/ecluse@sha256:…   # pin by digest
@@ -80,11 +83,12 @@ gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse \
   --predicate-type https://slsa.dev/provenance/v1
 ```
 
-This checks each signature against the release workflow's identity and the Rekor log, and
-that the subject matches your digest. Add `--format json` to extract the documents.
+The command checks each signature against the release workflow's identity and the Rekor
+log, and confirms the subject matches your digest. Add `--format json` to extract the
+documents.
 
-The image is also bit-for-bit reproducible. Rebuild it from pinned source and compare,
-rather than trust anyone.
+Stronger still, the image is bit-for-bit reproducible. Rebuild it from pinned source and
+compare, instead of trusting anyone.
 
 ```bash
 nix build github:AlexaDeWit/Ecluse/<ref>#dockerImage   # → ./result (a docker-archive)

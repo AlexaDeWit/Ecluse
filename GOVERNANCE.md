@@ -1,6 +1,6 @@
 # Governance
 
-This document records how decisions on Écluse get made today, and how that can change. It is
+How decisions on Écluse get made today, and how that can change. This is the current state,
 not an aspirational structure the project doesn't yet have.
 
 Écluse is, right now, entirely the project of a single maintainer, me,
@@ -10,8 +10,8 @@ deliberately simple: a **benevolent-dictator (BDFL) model**.
 ## Roles
 
 - **Maintainer**: currently one person, me. Holds final say on design, scope, review, merges,
-  releases, and security response, and owns the repository, the published image/package
-  identity, and the signing keys.
+  releases, and security response. Owns the repository, the published image/package identity,
+  and the signing keys.
 - **Contributor**: anyone who submits a change. Contributions are welcome under the
   [Developer Certificate of Origin](CONTRIBUTING.md#developer-certificate-of-origin-dco) and
   the [Code of Conduct](CODE_OF_CONDUCT.md). Contributors carry no standing obligations and no
@@ -20,8 +20,8 @@ deliberately simple: a **benevolent-dictator (BDFL) model**.
 ## How decisions are made
 
 I decide. The architecture documents ([`docs/architecture.md`](docs/architecture.md) and the
-`docs/architecture/` set) are the design authority. Raise a proposal as an issue or a pull
-request. A change merges when I approve it and the CI `gate` is green. I resolve
+`docs/architecture/` set) are the design authority. Contributors raise proposals as issues or
+pull requests. A change merges when I approve it and the CI `gate` passes. I resolve
 disagreements, and I'll explain the reasoning. There's no voting body and no second approver
 today, which I've recorded as a known risk under *Continuity*.
 

@@ -2,13 +2,12 @@
 
 _Other tools in this space, and when they might suit you better._
 
-Écluse is one answer to a problem many people are working on, and nowhere near the only good
-one. A range of projects and vendors reached its core idea independently: hold fresh packages
-behind a delay, and apply a policy at a chokepoint. Several of them are more mature than
-Écluse is today.
+Écluse is one answer to a problem many people work on, and nowhere near the only good one.
+Projects and vendors reached its core idea independently: hold fresh packages behind a
+delay, and apply a policy at a chokepoint. Several are more mature than Écluse is today.
 
-This page is a good-faith guide. Each entry says what a tool offers and when to reach for it.
-If one fits you better than Écluse, use it. For _why_ Écluse exists and how it differs, see
+Each entry says what a tool offers and when to reach for it. If one fits you better than
+Écluse, use it. For _why_ Écluse exists and how it differs, see
 [`MOTIVATION.md`](MOTIVATION.md).
 
 ## Self-hosted filtering proxies
@@ -17,18 +16,17 @@ A service you run and point your clients at, which filters or gates packages on 
 through. The closest cousins to Écluse.
 
 - **[Verdaccio](https://verdaccio.org/)**: a lightweight, widely-adopted self-hosted npm
-  registry that proxies and caches upstreams. It supports multiple uplinks with ordered
-  fallback. Since v6.4 it ships a bundled package filter: a minimum-age gate (`minAgeDays`),
-  version blocklists, per-package allow exceptions, and replacement of a blocked version with
-  an older one. That filter now ships with Verdaccio itself rather than as a third-party
-  plugin. That makes Verdaccio a genuine open-source npm repository-firewall configuration
-  for an npm-only team. _Reach for it_ when you want to run your own npm registry and a
-  metadata age gate is enough. Écluse differs on four points. It merges versions across
-  upstreams semantically rather than falling back in order. It drives denials from OSV
-  advisories with an immediate remediation fast lane, so a fix ships the moment it lands. It
-  swaps the advisory index atomically. It mirrors on demand into a registry you already run
-  instead of caching into its own storage. Verdaccio's filter is also metadata-only and
-  npm-only.
+  registry that proxies and caches upstreams, with multiple uplinks in ordered fallback.
+  Since v6.4 it ships its own package filter rather than a third-party plugin. The filter
+  offers a minimum-age gate (`minAgeDays`), version blocklists, per-package allow
+  exceptions, and replacement of a blocked version with an older one. That is a genuine
+  open-source npm repository-firewall configuration for an npm-only team. _Reach for it_ when
+  you want to run your own npm registry and a metadata age gate is enough. Écluse differs on
+  four points. It merges versions across upstreams semantically rather than falling back in
+  order. It drives denials from OSV advisories with an immediate remediation fast lane, so a
+  fix ships the moment it lands. It swaps the advisory index atomically. It mirrors on
+  demand into a registry you already run instead of caching into its own storage.
+  Verdaccio's filter is also metadata-only and npm-only.
 
 ## Package-manager and bot cooldowns
 
@@ -39,7 +37,7 @@ when you can guarantee consistent configuration across everyone who installs.
   uv**: an install-time delay set in the project or per consumer. Newer package-manager
   releases are moving toward stronger install-time defaults. _Reach for it_ for immediate,
   zero-infrastructure protection of a project you control.
-- **[Renovate](https://docs.renovatebot.com/key-concepts/minimum-release-age/)** and **[Dependabot](https://docs.github.com/en/code-security/dependabot)** cooldowns: delay _update_ proposals until a version has aged.
+- **[Renovate](https://docs.renovatebot.com/key-concepts/minimum-release-age/)** and **[Dependabot](https://docs.github.com/en/code-security/dependabot)** cooldowns: delay _update_ proposals until a version ages.
   _Reach for it_ when updates already flow through a bot and you want a cooldown with no new
   moving parts.
 - **[SafeDep PMG](https://github.com/safedep/pmg)** (Package Manager Guard): an open-source
@@ -80,28 +78,28 @@ Turnkey, vendor-supported central enforcement without building or maintaining it
 - **Managed cloud registries**, **[AWS CodeArtifact](https://aws.amazon.com/codeartifact/)** and **[Google Artifact Registry](https://cloud.google.com/artifact-registry)**, give
   you a chokepoint, storage, authentication, and dependency-confusion controls, but no
   freshness policy of their own. Pair them with a cooldown above. _Reach for it_ as the
-  backing store you likely already run. Écluse delegates storage to exactly these rather than
-  replacing them.
+  backing store you likely already run. Écluse delegates storage to exactly these rather
+  than replacing them.
 
 ## Complementary tools (not substitutes)
 
 These address a different part of the problem and pair with any of the above.
 
 - **Provenance and attestations**: [npm provenance](https://docs.npmjs.com/generating-provenance-statements/) (Sigstore / SLSA) and `npm audit signatures`
-  attest _where and how_ a package was built. _Use alongside_ a cooldown for cryptographic
+  attest _where and how_ a package was built. _Use it alongside_ a cooldown for cryptographic
   build-origin verification.
 - **Malicious-package scanners**: e.g. **[GuardDog](https://github.com/DataDog/guarddog)** and
   **[SafeDep vet](https://github.com/safedep/vet)**, heuristics that flag malicious packages.
-  _Use alongside_ a delay to add detection a delay alone won't provide.
+  _Use them alongside_ a delay to add detection a delay alone won't provide.
 
 ## Where Écluse fits
 
-Écluse sits at one corner of these trade-offs. It is an enforced central chokepoint, open and
+Écluse sits at one corner of these trade-offs: an enforced central chokepoint, open and
 self-hostable. It composes in front of the managed registry you already run rather than
 replacing it or hosting packages itself. It applies a deny-by-default freshness policy
-consistently, so you answer a malicious-package disclosure by comparing timelines rather than
-auditing logs. npm is the first supported ecosystem. The core is registry-agnostic, with PyPI
-on the roadmap. It's also early and unproven (see [`MOTIVATION.md`](MOTIVATION.md) → _What
-Écluse is not_).
+consistently, so you answer a malicious-package disclosure by comparing timelines rather
+than auditing logs. The first supported ecosystem is npm, and the core is
+registry-agnostic, with PyPI on the roadmap. It's also early and unproven (see
+[`MOTIVATION.md`](MOTIVATION.md) → _What Écluse is not_).
 
 If a different point on these trade-offs serves you better, use one of the tools above.

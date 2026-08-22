@@ -25,13 +25,12 @@ first.
 
 ## Intentional refusals, not bugs
 
-Some of Écluse's security refusals surprise an operator expecting a transparent passthrough.
-One example is the public integrity-digest floor, which drops weakly-hashed public versions.
-These refusals are deliberate. The [operator manual](USAGE.md#rule-policy) and the [security
-invariants](docs/architecture/security.md) document them. Confirm a surprising refusal against
-those before reporting it.
+Some of Écluse's security refusals can surprise an operator expecting a transparent
+passthrough. One example is the public integrity-digest floor, which drops weakly-hashed
+public versions. These refusals are deliberate. The [operator manual](USAGE.md#rule-policy)
+and the [security invariants](docs/architecture/security.md) document them. Confirm a
+surprising refusal against those before reporting it.
 
 ## Supported versions
 
-The project is pre-1.0 and under active development. Only the latest `main` branch is
-supported.
+The project is pre-1.0 and under active development. I support only the latest `main` branch.

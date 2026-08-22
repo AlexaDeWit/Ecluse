@@ -18,9 +18,9 @@ propagation from weeks to hours. On the consuming side, automated and AI-assiste
 development installs at machine speed. That removes the human "that doesn't look right"
 pause that used to catch some of this by accident.
 
-The property I keep coming back to: the danger is time-bounded. A malicious version is
-dangerous only between publication and the moment the ecosystem notices and pulls it. Most
-are caught fast, and the harm falls on whoever consumed them inside that window.
+The danger is time-bounded. A malicious version is dangerous only between publication and
+the moment the ecosystem notices and pulls it. The ecosystem catches most of them fast, and
+the harm falls on whoever installed one inside that window.
 
 ## The bet: resilience, not detection
 
@@ -29,18 +29,18 @@ never-certain target, and "we think it's clean" isn't the same as knowing.
 
 Écluse makes a narrower bet: don't adjudicate whether a version is malicious, just arrange
 for nothing to reach a build *inside its dangerous window*. The plainest form is a
-**freshness quarantine**. A public version stays ineligible until it has aged in public long
-enough that the ecosystem has probably found and pulled a malicious one. The premise rests
-on a real regularity: analyses of past attacks put most exploitation windows under a week.
-That's where the name comes from: *écluse* is French for a canal lock, a controlled passage
-every dependency clears before it's let forward. The goal is resilience: shrinking the blast
+**freshness quarantine**. A public version stays ineligible until it ages in public long
+enough that the ecosystem very likely already found and pulled a malicious one. The premise
+rests on a real regularity: analyses of past attacks put most exploitation windows under a
+week. The name comes from that: *écluse* is French for a canal lock, the controlled passage
+every dependency clears before it goes forward. The goal is resilience: shrinking the blast
 radius of a bad publish, not detecting malware.
 
 The payoff is operational. When the ecosystem discloses a malicious package, you shouldn't
-need to convene a response, comb logs, and trace egress to learn whether you were exposed. If
+need to convene a response, comb logs, and trace egress to learn whether it reached you. If
 your quarantine window is longer than the package's lifetime (published to pulled), Écluse
 never served it to you. The question becomes arithmetic, not forensics. The guarantee is
-exactly as strong as that one comparison, which is why the next section matters.
+exactly as strong as that one comparison.
 
 ## The bar: a chokepoint you can't step around
 
@@ -48,26 +48,25 @@ The guarantee has a precondition: enforcement has to be total. It only holds if 
 fetch a package by another route, and that rules out most of the obvious answers.
 
 The ecosystem does offer freshness controls at the package-manager level: minimum-release-age
-settings, resolver flags that refuse versions newer than a date. They're useful but advisory
-and per-project. Even shipping a "secure" configuration to every machine doesn't hold.
-Modern development routes *around* machine globals. Version managers, Nix shells,
-containers, and committed project-local config each bring their own toolchain and ignore
-what you set globally. The one layer you can centrally configure is the layer projects are
-built to override.
+settings, and resolver flags that refuse versions newer than a date. They're useful but
+advisory and per-project. Shipping a "secure" configuration to every machine doesn't hold
+either. Version managers, Nix shells, containers, and committed project-local config each
+bring their own toolchain and ignore what you set globally. The one layer you can centrally
+configure is the layer projects are built to override.
 
 So enforcement has to live *below* the toolchain, at the one place every install crosses: the
-network. Point all package traffic at a single proxy and close direct egress to the public
-registries. Nothing can then step around it. Whatever `npm` or `pnpm` a project conjures up,
-its fetches still cross the network, and only the chokepoint answers. That turns "please
-install safely" into "you can only install through here." The egress lockdown is an operator
-concern: see
+network. A single proxy that all package traffic resolves through, with direct egress to the
+public registries closed off, can't be side-stepped. Whatever `npm` or `pnpm` a project
+conjures up, its fetches still cross the network, and only the chokepoint answers. That turns
+"please install safely" into "you can only install through here". The egress lockdown is an
+operator concern: see
 [`USAGE.md` → Locking down CI egress](USAGE.md#locking-down-ci-egress-recommended).
 
 ## You can buy it, at a price
 
-Can't you just buy this? Partly. The commercial repository-firewall and curation platforms
-sell an age-based quarantine at the proxy off the shelf. If that fits and you can fund it,
-it's a working answer. The catch is cost and shape, not capability.
+The commercial repository-firewall and curation platforms sell an age-based quarantine at
+the proxy, off the shelf. If that fits and you can fund it, it's a working answer. The catch
+is cost and shape, not capability.
 
 The managed cloud registry you may already run has the chokepoint, storage, and
 authentication but no freshness policy. The platforms that add one tend to sit behind upper
@@ -97,20 +96,21 @@ than leaving it a private script.
 
 ## Why you can't naively build it either
 
-Self-hosting doesn't make this simple. The naive constructions all fail, and the failures are
-the clearest route to the design:
+Self-hosting doesn't make this simple. The naive constructions all fail, and their failures
+map the design:
 
 1. **Add a delay to the managed registry.** It has no such control.
 2. **Put a proxy in front and let the registry pull through it.** The pull caches the fetched
    version into your trusted store. An unvetted version lands in the clean registry before
    anything can stop it.
 3. **Invert it: a worker that pushes only approved packages in.** Now you must predict every
-   package a developer might want, which is unbounded complexity. The alternative is to
-   mirror the whole safe subset, which is an unbounded bill.
+   package a developer might want, an unbounded complexity. Mirroring the whole safe subset
+   instead is an unbounded bill.
 
-Two more constraints rule out a simple mirror. **Internal packages can't wait:** your own
-packages have to flow without quarantine, or the safeguard becomes a tax nobody tolerates. So
-the policy has to be source-aware. And **a simple mirror forces a lose-lose:**
+A simple mirror fails on two more constraints. First, **internal packages can't wait**: your
+own packages have to flow without quarantine, or the safeguard becomes a tax nobody
+tolerates. So the policy has to be source-aware. Second, **a simple mirror forces a
+lose-lose**:
 
 ```mermaid
 flowchart TD
@@ -156,7 +156,7 @@ flowchart TD
 
 Écluse delegates storage to the registry you already run, so it composes in front of your
 existing setup instead of replacing it. The [architecture docs](docs/architecture.md) cover
-the *how*: packument merging, rule evaluation, mirroring, and credentials.
+the *how*: packument merging, the rules engine, mirroring, and credentials.
 
 ## What Écluse is not
 
@@ -175,4 +175,4 @@ the *how*: packument merging, rule evaluation, mirroring, and credentials.
 good faith: take what's useful, adapt it, or apply the reasoning with some other tool
 entirely.
 
-[^publish-target]: The architecture carries a fourth registry role, a *publication target* for first-party `npm publish`, the write counterpart to the private read. It's an opt-in convenience for internal publishing, not part of the resilience argument. This section keeps to the three roles that bear on blast radius. See [Registry Model → Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
+[^publish-target]: The architecture carries a fourth registry role, a *publication target* for first-party `npm publish`, the write counterpart to the private read. It's an opt-in convenience for internal publishing, not part of the resilience argument. See [Registry Model → Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).

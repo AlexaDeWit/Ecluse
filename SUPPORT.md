@@ -1,7 +1,7 @@
 # Support
 
-Where to take a question, a bug, or a security report. Écluse is pre-1.0 and maintained in
-spare time, so please help me keep the signal high.
+Where to take a question, a bug, or a security report. I maintain Écluse in spare time and
+it's pre-1.0, so please help me keep the signal high.
 
 - **Start with the docs.** [`README.md`](README.md) covers what Écluse is and how to run it.
   [`docs/architecture.md`](docs/architecture.md) covers the design.
