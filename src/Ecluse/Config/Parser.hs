@@ -19,7 +19,7 @@ module Ecluse.Config.Parser (
 import Data.Aeson (Value (..), parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (Parser, withText)
+import Data.Aeson.Types (Parser)
 import Data.Text qualified as T
 
 import Ecluse.Config.Types (Url, mkUrl)
@@ -88,11 +88,20 @@ rejectUnknownKeys context accepted o =
                         <> intercalate ", " (map (show . Key.toText) unknown)
                     )
 
-parseUrl :: Value -> Parser Url
-parseUrl = withText "Url" $ \t ->
-    case mkUrl t of
-        Right u -> pure u
-        Left e -> fail (T.unpack e)
+{- | An operator-configured URL Écluse hands to a cloud SDK rather than dialling itself, such as
+the mirror-queue target. The value keeps its provider's shape, an SQS queue URL or a Pub\/Sub
+topic resource, and the queue-backend selector reads that shape.
+
+It carries the shared credential refusal ('refuseCredentialMaterial'). The refusal runs at load,
+ahead of the boot echo, the @check-config@ report, and the unrecognised-shape boot error. Each
+of those prints the value as written.
+-}
+parseUrl :: String -> Value -> Parser Url
+parseUrl field = \case
+    String t
+        | Left reason <- refuseCredentialMaterial (T.pack field) (T.strip t) -> fail (T.unpack reason)
+        | otherwise -> either (fail . T.unpack) pure (mkUrl t)
+    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
 
 {- | An @http(s)@ URL Écluse itself serves, rewrites against, or fetches from, such as the
 public URL and the OSV export base. Plain http stays legal for loopback development. The
