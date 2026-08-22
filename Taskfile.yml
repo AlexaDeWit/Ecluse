@@ -1,6 +1,5 @@
 version: '3'
 vars:
-  IMAGE: docker.io/alexadewit/ecluse
   DOCS_BUILDDIR: dist-newstyle
   BENCH_PROFILE_DIR: dist-bench-prof
   SUITE: ecluse-unit
@@ -583,13 +582,6 @@ tasks:
     desc: Build the lean OCI image via Nix
     cmds:
       - nix build .#dockerImage
-  docker-push:
-    desc: Push ./result to IMAGE:TAG
-    requires:
-      vars: [TAG]
-    cmds:
-      - printf '%s' "$DOCKERHUB_TOKEN" | skopeo login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
-      - skopeo copy docker-archive:./result "docker://{{.IMAGE}}:{{.TAG}}"
   sbom:
     desc: Generate the image SBOM
     cmds:

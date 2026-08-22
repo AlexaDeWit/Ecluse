@@ -13,9 +13,9 @@
 # those layouts and copies it to the registry. No podman, no sudo.
 #
 # Run by release.yml after the matrix build; needs skopeo, regctl, jq (the
-# `.#ci` shell) and an active Docker Hub login (release.yml's
-# docker/login-action writes ~/.docker/config.json, which both skopeo and regctl
-# read). See docs/architecture/release-supply-chain.md → "Multi-architecture image".
+# `.#ci` shell) and an active ghcr.io login (release.yml's docker/login-action
+# writes ~/.docker/config.json, which both skopeo and regctl read). See
+# docs/architecture/release-supply-chain.md → "Multi-architecture image".
 #
 # Emits the resolved digests to stdout as `key=value` lines (index-digest,
 # amd64-digest, arm64-digest) — and nothing else — so release.yml can append them

@@ -509,9 +509,10 @@
           agent-lsp
         ];
 
-        # Release and vulnerability-scanning tooling. skopeo pushes the Nix-built
-        # image to a registry (no Docker daemon needed) via `task docker-push`,
-        # and sbomnix generates the Nix-native SBOM (`task sbom`), which is more
+        # Release and vulnerability-scanning tooling. skopeo converts the two
+        # Nix-built per-arch archives into the OCI layout release.yml pushes
+        # (scripts/push-multiarch.sh; no Docker daemon needed), and sbomnix
+        # generates the Nix-native SBOM (`task sbom`), which is more
         # accurate than scanning a distroless image, whose static Haskell deps a
         # scanner cannot see; the provenance and SBOM attestations themselves are
         # produced in CI by the GitHub attest-actions (immutable OCI referrers),
@@ -620,8 +621,8 @@
           # for a supply-chain tool). `tag = null` derives a unique content-hash
           # tag for local use; releases retag at push time because the target
           # repo enforces immutable tags (see CONTRIBUTING.md "Releases").
-          # Push via `task docker-push`; provenance + SBOM attestations are
-          # attached in CI by release.yml (the GitHub attest-actions).
+          # release.yml pushes the multi-arch index; provenance + SBOM
+          # attestations are attached in CI by the GitHub attest-actions.
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "ecluse";
             tag = null;
