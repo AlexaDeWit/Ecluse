@@ -55,6 +55,7 @@ import Conduit (ConduitT, await, runResourceT, yield, (.|))
 import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy, retrying)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
+import GHC.Clock (getMonotonicTime)
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
@@ -74,7 +75,7 @@ import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
-import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, asmpSyncDuration), timedSeconds)
+import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpDatabaseAge, asmpSyncAttempt, asmpSyncDuration), timedSeconds)
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -227,47 +228,73 @@ runCveSync ::
     IO () ->
     m ()
 runCveSync metrics tracing env schedule notifyFirstSync = do
-    seen <- burst
-    poll seen
+    observation <- newSyncObservation metrics tracing
+    seen <- burst observation
+    poll observation seen
   where
     eco = show (syncEcosystem env) :: Text
 
-    step = observedStep metrics tracing env eco notifyFirstSync
+    step observation = observedStep observation env eco notifyFirstSync
 
     -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
     -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
-    burst = do
+    burst observation = do
         (settled, seen') <-
             retrying
                 (bootBurstPolicy (schedBootBackoff schedule))
                 (\_ (done, _) -> pure (not done))
-                (\_ -> step Nothing)
+                (\_ -> step observation Nothing)
         unless settled $
             -- The readiness gate reads 'csReady', so this ecosystem denies by default.
             -- Logged at 'ErrorS' because a persistent failure here is a misconfiguration.
             logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
         pure seen'
 
-    poll lastSeen = do
+    poll observation lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (_, seen') <- step lastSeen
-        poll seen'
+        (_, seen') <- step observation lastSeen
+        poll observation seen'
+
+{- What one task observes through: the two ports, and the freshness clock the age gauge measures
+from. The clock holds the monotonic time of the last swap. -}
+data SyncObservation = SyncObservation
+    { soMetrics :: AdvisorySyncMetricsPort
+    , soTracing :: AdvisorySyncTracingPort
+    , soFreshAt :: IORef Double
+    }
+
+-- The clock starts at the task's start, so the age reads a real interval before the first swap.
+newSyncObservation :: (MonadIO m) => AdvisorySyncMetricsPort -> AdvisorySyncTracingPort -> m SyncObservation
+newSyncObservation metrics tracing =
+    SyncObservation metrics tracing <$> (newIORef =<< liftIO getMonotonicTime)
+
+{- Record one concluded attempt: the counter, the latency, and the database's age. Only a swap
+resets the freshness clock, so the age climbs across every attempt that does not install one. -}
+recordAttempt :: SyncObservation -> Ecosystem -> AdvisorySyncResult -> Double -> IO ()
+recordAttempt observation ecosystem result seconds = do
+    asmpSyncAttempt metrics ecosystem result
+    asmpSyncDuration metrics ecosystem result seconds
+    now <- getMonotonicTime
+    when (result == AdvisorySwapped) (writeIORef (soFreshAt observation) now)
+    freshenedAt <- readIORef (soFreshAt observation)
+    asmpDatabaseAge metrics ecosystem (floor (now - freshenedAt))
+  where
+    metrics = soMetrics observation
 
 {- One observed step, yielding (the burst may stop, the ETag now last seen). Residue propagates to
-the task's supervision. The span closes after the two records, so it reads marginally longer.
+the task's supervision. The span closes after the attempt's records, so it reads marginally longer.
 -}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
-    AdvisorySyncMetricsPort ->
-    AdvisorySyncTracingPort ->
+    SyncObservation ->
     SyncEnv ->
     Text ->
     IO () ->
     Maybe DbEtag ->
     m (Bool, Maybe DbEtag)
-observedStep metrics tracing env eco notifyFirstSync lastSeen =
+observedStep observation env eco notifyFirstSync lastSeen =
     withRunInIO $ \runInIO ->
-        snd <$> astpSyncAttemptSpan tracing ecosystem fst (metered (runInIO attempt))
+        snd <$> astpSyncAttemptSpan (soTracing observation) ecosystem fst (metered (runInIO attempt))
   where
     ecosystem = syncEcosystem env
 
@@ -276,8 +303,7 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
     metered :: IO (AdvisorySyncResult, (Bool, Maybe DbEtag)) -> IO (AdvisorySyncResult, (Bool, Maybe DbEtag))
     metered act = do
         (attempted, seconds) <- timedSeconds act
-        asmpSyncAttempt metrics ecosystem (fst attempted)
-        asmpSyncDuration metrics ecosystem (fst attempted) seconds
+        recordAttempt observation ecosystem (fst attempted) seconds
         pure attempted
 
     attempt =

@@ -10,7 +10,7 @@ backend. A suite can therefore drive them over inert or recording doubles with n
 OpenTelemetry SDK. This module holds the shared doubles: an inert metrics port, a
 recording metrics port, and a pass-through tracing port. A recording port exposes what
 it captured, so a spec can assert on it. There is one set for the serve path, one for the
-worker, and one for the advisory sync task.
+worker, one for the advisory sync task, and one for the advisory compile.
 -}
 module Ecluse.Test.Port (
     -- * Serve-path ports
@@ -27,13 +27,19 @@ module Ecluse.Test.Port (
     -- * Advisory sync ports
     noopAdvisorySyncMetricsPort,
     recordingAdvisorySyncMetricsPort,
+    RecordedSync (..),
     passthroughAdvisorySyncTracingPort,
     recordingAdvisorySyncTracingPort,
+
+    -- * Advisory compile ports
+    noopAdvisoryCompileMetricsPort,
+    recordingAdvisoryCompileMetricsPort,
+    RecordedCompile (..),
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult, Decision, MirrorResult)
-import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
+import Ecluse.Core.Telemetry.Metrics (AdvisoryCompileResult, AdvisoryDropCause, AdvisorySyncResult, Decision, MirrorResult)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), TracingPort (..), WorkerTracingPort (..))
 
 {- | A 'MetricsPort' that discards every measurement, for a spec that drives the serve
@@ -133,26 +139,69 @@ noopAdvisorySyncMetricsPort =
     AdvisorySyncMetricsPort
         { asmpSyncAttempt = \_ _ -> pass
         , asmpSyncDuration = \_ _ _ -> pass
+        , asmpDatabaseAge = \_ _ -> pass
         }
 
-{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it receives,
-in record order, with a reader for each.
+-- | What one sync run recorded through 'recordingAdvisorySyncMetricsPort', each list in record order.
+data RecordedSync = RecordedSync
+    { rsAttempts :: [(Ecosystem, AdvisorySyncResult)]
+    , rsDurations :: [(Ecosystem, AdvisorySyncResult, Double)]
+    , rsAges :: [(Ecosystem, Int)]
+    }
+    deriving stock (Eq, Show)
+
+{- | An 'AdvisorySyncMetricsPort' that captures every attempt, latency sample, and age sample it
+receives, with one reader for the lot.
 -}
-recordingAdvisorySyncMetricsPort ::
-    IO
-        ( AdvisorySyncMetricsPort
-        , IO [(Ecosystem, AdvisorySyncResult)]
-        , IO [(Ecosystem, AdvisorySyncResult, Double)]
-        )
+recordingAdvisorySyncMetricsPort :: IO (AdvisorySyncMetricsPort, IO RecordedSync)
 recordingAdvisorySyncMetricsPort = do
-    attempts <- newTVarIO []
-    durations <- newTVarIO []
+    seen <- newTVarIO (RecordedSync [] [] [])
     let port =
             AdvisorySyncMetricsPort
-                { asmpSyncAttempt = \eco result -> atomically (modifyTVar' attempts (<> [(eco, result)]))
-                , asmpSyncDuration = \eco result seconds -> atomically (modifyTVar' durations (<> [(eco, result, seconds)]))
+                { asmpSyncAttempt = \eco result -> bump seen (\r -> r{rsAttempts = rsAttempts r <> [(eco, result)]})
+                , asmpSyncDuration = \eco result seconds -> bump seen (\r -> r{rsDurations = rsDurations r <> [(eco, result, seconds)]})
+                , asmpDatabaseAge = \eco seconds -> bump seen (\r -> r{rsAges = rsAges r <> [(eco, seconds)]})
                 }
-    pure (port, readTVarIO attempts, readTVarIO durations)
+    pure (port, readTVarIO seen)
+
+{- | An 'AdvisoryCompileMetricsPort' that discards every measurement, for a spec that compiles an
+artifact but asserts nothing about metrics.
+-}
+noopAdvisoryCompileMetricsPort :: AdvisoryCompileMetricsPort
+noopAdvisoryCompileMetricsPort =
+    AdvisoryCompileMetricsPort
+        { acmpCompileAccepted = const pass
+        , acmpCompileDropped = \_ _ -> pass
+        , acmpCompileRun = const pass
+        }
+
+{- | What one compile pass recorded through 'recordingAdvisoryCompileMetricsPort', each list in
+record order.
+-}
+data RecordedCompile = RecordedCompile
+    { rcAccepted :: [Int]
+    , rcDropped :: [(AdvisoryDropCause, Int)]
+    , rcRuns :: [AdvisoryCompileResult]
+    }
+    deriving stock (Eq, Show)
+
+{- | An 'AdvisoryCompileMetricsPort' that captures every tally and verdict it receives, with one
+reader for the lot.
+-}
+recordingAdvisoryCompileMetricsPort :: IO (AdvisoryCompileMetricsPort, IO RecordedCompile)
+recordingAdvisoryCompileMetricsPort = do
+    seen <- newTVarIO (RecordedCompile [] [] [])
+    let port =
+            AdvisoryCompileMetricsPort
+                { acmpCompileAccepted = \entries -> bump seen (\r -> r{rcAccepted = rcAccepted r <> [entries]})
+                , acmpCompileDropped = \cause entries -> bump seen (\r -> r{rcDropped = rcDropped r <> [(cause, entries)]})
+                , acmpCompileRun = \result -> bump seen (\r -> r{rcRuns = rcRuns r <> [result]})
+                }
+    pure (port, readTVarIO seen)
+
+-- Append one measurement to a recorder's tally.
+bump :: TVar a -> (a -> a) -> IO ()
+bump seen f = atomically (modifyTVar' seen f)
 
 {- | An 'AdvisorySyncTracingPort' that opens no span and runs the bracketed attempt, for
 a spec that drives the sync loop without a tracer.

@@ -8,6 +8,8 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult (CompileAborted, CompileCompleted),
+    AdvisoryDropCause (DropMalformed, DropOversize),
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
     BreakerSource (CredentialMint, EffectfulRule),
     BreakerState (Closed, HalfOpen, Open),
@@ -22,9 +24,15 @@ import Ecluse.Core.Telemetry.Metrics (
     Tier (Effectful, Structural),
     Upstream (Private, Public),
  )
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments (
+    advisoryCompileMetricsPortOf,
     newMetrics,
+    recordAdvisoryCompileAccepted,
+    recordAdvisoryCompileDropped,
+    recordAdvisoryCompileRun,
+    recordAdvisoryDatabaseAge,
     recordAdvisorySyncAttempt,
     recordAdvisorySyncDuration,
     recordBreakerState,
@@ -86,6 +94,21 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
             [AdvisorySwapped, AdvisoryUnchanged, AdvisoryNonePublished, AdvisoryFetchFailed, AdvisoryRefused]
         recordAdvisorySyncDuration m Npm AdvisorySwapped 1.5
         recordAdvisorySyncDuration m PyPI AdvisoryFetchFailed 0
+        recordAdvisoryDatabaseAge m Npm 0
+        recordAdvisoryDatabaseAge m PyPI 86400
+        recordAdvisoryCompileAccepted m Npm 12000
+        traverse_ (\cause -> recordAdvisoryCompileDropped m Npm cause 3) [DropOversize, DropMalformed]
+        traverse_ (recordAdvisoryCompileRun m Npm) [CompileCompleted, CompileAborted]
+        pure () :: Expectation
+
+    it "binds the compile port to one ecosystem, and stays total for a name outside the closed enum" $ do
+        m <- newMetrics telemetryDisabled
+        -- 'Nothing' is a compile of an ecosystem the enum does not carry, so the port has no
+        -- bounded label to record under and every field must still be total.
+        for_ [advisoryCompileMetricsPortOf m (Just Npm), advisoryCompileMetricsPortOf m Nothing] $ \port -> do
+            acmpCompileAccepted port 10
+            acmpCompileDropped port DropOversize 1
+            acmpCompileRun port CompileCompleted
         pure () :: Expectation
 
     it "times an action on the monotonic clock, never returning a negative duration" $ do

@@ -49,6 +49,8 @@ module Ecluse.Core.Telemetry.Metrics (
     CredentialResult (..),
     AdvisorySyncResult (..),
     advisorySyncResultName,
+    AdvisoryDropCause (..),
+    AdvisoryCompileResult (..),
     BreakerSource (..),
     RequestFaultCause (..),
     RelayAnomaly (..),
@@ -146,6 +148,14 @@ data MetricName
       AdvisorySyncAttempts
     | -- | @ecluse.advisory.sync.duration@: advisory sync attempt latency by ecosystem and result (histogram).
       AdvisorySyncDuration
+    | -- | @ecluse.advisory.database.age.seconds@: seconds since this ecosystem's last swap (gauge).
+      AdvisoryDatabaseAgeSeconds
+    | -- | @ecluse.advisory.compile.accepted@: advisory entries a compile pass accepted (counter).
+      AdvisoryCompileAccepted
+    | -- | @ecluse.advisory.compile.dropped@: advisory entries a compile pass dropped, by cause (counter).
+      AdvisoryCompileDropped
+    | -- | @ecluse.advisory.compile.runs@: compile passes by ecosystem and result (counter).
+      AdvisoryCompileRuns
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Universe MetricName where universe = universeGeneric
@@ -181,6 +191,10 @@ metricName = \case
     CredentialTokenTtlSeconds -> "ecluse.credential.token.ttl.seconds"
     AdvisorySyncAttempts -> "ecluse.advisory.sync.attempts"
     AdvisorySyncDuration -> "ecluse.advisory.sync.duration"
+    AdvisoryDatabaseAgeSeconds -> "ecluse.advisory.database.age.seconds"
+    AdvisoryCompileAccepted -> "ecluse.advisory.compile.accepted"
+    AdvisoryCompileDropped -> "ecluse.advisory.compile.dropped"
+    AdvisoryCompileRuns -> "ecluse.advisory.compile.runs"
 
 {- | The closed set of metric label keys. Every label Écluse attaches is one of these
 bounded-domain keys. The high-cardinality identifiers (@package@, @version@, @scope@, a
@@ -343,6 +357,30 @@ advisorySyncResultName = \case
     AdvisoryFetchFailed -> "fetch_failed"
     AdvisoryRefused -> "refused"
 
+{- | Why a compile pass dropped one advisory entry (@ecluse.advisory.compile.dropped@). The
+entry's own name and bytes stay on the drop log line, never a label.
+-}
+data AdvisoryDropCause
+    = -- | The entry breached the per-advisory byte cap.
+      DropOversize
+    | -- | The entry's JSON did not decode.
+      DropMalformed
+    deriving stock (Eq, Generic, Show)
+
+instance Universe AdvisoryDropCause where universe = universeGeneric
+
+{- | What one compile pass concluded (@ecluse.advisory.compile.runs@). A pass that never
+concluded, because a fetch or a filesystem fault escaped it, records neither value.
+-}
+data AdvisoryCompileResult
+    = -- | The pass finalised an artifact.
+      CompileCompleted
+    | -- | The pass abandoned the artifact over a systemic drop rate.
+      CompileAborted
+    deriving stock (Eq, Generic, Show)
+
+instance Universe AdvisoryCompileResult where universe = universeGeneric
+
 -- | Which circuit breaker a state gauge concerns.
 data BreakerSource = EffectfulRule | CredentialMint
     deriving stock (Eq, Generic, Show)
@@ -383,6 +421,8 @@ data Label
     | LMirrorResult MirrorResult
     | LCredentialResult CredentialResult
     | LAdvisorySyncResult AdvisorySyncResult
+    | LAdvisoryCompileResult AdvisoryCompileResult
+    | LAdvisoryDropCause AdvisoryDropCause
     | LProvider Provider
     | LCause Cause
     | LBreakerSource BreakerSource
@@ -405,6 +445,8 @@ labelKey = \case
     LMirrorResult{} -> KeyResult
     LCredentialResult{} -> KeyResult
     LAdvisorySyncResult{} -> KeyResult
+    LAdvisoryCompileResult{} -> KeyResult
+    LAdvisoryDropCause{} -> KeyCause
     LProvider{} -> KeyProvider
     LCause{} -> KeyCause
     LBreakerSource{} -> KeyBreakerSource
@@ -450,6 +492,12 @@ labelValue = \case
         Refreshed -> "refreshed"
         RefreshFailed -> "failed"
     LAdvisorySyncResult r -> advisorySyncResultName r
+    LAdvisoryCompileResult r -> case r of
+        CompileCompleted -> "completed"
+        CompileAborted -> "aborted"
+    LAdvisoryDropCause c -> case c of
+        DropOversize -> "oversize"
+        DropMalformed -> "malformed"
     LProvider p -> case p of
         CodeArtifact -> "codeartifact"
         Static -> "static"

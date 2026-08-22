@@ -12,6 +12,8 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult (CompileAborted, CompileCompleted),
+    AdvisoryDropCause (DropMalformed, DropOversize),
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisorySwapped),
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (..),
@@ -72,6 +74,10 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.credential.token.ttl.seconds"
                             , "ecluse.advisory.sync.attempts"
                             , "ecluse.advisory.sync.duration"
+                            , "ecluse.advisory.database.age.seconds"
+                            , "ecluse.advisory.compile.accepted"
+                            , "ecluse.advisory.compile.dropped"
+                            , "ecluse.advisory.compile.runs"
                             ]
         names `shouldContain` ["http.server.request.duration"]
 
@@ -150,11 +156,19 @@ renderSpec = describe "renderLabel" $ do
         renderLabel (LAdvisorySyncResult AdvisorySwapped) `shouldBe` ("result", "swapped")
         renderLabel (LAdvisorySyncResult AdvisoryFetchFailed) `shouldBe` ("result", "fetch_failed")
 
-    it "shares the result key across cache/mirror/credential/advisory-sync outcomes" $ do
+    it "renders an advisory compile's verdict and its bounded drop cause" $ do
+        renderLabel (LAdvisoryCompileResult CompileCompleted) `shouldBe` ("result", "completed")
+        renderLabel (LAdvisoryCompileResult CompileAborted) `shouldBe` ("result", "aborted")
+        -- The dropped entry's own name and bytes stay on the log line.
+        renderLabel (LAdvisoryDropCause DropOversize) `shouldBe` ("cause", "oversize")
+        renderLabel (LAdvisoryDropCause DropMalformed) `shouldBe` ("cause", "malformed")
+
+    it "shares the result key across cache/mirror/credential/advisory outcomes" $ do
         fst (renderLabel (LCacheResult Hit)) `shouldBe` "result"
         fst (renderLabel (LMirrorResult Published)) `shouldBe` "result"
         fst (renderLabel (LCredentialResult Refreshed)) `shouldBe` "result"
         fst (renderLabel (LAdvisorySyncResult AdvisorySwapped)) `shouldBe` "result"
+        fst (renderLabel (LAdvisoryCompileResult CompileCompleted)) `shouldBe` "result"
 
 -- Every label constructible from a finite value domain, the operator-bounded `rule` excepted
 -- because its domain is configuration. An unbounded label could not be enumerated here.
@@ -171,6 +185,8 @@ allBoundedLabels =
         , LMirrorResult <$> universe
         , LCredentialResult <$> universe
         , LAdvisorySyncResult <$> universe
+        , LAdvisoryCompileResult <$> universe
+        , LAdvisoryDropCause <$> universe
         , LProvider <$> universe
         , LCause <$> universe
         , LBreakerSource <$> universe

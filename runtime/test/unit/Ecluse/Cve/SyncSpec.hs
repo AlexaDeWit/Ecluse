@@ -37,6 +37,7 @@ import Ecluse.Runtime.Cve.Sync (
  )
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb)
 import Ecluse.Test.Port (
+    RecordedSync (RecordedSync, rsAges, rsAttempts, rsDurations),
     noopAdvisorySyncMetricsPort,
     passthroughAdvisorySyncTracingPort,
     recordingAdvisorySyncMetricsPort,
@@ -118,38 +119,46 @@ budget on the first attempt, and the steady poll's first interval outlasts any t
 oneAttempt :: SyncSchedule
 oneAttempt = SyncSchedule{schedBootBackoff = [], schedPollDelay = 600_000_000}
 
--- | What one run of the sync loop recorded, each list in record order.
+-- | What one run of the sync loop recorded: the bracketed spans, and the metrics port's tally.
 data Observed = Observed
     { obsSpans :: [(Ecosystem, AdvisorySyncResult)]
-    , obsAttempts :: [(Ecosystem, AdvisorySyncResult)]
-    , obsDurations :: [(Ecosystem, AdvisorySyncResult, Double)]
+    , obsMetrics :: RecordedSync
     }
 
 {- | Drive the sync loop over recording ports until it brackets @wanted@ attempts, then
-read back the three recorders. The bracket records the span last, so the metrics settle first.
+read back both recorders. The bracket records the span last, so the metrics settle first.
 -}
 observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
-    (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
+    (metricsPort, readRecorded) <- recordingAdvisorySyncMetricsPort
     (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
     withAsync (runQuiet (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
         waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
-        Observed <$> readSpans <*> readAttempts <*> readDurations
+        Observed <$> readSpans <*> readRecorded
 
-{- | Assert that the run bracketed exactly these attempts: one span, one counter
-increment, and one non-negative latency sample each, all under the same labels.
+{- | Assert that the run bracketed exactly these attempts: one span, one counter increment, one
+non-negative latency sample, and one age sample each, all under the same labels.
 -}
 shouldObserve :: Observed -> [(Ecosystem, AdvisorySyncResult)] -> Expectation
 shouldObserve observed expected = do
     obsSpans observed `shouldBe` expected
-    obsAttempts observed `shouldBe` expected
-    map (\(eco, result, _) -> (eco, result)) (obsDurations observed) `shouldBe` expected
-    map (\(_, _, seconds) -> seconds >= 0) (obsDurations observed) `shouldBe` map (const True) expected
+    rsAttempts (obsMetrics observed) `shouldBe` expected
+    map (\(eco, result, _) -> (eco, result)) (rsDurations (obsMetrics observed)) `shouldBe` expected
+    map (\(_, _, seconds) -> seconds >= 0) (rsDurations (obsMetrics observed)) `shouldBe` map (const True) expected
+    map fst (rsAges (obsMetrics observed)) `shouldBe` map fst expected
 
 -- | Keep only the first @n@ of each recording, for a loop that keeps attempting.
 truncateObserved :: Int -> Observed -> Observed
-truncateObserved n (Observed spans attempts durations) =
-    Observed (take n spans) (take n attempts) (take n durations)
+truncateObserved n (Observed spans (RecordedSync attempts durations ages)) =
+    Observed (take n spans) (RecordedSync (take n attempts) (take n durations) (take n ages))
+
+-- | The age samples one run recorded, in record order.
+observedAges :: Observed -> [Int]
+observedAges = map snd . rsAges . obsMetrics
+
+-- | Does a series of age samples never fall?
+nonDecreasing :: [Int] -> Bool
+nonDecreasing xs = and (zipWith (<=) xs (drop 1 xs))
 
 spec :: Spec
 spec = do
@@ -405,6 +414,33 @@ spec = do
                 let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
                 observed <- observeAttempts 2 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
                 truncateObserved 2 observed `shouldObserve` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
+
+        it "zeroes the database's age on the swap that installs a generation" $
+            withSyncEnv $ \_ _ envWith -> do
+                observed <- observeAttempts 1 oneAttempt (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                -- The swap sets the freshness clock to the instant the age is measured from.
+                rsAges (obsMetrics observed) `shouldBe` [(Npm, 0)]
+
+        it "keeps measuring the age from the last swap, so a sync that stops swapping climbs" $
+            withSyncEnv $ \_ _ envWith -> do
+                let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                observed <- truncateObserved 3 <$> observeAttempts 3 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                -- The first attempt swaps and zeroes the clock. The polls that follow read the
+                -- artifact as unchanged, so nothing resets the age and no sample falls.
+                observedAges observed `shouldSatisfy` (\ages -> take 1 ages == [0] && nonDecreasing ages)
+                length (observedAges observed) `shouldBe` 3
+
+        it "records an age before any artifact lands, so a bucket that never publishes still alarms" $
+            withSyncEnv $ \_ _ envWith -> do
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Right Nothing)
+                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
+                            }
+                observed <- observeAttempts 1 oneAttempt (envWith fetch)
+                -- The clock starts with the task, so the age is the interval since start.
+                map fst (rsAges (obsMetrics observed)) `shouldBe` [Npm]
+                observedAges observed `shouldSatisfy` all (>= 0)
 
         it "syncs identically over inert ports, so observation is never load-bearing" $
             withSyncEnv $ \_ slot envWith -> do

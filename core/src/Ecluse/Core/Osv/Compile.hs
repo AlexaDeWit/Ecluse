@@ -35,14 +35,23 @@ import Ecluse.Core.Osv.Stream (
     systemicDrop,
  )
 import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult (CompileAborted, CompileCompleted),
+    AdvisoryDropCause (DropMalformed, DropOversize),
+ )
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun))
 import OpenTelemetry.Context qualified as Ctx
-import OpenTelemetry.Trace.Core (SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
+import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
 {- | Compile an ecosystem's OSV advisory export into the SQLite artifact at @outDir@.
 The artifact's name, epoch stamp, and @meta@ table follow "Ecluse.Core.Osv.Schema".
+
+The pass records its tallies and its verdict through @metrics@, which the caller binds to the
+ecosystem it compiles. A fault that escapes the stream records neither, so the supervision above
+reports an abandoned pass instead.
 -}
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> FilePath -> Text -> String -> m FilePath
-compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> Text -> String -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir ecosystem urlStr = do
     let dbFile = outDir </> osvDbFileName ecosystem
         mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
@@ -76,26 +85,41 @@ compileOsvToSqlite mTracerProvider outDir ecosystem urlStr = do
                             .| CL.chunksOf 2000
                             .| sinkSqlite conn
 
-                -- The stream drops a poisoned advisory rather than halting. A systemic
-                -- drop rate must not ship as a fresh-looking artifact that silently omits
-                -- advisories, so the run is abandoned before 'writeMeta' finalises it.
                 stats <- readIngestStats ingest
-                forM_ mSpan $ \sp -> do
-                    addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
-                    addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
-                    addAttribute sp "ecluse.osv.dropped_malformed" (show (statDroppedMalformed stats) :: Text)
-                when (systemicDrop stats) $ do
-                    forM_ mSpan $ \sp -> setStatus sp (Error "systemic advisory drop rate; compile abandoned")
-                    katipAddContext (dropFields ecosystem stats) $
-                        logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> renderDrops stats))
-                    throwIO (PilotIngestAborted stats)
-
-                rowCount <- liftIO $ writeMeta conn ecosystem urlStr
-                forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
-                katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
-                    logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+                concludeCompile metrics mSpan conn ecosystem urlStr stats
 
     pure dbFile
+
+{- The verdict once the stream completes. The stream drops a poisoned advisory rather than
+halting. A systemic drop rate must not ship as a fresh-looking artifact that silently omits
+advisories, so this abandons the run before 'writeMeta' finalises it. -}
+concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> Text -> String -> IngestStats -> m ()
+concludeCompile metrics mSpan conn ecosystem urlStr stats = do
+    forM_ mSpan $ \sp -> do
+        addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
+        addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
+        addAttribute sp "ecluse.osv.dropped_malformed" (show (statDroppedMalformed stats) :: Text)
+    liftIO (recordTallies metrics stats)
+    when (systemicDrop stats) $ do
+        forM_ mSpan $ \sp -> setStatus sp (Error "systemic advisory drop rate; compile abandoned")
+        liftIO (acmpCompileRun metrics CompileAborted)
+        katipAddContext (dropFields ecosystem stats) $
+            logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> renderDrops stats))
+        throwIO (PilotIngestAborted stats)
+
+    rowCount <- liftIO $ writeMeta conn ecosystem urlStr
+    liftIO (acmpCompileRun metrics CompileCompleted)
+    forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
+    katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
+        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+
+-- An abandoned pass records its tallies too, and a pass with no drops records a zero, so
+-- the drop series exists before the first drop.
+recordTallies :: AdvisoryCompileMetricsPort -> IngestStats -> IO ()
+recordTallies metrics stats = do
+    acmpCompileAccepted metrics (statAccepted stats)
+    acmpCompileDropped metrics DropOversize (statDroppedOversize stats)
+    acmpCompileDropped metrics DropMalformed (statDroppedMalformed stats)
 
 -- A one-line summary of an ingest pass's drop tally for the boot log.
 renderDrops :: IngestStats -> Text

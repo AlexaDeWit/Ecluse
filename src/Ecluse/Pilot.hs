@@ -30,6 +30,7 @@ import Ecluse.Config (
     unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Supervision (
@@ -38,10 +39,12 @@ import Ecluse.Core.Supervision (
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     superviseLoop,
  )
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, raceServerAgainstLoop, runWarp, serverMiddleware)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
+import Ecluse.Runtime.Telemetry.Instruments (advisoryCompileMetricsPortOf, newMetrics)
 
 -- | The WAI application for the Pilot worker mode: the liveness and readiness probes.
 pilotApplication :: ServerConfig -> IO Application
@@ -80,6 +83,9 @@ runExportLoop telemetry ambient config = do
             forever $ threadDelay (24 * 60 * 60 * 1000000)
         Just bucketName -> do
             logFM InfoS (ls ("S3 export loop starting up. Target bucket: " <> bucketName))
+            -- One instrument set for the whole loop. Rebuilding it per cycle would register
+            -- the catalogue again and split each signal across two streams.
+            metrics <- liftIO (newMetrics telemetry)
             void
                 $ superviseLoop
                     SupervisionPolicy
@@ -88,14 +94,14 @@ runExportLoop telemetry ambient config = do
                         , spBackoff = BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros}
                         }
                 $ do
-                    runResourceT (exportNpm telemetry ambient appCfg bucketName)
+                    runResourceT (exportNpm (advisoryCompileMetricsPortOf metrics (Just Npm)) telemetry ambient appCfg bucketName)
                     threadDelay intervalMicros
 
 -- | Compile the npm OSV artifact and upload it to the given bucket: one full cycle.
-exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
-exportNpm telemetry ambient appCfg bucketName = do
+exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
+exportNpm compileMetrics telemetry ambient appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
-    dbPath <- compileOsvToSqlite (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) "npm")
+    dbPath <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (advDataDir (cfgAdvisories appCfg)) "npm" (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) "npm")
     exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucketName dbPath
 
 -- | Options for the one-shot 'runPilotCompile' mode.
@@ -129,9 +135,13 @@ exits non-zero and the command stays safe to script.
 runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry ambient appCfg opts = do
     let url = fromMaybe (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (pcoEcosystem opts)) (pcoSource opts)
+    metrics <- newMetrics telemetry
+    -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
+    -- outside it still writes its artifact, and records no series.
+    let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
         runResourceT $ do
-            dbFile <- compileOsvToSqlite (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
+            dbFile <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
             when (pcoUpload opts) $
                 case advBucket (cfgAdvisories appCfg) of
                     Nothing -> throwIO PilotUploadUnconfigured
