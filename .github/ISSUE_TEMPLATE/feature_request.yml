@@ -13,7 +13,7 @@ body:
     id: proposal
     attributes:
       label: Proposed behaviour
-      description: What should happen instead. Sketch the policy/config/interface if relevant.
+      description: What should happen instead. Sketch the policy, config, or interface if it helps.
     validations:
       required: true
   - type: textarea
@@ -30,5 +30,5 @@ body:
       options:
         - label: I searched existing issues and this is not a duplicate.
           required: true
-        - label: If I used an AI tool to help draft this, I have verified the details myself (see CONTRIBUTING.md → AI-assisted contributions).
+        - label: If an AI tool helped draft this, I verified every detail myself (see CONTRIBUTING.md → AI-assisted contributions).
           required: true
