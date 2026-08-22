@@ -5,12 +5,13 @@
 module Ecluse.Cve.SlotSpec (spec) where
 
 import Control.Concurrent.STM (check)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
+import GHC.Clock (getMonotonicTime)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
-import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Test.Cve (fakeCveLookup)
 
 {- | A fake owning resource over the in-memory lookup, recording every close so the
@@ -114,3 +115,40 @@ spec = describe "CveSlot" $ do
         currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-a")
         swapIn slot (DbEtag "gen-b") (fakeDb "gen-b" closeLog)
         currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-b")
+
+    it "stamps its creation time, so the age gauge reads a real interval before the first swap" $ do
+        before <- getMonotonicTime
+        slot <- newCveSlot
+        after <- getMonotonicTime
+        stamp <- generationInstalledAt slot
+        stamp `shouldSatisfy` within before after
+
+    it "restamps on the swap that installs a generation, and the new stamp is the install time" $ do
+        closeLog <- newIORef []
+        slot <- newCveSlot
+        created <- generationInstalledAt slot
+        threadDelay 2_000
+        before <- getMonotonicTime
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
+        after <- getMonotonicTime
+        installed <- generationInstalledAt slot
+        -- Bracketed by the two readings around the swap, so a stamp taken anywhere else
+        -- (at creation, or at a later read) fails the case.
+        installed `shouldSatisfy` within before after
+        installed `shouldSatisfy` (> created)
+
+    it "leaves the stamp alone for a read, and for a poll that installs nothing" $ do
+        closeLog <- newIORef []
+        slot <- newCveSlot
+        swapIn slot (DbEtag "gen-a") (fakeDb "gen-a" closeLog)
+        installed <- generationInstalledAt slot
+        threadDelay 2_000
+        -- Only 'swapIn' moves the stamp. A refused or unchanged artifact never reaches the
+        -- slot at all, so the served generation keeps ageing, which is what an alarm needs.
+        void (withSlotLookup slot (pure . isJust))
+        void (currentAdvisoryEtag slot)
+        generationInstalledAt slot `shouldReturn` installed
+
+-- | Does a stamp fall inside the two clock readings that bracket the moment it was taken?
+within :: Double -> Double -> Double -> Bool
+within before after stamp = stamp >= before && stamp <= after

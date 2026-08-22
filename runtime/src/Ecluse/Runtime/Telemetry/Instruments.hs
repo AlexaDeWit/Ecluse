@@ -37,6 +37,7 @@ module Ecluse.Runtime.Telemetry.Instruments (
     metricsPortOf,
     workerMetricsPortOf,
     advisorySyncMetricsPortOf,
+    advisoryCompileMetricsPortOf,
 
     -- * Timing
     timedSeconds,
@@ -76,26 +77,41 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * Advisory sync
     recordAdvisorySyncAttempt,
     recordAdvisorySyncDuration,
+
+    -- * Advisory database age (observable)
+    registerAdvisoryDatabaseAge,
+    reportAdvisoryDatabaseAge,
+
+    -- * Advisory compile
+    recordAdvisoryCompileAccepted,
+    recordAdvisoryCompileDropped,
+    recordAdvisoryCompileRun,
 ) where
 
+import GHC.Clock (getMonotonicTime)
 import OpenTelemetry.Metric.Core (
     Counter (counterAdd),
     Gauge (gaugeRecord),
     Histogram (histogramRecord),
     Meter,
     MeterProvider,
+    ObservableGauge (observableGaugeRegisterCallback),
+    ObservableResult (observe),
     UpDownCounter (upDownCounterAdd),
     defaultAdvisoryParameters,
     getMeter,
     meterCreateCounterInt64,
     meterCreateGaugeInt64,
     meterCreateHistogram,
+    meterCreateObservableGaugeInt64,
     meterCreateUpDownCounterInt64,
     noopMeterProvider,
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult,
+    AdvisoryDropCause,
     AdvisorySyncResult,
     BreakerSource,
     BreakerState,
@@ -103,7 +119,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause,
     CredentialResult,
     Decision,
-    Label (LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LTier, LUpstream),
+    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LTier, LUpstream),
     MetricName (..),
     MirrorResult,
     Provider,
@@ -117,7 +133,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
-import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
 {- | The live metric instruments, one per @ecluse.*@ signal, built by 'newMetrics' on one meter.
@@ -153,6 +169,10 @@ data Metrics = Metrics
     , mCredentialTokenTtlSeconds :: Gauge Int64
     , mAdvisorySyncAttempts :: Counter Int64
     , mAdvisorySyncDuration :: Histogram
+    , mAdvisoryDatabaseAgeSeconds :: ObservableGauge Int64
+    , mAdvisoryCompileAccepted :: Counter Int64
+    , mAdvisoryCompileDropped :: Counter Int64
+    , mAdvisoryCompileRuns :: Counter Int64
     }
 
 {- | Build the metric instruments from a 'Telemetry' handle.
@@ -193,6 +213,10 @@ newMetrics telemetry = do
         <*> gauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
         <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
         <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
+        <*> observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
+        <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
+        <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
+        <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
 counter meter name unit description =
@@ -209,6 +233,13 @@ upDownCounter meter name unit description =
 gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
 gauge meter name description =
     meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
+
+-- An asynchronous instrument: it carries no value of its own and reports what its registered
+-- callbacks observe at each collection. It ships with none, so nothing reports until a
+-- 'registerAdvisoryDatabaseAge' call attaches one.
+observableGauge :: Meter -> MetricName -> Text -> IO (ObservableGauge Int64)
+observableGauge meter name description =
+    meterCreateObservableGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters []
 
 -- The instrumentation scope for these instruments, matching the hand-added spans.
 -- Polymorphic over 'IsString' because the metric API does not export @InstrumentationLibrary@.
@@ -261,6 +292,29 @@ advisorySyncMetricsPortOf m =
     AdvisorySyncMetricsPort
         { asmpSyncAttempt = recordAdvisorySyncAttempt m
         , asmpSyncDuration = recordAdvisorySyncDuration m
+        }
+
+{- | Project the instruments onto the core 'AdvisoryCompileMetricsPort' that
+"Ecluse.Core.Osv.Compile" records through, bound to the ecosystem the pass compiles. The label
+domain is the closed 'Ecosystem' enum, so a pass over a name outside it records no series at all.
+-}
+advisoryCompileMetricsPortOf :: Metrics -> Maybe Ecosystem -> AdvisoryCompileMetricsPort
+advisoryCompileMetricsPortOf m = maybe inertCompilePort boundPort
+  where
+    boundPort eco =
+        AdvisoryCompileMetricsPort
+            { acmpCompileAccepted = recordAdvisoryCompileAccepted m eco
+            , acmpCompileDropped = recordAdvisoryCompileDropped m eco
+            , acmpCompileRun = recordAdvisoryCompileRun m eco
+            }
+
+-- No bounded label to record under, so nothing is recorded.
+inertCompilePort :: AdvisoryCompileMetricsPort
+inertCompilePort =
+    AdvisoryCompileMetricsPort
+        { acmpCompileAccepted = const pass
+        , acmpCompileDropped = \_ _ -> pass
+        , acmpCompileRun = const pass
         }
 
 -- | Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
@@ -399,8 +453,50 @@ recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyn
 recordAdvisorySyncDuration m eco result seconds =
     record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]
 
+{- | Attach one ecosystem's advisory-database age to @ecluse.advisory.database.age.seconds@.
+
+@installedAt@ is the slot's install stamp ('Ecluse.Core.Cve.Slot.generationInstalledAt'). The SDK
+invokes the callback at each collection, so the reported age climbs on its own: no task has to be
+alive to push it, and a sync task that dies or restarts cannot freeze or reset it. Registering is
+inert when telemetry is off, because the no-op instrument never calls back.
+-}
+registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO Double -> IO ()
+registerAdvisoryDatabaseAge m eco installedAt =
+    void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
+
+{- | What one collection of @ecluse.advisory.database.age.seconds@ reports: whole seconds from the
+install stamp to now, under the ecosystem label. The reading is monotonic, so an age is never
+negative, and the clamp holds that even for a stamp from the future.
+-}
+reportAdvisoryDatabaseAge :: Ecosystem -> IO Double -> ObservableResult Int64 -> IO ()
+reportAdvisoryDatabaseAge eco installedAt result = do
+    stamp <- installedAt
+    now <- getMonotonicTime
+    observe result (max 0 (floor (now - stamp))) (metricAttributes [LEcosystem eco])
+
+-- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
+recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()
+recordAdvisoryCompileAccepted m eco entries =
+    addCount (mAdvisoryCompileAccepted m) entries [LEcosystem eco]
+
+{- | Record the advisory entries one compile pass dropped for a bounded cause
+(@ecluse.advisory.compile.dropped@).
+-}
+recordAdvisoryCompileDropped :: (MonadIO m) => Metrics -> Ecosystem -> AdvisoryDropCause -> Int -> m ()
+recordAdvisoryCompileDropped m eco cause entries =
+    addCount (mAdvisoryCompileDropped m) entries [LEcosystem eco, LAdvisoryDropCause cause]
+
+-- | Record how one compile pass concluded (@ecluse.advisory.compile.runs@).
+recordAdvisoryCompileRun :: (MonadIO m) => Metrics -> Ecosystem -> AdvisoryCompileResult -> m ()
+recordAdvisoryCompileRun m eco result =
+    addOne (mAdvisoryCompileRuns m) [LEcosystem eco, LAdvisoryCompileResult result]
+
 addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()
 addOne instrument labels = liftIO (counterAdd instrument 1 (metricAttributes labels))
+
+-- A counter never goes backwards, so a negative tally adds nothing.
+addCount :: (MonadIO m) => Counter Int64 -> Int -> [Label] -> m ()
+addCount instrument n labels = liftIO (counterAdd instrument (fromIntegral (max 0 n)) (metricAttributes labels))
 
 addDelta :: (MonadIO m) => UpDownCounter Int64 -> Int64 -> [Label] -> m ()
 addDelta instrument delta labels = liftIO (upDownCounterAdd instrument delta (metricAttributes labels))

@@ -67,6 +67,20 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   ecosystem gates against an ageing advisory database or none at all. Its rules then deny by
   default. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
   own identifiers stay on the sync log line, never a label.
+- `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). It reads the seconds since
+  that ecosystem's serving advisory database was installed. Écluse measures it at each collection,
+  from the slot that holds the database, so it climbs on its own whether or not a sync task is
+  alive. One threshold therefore alarms on a stale database, on a sync that stopped swapping, and
+  on a sync task that is crash-looping. Before the first swap it reads from the slot's creation,
+  which is process start.
+- `ecluse.advisory.compile.accepted` and `ecluse.advisory.compile.dropped` (both counters) carry
+  (ecosystem), and the dropped counter adds (cause), one of `oversize` or `malformed`. Pilot records
+  both once per compile pass, so a backend computes the drop rate from the pair. The dropped entry's
+  own name and bytes stay on the compile log line, never a label.
+- `ecluse.advisory.compile.runs` (a counter) carries (ecosystem, result), where result is
+  `completed` or `aborted`. An `aborted` run means Pilot judged the feed's drop rate systemic. It
+  abandoned the artifact rather than publish one that silently omits advisories. A run of them
+  leaves every consumer on its last-good artifact, ageing.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate
 dashboards, and all export over the same OTLP push pipeline as traces.

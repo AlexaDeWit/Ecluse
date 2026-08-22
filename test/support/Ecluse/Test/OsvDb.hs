@@ -22,6 +22,7 @@ import System.IO.Temp (withSystemTempDirectory)
 
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip)
+import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 newtype CompileM a = CompileM {runCompileM :: ReaderT LogEnv (ResourceT IO) a}
@@ -49,6 +50,6 @@ withFixtureOsvDb v use = do
             dbFile <-
                 runResourceT $
                     runReaderT
-                        (runCompileM (compileOsvToSqlite Nothing dir "npm" (toString (stubBaseUrl stub) <> "/all.zip")))
+                        (runCompileM (compileOsvToSqlite noopAdvisoryCompileMetricsPort Nothing dir "npm" (toString (stubBaseUrl stub) <> "/all.zip")))
                         le
             use dbFile

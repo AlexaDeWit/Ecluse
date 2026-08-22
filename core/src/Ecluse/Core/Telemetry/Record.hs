@@ -15,12 +15,16 @@ supplies the OTel-backed implementations behind them (see
 @Ecluse.Runtime.Telemetry.Instruments@), and a test supplies an inert or recording
 double.
 
-There are three ports. 'MetricsPort' serves the serve path: serve decisions, the rule
+There are four ports. 'MetricsPort' serves the serve path: serve decisions, the rule
 gate, the data-plane upstream fetch, the metadata cache, and mirror enqueue.
 'WorkerMetricsPort' serves the mirror worker: jobs processed, publish latency.
-'AdvisorySyncMetricsPort' serves the advisory sync task: attempts and their latency. The
-credential signals stay in the application instrument set. Each port carries exactly the
-signals its consumer emits.
+'AdvisorySyncMetricsPort' serves the advisory sync task: attempts and their latency.
+'AdvisoryCompileMetricsPort' serves the Pilot compile: the entries one pass accepted or
+dropped, and how the pass concluded. The credential signals stay in the application
+instrument set. Each port carries exactly the signals its consumer emits.
+
+The advisory database's age is not here. It reads from the slot at each collection
+(@Ecluse.Runtime.Telemetry.Instruments@), so no consumer has to push it.
 -}
 module Ecluse.Core.Telemetry.Record (
     -- * The serve-path recording port
@@ -32,6 +36,9 @@ module Ecluse.Core.Telemetry.Record (
     -- * The advisory sync recording port
     AdvisorySyncMetricsPort (..),
 
+    -- * The advisory compile recording port
+    AdvisoryCompileMetricsPort (..),
+
     -- * Timing
     timedSeconds,
 ) where
@@ -40,6 +47,8 @@ import GHC.Clock (getMonotonicTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult,
+    AdvisoryDropCause,
     AdvisorySyncResult,
     CacheResult,
     Cause,
@@ -153,6 +162,24 @@ data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
     {- ^ Record one advisory sync attempt's latency in seconds
     (@ecluse.advisory.sync.duration@) by ecosystem and result.
     -}
+    }
+
+{- | The Pilot compile's metric-recording port, recorded by @Ecluse.Core.Osv.Compile@. One port
+is bound to one ecosystem, so no field carries the ecosystem the compile holds as free text.
+@Ecluse.Runtime.Telemetry.Instruments@ binds the label when it builds the port.
+-}
+data AdvisoryCompileMetricsPort = AdvisoryCompileMetricsPort
+    { acmpCompileAccepted :: Int -> IO ()
+    {- ^ Record the advisory entries one compile pass accepted
+    (@ecluse.advisory.compile.accepted@).
+    -}
+    , acmpCompileDropped :: AdvisoryDropCause -> Int -> IO ()
+    {- ^ Record the advisory entries one compile pass dropped for a bounded cause
+    (@ecluse.advisory.compile.dropped@). A pass with no drops records zero, so the series
+    exists before the first drop.
+    -}
+    , acmpCompileRun :: AdvisoryCompileResult -> IO ()
+    -- ^ Record how one compile pass concluded (@ecluse.advisory.compile.runs@).
     }
 
 {- | Run an action and return its result with the elapsed seconds. It measures on the monotonic

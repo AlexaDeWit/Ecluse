@@ -57,6 +57,7 @@ import Ecluse.Config (
     mountPostureLines,
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Cve.Slot (generationInstalledAt)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, noMirrorQueue, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
@@ -81,13 +82,13 @@ import Ecluse.Core.Supervision (
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
-import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
+import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady, csSlot), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Runtime.Telemetry.Instruments (advisorySyncMetricsPortOf)
+import Ecluse.Runtime.Telemetry.Instruments (advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge)
 import Ecluse.Runtime.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredMirrorEnqueueFailure,
@@ -204,6 +205,7 @@ runProxy bootEnv = do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
+        registerAdvisoryAges builtEnv cveSyncPlan
         -- The drain loop and the sync tasks never return, so the race cancels them at shutdown.
         -- A dropped job re-enqueues on the next demand and a cancelled sync resumes on next boot.
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
@@ -245,6 +247,14 @@ bufferedMirrorHandOff warn countEnqueueFailure =
 the log line is rate-limited, and the metric alongside counts every event. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
+
+{- Attach each ecosystem's advisory-database age to the observable gauge, once at boot. The
+callback reads the slot, which outlives the supervised sync tasks below, so the reported age
+keeps climbing from the last install across a task restart. -}
+registerAdvisoryAges :: Env -> Map.Map Ecosystem CveSyncHandle -> IO ()
+registerAdvisoryAges builtEnv plan =
+    for_ (Map.toList plan) $ \(eco, handle) ->
+        registerAdvisoryDatabaseAge (envMetrics builtEnv) eco (generationInstalledAt (csSlot handle))
 
 -- One supervised sync task per configured ecosystem. Each flips its ecosystem's one-way
 -- readiness flag once its first sync lands, and a restart resumes from the remote artifact.

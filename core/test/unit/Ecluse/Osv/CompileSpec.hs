@@ -24,7 +24,12 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
+import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult (CompileAborted, CompileCompleted),
+    AdvisoryDropCause (DropMalformed, DropOversize),
+ )
 import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
 
@@ -46,11 +51,12 @@ spec = describe "SQLite OSV Compilation" $ do
     it "fetches an OSV zip and compiles it into a named, stamped SQLite artifact" $ do
         le <- initLogEnv "test" (Environment "test")
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         dbFile <- withStub status200 zipData $ \stub -> do
             runResourceT $
                 runReaderT
                     ( runTestM $
-                        compileOsvToSqlite Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/sample.zip")
+                        compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/sample.zip")
                     )
                     le
 
@@ -88,6 +94,11 @@ spec = describe "SQLite OSV Compilation" $ do
         Map.lookup "source_url" meta `shouldSatisfy` maybe False (T.isSuffixOf "/sample.zip")
         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
 
+        -- The sample holds one advisory and no bad entries, so the pass records one accepted
+        -- entry, a zero under each drop cause, and one completed run.
+        recorded <- readRecorded
+        recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
+
     it "aborts the compile without publishing when the drop rate is systemic" $ do
         le <- initLogEnv "test" (Environment "test")
         -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
@@ -97,12 +108,18 @@ spec = describe "SQLite OSV Compilation" $ do
                 ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]
                     <> [("good.json", "{\"id\":\"GHSA-ok\",\"affected\":[{\"package\":{\"name\":\"ok\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")]
                 )
+        (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         let action =
                 withStub status200 zipData $ \stub ->
                     runResourceT $
                         runReaderT
                             ( runTestM $
-                                compileOsvToSqlite Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/all.zip")
+                                compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/all.zip")
                             )
                             le
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
+
+        -- The abandoned pass still records its tally, and its run reads as aborted, so an
+        -- operator alarms on a feed that keeps failing to compile.
+        recorded <- readRecorded
+        recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
