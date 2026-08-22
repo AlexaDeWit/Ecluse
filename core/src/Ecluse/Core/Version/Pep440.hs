@@ -4,22 +4,22 @@
 
 {- | The PEP 440 grammar and ordering (PyPI).
 
-Parses a PEP 440 version into a 'Pep440Key' -- the canonical ordering tuple
-@(epoch, release, pre, post, dev, local)@ -- canonicalising non-normalised
-spellings (@1.0ALPHA1@, @1.0-1@, trailing zeros, …) along the way. Release has
-trailing zeros stripped (@1.0 == 1.0.0@), and the rank tuples encode PEP 440's
-None-handling so 'Ord' on 'Pep440Key' reproduces the spec ordering directly:
+'parsePep440' reads a PEP 440 version into a 'Pep440Key', the canonical ordering
+tuple @(epoch, release, pre, post, dev, local)@. It canonicalises non-normalised
+spellings (@1.0ALPHA1@, @1.0-1@, trailing zeros, …) along the way and strips the
+release's trailing zeros (@1.0 == 1.0.0@). The rank tuples encode PEP 440's
+None-handling, so 'Ord' on 'Pep440Key' reproduces the spec ordering directly.
 
-* @p440Pre@ is @(band, stage, n)@ where @band@ is __0__ for a dev release with
-  no prerelease and no post (it sorts /before/ all prereleases, e.g.
-  @1.0.dev1 < 1.0a1@), __1__ for an actual prerelease (with @stage@ a\/b\/rc and
-  its number), and __2__ for a final or post release (sorts after prereleases).
-* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
-* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
+* The @p440Pre@ rank is @(band, stage, n)@. The @band@ is __0__ for a dev release with
+  no prerelease and no post, which sorts /before/ all prereleases (@1.0.dev1 < 1.0a1@).
+  It is __1__ for an actual prerelease, with @stage@ a\/b\/rc and its number. It is
+  __2__ for a final or post release, which sorts after prereleases.
+* The @p440Post@ rank is @(0,0)@ when absent, so a final sorts below any post-release.
+* The @p440Dev@ rank is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
   sorts below its non-dev sibling.
 
-A PEP 440 version is __stable__ iff it is neither a pre-release (@a@\/@b@\/@rc@)
-nor a dev release; post-releases stay stable.
+A PEP 440 version is __stable__ iff it is neither a pre-release (@a@\/@b@\/@rc@) nor
+a dev release. Post-releases stay stable.
 -}
 module Ecluse.Core.Version.Pep440 (
     Pep440Key (..),
@@ -42,12 +42,12 @@ import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
 (@1.0 == 1.0.0@). The rank tuples encode PEP 440's None-handling:
 
-\* @p440Pre@ is @(band, stage, n)@ where @band@ is __0__ for a dev release with
-  no prerelease and no post (it sorts /before/ all prereleases, e.g.
-  @1.0.dev1 < 1.0a1@), __1__ for an actual prerelease (with @stage@ a\/b\/rc and
-  its number), and __2__ for a final or post release (sorts after prereleases).
-\* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
-\* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
+\* The @p440Pre@ rank is @(band, stage, n)@. The @band@ is __0__ for a dev release with
+  no prerelease and no post, which sorts /before/ all prereleases (@1.0.dev1 < 1.0a1@).
+  It is __1__ for an actual prerelease, with @stage@ a\/b\/rc and its number. It is
+  __2__ for a final or post release, which sorts after prereleases.
+\* The @p440Post@ rank is @(0,0)@ when absent, so a final sorts below any post-release.
+\* The @p440Dev@ rank is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
   sorts below its non-dev sibling.
 -}
 data Pep440Key = Pep440Key
@@ -66,9 +66,9 @@ PEP 440 version (e.g. no release, or unrecognised trailing text).
 -}
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
-    -- Bound the input length before any numeric parsing: a segment is read into an
-    -- 'Integer' with 'readMaybe', which is quadratic in the digit count, so an
-    -- unbounded run in hostile metadata would be an algorithmic-complexity DoS.
+    -- Bound the input length before any numeric parsing. 'readMaybe' reads a segment
+    -- into an 'Integer', which is quadratic in the digit count. An unbounded run in
+    -- hostile metadata would therefore be an algorithmic-complexity DoS.
     guard (T.compareLength raw maxVersionLength /= GT)
     let lowered = T.toLower (T.strip raw)
         noV = fromMaybe lowered (T.stripPrefix "v" lowered)
@@ -99,24 +99,23 @@ parseRelease :: Text -> Maybe ([Integer], Text)
 parseRelease afterEpoch = do
     let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
         -- 'releaseText' greedily grabs the dot that separates the release from a
-        -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing
-        -- empty segment -- but only one, and reject any remaining empty segment so
-        -- interior/leading blanks ("1..0", ".1.0", "1.0..dev1") are not accepted.
+        -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing empty
+        -- segment. Only one: the guard below rejects any remaining empty segment, so
+        -- interior and leading blanks ("1..0", ".1.0", "1.0..dev1") never parse.
         relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
     guard (not (any T.null relSegs))
     release <- traverse parseNumSeg relSegs
     guard (not (null release))
     pure (release, suffix)
   where
-    -- Drop at most one trailing empty segment (the release/suffix separator dot).
-    -- Only the final segment is dropped, so a doubled trailing blank ("1.0..dev1")
-    -- leaves an empty segment behind for the 'any T.null' guard above to reject.
+    -- Drop at most one trailing empty segment, so a doubled trailing blank
+    -- ("1.0..dev1") leaves one behind for the 'any T.null' guard above to reject.
     dropTrailingEmpty segs = case unsnoc segs of
         Just (initSegs, lastSeg) | T.null lastSeg -> initSegs
         _ -> segs
 
 -- Parse the local segment (still carrying its leading @+@) into ordering
--- tokens; empty input means no local segment.
+-- tokens. Empty input means no local segment.
 parseLocal :: Text -> Maybe [VToken]
 parseLocal lr
     | T.null lr = Just []
@@ -156,8 +155,8 @@ assembleKey epoch release (mPre, mPost, mDev) localToks =
     stripTrailingZeros = dropWhileEnd (== 0)
 
 {- | Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
-or present), failing if any text is left unconsumed (so trailing garbage is
-rejected). The banding into a sort key happens in 'parsePep440'.
+or present), failing if any text is left unconsumed, so trailing garbage never
+parses. The banding into a sort key happens in 'parsePep440'.
 -}
 parsePep440Suffix ::
     Text -> Maybe (Maybe (Int, Integer), Maybe Integer, Maybe Integer)
@@ -173,8 +172,8 @@ dropSep s = case T.uncons s of
     Just (c, rest) | c == '.' || c == '-' || c == '_' -> rest
     _ -> s
 
-{- | Consume an optional prerelease label into @Just (stage, n)@ (stage 0\/1\/2
-for a\/b\/rc); 'Nothing' if absent.
+{- | Consume an optional prerelease label into @Just (stage, n)@, with stage
+0\/1\/2 for a\/b\/rc. 'Nothing' if absent.
 -}
 consumePre :: Text -> (Maybe (Int, Integer), Text)
 consumePre s =
@@ -196,10 +195,10 @@ consumePre s =
         ]
 
 {- | Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into
-@Just n@; 'Nothing' if absent. PEP 440 spells the post-release label @post@,
-@rev@, or @r@ (its reference implementation @packaging@ normalises all three to
-@post@), so each must be accepted here. The labels are tried @post@\/@rev@ before
-the single-letter @r@, so @revN@ is never mis-split as @r@ + @evN@.
+@Just n@. 'Nothing' if absent. PEP 440 spells the post-release label @post@, @rev@,
+or @r@, and its reference implementation @packaging@ normalises all three to @post@,
+so this accepts each. It tries @post@ and @rev@ before the single-letter @r@, so it
+never mis-splits @revN@ as @r@ + @evN@.
 -}
 consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
@@ -213,7 +212,7 @@ consumePost s =
                  in if T.null digits then (Nothing, s) else (Just (numOr0 digits), rest)
             Nothing -> (Nothing, s)
 
--- | Consume an optional dev-release (@.devN@) into @Just n@; 'Nothing' if absent.
+-- | Consume an optional dev-release (@.devN@) into @Just n@, or 'Nothing' if absent.
 consumeDev :: Text -> (Maybe Integer, Text)
 consumeDev s =
     case T.stripPrefix "dev" (dropSep s) of
@@ -224,12 +223,12 @@ consumeDev s =
 
 {- | Whether a PEP 440 version is stable: neither a pre-release (@a@\/@b@\/@rc@)
 nor a dev release. Post-releases /are/ stable. So @1.0@ and @1.0.post1@ are
-stable; @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
+stable. @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
 -}
 isPep440Stable :: Pep440Key -> Bool
 isPep440Stable k = noPre k && noDev k
   where
-    -- Final/post: no prerelease band (1) and no dev band (0). The field
-    -- semantics are documented on 'Pep440Key'; post-releases stay stable.
+    -- Final/post: no prerelease band (1) and no dev band (0). 'Pep440Key' documents
+    -- the field semantics. Post-releases stay stable.
     noPre key = case p440Pre key of (band, _, _) -> band /= 1
     noDev key = case p440Dev key of (band, _) -> band /= 0

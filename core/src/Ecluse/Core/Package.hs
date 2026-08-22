@@ -2,35 +2,34 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The package domain model -- ecosystem-agnostic vocabulary for the rules
+{- | The package domain model: the ecosystem-agnostic vocabulary for the rules
 engine.
 
-These types capture everything the proxy needs to reason about a package
-version while staying decoupled from any registry's wire format. Registry
-adapters (npm, PyPI, RubyGems) are responsible for projecting their responses
-into these types; nothing above the registry layer sees registry-specific
-structures.
+These types capture everything the proxy needs to reason about a package version
+while staying decoupled from any registry's wire format. A registry adapter (npm,
+PyPI, RubyGems) projects its responses into these types, so nothing above the
+registry layer sees a registry-specific structure.
 
-Three pieces of this vocabulary earn their own sibling module: the 'Ecosystem' tag
-lives in "Ecluse.Core.Ecosystem" (shared with the version engine and the registry
-adapters), version identity and ordering live in "Ecluse.Core.Version" (a
-'Version' is embedded here in 'PackageDetails'), and the integrity-digest
-vocabulary ('Hash', 'HashAlg', and the Subresource-Integrity forms) lives in
-"Ecluse.Core.Package.Hash" and is re-exported here in full. Import those modules
-directly when you need to name or build their types.
+Three pieces of this vocabulary earn their own sibling module. The 'Ecosystem' tag
+lives in "Ecluse.Core.Ecosystem", shared with the version engine and the registry
+adapters. Version identity and ordering live in "Ecluse.Core.Version", and
+'PackageDetails' embeds a 'Version' here. The integrity-digest vocabulary ('Hash',
+'HashAlg', and the Subresource-Integrity forms) lives in
+"Ecluse.Core.Package.Hash", re-exported here in full. Import those modules directly
+when you need to name or build their types.
 
 The design follows two principles synthesised from the protocol research (see
 @docs\/research\/synthesis.md@):
 
-* __Rules consume normalised signals, not raw fields.__ The risky behaviours
+* __Rules consume normalised signals, not raw fields__. The risky behaviours
   differ on the wire (npm install scripts, PyPI sdist builds, RubyGems native
-  extensions) but collapse to one signal -- 'CodeExecSignal'. Trust likewise
+  extensions) but collapse to one signal, 'CodeExecSignal'. Trust likewise
   collapses to 'Trust'. A rule never learns which ecosystem it is looking at.
 
-* __Signal availability is explicit.__ A signal the adapter has not (or cannot
-  cheaply) determine is 'CodeExecUnknown' \/ 'TrustUnknown' \/ 'Nothing', so a
-  pure rule abstains rather than guessing and the effectful tier can resolve it
-  later (see @docs\/architecture.md@ → "Rules Engine").
+* __Signal availability is explicit__. A signal the adapter has not determined, or
+  cannot determine cheaply, is 'CodeExecUnknown' \/ 'TrustUnknown' \/ 'Nothing'. A
+  pure rule then abstains rather than guessing, and the effectful tier can resolve
+  it later (see @docs\/architecture.md@ → "Rules Engine").
 -}
 module Ecluse.Core.Package (
     -- * Scopes
@@ -116,13 +115,13 @@ import Ecluse.Core.Package.Hash (
 import Ecluse.Core.Version (Version)
 
 {- | An npm scope, stored without its leading @\'\@\'@ (the scope of
-@\@myorg\/pkg@ is @"myorg"@). Construct via 'mkScope', which normalises away
-a leading @\'\@\'@ so equality is independent of how the scope was written.
+@\@myorg\/pkg@ is @"myorg"@). Construct it with 'mkScope', which normalises away a
+leading @\'\@\'@, so equality does not depend on how the scope was written.
 
-A scope is a bulk-stored, equality-only identifier (an allow-list key and part
-of 'PackageName' identity), so it is held as 'ShortText': the @'Text' -> 'ShortText'@
-conversion happens once in 'mkScope' and the reverse once in 'unScope'\/'renderScope',
-never in a hot loop (see STYLE.md §6).
+A scope is a bulk-stored, equality-only identifier: an allow-list key, and part of
+'PackageName' identity. It is therefore held as 'ShortText'. The
+@'Text' -> 'ShortText'@ conversion happens once in 'mkScope' and the reverse once in
+'unScope'\/'renderScope', never in a hot loop (see STYLE.md §6).
 -}
 newtype Scope = Scope ShortText
     deriving stock (Eq, Ord, Show)
@@ -141,13 +140,13 @@ renderScope (Scope s) = "@" <> TS.toText s
 
 {- | A package identity, decoupled from any registry's wire format.
 
-Identity differs by ecosystem -- npm has scopes and is case-sensitive, PyPI
-normalises per PEP 503, RubyGems is verbatim -- so the type is __opaque__:
-build it with 'mkPackageName', which records the ecosystem, computes a
-'pkgCanonical' key used for equality\/matching, and keeps a 'pkgDisplay' form
-for faithful rendering. Equality and ordering are on
-@('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only -- never the display
-or base form -- so @Flask@ and @flask@ are the same PyPI package but different npm ones.
+Identity differs by ecosystem: npm has scopes and is case-sensitive, PyPI
+normalises per PEP 503, and RubyGems is verbatim. The type is therefore __opaque__.
+Build it with 'mkPackageName', which records the ecosystem, computes the
+'pkgCanonical' key for equality and matching, and keeps a 'pkgDisplay' form for
+faithful rendering. Equality and ordering use
+@('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only, never the display or base
+form. So @Flask@ and @flask@ are the same PyPI package but different npm ones.
 -}
 data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
@@ -155,26 +154,26 @@ data PackageName = PackageName
     , pkgNamespace :: Maybe Scope
     -- ^ The scope, if scoped (npm @\@scope\/name@). 'Nothing' for PyPI/RubyGems.
     , pkgCanonical :: ShortText
-    {- ^ The normalised key for equality and matching (PEP 503 for PyPI;
-    verbatim for npm/RubyGems). Held as 'ShortText': it is an equality\/'Ord' key
-    that is normalised once at 'mkPackageName' and never sliced afterwards.
+    {- ^ The normalised key for equality and matching: PEP 503 for PyPI, verbatim
+    for npm and RubyGems. Held as 'ShortText', because it is an equality and 'Ord'
+    key that 'mkPackageName' normalises once and nothing slices afterwards.
     -}
     , pkgDisplay :: ShortText
     {- ^ The name as published, for rendering and round-tripping. Held as
-    'ShortText'; read it back as 'Text' through 'renderPackageName'.
+    'ShortText'. Read it back as 'Text' through 'renderPackageName'.
     -}
     , pkgBaseName :: ShortText
     {- ^ The unscoped base name: the published name with any @\@scope\/@ prefix
-    dropped (@\@babel\/code-frame@ → @code-frame@). Stored structurally at
-    'mkPackageName' (it is exactly the bare name the constructor is given), so the
-    npm tarball\/path layer and the mirror queue read it as a field rather than
-    re-slicing the display form. Not part of identity (like 'pkgDisplay'); held as
-    'ShortText' and read back as 'Text' through 'unscopedName'.
+    dropped (@\@babel\/code-frame@ → @code-frame@). That is exactly the bare name the
+    constructor receives, so 'mkPackageName' stores it structurally. The npm
+    tarball\/path layer and the mirror queue then read it as a field rather than
+    re-slicing the display form. It is not part of identity, like 'pkgDisplay'. Held
+    as 'ShortText' and read back as 'Text' through 'unscopedName'.
     -}
     }
     deriving stock (Show)
 
--- The fields that constitute identity (the display form is excluded).
+-- The fields that constitute identity: the display form is not one of them.
 nameKey :: PackageName -> (Ecosystem, Maybe Scope, ShortText)
 nameKey n = (pkgEcosystem n, pkgNamespace n, pkgCanonical n)
 
@@ -186,9 +185,9 @@ instance Ord PackageName where
 
 {- | Build a 'PackageName', normalising the canonical key for the ecosystem.
 
-The display form is the scope-joined raw name (@\@scope\/name@ when scoped);
-the canonical key is that form normalised: PEP 503 lower-casing and
-@[-_.]+@→@-@ collapsing for PyPI, verbatim for npm and RubyGems.
+The display form is the scope-joined raw name (@\@scope\/name@ when scoped). The
+canonical key is that form normalised: PEP 503 lower-casing and @[-_.]+@→@-@
+collapsing for PyPI, verbatim for npm and RubyGems.
 -}
 mkPackageName :: Ecosystem -> Maybe Scope -> Text -> PackageName
 mkPackageName eco ns raw =
@@ -226,9 +225,10 @@ renderPackageName :: PackageName -> Text
 renderPackageName = TS.toText . pkgDisplay
 
 {- | The unscoped (base) name as 'Text' (@\@babel\/code-frame@ → @code-frame@): the
-'ShortText' 'pkgBaseName' field read back. The single home for the bare-name the npm
-tarball/path layer and the mirror queue all need; it is stored structurally at
-'mkPackageName' rather than reconstructed by rendering then string-stripping the scope.
+'ShortText' 'pkgBaseName' field read back. This is the single home for the bare name
+the npm tarball/path layer and the mirror queue both need. 'mkPackageName' stores it
+structurally rather than reconstructing it by rendering and then string-stripping the
+scope.
 -}
 unscopedName :: PackageName -> Text
 unscopedName = TS.toText . pkgBaseName
@@ -239,17 +239,17 @@ of npm install scripts, PyPI sdist builds, and RubyGems native extensions).
 data CodeExecSignal
     = -- | Determined: installation runs no code.
       NoCodeOnInstall
-    | -- | Determined: installation runs code; the text says how (audit trail).
+    | -- | Determined: installation runs code. The text says how, for the audit trail.
       RunsCodeOnInstall Text
-    | {- | Not yet determined (e.g. the RubyGems gemspec has not been fetched).
-      Pure rules abstain; the effectful tier may resolve it.
+    | {- | Not yet determined (e.g. nothing has fetched the RubyGems gemspec yet).
+      Pure rules abstain, and the effectful tier may resolve it.
       -}
       CodeExecUnknown
     deriving stock (Eq, Show)
 
 {- | The trust\/provenance signal for a version. The /how/ of trust differs by
 ecosystem (npm @dist.signatures@, PyPI PEP 740 attestations, RubyGems signed
-gems\/MFA) but is captured as 'TrustEvidence' so rules stay ecosystem-blind.
+gems\/MFA), but 'TrustEvidence' captures it, so rules stay ecosystem-blind.
 -}
 data Trust
     = -- | Determined trusted, with the evidence supporting it.
@@ -260,7 +260,7 @@ data Trust
       TrustUnknown
     deriving stock (Eq, Show)
 
-{- | A normalised reason a version is trusted; the adapter maps its ecosystem's
+{- | A normalised reason a version is trusted. The adapter maps its ecosystem's
 mechanism onto this vocabulary.
 -}
 data TrustEvidence
@@ -278,9 +278,9 @@ data TrustEvidence
 data Availability
     = -- | Offered normally.
       Available
-    | -- | Advisory deprecation (npm); still resolvable. Carries the message.
+    | -- | Advisory deprecation (npm), still resolvable. Carries the message.
       Deprecated Text
-    | {- | Withdrawn from resolution (PyPI yank keeps the file; RubyGems yank
+    | {- | Withdrawn from resolution (PyPI yank keeps the file, RubyGems yank
       removes it). Carries the reason, if given.
       -}
       Yanked (Maybe Text)
@@ -292,9 +292,9 @@ data ArtifactKind
       Tarball
     | -- | A PyPI source distribution (building it may execute code).
       Sdist
-    | -- | A PyPI wheel; carries its compatibility tag (e.g. @"cp310-…"@).
+    | -- | A PyPI wheel. Carries its compatibility tag (e.g. @"cp310-…"@).
       Wheel Text
-    | -- | A RubyGems gem; carries its platform (@"ruby"@ = pure).
+    | -- | A RubyGems gem. Carries its platform (@"ruby"@ = pure).
       Gem Text
     deriving stock (Eq, Show)
 
@@ -307,7 +307,7 @@ data Artifact = Artifact
     , artUrl :: Text
     , artKind :: ArtifactKind
     , artHashes :: [Hash]
-    -- ^ Integrity digests; the client verifies the download against these.
+    -- ^ Integrity digests. The client verifies the download against these.
     , artSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball
     byte count: npm populates it from @dist.unpackedSize@, the size of the unpacked
@@ -337,8 +337,8 @@ data Person = Person
     deriving stock (Eq, Ord, Show)
 
 {- | The ecosystem-agnostic snapshot of a single package /version/ that the
-rules engine evaluates. A registry adapter projects its wire format into this;
-the rules engine never sees anything else, and never branches on the ecosystem.
+rules engine evaluates. A registry adapter projects its wire format into this. The
+rules engine never sees anything else, and never branches on the ecosystem.
 -}
 data PackageDetails = PackageDetails
     { pkgName :: PackageName
@@ -356,24 +356,23 @@ data PackageDetails = PackageDetails
     , pkgAvailability :: Availability
     -- ^ Whether the version is offered, deprecated, or withdrawn.
     , pkgArtifacts :: NonEmpty Artifact
-    -- ^ The version's distribution files (one for npm; many for PyPI/RubyGems).
+    -- ^ The version's distribution files (one for npm, many for PyPI/RubyGems).
     , pkgLicenses :: [Text]
-    -- ^ Declared licenses (SPDX expressions/ids); may be several.
+    -- ^ Declared licenses (SPDX expressions/ids). There may be several.
     , pkgPublisher :: Maybe Person
     {- ^ Who published __this__ version, if known (provenance).
 
-    Dependencies and maintainers are __deliberately not modelled__ (architect
-    ruling, 2026-07-02). Dependencies are structurally redundant on the decision
-    surface: a dependency only ever matters when it is itself fetched, and that
-    fetch comes back through this same gate and receives its own verdict, so
-    gating a parent's dependency /list/ would duplicate the gate that already
-    sits on every child request. Not modelling them means the wire layer does
-    not even parse them (a heavy packument carries thousands of per-version
-    dependency entries of pure parse cost on the hot path), and a malformed
-    entry there can no longer drop the version -- it degrades, per the same
-    ruling. The raw document still carries everything to the client untouched;
-    the served surface is lossless regardless of what the decision surface
-    models. If a dependency-reading rule ever genuinely lands, restore the
+    Dependencies and maintainers are __deliberately not modelled__. Dependencies
+    are structurally redundant on the decision surface. A dependency only ever
+    matters when a client fetches it, and that fetch comes back through this same
+    gate and receives its own verdict. Gating a parent's dependency /list/ would
+    therefore duplicate the gate that already sits on every child request. Not
+    modelling them means the wire layer does not even parse them. A heavy packument
+    carries thousands of per-version dependency entries, and parsing them would be
+    pure cost on the hot path. A malformed entry there can no longer drop the
+    version either: it degrades. The raw document still carries everything to the
+    client untouched, so the served surface is lossless whatever the decision
+    surface models. If a dependency-reading rule ever genuinely lands, restore the
     @Dependency@\/@DepKind@ vocabulary from history and re-model then.
     -}
     }
@@ -381,18 +380,18 @@ data PackageDetails = PackageDetails
 
 {- | The packument-level view of a package: the whole-package metadata document
 ('PackageDetails' is the per-/version/ snapshot embedded within it). A registry
-adapter projects a registry's packument (the npm full-metadata document) into
-this; the proxy core reasons over it without ever seeing the wire format.
+adapter projects a registry's packument, the npm full-metadata document, into this
+type. The proxy core then reasons over it without ever seeing the wire format.
 -}
 data PackageInfo = PackageInfo
     { infoName :: PackageName
     -- ^ The package identity this document describes.
     , infoVersions :: Map Text PackageDetails
     {- ^ Every published version, keyed by its __raw version string__ (the
-    packument's own key). Each 'PackageDetails' still carries its parsed
-    'Version'; the map is keyed by 'Text' because a 'Version' has no 'Ord'
-    (ordering goes through 'Ecluse.Core.Version.compareVersions', never a derived
-    instance) -- see "Ecluse.Core.Version".
+    packument's own key). Each 'PackageDetails' still carries its parsed 'Version'.
+    The map is keyed by 'Text' because a 'Version' has no 'Ord': ordering goes
+    through 'Ecluse.Core.Version.compareVersions', never a derived instance. See
+    "Ecluse.Core.Version".
     -}
     , infoDistTags :: Map Text Version
     {- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
@@ -400,23 +399,23 @@ data PackageInfo = PackageInfo
     -}
     , infoInvalidEntries :: [InvalidEntry]
     {- ^ The malformed entries the projection __dropped__ rather than failing the
-    whole document on, retained so the serve path can surface them to an operator.
-    A version's publish time lives on its 'PackageDetails.pkgPublishedAt' (the npm
-    @time@ object is reconstructed at serialisation), so it is __not__ duplicated
-    here; only the /dropped/ entries are.
+    whole document on, kept so the serve path can surface them to an operator. A
+    version's publish time lives on its 'PackageDetails.pkgPublishedAt', and
+    serialisation reconstructs the npm @time@ object from it, so this field does
+    __not__ duplicate it. Only the /dropped/ entries appear here.
     -}
     }
     deriving stock (Eq, Show)
 
 {- | A single packument entry a registry projection __dropped__ as malformed rather
-than failing the entire document, kept so the drop is observable rather than silent
-(an operator can see that an upstream served a malformed entry, and which). Each
-ecosystem's projection populates this from its own wire shape, so the
+than failing the entire document. It is kept so the drop is observable rather than
+silent: an operator can see that an upstream served a malformed entry, and which one.
+Each ecosystem's projection populates this from its own wire shape, so the
 drop-and-track contract is the same across npm, PyPI, and RubyGems.
 -}
 data InvalidEntry = InvalidEntry
     { invalidKind :: InvalidEntryKind
-    -- ^ Which kind of packument entry was dropped.
+    -- ^ Which kind of packument entry the projection dropped.
     , invalidKey :: Text
     {- ^ The map key the dropped entry sat under: the raw version string for a
     version manifest or publish time, the tag name for a dist-tag.
@@ -424,12 +423,13 @@ data InvalidEntry = InvalidEntry
     , invalidValue :: Value
     {- ^ The __offending value__ ('Value' is lossless), so an operator can see what the
     upstream sent rather than only a reason string. A dropped publish time keeps its raw
-    bad date here even though the version's 'pkgPublishedAt' folds to 'Nothing'; the
-    gating value (absent) and the diagnostic (the raw bytes) are kept separate. Render it
-    (truncating if large) at log time. A value that is a __URL__ is reduced to its
-    authority before it is recorded ('Ecluse.Core.Security.Authority.authorityLabel'):
-    this record reaches a log line, and an upstream-supplied @dist.tarball@ can carry a
-    credential in its userinfo or query string.
+    bad date here even though the version's 'pkgPublishedAt' folds to 'Nothing'. That
+    keeps the gating value (absent) separate from the diagnostic (the raw bytes). Render
+    it at log time, truncating if it is large. A projection reduces a __URL__ value to its
+    authority before it records the entry
+    ('Ecluse.Core.Security.Authority.authorityLabel'). This record reaches a log line, and
+    an upstream-supplied @dist.tarball@ can carry a credential in its userinfo or query
+    string.
     -}
     , invalidReason :: Text
     -- ^ Why the entry could not be projected (the decode error), for the operator log.
@@ -437,9 +437,9 @@ data InvalidEntry = InvalidEntry
     deriving stock (Eq, Show)
 
 {- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A version
-manifest drop removes a serve candidate (fail-closed for that one version); a dist-tag or
-publish-time drop loses only that advisory datum while the version it referred to still
-resolves.
+manifest drop removes a serve candidate, which is fail-closed for that one version. A
+dist-tag or publish-time drop loses only that advisory datum, and the version it referred
+to still resolves.
 -}
 data InvalidEntryKind
     = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).

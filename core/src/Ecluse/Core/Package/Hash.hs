@@ -6,15 +6,15 @@
 the validated 'Hash' value, digest computation, and the Subresource-Integrity
 wire forms.
 
-This is the single home for the algorithm vocabulary: the wire name an algorithm
-renders to and parses from, and how a Subresource-Integrity string is split and
-resolved. It lives in the package layer's lowest module because 'mkHash' needs it
-and the vocabulary's consumers must never disagree on it: everything that names an
-algorithm or reads an SRI (the worker's tamper gate, the serve-admission floor, the
-queue wire) defers here, so they share one notion of what @"sha512"@ means and what
-an SRI asserts rather than each re-encoding it. "Ecluse.Core.Package" re-exports
-this whole surface for its callers; import this module directly only where the
-package vocabulary itself is not needed.
+This is the single home for the algorithm vocabulary. It holds the wire name an
+algorithm renders to and parses from, and how a Subresource-Integrity string is split
+and resolved. It lives in the package layer's lowest module because 'mkHash' needs it,
+and because the vocabulary's consumers must never disagree on it. Everything that
+names an algorithm or reads an SRI defers here: the worker's tamper gate, the
+serve-admission floor, and the queue wire. They therefore share one notion of what
+@"sha512"@ means and what an SRI asserts, rather than each re-encoding it.
+"Ecluse.Core.Package" re-exports this whole surface for its callers. Import this
+module directly only where the package vocabulary itself is not needed.
 -}
 module Ecluse.Core.Package.Hash (
     -- * Hashes
@@ -48,7 +48,7 @@ import Data.Universe.Generic (universeGeneric)
 
 The 'Ord' instance is the integrity authority order, not constructor order:
 @SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@. A bare 'SRI' is a wrapper,
-not an algorithm; callers that care about its embedded algorithm should resolve it first.
+not an algorithm. A caller that needs its embedded algorithm resolves it first.
 -}
 data HashAlg
     = SHA1
@@ -58,16 +58,16 @@ data HashAlg
     | MD5
     | Blake2b
     | {- | A single Subresource-Integrity component (npm @dist.integrity@), e.g.
-      @"sha512-…"@. Exactly one @\<alg\>-\<base64\>@ component per 'Hash': a wire
-      string that joins several with whitespace is split into one 'Hash' per
-      component by 'mkSriHashes', so every reader resolves the same algorithm and
-      digest body from 'hashValue'.
+      @"sha512-…"@. Exactly one @\<alg\>-\<base64\>@ component per 'Hash':
+      'mkSriHashes' splits a wire string that joins several with whitespace into one
+      'Hash' per component, so every reader resolves the same algorithm and digest
+      body from 'hashValue'.
       -}
       SRI
     deriving stock (Eq, Generic, Show)
 
--- Enumerate every HashAlg from the type itself, so a new algorithm is covered without a
--- hand-maintained list. Derived from Generic, not a partial Enum/Bounded pair; the
+-- Enumerate every HashAlg from the type itself, so it covers a new algorithm without a
+-- hand-maintained list. Derived from Generic, not a partial Enum/Bounded pair. The
 -- cross-module floor-vs-compute invariant test relies on this being exhaustive.
 instance Universe HashAlg where universe = universeGeneric
 
@@ -75,7 +75,7 @@ instance Ord HashAlg where
     compare a b = compare (hashAlgRank a) (hashAlgRank b)
 
 -- Explicit integrity ordering, weakest to strongest. The gaps are only for
--- readability; order, not arithmetic distance, is the policy.
+-- readability: order, not arithmetic distance, is the policy.
 hashAlgRank :: HashAlg -> Int
 hashAlgRank = \case
     SRI -> 0
@@ -86,10 +86,10 @@ hashAlgRank = \case
     Blake2b -> 50
     SHA512 -> 60
 
-{- | An integrity digest of an artifact. __Opaque__: a 'Hash' is built only through
-'mkHash', which validates that the digest is well-formed, so every value of this type
-carries the proof that its digest could be a real digest of its algorithm. Read it
-back through 'hashAlg' and 'hashValue'.
+{- | An integrity digest of an artifact. The type is __opaque__. 'mkHash' is the only
+way to build one, and it validates that the digest is well-formed. Every value of this
+type therefore carries the proof that its digest could be a real digest of its
+algorithm. Read it back through 'hashAlg' and 'hashValue'.
 -}
 data Hash = Hash
     { hashAlg :: HashAlg
@@ -103,22 +103,23 @@ data Hash = Hash
 
 {- | Build a 'Hash', validating that the digest is __structurally well-formed__:
 cleanly encoded and exactly the byte length its algorithm specifies. This is the only
-way to construct a 'Hash', so the type itself is the proof that the digest could be a
-real digest of that algorithm -- an empty, truncated, over-long, non-hex, or bad-base64
-value is unconstructable and so can never reach an integrity gate as a degenerate
-digest (the fail-open this closes is @docs\/architecture\/security.md@ invariant 5).
+way to construct a 'Hash'. The type itself is therefore the proof that the digest could
+be a real digest of that algorithm. An empty, truncated, over-long, non-hex, or bad-base64
+value is unconstructable, so it can never reach an integrity gate as a degenerate
+digest. That closes the fail-open of @docs\/architecture\/security.md@ invariant 5.
 
-Well-formedness is __not__ admissibility: a well-formed but weak SHA-1 digest builds
-fine; whether it clears the public-integrity floor is the separate decision of
-"Ecluse.Core.Package.Integrity". 'mkHash' rejects a malformed digest, never a merely weak one.
+Well-formedness is __not__ admissibility. A well-formed but weak SHA-1 digest builds
+fine, and whether it clears the public-integrity floor is the separate decision of
+"Ecluse.Core.Package.Integrity". 'mkHash' rejects a malformed digest, never a merely
+weak one.
 
 A hex-tagged algorithm (everything but 'SRI') takes lower- or upper-case hex of the
 algorithm's digest length. An 'SRI' takes __exactly one__ @\<alg\>-\<base64\>@
 component, naming a Subresource-Integrity algorithm (@sha256@, @sha384@, @sha512@)
-whose base64 body decodes to that algorithm's digest length. A wire string that
-joins several components with whitespace is malformed /here/: split it with
-'mkSriHashes', which yields one 'Hash' per component, so no reader ever has to
-decide which component of a joined string a 'Hash' means.
+whose base64 body decodes to that algorithm's digest length. A wire string that joins
+several components with whitespace is malformed /here/. Split it with 'mkSriHashes',
+which yields one 'Hash' per component. No reader then has to decide which component of a
+joined string a 'Hash' means.
 
 >>> import Ecluse.Core.Package.Hash (HashAlg (SHA1))
 >>> fmap hashAlg (mkHash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0")
@@ -132,17 +133,16 @@ mkHash alg value
     | wellFormed alg value = Right (Hash alg value)
     | otherwise = Left ("malformed " <> renderHashAlg alg <> " digest")
 
-{- | Split a Subresource-Integrity __wire string__ -- one or more
-whitespace-separated @\<alg\>-\<base64\>@ components (npm's @dist.integrity@) --
-into one 'SRI' 'Hash' per component, each built through the validating 'mkHash'.
-The whole string is rejected when it carries no component or /any/ component is
-malformed, so a partially-valid value never yields a partial digest set.
+{- | Split a Subresource-Integrity __wire string__, one or more whitespace-separated
+@\<alg\>-\<base64\>@ components (npm's @dist.integrity@), into one 'SRI' 'Hash' per
+component, each built through the validating 'mkHash'. It rejects the whole string
+when it carries no component, or when /any/ component is malformed. A partially-valid
+value therefore never yields a partial digest set.
 
-This is the one intended path from wire data to 'SRI' hashes. Because each
-resulting 'Hash' holds exactly one component, the admission floor, the worker's
-tamper gate, and the divergence fingerprint all resolve the same algorithm and
-digest body from it -- there is no joined string left for two consumers to read
-two different ways.
+This is the one intended path from wire data to 'SRI' hashes. Each resulting 'Hash'
+holds exactly one component. The admission floor, the worker's tamper gate, and the
+divergence fingerprint therefore resolve the same algorithm and digest body from it. No
+joined string is left for two consumers to read two different ways.
 
 >>> fmap length (mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
 Right 2
@@ -155,15 +155,14 @@ mkSriHashes wire = case nonEmpty (T.words wire) of
     Nothing -> Left "malformed sri digest"
     Just comps -> traverse (mkHash SRI) comps
 
--- Whether a digest string is a well-formed digest of the given algorithm.
 wellFormed :: HashAlg -> Text -> Bool
 wellFormed = \case
     SRI -> wellFormedSri
     alg -> wellFormedHex alg
 
 -- A hex digest is well-formed when it decodes as hex (case-insensitively) to exactly
--- the algorithm's digest length -- which 'digestFromByteString' decides by accepting
--- only an input of the right size.
+-- the algorithm's digest length. 'digestFromByteString' decides that by accepting only
+-- an input of the right size.
 wellFormedHex :: HashAlg -> Text -> Bool
 wellFormedHex alg t =
     case convertFromBase Base16 (encodeUtf8 (T.toLower t) :: ByteString) :: Either String ByteString of
@@ -183,17 +182,17 @@ hexDigestOk alg bytes = case alg of
 {- | Compute the digest of bytes in a given algorithm, as the raw digest bytes, or
 'Nothing' for an algorithm Écluse will not verify against. The computable algorithms are
 exactly the collision-resistant ones: 'SHA1', 'SHA256', 'SHA384', 'SHA512', and
-Blake2b-512. 'MD5' is deliberately uncomputable here (a match on a broken hash cannot prove
-the bytes were not substituted, so the tamper gate never verifies against it), as is the
-bare 'SRI' wrapper, which names no algorithm of its own (resolve it with 'sriAlgorithm'
-first).
+Blake2b-512. 'MD5' is deliberately uncomputable here. A match on a broken hash cannot
+prove the bytes were not substituted, so the tamper gate never verifies against it.
+The bare 'SRI' wrapper is uncomputable too, because it names no algorithm of its own.
+Resolve it with 'sriAlgorithm' first.
 
-This is the sibling of 'hexDigestOk': both dispatch on the same per-algorithm crypto type,
-so they live together and a new 'HashAlg' must be given an arm in each (the 'case' is total,
-and the package builds with @-Wincomplete-patterns@ as an error). It is the one place that
-defines /which algorithms the worker can verify/; the integrity floor admits by /strength/
-("Ecluse.Core.Package.Integrity"), and the invariant that every floor-clearing algorithm is
-computable here keeps the worker able to verify whatever the floor admits.
+This is the sibling of 'hexDigestOk'. Both dispatch on the same per-algorithm crypto type,
+so they live together, and a new 'HashAlg' needs an arm in each. The 'case' is total, and
+the package builds with @-Wincomplete-patterns@ as an error. This is the one place that
+defines /which algorithms the worker can verify/. The integrity floor admits by /strength/
+("Ecluse.Core.Package.Integrity"). Every floor-clearing algorithm is computable here, so the
+worker can verify whatever the floor admits.
 -}
 computeDigest :: HashAlg -> Maybe (LByteString -> ByteString)
 computeDigest = \case
@@ -208,9 +207,9 @@ computeDigest = \case
     digestBytes :: Digest a -> ByteString
     digestBytes = convert
 
-{- | Whether the worker can compute (and so verify a digest in) the given algorithm: the
-predicate form of 'computeDigest', taken from the same single definition so the computable
-set cannot drift from what 'computeDigest' actually computes.
+{- | Whether the worker can compute (and so verify a digest in) the given algorithm. This
+is the predicate form of 'computeDigest', taken from that same single definition. The
+computable set therefore cannot drift from what 'computeDigest' actually computes.
 
 >>> isComputable SHA256
 True
@@ -221,13 +220,13 @@ False
 isComputable :: HashAlg -> Bool
 isComputable = isJust . computeDigest
 
-{- An 'SRI' 'Hash' carries exactly one canonical @\<alg\>-\<base64\>@ component: no
-surrounding whitespace (the first-dash accessors 'sriPrefix'\/'sriBody' read the
-stored value verbatim, so a padded value would corrupt both) and never a
-whitespace-joined set (that is the wire shape 'mkSriHashes' splits, one 'Hash' per
-component). The single-component invariant is what lets every consumer -- the
-admission floor, the worker's tamper gate, the divergence fingerprint -- resolve
-the same algorithm and digest body from one 'Hash'.
+{- An 'SRI' 'Hash' carries exactly one canonical @\<alg\>-\<base64\>@ component. It
+has no surrounding whitespace, because the first-dash accessors 'sriPrefix'\/'sriBody'
+read the stored value verbatim and a padded value would corrupt both. It is never a
+whitespace-joined set either: that is the wire shape 'mkSriHashes' splits, one 'Hash'
+per component. The single-component invariant lets every consumer resolve the same
+algorithm and digest body from one 'Hash'. Those consumers are the admission floor, the
+worker's tamper gate, and the divergence fingerprint.
 -}
 wellFormedSri :: Text -> Bool
 wellFormedSri t = case T.words t of
@@ -241,7 +240,7 @@ wellFormedSriComponent comp
     | otherwise = sriBodyOk (sriPrefix comp) (sriBody comp)
 
 -- The SRI algorithms recognised are exactly the Subresource-Integrity set
--- (sha256/sha384/sha512); the base64 body must decode to that algorithm's digest
+-- (sha256/sha384/sha512), and the base64 body must decode to that algorithm's digest
 -- length. Each is a modelled 'HashAlg', so a well-formed component both constructs and
 -- resolves to an algorithm the strength tier ranks ('assertedAlg').
 sriBodyOk :: Text -> Text -> Bool
@@ -254,7 +253,7 @@ sriBodyOk algName body =
             "sha512" -> isJust (digestFromByteString @SHA512 bytes)
             _ -> False
 
-{- | The lower-case wire name of an algorithm -- the canonical spelling 'parseHashAlg'
+{- | The lower-case wire name of an algorithm: the canonical spelling 'parseHashAlg'
 reads back. Total and injective, so it doubles as config rendering and error text.
 
 >>> renderHashAlg SHA256
@@ -272,11 +271,11 @@ renderHashAlg = \case
 
 {- | Parse an algorithm name, tolerating surrounding whitespace and case, and a
 single family-separating @\'-\'@ (so @"SHA-256"@ and @"sha256"@ both parse). It
-accepts only the canonical names and their documented single-dash aliases: it does
-__not__ strip arbitrary internal dashes, so a typo such as @"s-h-a--2-5-6"@ is
-rejected rather than silently read as @sha256@. An unrecognised name is reported as
-such, distinct from a recognised-but-too-weak floor. The @sri@ wrapper is not a
-config-selectable algorithm and is rejected.
+accepts only the canonical names and their documented single-dash aliases. It does
+__not__ strip arbitrary internal dashes, so it rejects a typo such as @"s-h-a--2-5-6"@
+rather than silently reading it as @sha256@. It reports an unrecognised name as such,
+distinct from a recognised-but-too-weak floor. The @sri@ wrapper is not a
+config-selectable algorithm, so this rejects it too.
 
 >>> parseHashAlg "SHA-256"
 Right SHA256
@@ -298,7 +297,7 @@ parseHashAlg raw = case T.toLower (T.strip raw) of
     "blake2b" -> Right Blake2b
     _ -> Left ("unknown integrity algorithm: " <> raw)
 
-{- | The algorithm-name token of a Subresource-Integrity string -- the @\<alg\>@ before
+{- | The algorithm-name token of a Subresource-Integrity string: the @\<alg\>@ before
 the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefix.
 
 >>> sriPrefix "sha512-Zm9vYmFy"
@@ -307,7 +306,7 @@ the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefi
 sriPrefix :: Text -> Text
 sriPrefix = fst . T.breakOn "-"
 
-{- | The base64 digest body of a Subresource-Integrity string -- the @\<base64\>@ after
+{- | The base64 digest body of a Subresource-Integrity string: the @\<base64\>@ after
 the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ has an empty body.
 
 >>> sriBody "sha512-Zm9vYmFy"
@@ -318,9 +317,9 @@ sriBody = T.drop 1 . snd . T.breakOn "-"
 
 {- | The 'HashAlg' a Subresource-Integrity string names, read from its @\<alg\>@ prefix.
 The prefixes resolved are the Subresource-Integrity set @sha256@, @sha384@ and @sha512@
-(every long digest the model represents and a registry serves); an unrecognised or
+(every long digest the model represents and a registry serves). An unrecognised or
 malformed prefix yields 'Nothing', so the string asserts no algorithm and clears no
-floor (the fail-closed reading).
+floor: the fail-closed reading.
 
 >>> sriAlgorithm "sha512-Zm9vYmFy"
 Just SHA512
