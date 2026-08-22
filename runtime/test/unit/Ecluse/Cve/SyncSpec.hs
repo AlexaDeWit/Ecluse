@@ -11,9 +11,9 @@ import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
-import UnliftIO.Async (async, cancel, waitCatch, withAsync)
+import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (mask_, throwIO)
 
 import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
@@ -279,17 +279,25 @@ spec = do
                 void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
                 insideReader <- newEmptyMVar
                 releaseReader <- newEmptyMVar
+                insideSwapper <- newEmptyMVar
                 pinned <- async $ withSlotLookup slot $ \_ -> do
                     putMVar insideReader ()
                     takeMVar releaseReader
                 takeMVar insideReader
-                -- The swap publishes the new generation, then parks draining
-                -- the displaced one, whose reader is still pinned inside.
-                swapper <- async (void (syncStep (envWith (fetchServing (Just "e2") (`mkMinimalValidDb` "pkg-b"))) (Just (DbEtag "e1"))))
-                awaitServing slot "pkg-b"
+                let buildPkgB dest = do
+                        putMVar insideSwapper ()
+                        mkMinimalValidDb dest "pkg-b"
+                -- The swap publishes the new generation, then parks draining the displaced
+                -- one, whose reader is still pinned inside. The mask defers the cancellation
+                -- to the swapper's only blocking point, that drain, so no wait rides a clock.
+                swapper <- async (mask_ (syncStep (envWith (fetchServing (Just "e2") buildPkgB)) (Just (DbEtag "e1"))))
+                takeMVar insideSwapper
                 cancel swapper
                 putMVar releaseReader ()
                 void (waitCatch pinned)
+                waitCatch swapper >>= \case
+                    Left err | Just AsyncCancelled <- fromException err -> pass
+                    finished -> expectationFailure ("expected the swapper to be cancelled inside its drain, got " <> show finished)
                 -- The cancellation interrupted the drain wait, never the
                 -- published generation: the slot must still answer.
                 probesFor slot "pkg-b" `shouldReturn` Just True
