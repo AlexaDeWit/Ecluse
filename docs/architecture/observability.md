@@ -140,7 +140,9 @@ URL (see [Secrets](../../USAGE.md#secrets)).
 
 Telemetry is off until `ECLUSE_OBSERVABILITY__TELEMETRY` is set; the operator surface (the `OTEL_*`
 and `DD_*` [variables](../../USAGE.md#observability-observability) and the
-[Datadog recipe](../../USAGE.md#datadog-on-kubernetes)) lives in the operator manual. The design
+[Datadog recipe](../../USAGE.md#datadog-on-kubernetes)) lives in the operator manual. Logs sit
+outside that switch: they go to stdout on every run and reach a backend through the collector's
+container log collection, never through OTLP export, so telemetry off costs no logs. The design
 facts here:
 
 - **No agentless export.** `DD_API_KEY` and `DD_SITE` are never read: Écluse exports to a node-local

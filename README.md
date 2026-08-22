@@ -53,6 +53,11 @@ network-egress safety you're responsible for, the rule policy, and the health an
 observability endpoints. The [`docs/architecture/`](docs/architecture.md) documents are the
 *why* behind each setting.
 
+Écluse publishes to GitHub Container Registry and nowhere else: `ghcr.io/alexadewit/ecluse`,
+one immutable tag per version, no `latest`. Pin a deployment by digest and verify what you
+pin ([Verifying the image](#verifying-the-image)). The publish flow is in
+[Release and supply-chain operations](docs/architecture/release-supply-chain.md#releases-and-container-image).
+
 ## Verifying the image
 
 > **Pre-release.** No GA release is cut yet. Release candidates (e.g. `0.1.0-rc.2`) are
@@ -60,9 +65,9 @@ observability endpoints. The [`docs/architecture/`](docs/architecture.md) docume
 > attestations below.
 
 Each tag is a single multi-arch image (`linux/amd64` + `linux/arm64`) carrying keyless
-(Sigstore) provenance and SBOM attestations in the public Rekor log. A cut release's digest
-is published in the [GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases); until
-then, pin by digest. Verify with the GitHub CLI:
+(Sigstore) provenance and SBOM attestations in the public Rekor log. A version's digest is
+published in its [GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases). Verify with
+the GitHub CLI:
 
 ```bash
 IMAGE=ghcr.io/alexadewit/ecluse@sha256:…   # pin by digest
@@ -85,7 +90,7 @@ compare, rather than trust anyone.
 nix build github:AlexaDeWit/Ecluse/<ref>#dockerImage   # → ./result (a docker-archive)
 ```
 
-See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md#supply-chain-attestations).
+See [Release and supply-chain operations](docs/architecture/release-supply-chain.md#supply-chain-attestations).
 
 ## Versioning
 
