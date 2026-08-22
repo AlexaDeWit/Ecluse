@@ -119,7 +119,7 @@ flowchart TD
 | Document | Covers |
 | --- | --- |
 | [Registry model](architecture/registry-model.md) | The four registry roles (two reads, two writes), the domain vocabulary, and the registry abstraction. |
-| [Web layer](architecture/web-layer.md) | Raw-WAI front door: routing, mounts, the capability manifest, the control/data-plane split, streaming, and graceful shutdown. |
+| [Web layer](architecture/web-layer.md) | Raw-WAI front door: routing, mounts, the OpenAPI spec, the control/data-plane split, streaming, and graceful shutdown. |
 | [Rules engine and responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
 | [Cloud backends and mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`). AWS. |
 | [Configuration and authentication](architecture/configuration.md) | Environment config, outbound registry credentials, and inbound client auth. |
@@ -135,7 +135,7 @@ flowchart TD
   through `publishArtifact`.
 - Web UI or admin API.
 - Re-specifying upstream registry protocols in the
-  [capability manifest](architecture/web-layer.md#capability-manifest): Écluse documents its coverage, not npm's
+  [OpenAPI spec](architecture/web-layer.md#openapi-spec): Écluse documents its coverage, not npm's
   full contract, which clients hardcode.
 - Non-npm adapters. The adapter registry, the mount model, and the protocol codec over the
   shared publish transport accommodate them (see

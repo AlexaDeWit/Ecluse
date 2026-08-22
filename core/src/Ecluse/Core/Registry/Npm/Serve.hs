@@ -7,7 +7,7 @@
 The agnostic serve layer decides the HTTP /status/ of a refusal. The /body/ shape is
 npm's, and it lives here as one 'NpmError' type with an @autodocodec@ codec. That codec
 is the single source of truth. The serve path encodes the wire denial from it, and the
-capability manifest renders the /same/ codec to the documented schema. The manifest runs
+OpenAPI spec renders the /same/ codec to the documented schema. The manifest runs
 in its own tier, so @openapi3@ never reaches the proxy. An npm client reads the
 human-facing reason from a JSON @{"error": …}@ object, matching npm's own denial bodies.
 

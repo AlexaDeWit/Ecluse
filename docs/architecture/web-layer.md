@@ -30,7 +30,7 @@ consumer's URLs. Each mount also carries an optional per-ecosystem
 the degenerate case, under its own derived prefix.
 
 A mount also carries its ecosystem's credential presentation: the form its clients put a
-credential in (npm: `Authorization: Bearer`), which Écluse also uses when it forwards the
+credential in (npm: `Authorization: Bearer`). Écluse uses the same form when it forwards the
 credential upstream. The web layer compares what the mount recovered against the configured edge
 token in constant time and refuses anything else.
 
@@ -54,19 +54,18 @@ about public-upstream reachability. The proxy still serves private hits while pu
 upstream blip must not pull a healthy pod from rotation. `/-/ping` answers locally, and
 `/-/v1/search` returns `501`, a discovery convenience rather than an install path.
 
-## Capability manifest
+## OpenAPI spec
 
 Écluse speaks package-registry protocols (npm today), not a bespoke HTTP API.
 Clients (`npm`, `pnpm`, `yarn`) hardcode the protocol and never read an API description, so the
-published OpenAPI document is not a client-integration contract. It is a **capability manifest**: a
-human-facing statement of which protocols this server speaks, and what each ecosystem does and does
-not support. That stops being self-evident as mounts multiply.
+published OpenAPI spec is not a client-integration contract. It states which protocols this
+server speaks, and what each ecosystem does and does not support. That stops being self-evident as mounts multiply.
 
-### What the manifest covers, and what it doesn't
+### What the spec covers, and what it doesn't
 
 Écluse documents its coverage of each protocol, not the protocol itself:
 
-- **The manifest models owned and synthesised responses in full**: the error/denial envelope, the
+- **The spec models owned and synthesised responses in full**: the error/denial envelope, the
   health and meta routes, and the packument Écluse synthesises (see
   [Packument merge](registry-model.md#packument-merge-across-upstreams)).
 - **It describes opaque pass-through instead of re-specifying it**: tarball and artifact responses
@@ -123,8 +122,8 @@ can leak to another inside the TTL, because Écluse forbids a shared private cac
 holds it freely.
 
 The assembled-representation store beside it memoises the encoded merged document under a content
-fingerprint of every input, including the digest of the private document this request's own
-authorised fetch returned. No request shares or skips the private fetch and its authorisation.
+fingerprint of every input. That fingerprint includes the digest of the private document this
+request's own authorised fetch returned. No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 

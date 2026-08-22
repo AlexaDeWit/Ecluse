@@ -445,7 +445,7 @@ executable ecluse
   hs-source-dirs: app
   build-depends:  ecluse
 
--- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder and
+-- The OpenAPI spec assembly: the pure (ManifestSource -> OpenApi) builder and
 -- the owned schemas. An INTERNAL sublibrary, following the ecluse-test-support
 -- pattern. That keeps the heavy OpenAPI dependency tree (openapi3, autodocodec, lens,
 -- optics, and the rest) OUT of the shipped `library ecluse` and `executable ecluse`
@@ -468,7 +468,7 @@ library ecluse-manifest
     , openapi3                   ^>=3.2
     , text                       ^>=2.1
 
--- The capability-manifest generator: a build-time component that assembles the
+-- The OpenAPI spec generator: a build-time component that assembles the
 -- OpenAPI document (Ecluse.Manifest) from the fixed canonical source and writes
 -- the committed openapi.json. It depends on the ecluse-manifest sublibrary, NOT the
 -- app library, so the OpenAPI dependency tree never reaches the running proxy. Run

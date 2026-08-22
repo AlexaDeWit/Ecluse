@@ -4,7 +4,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
 {- | The response-contract algebra: one value interpreted as both wire behaviour and
-capability-manifest documentation.
+OpenAPI documentation.
 
 A 'ResponseContract' is indexed by the value a handler must produce. Its constructor is
 private: callers can only build one from the leaf contracts in this module and combine
@@ -96,7 +96,7 @@ data ResponseStatus
     | DefaultResponse
     deriving stock (Eq, Show)
 
-{- | One response entry for the capability manifest. This is a projection of a
+{- | One response entry for the OpenAPI spec. This is a projection of a
 'ResponseContract' leaf, never independently supplied by a route.
 -}
 data ResponseDoc = ResponseDoc
