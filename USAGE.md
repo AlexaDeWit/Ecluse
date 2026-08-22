@@ -626,8 +626,8 @@ refuse traffic when the advisory database is briefly unavailable; the default `d
 ### Datadog on Kubernetes
 
 Deploy via the Datadog Operator: a `DatadogAgent` custom resource (`datadoghq.com/v2alpha1`)
-manages the node Agent, traces and metrics go OTLP over TCP to the node-local Agent, and logs
-are scraped from stdout with no extra wiring.
+manages the node Agent, traces and metrics go OTLP over TCP to the node-local Agent, and the
+Agent collects the container's stdout once the CR turns log collection on.
 
 1. Enable the Agent's OTLP receiver in the CR. Sampling lives Agent-side (the probabilistic
    sampler needs Agent v7.70+):
@@ -661,8 +661,20 @@ are scraped from stdout with no extra wiring.
        value: "http/protobuf"
    ```
 
-3. Logs need no extra wiring: Écluse writes JSONL to stdout and the Agent's container log
-   collection picks it up.
+3. Turn on container log collection in the same CR. It is off by default, so without this
+   step the JSONL stream never reaches Datadog:
+
+   ```yaml
+   spec:
+     features:
+       logCollection:
+         enabled: true
+         containerCollectAll: true   # else give the Écluse pod an Autodiscovery log config
+   ```
+
+   No custom log pipeline is needed: Datadog's JSON preprocessing reads `timestamp`,
+   `status`, `message`, and `service` straight off each line, and correlates a line to its
+   trace through `dd.trace_id`.
 
 ## Planned controls
 
