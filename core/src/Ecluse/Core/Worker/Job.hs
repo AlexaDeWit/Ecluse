@@ -10,6 +10,10 @@ acks on success; before a publish that may run long it calls
 transient failure it does __not__ ack, so the message redelivers. A batch is
 processed __sequentially__, so each job has the full visibility budget rather than
 competing with its batch-mates for it.
+
+A delivery that has already spent the queue's redelivery budget is retired here
+before the job runs at all, so a message nothing else captures stops cycling instead
+of re-fetching its artifact on every redelivery (see "Ecluse.Core.Queue").
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
@@ -36,7 +40,7 @@ import Ecluse.Core.Package.Admission (
     ),
     admitArtifact,
  )
-import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, qfDetail)
+import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, qfDetail, retiringDelivery)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize), PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
@@ -129,11 +133,11 @@ retireTerminally reason receipt = do
 -- terminus this line is the only record the message ever leaves, so it names the job,
 -- what it cost, and what the operator can do about it.
 budgetSpentReason :: DeliveryBudget -> QueueMessage -> Text
-budgetSpentReason (DeliveryBudget budget) message =
+budgetSpentReason budget message =
     "discarding a mirror job after "
         <> show (msgReceiveCount message)
-        <> " deliveries (this queue grants "
-        <> show budget
+        <> " deliveries (this queue retires one on delivery "
+        <> show (retiringDelivery budget)
         <> "): "
         <> renderJob (msgJob message)
         <> ". No dead-letter queue captured it, so it is retired here rather than left to"

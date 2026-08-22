@@ -91,12 +91,12 @@ warning, because the operator has no way to see what their proxy could not mirro
 A warning alone would leave the message cycling, so there is a second, weaker terminus beneath
 it: a **redelivery budget**. Every delivery carries its own count, and a message that has used up
 that budget is discarded by the worker itself, with an error log naming the job and a distinct
-`discarded` result on the mirror-job counter. It is
-deliberately the lesser outcome, retaining nothing, so it is held one delivery above an
-attached policy's own `maxReceiveCount`: where a dead-letter queue exists it always captures
-first, and the budget only ever fires for a deployment that has none. Discarding is safe in the
-way the rest of mirroring is safe: it is demand-driven, so the job returns on the next pull of
-that artifact, and fails the same way until the cause is fixed.
+`discarded` result on the mirror-job counter. It is deliberately the lesser outcome, retaining
+nothing, so it is held one delivery above an attached policy's own `maxReceiveCount`: where a
+dead-letter queue exists it always captures first, and the budget only ever fires for a
+deployment that has none. Discarding is safe in the way the rest of mirroring is safe: it is
+demand-driven, so the job returns on the next pull of that artifact, and fails the same way
+until the cause is fixed.
 
 The budget is checked before the job runs rather than after, which is what spares the repeated
 fetch the cycling would otherwise pay for.

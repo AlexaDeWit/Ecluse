@@ -132,6 +132,7 @@ spec = do
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.com")
                     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
                     , ("ECLUSE_QUEUE__MEMORY_MAX_DEPTH", "50000")
+                    , ("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "5")
                     , ("ECLUSE_SERVER__AUTH_TOKEN", "secret-token")
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-token")
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43200")
@@ -197,6 +198,7 @@ spec = do
                                     KeyMap.fromList
                                         [ ("url", String "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
                                         , ("memoryMaxDepth", Number 50000)
+                                        , ("maxReceiveCount", Number 5)
                                         ]
                                 )
                             ,

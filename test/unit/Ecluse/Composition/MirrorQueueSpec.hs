@@ -166,8 +166,10 @@ deadLetterTerminusSpec :: Spec
 deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
     it "warns loudly when a durable queue has nothing to capture a poison message" $ do
         -- The gap this closes: with no redrive policy the message would cycle until
-        -- the retention window discarded it unseen, so the operator must be told.
-        case deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right TerminusAbsent) of
+        -- the retention window discarded it unseen, so the operator must be told. The
+        -- budget passed is the built handle's, and the plan's own floor is deliberately
+        -- a different number, so a warning quoting the plan would fail here.
+        case deadLetterTerminusWarning (SqsBackend planConfig) (DeliveryBudget 7) (Right TerminusAbsent) of
             Nothing -> expectationFailure "expected a no-terminus warning on the durable backend"
             Just warning -> do
                 warning `shouldSatisfy` ("NO DEAD-LETTER TERMINUS" `T.isInfixOf`)
@@ -176,15 +178,15 @@ deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
                 warning `shouldSatisfy` ("redrive policy" `T.isInfixOf`)
 
     it "stays silent when a terminus is attached" $ do
-        deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right (TerminusAttached (Just (DeliveryBudget 3))))
+        deadLetterTerminusWarning (SqsBackend planConfig) (DeliveryBudget 7) (Right (TerminusAttached (Just (DeliveryBudget 3))))
             `shouldBe` Nothing
-        deadLetterTerminusWarning (SqsBackend budgetedConfig) (Right (TerminusAttached Nothing))
+        deadLetterTerminusWarning (SqsBackend planConfig) (DeliveryBudget 7) (Right (TerminusAttached Nothing))
             `shouldBe` Nothing
 
     it "warns when the redrive policy could not be read, carrying the fault detail" $
         -- Boot continues on the configured budget, but that budget is no longer known
         -- to sit above a terminus's capture count, so the operator is told why.
-        case deadLetterTerminusWarning (SqsBackend budgetedConfig) (Left probeFault) of
+        case deadLetterTerminusWarning (SqsBackend planConfig) (DeliveryBudget 7) (Left probeFault) of
             Nothing -> expectationFailure "expected a warning when the probe faulted"
             Just warning -> do
                 warning `shouldSatisfy` ("sqs:GetQueueAttributes" `T.isInfixOf`)
@@ -193,12 +195,14 @@ deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
     it "stays silent for the in-memory backend, whose own boot warning already covers it" $
         -- It genuinely has no terminus, but 'memoryQueueBootWarning' has already said
         -- the mirror is non-durable and sheds jobs; a second line would dilute it.
-        deadLetterTerminusWarning MemoryBackend (Right TerminusAbsent) `shouldBe` Nothing
+        deadLetterTerminusWarning MemoryBackend (DeliveryBudget 7) (Right TerminusAbsent) `shouldBe` Nothing
   where
-    budgetedConfig :: SqsConfig
-    budgetedConfig =
+    -- The plan's configured floor, deliberately unequal to the handle budget the
+    -- warning is given, so the two cannot be confused for one another.
+    planConfig :: SqsConfig
+    planConfig =
         (defaultSqsConfig "https://sqs.us-east-1.amazonaws.com/123456789012/mirror" "us-east-1")
-            { sqsMaxReceiveCount = DeliveryBudget 7
+            { sqsMaxReceiveCount = DeliveryBudget 2
             }
 
     probeFault = queueTransportFault (transportFault TransportUnreachable "access denied by the emulator")

@@ -560,7 +560,7 @@ spec = do
                     enqueue_ queue (jobWith url)
                     [message] <- receive_ queue
                     runWM runtime (processBatch [message{msgReceiveCount = 2}])
-                    -- Unchanged from today: the job mirrors and is acked on success.
+                    -- The job mirrors and is acked on success.
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
                     acked <- ackedReceipts

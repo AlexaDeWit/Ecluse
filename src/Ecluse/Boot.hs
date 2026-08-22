@@ -51,7 +51,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Config.Resolve (secretEnvSpellings)
-import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus))
+import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
@@ -237,9 +237,10 @@ composition-root logger, then constructs the bounded queue with a drop callback 
 logs each rate-limited cap-overflow drop at a warning. (A drop /metric/ hooks in
 alongside the log once the @ecluse.mirror.*@ catalogue lands.)
 
-The built queue reports what its dead-letter probe found, so a second warning follows
-when a durable queue has nothing to capture a mirror job that can never be published
-('deadLetterTerminusWarning' decides; this is only the call). -}
+The built queue reports both what its dead-letter probe found and the delivery budget
+it settled on, so a second warning follows when a durable queue has nothing to capture
+a mirror job that can never be published ('deadLetterTerminusWarning' decides; this is
+only the call). -}
 buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
@@ -247,7 +248,7 @@ buildMirrorQueue logEnv memoryDepth plan = do
         SqsBackend sqsConfig -> newSqsQueue logEnv mkRegistryUrl sqsConfig
         MemoryBackend ->
             newBoundedInMemoryQueue (defaultMemoryQueueConfig memoryDepth) (logBootWarning logEnv . memoryQueueDropWarning)
-    whenJust (deadLetterTerminusWarning plan (deadLetterTerminus queue)) (logBootWarning logEnv)
+    whenJust (deadLetterTerminusWarning plan (deliveryBudget queue) (deadLetterTerminus queue)) (logBootWarning logEnv)
     pure queue
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this

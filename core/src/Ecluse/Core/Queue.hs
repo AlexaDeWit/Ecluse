@@ -94,6 +94,7 @@ module Ecluse.Core.Queue (
     DeliveryBudget (..),
     defaultDeliveryBudget,
     effectiveDeliveryBudget,
+    retiringDelivery,
     deliveryBudgetSpent,
 
     -- * Backend building blocks
@@ -295,16 +296,21 @@ effectiveDeliveryBudget configured = \case
     TerminusAttached Nothing -> configured
     TerminusAbsent -> configured
 
+{- | The delivery a budget actually retires on: the configured value, floored at two
+so a first delivery is never spent (retiring a job that has not been tried once would
+be a bug rather than a policy). Both the verdict ('deliveryBudgetSpent') and the
+worker's alarm read it, so the number an operator is told is the number that fired.
+-}
+retiringDelivery :: DeliveryBudget -> Int
+retiringDelivery (DeliveryBudget budget) = max 2 budget
+
 {- | Whether this delivery has spent the queue's redelivery budget, so the worker
 retires the message through its terminal path rather than letting it cycle. The
 single decision every backend's deliveries are judged by: a backend supplies the
 count ('msgReceiveCount'), never the verdict.
-
-A first delivery is never spent, whatever the budget says: retiring a job that has
-not been tried once would be a bug rather than a policy, so the floor is two.
 -}
 deliveryBudgetSpent :: DeliveryBudget -> QueueMessage -> Bool
-deliveryBudgetSpent (DeliveryBudget budget) message = msgReceiveCount message >= max 2 budget
+deliveryBudgetSpent budget message = msgReceiveCount message >= retiringDelivery budget
 
 {- | The mirror-queue handle -- a record of functions over a backend whose private
 state the closures capture. See the module header for the @enqueue@ /

@@ -175,8 +175,8 @@ data SqsConfig = SqsConfig
     (@ChangeMessageVisibility@, never @DeleteMessage@): larger than the normal
     processing window so a permanently-unmirrorable artifact is not re-fetched in a
     hot loop, while it rides the operator's redrive policy to the dead-letter queue.
-    A fixed backoff rather than a per-attempt one: the delivery count now available
-    bounds the cycling instead, by retiring the message outright once
+    A fixed backoff rather than a per-attempt one: the delivery count each message
+    carries bounds the cycling instead, by retiring the message outright once
     'sqsMaxReceiveCount' is spent.
     -}
     , sqsMaxReceiveCount :: DeliveryBudget

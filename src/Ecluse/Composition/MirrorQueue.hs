@@ -42,6 +42,7 @@ import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
     QueueFault (qfDetail),
+    retiringDelivery,
  )
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount), SqsEndpoint (..), defaultSqsConfig)
@@ -188,7 +189,8 @@ memoryQueueBootWarning =
 
 {- | The boot warning a built queue's dead-letter probe warrants, or 'Nothing' when
 none is due. The composition root logs the 'Just' at @WarningS@ once, right after the
-queue is built.
+queue is built, passing the __built handle's__ budget rather than the plan's
+configured floor, so the warning states what the worker will actually do.
 
 A durable queue with no redrive policy attached is the case worth shouting about: a
 mirror job it can never publish is captured nowhere, so the worker's own delivery
@@ -198,22 +200,22 @@ The in-memory backend is silent here: 'memoryQueueBootWarning' has already said 
 mirror is non-durable and sheds jobs, and a second line on the same fact would only
 dilute it.
 -}
-deadLetterTerminusWarning :: MirrorQueuePlan -> Either QueueFault DeadLetterTerminus -> Maybe Text
-deadLetterTerminusWarning plan probed = case plan of
+deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either QueueFault DeadLetterTerminus -> Maybe Text
+deadLetterTerminusWarning plan budget probed = case plan of
     MemoryBackend -> Nothing
-    SqsBackend cfg -> case probed of
+    SqsBackend{} -> case probed of
         Right TerminusAttached{} -> Nothing
-        Right TerminusAbsent -> Just (noDeadLetterTerminusWarning (sqsMaxReceiveCount cfg))
+        Right TerminusAbsent -> Just (noDeadLetterTerminusWarning budget)
         Left fault -> Just (terminusUnprobedWarning (qfDetail fault))
 
 -- The no-terminus warning, naming the budget that now stands in for the missing
 -- dead-letter queue so an operator can see what will happen to a poison message.
 noDeadLetterTerminusWarning :: DeliveryBudget -> Text
-noDeadLetterTerminusWarning (DeliveryBudget budget) =
+noDeadLetterTerminusWarning budget =
     "the mirror queue has NO DEAD-LETTER TERMINUS: no redrive policy is attached, so nothing captures a "
         <> "mirror job that can never be published. Écluse retires such a job itself once it has been "
         <> "delivered "
-        <> show budget
+        <> show (retiringDelivery budget)
         <> " times, alarming and counting it, rather than letting it cycle until the queue's "
         <> "retention window discards it unseen. Attach a redrive policy with a dead-letter queue to keep "
         <> "poison messages for inspection."
