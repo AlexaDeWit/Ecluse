@@ -1,22 +1,23 @@
-# Fourmolu configuration — the single source of truth for Haskell formatting.
+# Fourmolu configuration: the single source of truth for Haskell formatting.
 #
-# Every value is set explicitly so that (a) the formatting rules are legible to
-# newcomers without consulting fourmolu's docs, and (b) the layout cannot drift
-# if the tool's defaults change in a future version. The dev shell pins fourmolu
-# itself via flake.lock (currently 0.19.x on the nixos-26.05 base). NOTE: 0.19
-# reads `haddock-style: multi-line` more strictly than 0.14 did — it reflows a
-# wrapped, multi-line `-- |`/`-- ^` Haddock into a `{- | … -}` block (single-line
-# `-- |` is untouched). That matches docs/haddock.md's "blocks for longer docs", so we
-# keep `multi-line`; `single-line` would instead rewrite the intentional `{- | -}`
-# block comments and churns far more.
+# This file sets every value explicitly for two reasons. The rules stay legible
+# without a trip to fourmolu's docs, and the layout cannot drift when the tool
+# changes a default. The dev shell pins fourmolu itself via flake.lock, currently
+# 0.19.x on the nixos-26.05 base.
 #
-# Do not hand-format Haskell; run `make format` (writes) or `make format-check`
+# 0.19 reads `haddock-style: multi-line` more strictly than 0.14 did. It reflows a
+# wrapped, multi-line `-- |` or `-- ^` Haddock into a `{- | … -}` block, and leaves
+# a single-line `-- |` alone. That matches docs/haddock.md's "blocks for longer
+# docs", so we keep `multi-line`. `single-line` instead rewrites the intentional
+# `{- | -}` block comments, and churns far more.
+#
+# Do not hand-format Haskell. Run `make format` (writes) or `make format-check`
 # (the gating check). See docs/style.md → "Formatting".
 
 # Number of spaces per indentation step.
 indentation: 4
 
-# No hard column limit; we wrap by hand where it reads best.
+# No hard column limit. We wrap by hand where it reads best.
 column-limit: none
 
 # Arrows in type signatures sit at the end of the line.
@@ -37,7 +38,6 @@ record-brace-space: false
 # One blank line between top-level declarations.
 newlines-between-decls: 1
 
-# Multi-line Haddock comment style.
 haddock-style: multi-line
 haddock-style-module: null
 

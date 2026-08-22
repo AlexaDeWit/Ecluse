@@ -3,10 +3,10 @@ name:          ecluse
 version:       0.1.0
 synopsis:      Supply-chain resilience proxy for package registries
 description:
-  Écluse is a controlled passage in front of package registries (npm, PyPI, …):
-  every dependency clears resilience and policy checks — version and age gates
-  and rule-based allow/deny — before it reaches your build. See the README for
-  the architecture and configuration.
+  Écluse is a controlled passage in front of package registries (npm, PyPI, …).
+  Every dependency clears resilience and policy checks (version and age gates,
+  rule-based allow/deny) before it reaches your build. See the README for the
+  architecture and configuration.
 homepage:      https://github.com/AlexaDeWit/Ecluse
 license:       MIT
 license-file:  LICENSE
@@ -15,21 +15,22 @@ maintainer:    https://github.com/AlexaDeWit
 category:      Network, Security
 build-type:    Simple
 
--- Test fixtures read at runtime by the pure unit suite. The version-ordering
--- file is reference-oracle output (regenerate with `task gen-version-fixtures`);
--- the npm/*.json bodies are captures derived from
--- docs/research/reverse-engineering/npm.md, decoded by Ecluse.Registry.Npm.Wire.
--- express.full.json is a real, untrimmed capture of a large trusted package's full
--- packument (registry.npmjs.org/express), so the response-bound defaults can be
--- proven not to false-positive on a legitimate large package.
+-- Test fixtures the pure unit suite reads at run time. The version-ordering file is
+-- reference-oracle output. Regenerate it with `task gen-version-fixtures`. The
+-- `npm/*.json` bodies are captures derived from
+-- docs/research/reverse-engineering/npm.md, and Ecluse.Registry.Npm.Wire decodes them.
+-- `express.full.json` is a real, untrimmed capture of a large trusted package's full
+-- packument (registry.npmjs.org/express). A test can then prove that the
+-- response-bound defaults do not false-positive on a legitimate large package.
 --
--- bench/corpus/npm/*.json is the curated real-world packument corpus the benchmarks
--- read at run time (frozen data, pinned by bench/corpus/pins.json and re-captured
--- deliberately with `task gen-bench-corpus`; see docs/architecture/performance.md).
--- bench/corpus/pins.json is the shared registry catalogue (capture pins + the smoke
--- curated names) read by the Node capture script and Ecluse.Test.RegistryCapture.
--- acceptance/criteria.json is the version-controlled acceptance budget for the live
--- performance-acceptance harness (Ecluse.Acceptance / the perf-acceptance executable).
+-- `bench/corpus/npm/*.json` is the curated real-world packument corpus the benchmarks
+-- read at run time. The corpus stays frozen, pinned by `bench/corpus/pins.json` and
+-- re-captured deliberately with `task gen-bench-corpus`. See
+-- docs/architecture/performance.md. `bench/corpus/pins.json` is the shared registry
+-- catalogue, holding the capture pins and the smoke curated names, read by the Node
+-- capture script and Ecluse.Test.RegistryCapture. `acceptance/criteria.json` is the
+-- version-controlled acceptance budget for the live performance-acceptance harness
+-- (Ecluse.Acceptance and the perf-acceptance executable).
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json
@@ -47,10 +48,10 @@ source-repository head
 -- Compile the test- and dev-only plain-HTTP loopback egress constructor
 -- (Ecluse.Core.Security.Egress.DevHttp). OFF by default, so the release library and
 -- executable carry no way to construct a non-https registry target. The dev shell and
--- the test/CI builds turn it ON (cabal.project enables it for `cabal` in the dev shell;
--- the flake's unit-core/unit-app checks pass -fdev-http-egress) so the loopback
--- integration suites compile; the Nix-built release `ecluse` (callCabal2nix, which
--- ignores cabal.project and uses this default) leaves it off.
+-- the test and CI builds turn it ON, so the loopback integration suites compile.
+-- `cabal.project` enables it for `cabal` in the dev shell, and the flake's unit-core
+-- and unit-app checks pass -fdev-http-egress. The Nix-built release `ecluse` leaves
+-- it off, because callCabal2nix ignores cabal.project and takes this default.
 flag dev-http-egress
   description: Expose the test-only plain-HTTP loopback egress constructor.
   default:     False
@@ -59,12 +60,11 @@ flag dev-http-egress
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
-  -- Warning set. -Wall plus extra warnings chosen to reinforce the conventions
-  -- in STYLE.md; warnings are promoted to errors for our package in
-  -- cabal.project. Deliberately omitted: -Wunused-packages (the relude mixin
-  -- defeats its attribution; see docs/architecture.md), -Wmissing-import-lists
-  -- (we use open imports for internal modules), and -Wmissing-local-signatures
-  -- (where-helpers are allowed to be inferred).
+  -- Warning set: -Wall plus extra warnings that reinforce the conventions in
+  -- STYLE.md. cabal.project promotes a warning to an error for our own package.
+  -- Deliberately omitted: -Wunused-packages (the relude mixin defeats its attribution,
+  -- see docs/architecture.md), -Wmissing-import-lists (open imports for internal
+  -- modules), and -Wmissing-local-signatures (a where-helper may stay inferred).
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-record-selectors
     -Wincomplete-record-updates -Wincomplete-uni-patterns
@@ -88,9 +88,9 @@ common shared
     relude (Relude as Prelude)
 
 -- The pure capability core: domain types, registry adapters, version grammars,
--- credential refresh, rule engine, queue abstraction, security, and the
--- agnostic server layer (Route/Response/Conditional/Stream) and metrics catalogue.
--- The main application library and all test suites depend on this.
+-- credential refresh, the rule engine, the queue abstraction, and security. It also
+-- holds the agnostic server layer (Route, Response, Conditional, Stream) and the
+-- metrics catalogue. The main application library and all test suites depend on this.
 library ecluse-core
   import:          shared
   hs-source-dirs:  core/src
@@ -196,9 +196,9 @@ library ecluse-core
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- ecluse-core: VersionKey is opaque, so callers reach these only through the
   -- agnostic Ecluse.Core.Version API. Egress.Internal holds the raw RegistryUrl
-  -- constructor: an other-module, so it is reachable only from within ecluse-core
-  -- (the app library and executable see only the abstract type through
-  -- Ecluse.Core.Security.Egress).
+  -- constructor. It is an other-module, so only code inside ecluse-core reaches it,
+  -- and the app library and executable see only the abstract type through
+  -- Ecluse.Core.Security.Egress.
   other-modules:
     Ecluse.Core.Security.Egress.Internal
     Ecluse.Core.Version.Gem
@@ -212,8 +212,9 @@ library ecluse-core
 
   autogen-modules: Paths_ecluse
 
-  -- The test/dev-only plain-HTTP loopback constructor, exposed only when the flag is
-  -- on. Off in a release build, so the constructor is absent from the shipped artifact.
+  -- The test and dev-only plain-HTTP loopback constructor, exposed only when the flag
+  -- is on. A release build leaves the flag off, so the shipped artifact carries no
+  -- such constructor.
   if flag(dev-http-egress)
     exposed-modules: Ecluse.Core.Security.Egress.DevHttp
 
@@ -346,12 +347,12 @@ library
     , filepath                        ^>=1.4 || ^>=1.5
     , primitive                       ^>=0.9
 
--- The effectful runtime edge: the capabilities that bind process-global substrate
--- (the OpenTelemetry SDK, the warp listener, the katip scribes) and the cloud
--- adapters (amazonka SQS / CodeArtifact / S3), plus the runtime environment record
--- (Ecluse.Runtime.Env) and the OSV artifact S3 upload. It depends on ecluse-core; the
--- composition shell (library ecluse) depends on THIS and wires it together, so the
--- dependency arrow points inward only (shell -> runtime -> core).
+-- The effectful runtime edge. It binds the process-global substrate: the OpenTelemetry
+-- SDK, the warp listener, and the katip scribes. It holds the cloud adapters (amazonka
+-- SQS, CodeArtifact, S3), the runtime environment record (Ecluse.Runtime.Env), and the
+-- OSV artifact S3 upload. It depends on ecluse-core. The composition shell (library
+-- ecluse) depends on it and wires it together, so the dependency arrow points inward
+-- only (shell -> runtime -> core).
 library ecluse-runtime
   import:          shared
   hs-source-dirs:  runtime/src
@@ -375,8 +376,8 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry.Resolve
     Ecluse.Runtime.Telemetry.Tracing
 
-  -- The generated version module: the resolved telemetry identity falls back to the
-  -- running binary's own build version (Ecluse.Runtime.Telemetry.Resolve).
+  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve falls back to the
+  -- running binary's own build version for the telemetry identity.
   other-modules:   Paths_ecluse
   autogen-modules: Paths_ecluse
 
@@ -427,30 +428,30 @@ library ecluse-runtime
 
 executable ecluse
   import:         shared
-  -- The threaded runtime is required: with telemetry enabled the OpenTelemetry SDK
-  -- runs a batch span processor on a background thread, which aborts under the
-  -- non-threaded RTS. -N lets the server and worker use every core.
+  -- This executable needs the threaded runtime. With telemetry enabled, the
+  -- OpenTelemetry SDK runs a batch span processor on a background thread, which aborts
+  -- under the non-threaded RTS. The -N flag lets the server and worker use every core.
   --
-  -- -A64m -n4m tune the GC for the serve path's allocation profile: assembling and
-  -- re-serialising a many-version packument allocates tens of MB per request, and
-  -- the default 4 MB allocation area makes the process collect hundreds of times a
-  -- second under load (GC was ~half the wall time in the load benchmarks). A 64 MB
-  -- per-capability allocation area divided into 4 MB chunks (so capabilities share
-  -- it instead of stranding idle nurseries) cuts the collection count by an order
-  -- of magnitude. Operators can override at run time, e.g.
-  -- `ecluse +RTS -A16m -RTS`, since -rtsopts is set; see USAGE.md.
+  -- The -A64m -n4m pair tunes the GC for the serve path's allocation profile.
+  -- Assembling and re-serialising a many-version packument allocates tens of MB per
+  -- request. The default 4 MB allocation area then makes the process collect hundreds
+  -- of times a second under load. GC took about half the wall time in the load
+  -- benchmarks. A 64 MB per-capability allocation area, divided into 4 MB chunks, cuts
+  -- the collection count by an order of magnitude. The chunks let capabilities share
+  -- the area instead of stranding idle nurseries. An operator can override it at run
+  -- time, `ecluse +RTS -A16m -RTS` for example, because -rtsopts is set. See USAGE.md.
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:  ecluse
 
--- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder
--- and the owned schemas. An INTERNAL sublibrary (the ecluse-test-support pattern)
--- so the heavy OpenAPI dependency tree (openapi3 + autodocodec + lens/optics/…)
--- stays OUT of the shipped `library ecluse` / `executable ecluse` closure: it is
--- depended on only by the openapi-gen generator and the ecluse-unit test suite,
--- never by the app library. It links ecluse-core (the Route enumeration and the
--- served types), not the app library.
+-- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder and
+-- the owned schemas. An INTERNAL sublibrary, following the ecluse-test-support
+-- pattern. That keeps the heavy OpenAPI dependency tree (openapi3, autodocodec, lens,
+-- optics, and the rest) OUT of the shipped `library ecluse` and `executable ecluse`
+-- closure. Only the openapi-gen generator and the ecluse-unit test suite depend on it,
+-- never the app library. It links ecluse-core, for the Route enumeration and the
+-- served types, not the app library.
 library ecluse-manifest
   import:          shared
   hs-source-dirs:  manifest
@@ -481,9 +482,9 @@ executable openapi-gen
     , ecluse:ecluse-manifest
     , filepath           ^>=1.5
 
--- Internal test-support library shared by every suite below. The common home
--- for cross-suite helpers, fixtures, and specs; it links against the library
--- under test so shared fixtures can build domain values directly.
+-- Internal test-support library shared by every suite below. The common home for
+-- cross-suite helpers, fixtures, and specs. It links against the library under test,
+-- so shared fixtures can build domain values directly.
 library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
@@ -553,13 +554,13 @@ library ecluse-runtime-test-support
     , katip             ^>=0.8.8
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
--- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
--- enforcement — an app spec accidentally placed here fails to compile.
+-- MUST NOT list the `ecluse` app library in build-depends. That absence enforces the
+-- partition: an app spec placed here by accident fails to compile.
 test-suite ecluse-core-unit
   import:             shared
-  -- hspec-discover generates a Main without an export list. -threaded is required
-  -- by the admission wait (GHC.Conc.registerDelay aborts under the non-threaded
-  -- RTS); the served process always runs threaded, so the suite matches it.
+  -- hspec-discover generates a Main without an export list. The admission wait needs
+  -- -threaded, because GHC.Conc.registerDelay aborts under the non-threaded RTS. The
+  -- served process always runs threaded, so the suite matches it.
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
@@ -684,10 +685,10 @@ test-suite ecluse-core-unit
     , vector            ^>=0.13
     , wai               ^>=3.2
     , warp              ^>=3.4
-    -- Test-only: gzip a body so the bounded metadata read can be asserted to bound
-    -- DECOMPRESSED bytes (a small compressed blob that inflates past the cap). zlib
-    -- is already in the resolved build plan (a transitive dependency), so this adds
-    -- no new resolution.
+    -- Test-only: a gzipped body proves the bounded metadata read bounds DECOMPRESSED
+    -- bytes. The fixture is a small compressed blob that inflates past the cap.
+    -- `zlib` is already in the resolved build plan, as a transitive dependency, so
+    -- this adds no new resolution.
     , zlib              ^>=0.7
 
 -- App-layer unit tests: cover every Ecluse.* (non-Core) module. Pure, fast,
@@ -788,17 +789,18 @@ test-suite ecluse-unit
     , temporary         ^>=1.3
 
 -- Runtime-tier unit tests: cover the Ecluse.Runtime.* capability modules that need no
--- application library (the cloud adapters, the telemetry SDK wiring, and logging). Pure,
--- fast, deterministic. Gating. MUST NOT list the `ecluse` app library in build-depends:
--- its absence is the partition enforcement, mirroring ecluse-core-unit, so a shell spec
--- accidentally placed here fails to compile. Ecluse.Runtime.Server and Ecluse.Runtime.Env
--- exercise the shell's runServer/runWorker, so their specs stay in ecluse-unit; those two
--- modules are the unscoped entries in scripts/coverage.sh's ecluse-runtime-unit guard.
+-- application library (the cloud adapters, the telemetry SDK wiring, and logging).
+-- Pure, fast, deterministic. Gating. MUST NOT list the `ecluse` app library in
+-- build-depends. That absence enforces the partition, mirroring ecluse-core-unit, so a
+-- shell spec placed here by accident fails to compile. Ecluse.Runtime.Server and
+-- Ecluse.Runtime.Env exercise the shell's runServer and runWorker, so their specs stay
+-- in ecluse-unit. Those two modules are the unscoped entries in the ecluse-runtime-unit
+-- guard in scripts/coverage.sh.
 test-suite ecluse-runtime-unit
   import:             shared
-  -- hspec-discover generates a Main without an export list. -threaded is required by the
-  -- OpenTelemetry batch span processor the telemetry specs drive through the live SDK (it
-  -- aborts under the non-threaded RTS).
+  -- hspec-discover generates a Main without an export list. The telemetry specs drive
+  -- the OpenTelemetry batch span processor through the live SDK, and it aborts under
+  -- the non-threaded RTS, so the suite needs -threaded.
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
@@ -849,12 +851,12 @@ test-suite ecluse-runtime-unit
 
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via
--- testcontainers). Hermetic and gating; the AWS cases require a Docker daemon.
+-- testcontainers). Hermetic and gating. The AWS cases require a Docker daemon.
 test-suite ecluse-integration
   import:             shared
-  -- hspec-discover generates a Main without an export list. -threaded is required by
-  -- the OpenTelemetry batch span processor the tracing integration test drives
-  -- through the live SDK (it aborts under the non-threaded RTS).
+  -- hspec-discover generates a Main without an export list. The tracing integration
+  -- test drives the OpenTelemetry batch span processor through the live SDK. It aborts
+  -- under the non-threaded RTS, so the suite needs -threaded.
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
@@ -914,12 +916,12 @@ test-suite ecluse-integration
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
 
--- S54's bounded-memory streaming gate. Deliberately its OWN suite rather than a spec
--- inside ecluse-integration, for two structural reasons: the assertion samples live
--- bytes (GHC.Stats) while streaming, so it must not share a heap with hundreds of
--- other examples whose residency would drown the signal; and it needs the RTS
--- statistics flag (-T) baked in, which the wider tiers should not pay for. It reuses
--- the integration tier's canonical proxy fixture (TestSupport) via a shared source
+-- The bounded-memory streaming gate. It is its OWN suite rather than a spec inside
+-- ecluse-integration, for two structural reasons. The assertion samples live bytes
+-- (GHC.Stats) while streaming. It must not share a heap with hundreds of other
+-- examples whose residency would drown the signal. It also needs the RTS statistics
+-- flag (-T) baked in, which the wider tiers should not pay for. It reuses the
+-- integration tier's canonical proxy fixture (TestSupport) through a shared source
 -- directory instead of duplicating it.
 test-suite ecluse-residency
   import:             shared
@@ -954,9 +956,9 @@ test-suite ecluse-residency
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
 
--- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
--- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
--- uncontrolled external services.
+-- Smoke tests: live calls to public registries (npm, PyPI) to validate our JSON and
+-- protocol handling. ALLOWED TO FAIL by design, and non-gating, because they depend
+-- on uncontrolled external services.
 test-suite ecluse-smoke
   import:             shared
   -- hspec-discover generates a Main without an export list.
@@ -996,12 +998,12 @@ test-suite ecluse-smoke
     , unliftio         ^>=0.2.25
 
 -- End-to-end tests: the whole system as the real OCI image, driven by the real npm
--- CLI over its public HTTP surface, with the server↔worker round-trip across real
--- containers. NON-GATING (pre-merge visibility + nightly) — needs a Docker daemon,
--- the npm CLI, and the `.#dockerImage` build, so it is far heavier than the gate.
--- It COMPILES in the normal build but only RUNS when ECLUSE_E2E_IMAGE names a loaded
--- image (otherwise every case is `pending`), so a bare `cabal test` never fails on a
--- machine without the setup. See planning/slices/S53-e2e-ecosystem.md.
+-- CLI over its public HTTP surface. The suite covers the server↔worker round-trip
+-- across real containers. NON-GATING, for pre-merge visibility and the nightly run.
+-- It needs a Docker daemon, the npm CLI, and the `.#dockerImage` build, so it is far
+-- heavier than the gate. It COMPILES in the normal build, and RUNS only when
+-- ECLUSE_E2E_IMAGE names a loaded image. Without that variable every case is
+-- `pending`, so a bare `cabal test` never fails on a machine without the setup.
 test-suite ecluse-e2e
   import:             shared
   -- hspec-discover generates a Main without an export list.
@@ -1038,13 +1040,13 @@ test-suite ecluse-e2e
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
 
--- Benchmarks: the work-per-request micro-benches over the pure
--- ecluse-core hot paths, plus the synthetic-corpus generator's correctness tests
--- and the complexity assertions that guard the accidentally-quadratic class.
--- tasty-bench (not criterion) is the harness: it reports time AND allocations
--- (the machine-independent signal, captured from GC stats under +RTS -T, baked in
--- below). It links ecluse:ecluse-core and ecluse:ecluse-test-support but is kept
--- OUT of the library's own dependency closure. See docs/architecture/performance.md.
+-- Benchmarks: the work-per-request micro-benches over the pure ecluse-core hot paths,
+-- plus the synthetic-corpus generator's correctness tests and the complexity
+-- assertions that guard the accidentally-quadratic class. The harness is tasty-bench
+-- rather than criterion, because it reports time AND allocations. Allocations are the
+-- machine-independent signal, captured from GC stats under +RTS -T, baked in below.
+-- It links ecluse:ecluse-core and ecluse:ecluse-test-support, and stays OUT of the
+-- library's own dependency closure. See docs/architecture/performance.md.
 benchmark ecluse-bench
   import:          shared
   type:            exitcode-stdio-1.0
@@ -1052,8 +1054,8 @@ benchmark ecluse-bench
   hs-source-dirs:  bench
   -- Built at the package's default optimisation (-O1), like every other component,
   -- so the numbers reflect the shipped build rather than a benchmark-only setting.
-  -- -T (baked into the RTS opts) makes tasty-bench report allocated bytes from GC
-  -- stats on every run, with no caller flag.
+  -- The RTS opts bake in -T, so tasty-bench reports allocated bytes from GC stats on
+  -- every run, with no caller flag.
   ghc-options:     -rtsopts "-with-rtsopts=-T"
   other-modules:
     Ecluse.Bench.Corpus
@@ -1082,15 +1084,16 @@ benchmark ecluse-bench
     , text             ^>=2.1
     , time             ^>=1.12
 
--- Load benchmarks harness (S38): throughput & latency under concurrent load against the
--- real composed proxy. A separate EXECUTABLE (not a tasty-bench component): it boots
--- Ecluse.Server.application on warp over in-process stub upstreams and the in-memory
--- queue/credential doubles, drives the HTTP scenarios with `oha` (a subprocess, via
--- typed-process) and the worker scenario in-process, and captures RTS stats (peak
--- residency, GC pauses, allocations/request) — so it needs the threaded RTS (-threaded,
--- real warp + concurrency), -N (every core), and -T baked in (GHC.Stats). It links the
--- `ecluse` app library for the composed Application; kept out of the library closure.
--- INFORM-ONLY and not part of the gate. See docs/architecture/performance.md.
+-- Load benchmarks harness: throughput and latency under concurrent load against the
+-- real composed proxy. A separate EXECUTABLE rather than a tasty-bench component. It
+-- boots Ecluse.Server.application on warp over in-process stub upstreams and the
+-- in-memory queue and credential doubles. It drives the HTTP scenarios with `oha`, a
+-- subprocess run through typed-process, and the worker scenario in-process. It captures
+-- RTS stats (peak residency, GC pauses, allocations per request). So it needs the
+-- threaded RTS (-threaded, for real warp and concurrency), -N for every core, and -T
+-- baked in (GHC.Stats). It links the `ecluse` app library for the composed Application,
+-- and stays out of the library closure. INFORM-ONLY and not part of the gate. See
+-- docs/architecture/performance.md.
 executable bench-load
   import:          shared
   main-is:         Main.hs
@@ -1098,13 +1101,13 @@ executable bench-load
 
   -- The load harness drives in-process plain-http stub registries, so it needs the
   -- flag-gated loopback egress former (Ecluse.Core.Security.Egress.DevHttp). A
-  -- release-posture build (the flag off -- the Nix docs/Haddock check included) has
-  -- no such module by design, so this dev-only tool is simply not buildable there.
+  -- release-posture build has the flag off, the Nix docs and Haddock check included.
+  -- It carries no such module by design, so this dev-only tool does not build there.
   if !flag(dev-http-egress)
     buildable: False
-  -- Mirrors the shipped server's RTS tuning (-A64m -n4m; see `executable ecluse`)
-  -- so the load benchmarks measure the runtime posture the proxy actually ships
-  -- with; -T additionally exposes the RTS stats the harness reports.
+  -- Mirrors the shipped server's RTS tuning (-A64m -n4m, see `executable ecluse`), so
+  -- the load benchmarks measure the runtime posture the proxy ships with. The -T flag
+  -- also exposes the RTS stats the harness reports.
   ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N -A64m -n4m"
   other-modules:
     Ecluse.BenchLoad.Error
@@ -1134,12 +1137,13 @@ executable bench-load
     , wai              ^>=3.2
     , warp             ^>=3.4
 
--- Load benchmarks normalisation core: the PURE attribution and saturation maths the load
--- harness's two analysis views are built from (service-time upstream-vs-overhead split,
--- and the load-saturation queuing-delay flag). An INTERNAL sublibrary (the
--- ecluse-acceptance pattern) so the gating unit suite tests the maths deterministically,
--- while the live RTT probe + two-pass orchestration stay in the bench-load executable.
--- Carries no socket or load-generator dependency. See docs/architecture/performance.md.
+-- Load benchmarks normalisation core: the PURE attribution and saturation maths behind
+-- the load harness's two analysis views. Those views are the service-time split of
+-- upstream against overhead, and the load-saturation queuing-delay flag. An INTERNAL
+-- sublibrary, following the ecluse-acceptance pattern, so the gating unit suite tests
+-- the maths deterministically. The live RTT probe and the two-pass orchestration stay
+-- in the bench-load executable. Carries no socket or load-generator dependency. See
+-- docs/architecture/performance.md.
 library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
@@ -1148,10 +1152,10 @@ library ecluse-bench-load
 
 -- Work-per-request bench report core: the PURE CSV-to-Markdown rendering behind the
 -- bench run summary (parse the tasty-bench CSV, group by tasty path, render the
--- structured report). An INTERNAL sublibrary (the ecluse-bench-load pattern) so the
--- gating unit suite exercises the parse and rendering deterministically. No HTTP and
--- no egress former, so unlike bench-load it needs no dev-http-egress gating; kept
--- out of the shipped library closure.
+-- structured report). An INTERNAL sublibrary, following the ecluse-bench-load pattern,
+-- so the gating unit suite exercises the parse and rendering deterministically. No HTTP
+-- and no egress former, so unlike bench-load it needs no dev-http-egress gating. It
+-- stays out of the shipped library closure.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
@@ -1159,8 +1163,8 @@ library ecluse-bench-report
   build-depends:   text ^>=2.1
 
 -- The bench report renderer: the thin file-reading shell over ecluse-bench-report.
--- CI runs it after the benchmarks to turn bench-results.csv (plus the teed console
--- output) into the run summary; it appends to $GITHUB_STEP_SUMMARY itself, like the
+-- CI runs it after the benchmarks to turn bench-results.csv, plus the teed console
+-- output, into the run summary. It appends to $GITHUB_STEP_SUMMARY itself, like the
 -- load and acceptance harnesses, so the workflow step stays a single unwrapped
 -- command.
 executable bench-report
@@ -1171,12 +1175,12 @@ executable bench-report
     , ecluse:ecluse-bench-report
     , text  ^>=2.1
 
--- Live performance-acceptance harness (Context B): the PURE evaluation core. The
+-- Live performance-acceptance harness: the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
--- run-summary rendering. An INTERNAL sublibrary (the ecluse-manifest pattern) so the
--- gating unit suite can test the acceptance decision deterministically, while the
--- live fetch + timing stay in the perf-acceptance executable. Links ecluse-core only;
--- kept out of the shipped library closure. See docs/architecture/performance.md.
+-- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern,
+-- so the gating unit suite can test the acceptance decision deterministically. The live
+-- fetch and timing stay in the perf-acceptance executable. Links ecluse-core only, and
+-- stays out of the shipped library closure. See docs/architecture/performance.md.
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src
@@ -1188,13 +1192,13 @@ library ecluse-acceptance
     , containers  ^>=0.7
     , text        ^>=2.1
 
--- The live performance-acceptance harness (Context B): a separate EXECUTABLE that
--- fetches LIVE packuments for the curated catalogue set (Ecluse.Test.RegistryCapture),
--- times Ecluse's work-per-request over each, and evaluates the overhead against the
--- version-controlled budget (ecluse-acceptance). Runs on demand / scheduled / per-PR,
--- NEVER per-PR-gating: a budget breach reds the (non-required) check to inform a human
--- decision, it never blocks merge. Kept out of the shipped library closure. See
--- docs/architecture/performance.md.
+-- The live performance-acceptance harness: a separate EXECUTABLE. It fetches LIVE
+-- packuments for the curated catalogue set (Ecluse.Test.RegistryCapture), times
+-- Écluse's work-per-request over each, and evaluates the overhead against the
+-- version-controlled budget (ecluse-acceptance). It runs on demand, on a schedule, and
+-- per PR, and it NEVER gates a PR. A budget breach reds the non-required check to
+-- inform a human decision, and never blocks the merge. Kept out of the shipped library
+-- closure. See docs/architecture/performance.md.
 executable perf-acceptance
   import:         shared
   main-is:        Main.hs

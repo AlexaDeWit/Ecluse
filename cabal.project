@@ -1,18 +1,18 @@
 packages: .
 
--- amazonka, sourced from git rather than Hackage. The Hackage release is capped
--- at 2.0 / 2023, which needs base < 4.19 (GHC ≤ 9.6) and containers < 0.7 — both
--- incompatible with our pinned GHC 9.10. So we take amazonka from the upstream
--- monorepo at the *exact* git rev flake.nix pins as `amazonkaRev` and builds its
--- own amazonka from, so this cabal path and the Nix path that builds the shipped
--- artifact use identical amazonka sources. checks.amazonka-lockstep fails CI
--- whenever the two revs diverge: bump both in the same commit, then `task freeze`.
+-- amazonka, sourced from git rather than Hackage. The Hackage release stops at
+-- 2.0 / 2023, which needs base < 4.19 (GHC ≤ 9.6) and containers < 0.7. Both are
+-- incompatible with our pinned GHC 9.10. So amazonka comes from the upstream monorepo,
+-- at the *exact* git rev flake.nix pins as `amazonkaRev` and builds its own amazonka
+-- from. This cabal path and the Nix path that builds the shipped artifact then use
+-- identical amazonka sources. `checks.amazonka-lockstep` fails CI whenever the two revs
+-- diverge: bump both in the same commit, then run `task freeze`.
 --
--- The monorepo is one checkout with per-package subdirs; we vendor only the ones
--- our cloud leaves need: the umbrella `amazonka` (Env/auth/send) and its own
--- dependencies amazonka-core + amazonka-sso + amazonka-sts, plus the service
--- packages we call — amazonka-codeartifact (the credential leaf) and amazonka-sqs
--- (the mirror queue).
+-- The monorepo is one checkout with per-package subdirs. We vendor only the ones our
+-- cloud leaves need. We take the umbrella `amazonka` (Env, auth, send) and its own
+-- dependencies amazonka-core, amazonka-sso, and amazonka-sts. We also take the service
+-- packages we call: amazonka-codeartifact (the credential leaf) and amazonka-sqs (the
+-- mirror queue).
 source-repository-package
   type:     git
   location: https://github.com/brendanhay/amazonka.git
@@ -25,79 +25,77 @@ source-repository-package
             lib/services/amazonka-sqs
             lib/services/amazonka-s3
 
--- Pin the Hackage index the solver may see, so `cabal build`/`cabal test` (the
--- dev-shell + CI path) resolve a *reproducible* plan: a package uploaded to
--- Hackage after this instant cannot silently change the build or flip the gate
--- with no source change. cabal.project.freeze holds the exact versions and is
--- *generated* from the Nix package set (`task freeze`), so flake.lock is the one
--- upstream lock and this line is the only index-state (the generated freeze
--- carries none). It only needs to be recent enough to contain every pinned
--- version; advance it with `task bump-index-state` when cabal reports a pinned
--- version as unknown. See docs/getting-started.md → "Dependency locking".
+-- Pin the Hackage index the solver may see, so `cabal build` and `cabal test` (the
+-- dev-shell and CI path) resolve a *reproducible* plan. A package uploaded to Hackage
+-- after this instant cannot silently change the build or flip the gate with no source
+-- change. `cabal.project.freeze` holds the exact versions, *generated* from the Nix
+-- package set (`task freeze`). So flake.lock is the one upstream lock, and this line is
+-- the only index-state, because the generated freeze carries none. The date only needs
+-- to be recent enough to contain every pinned version. Advance it with
+-- `task bump-index-state` when cabal reports a pinned version as unknown. See
+-- docs/getting-started.md → "Dependency locking".
 index-state: 2026-07-01T00:33:51Z
 
--- Enable the test suites in the solver for *every* command, so a bare
--- `cabal test <suite>` (as `task test` runs) resolves a tests-inclusive plan
+-- Enable the test suites in the solver for *every* command. A bare
+-- `cabal test <suite>` (what `task test` runs) then resolves a tests-inclusive plan
 -- instead of failing with Cabal-7043. Without this, `cabal test` does not pass
--- `--enable-tests` to the solver and can pick a tests-disabled plan once the
--- library gains a non-trivial dependency closure (e.g. aeson) — even though
+-- `--enable-tests` to the solver. It can then pick a tests-disabled plan once the
+-- library gains a non-trivial dependency closure, aeson for example, even where
 -- `cabal build --enable-tests` succeeds. Keeping it here makes `task build` and
 -- `task test` resolve identically.
 tests: True
 
--- Enable the benchmark component in the solver for *every* command, so a bare
--- `cabal bench ecluse-bench` (as `task bench` runs) resolves a benchmarks-inclusive
--- plan instead of failing with Cabal-7043 — the same reason `tests: True` is set
--- above. Without it `cabal bench` does not pass `--enable-benchmarks` to the solver
--- and can pick a benchmarks-disabled plan.
+-- Enable the benchmark component in the solver for *every* command. A bare
+-- `cabal bench ecluse-bench` (what `task bench` runs) then resolves a
+-- benchmarks-inclusive plan instead of failing with Cabal-7043. That is the same reason
+-- `tests: True` sits above. Without it, `cabal bench` does not pass
+-- `--enable-benchmarks` to the solver and can pick a benchmarks-disabled plan.
 benchmarks: True
 
--- Cap warp below 3.4.10. warp 3.4.10 ("Using newest dependencies") regressed
--- connection handling so that its `testWithApplication` helper — which the unit
--- suite's HTTP stub uses — tears the connection down before the response is
--- written; every stubbed request then fails with `NoResponseDataReceived`.
--- Bisected: 3.4.9 OK, 3.4.10 through the latest at this index-state (3.4.13.1)
--- broken. The freeze is generated from the Nix set, so this cap is a tripwire:
--- if a flake bump moves nixpkgs onto a broken warp, the regenerated freeze
--- conflicts here and fails loudly. This is a runtime-behaviour cap (the
--- library is API-compatible with later warp), so it lives here as solver
--- guidance rather than as an upper bound in ecluse.cabal — Renovate's
--- bound-widening can't silently undo it. Remove once upstream ships a fix
--- (> 3.4.13.1) and re-freeze.
+-- Cap warp below 3.4.10. Version 3.4.10 ("Using newest dependencies") regressed
+-- connection handling. Its `testWithApplication` helper, which the unit suite's HTTP
+-- stub uses, tears the connection down before warp writes the response. Every stubbed
+-- request then fails with `NoResponseDataReceived`. Bisected: 3.4.9 works, and every
+-- version from 3.4.10 to the latest at this index-state (3.4.13.1) fails. The freeze
+-- comes from the Nix set, so this cap is a tripwire. If a flake bump moves nixpkgs onto
+-- a broken warp, the regenerated freeze conflicts here and fails loudly. The cap is
+-- about runtime behaviour, and the library is API-compatible with later warp. So it
+-- lives here as solver guidance rather than as an upper bound in ecluse.cabal, where
+-- Renovate's bound-widening could silently undo it. Remove it once upstream ships a
+-- fix (> 3.4.13.1), then re-freeze.
 constraints: warp < 3.4.10
 
--- Relax one over-tight upper bound for the benchmark path only: tasty-bench-fit
+-- Relax one over-tight upper bound, for the benchmark path only. `tasty-bench-fit`
 -- pulls regression-simple, whose every release caps base < 4.20, which excludes our
--- pinned GHC 9.10 (base 4.20). regression-simple is a small pure-Haskell numeric
--- library that builds clean against base 4.20 — the bound is stale, not a real
--- incompatibility — so we allow the newer base, scoped narrowly to that one
--- package's base dependency. This mirrors what the Nix/Hackage haskell set already
--- does for the package; the constraint is the cabal-path equivalent. Drop it once
--- regression-simple widens its bound upstream, then re-freeze.
+-- pinned GHC 9.10 (base 4.20). `regression-simple` is a small pure-Haskell numeric
+-- library that builds clean against base 4.20, so the bound is stale rather than a
+-- real incompatibility. We allow the newer base, scoped to that one package's base
+-- dependency. The Nix and Hackage haskell set already does this for the package, and
+-- the constraint is the cabal-path equivalent. Drop it once regression-simple widens
+-- its bound upstream, then re-freeze.
 --
--- The two aeson entries mirror the advisory overlay in flake.nix: the freeze
--- pins aeson 2.3 (HSEC-2026-0007), and no insert-ordered-containers or openapi3
--- release or revision admits it yet, so the Nix path jailbreaks them and this
--- is the cabal path's equivalent. Drop both when upstream widens, then
--- re-freeze.
+-- The two aeson entries mirror the advisory overlay in flake.nix. The freeze pins
+-- aeson 2.3 (HSEC-2026-0007), and no insert-ordered-containers or openapi3 release or
+-- revision admits it yet. So the Nix path jailbreaks them, and these entries are the
+-- cabal path's equivalent. Drop both when upstream widens, then re-freeze.
 allow-newer:
   regression-simple:base,
   insert-ordered-containers:aeson,
   openapi3:aeson
 
--- Warnings are errors for our own package, in CI and locally. GHC is pinned by
--- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
--- guard against. Scoped to `ecluse` so dependencies (which we do not control)
--- are never built with -Werror. The warning set itself lives in the cabal
--- `common` stanza; see STYLE.md → "Compiler flags".
+-- Warnings are errors for our own package, in CI and locally. `flake.lock` pins GHC, so
+-- there is no "new compiler surfaces new warnings" surprise to guard against. The
+-- stanza scopes it to `ecluse`, so nothing ever builds a dependency we do not control
+-- with -Werror. The warning set itself lives in the cabal `common` stanza. See
+-- STYLE.md → "Compiler flags".
 --
 -- To relax this during a noisy refactor, create cabal.project.local (untracked):
 --     package ecluse
 --       ghc-options: -Wwarn
 package ecluse
   ghc-options: -Werror
-  -- Compile the test-only plain-HTTP loopback egress constructor for the dev-shell /
-  -- CI cabal path, so the loopback integration suites build. callCabal2nix (the
-  -- Nix path that builds the shipped artifact) ignores cabal.project, so the release
-  -- `ecluse` keeps the flag's default (off) and carries no plaintext-egress constructor.
+  -- Compile the test-only plain-HTTP loopback egress constructor for the dev-shell and
+  -- CI cabal path, so the loopback integration suites build. `callCabal2nix`, the Nix
+  -- path that builds the shipped artifact, ignores cabal.project. So the release `ecluse`
+  -- keeps the flag's default (off) and carries no plaintext-egress constructor.
   flags: +dev-http-egress

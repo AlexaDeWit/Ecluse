@@ -1,55 +1,56 @@
-# The defaults Écluse boots from, embedded in the binary. Your config document and
-# ECLUSE_* environment variables override it key by key (defaults < document <
-# environment; ECLUSE_CACHE__TTL spells cache.ttl). Commented keys are INACTIVE:
-# they document the schema, and each names the computed or derived default that
-# applies while it stays unset. Secrets belong in environment variables, never here.
+# The defaults Écluse boots from, embedded in the binary. Your config document and the
+# ECLUSE_* environment variables override it key by key, in the order defaults <
+# document < environment. ECLUSE_CACHE__TTL spells cache.ttl. A commented key is
+# INACTIVE: it documents the schema, and names the computed or derived default that
+# applies while it stays unset. Put secrets in environment variables, never here.
 
 server:
   port: 8080
-  # The proxy's own externally-reachable base URL, which served tarball URLs are
-  # rewritten against. Required as soon as any mount is active.
+  # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
+  # URLs against it. Required as soon as any mount is active.
   # publicUrl: https://registry.example.com
   # Set via ECLUSE_SERVER__AUTH_TOKEN (a secret): clients must then present it.
   # authToken:
-  # A note appended to client-facing error bodies, e.g. where to ask for access.
+  # A note Écluse appends to client-facing error bodies, e.g. where to ask for access.
   # helpMessage: Contact platform engineering for access
   shutdownDrainTimeout: 30
 
-# The mirror queue, consulted only when a mount mirrors. The backend is derived
-# from url's shape: an SQS queue URL (https://sqs.{region}.amazonaws.com/...)
-# selects the durable SQS backend with its region taken from the host; a Pub/Sub
-# topic resource (projects/{p}/topics/{t}) names the GCP backend (not yet built).
-# Unset, mirroring runs on the bounded in-memory queue: non-durable, best-effort,
-# warned loudly at boot; fine for a single node or a trial.
+# The mirror queue, read only when a mount mirrors. The shape of url picks the
+# backend. An SQS queue URL (https://sqs.{region}.amazonaws.com/...) selects the
+# durable SQS backend and takes its region from the host. A Pub/Sub topic resource
+# (projects/{p}/topics/{t}) names the GCP backend, which is not yet built. Unset,
+# mirroring runs on the bounded in-memory queue: non-durable, best-effort, and warned
+# loudly at boot. That is fine for a single node or a trial.
 queue:
-  # How many deliveries one mirror job gets before the worker retires it outright,
-  # alarming and counting it. A queue with a dead-letter terminus attached runs one
-  # delivery above that terminus's own maxReceiveCount, so the dead-letter queue
-  # always captures first; this is the floor, and the only terminus a queue without
-  # one has.
+  # How many deliveries one mirror job gets before the worker retires it outright. The
+  # worker alarms and counts each retirement. A queue with a dead-letter queue attached
+  # runs one delivery above that dead-letter queue's own maxReceiveCount. The
+  # dead-letter queue therefore always captures the job first. This count is the floor,
+  # and the only end a job gets on a queue with no dead-letter queue.
   maxReceiveCount: 5
   # url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
   # memoryMaxDepth: 50000   # unset, computed from the runtime posture
 
 limits:
-  # Structural hostile-input bounds: they bound document shape, not bytes, so they
-  # are a pinned policy stance rather than a machine property.
+  # Structural hostile-input bounds. They bound document shape, not bytes, so they are
+  # a pinned policy stance rather than a machine property.
   maxVersionCount: 100000
   maxNestingDepth: 64
-  # The byte-valued caps are computed at boot by the memory plan (named tenants of
-  # the effective heap ceiling; the boot log names each decision). Set either
-  # only to override.
+  # The memory plan computes the byte-valued caps at boot, as named tenants of the
+  # effective heap ceiling, and the boot log names each decision. Set either one only
+  # to override it.
   # maxResponseBytes: 12582912
   # maxRequestBytes: 26214400
-  # The mirror worker's per-artifact fetch cap: also computed by the memory plan (the
-  # mirror-artifact tenant), sized so the transient publish envelope stays within the
-  # heap ceiling. Raising it needs headroom the plan will refuse to boot without.
+  # The mirror worker's per-artifact fetch cap. The memory plan computes this one too,
+  # as the mirror-artifact tenant, sized so the transient publish envelope stays within
+  # the heap ceiling. Raising it needs headroom the plan will refuse to boot without.
   # maxArtifactBytes: 536870912
 
 cache:
   ttl: 60
-  # Both bounds are computed at boot from the resolved heap ceiling (a clamped
-  # fraction; the boot log names each decision). Set either only to override.
+  # Écluse computes both bounds at boot from the resolved heap ceiling, as a clamped
+  # fraction of it, and the boot log names each decision. Set either one only to
+  # override it.
   # maxEntries: 1024
   # maxBytes: 268435456
 
@@ -58,7 +59,7 @@ integrity:
   minTrusted: sha256 # refinable per mount: mounts.<ecosystem>.minTrustedIntegrity
   # What to do when the public and private copies of a version contradict on a shared
   # integrity algorithm (threat #11). Both policies log a WARNING and increment the
-  # ecluse.registry.merge.divergence counter; the trusted copy always wins the bytes.
+  # ecluse.registry.merge.divergence counter. The trusted copy always wins the bytes.
   #   warn        - serve the trusted copy and rely on the alarm (default)
   #   fail-closed - additionally withhold the contested version from the served listing
   divergencePolicy: warn # refinable per mount: mounts.<ecosystem>.divergencePolicy
@@ -70,25 +71,25 @@ integrity:
 
 advisories:
   # How often the proxy polls object storage for a fresh advisory database (a cheap
-  # ETag HEAD). Deliberately independent of, and much more frequent than, Pilot's
-  # compileInterval: matching them would nearly double the worst-case advisory age.
+  # ETag HEAD). It is deliberately independent of Pilot's compileInterval, and much
+  # more frequent: matching them would nearly double the worst-case advisory age.
   pollInterval: 60
   # Pilot only: how often it recompiles and re-exports the advisory artifacts.
   compileInterval: 3600
   dataDir: "data/osv"
   # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
-  # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it;
-  # a new URL must never require a new Ecluse binary.
+  # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it.
+  # A new URL must never require a new Écluse binary.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
   # Refuse to download an advisory database larger than this many bytes (512 MiB).
   maxDatabaseBytes: 536870912
-  # The object-storage bucket the compiled advisory database syncs from; unset, the
+  # The object-storage bucket the compiled advisory database syncs from. Unset, the
   # advisory stack is off and the advisory-dependent rules abstain.
   # bucket: my-advisory-bucket
 
-# Process sizing. Every key is computed at boot from the container's cgroup limits,
-# the RTS posture, and the file-descriptor budget, and each decision is boot-logged
-# with its provenance. Set a key only to override the computed value.
+# Process sizing. Écluse computes every key at boot from the container's cgroup
+# limits, the RTS posture, and the file-descriptor budget. The boot log records each
+# decision with its provenance. Set a key only to override the computed value.
 # runtime:
 #   cores: 4
 #   maxHeapBytes: 1073741824
@@ -98,15 +99,17 @@ advisories:
 
 observability:
   logFormat: json
-  # Lowest severity kept: debug, info, warn, or error. Debug carries the per-decision
-  # diagnostics (mirror probes, artifact fetches) and is verbose under load.
+  # The lowest severity Écluse logs: debug, info, warn, or error. Debug carries the
+  # per-decision diagnostics, such as mirror probes and artifact fetches, and is
+  # verbose under load.
   logLevel: info
   telemetry: "off"
 
 mounts:
-  # Dormant per-ecosystem templates: a mount activates only when your document or
-  # environment declares any key under it (enabled: true alone suffices for the
-  # serve-only pure public gate; declaring mirrorTarget is what makes it mirrored).
+  # Dormant per-ecosystem templates. A mount activates only when your document or
+  # environment declares any key under it. `enabled: true` alone is enough for the
+  # serve-only pure public gate, and declaring `mirrorTarget` is what makes a mount
+  # mirror.
   npm:
     publicUpstream: https://registry.npmjs.org
   pypi:
@@ -119,28 +122,28 @@ rules:
     type: AllowIfOlderThan
     precedence: 100
     ageSeconds: 604800
-  # The remediation fast lane: a version a synced advisory names as its exact fix
-  # is admitted ahead of the min-age quarantine. With no advisory database
-  # configured (no advisories.bucket) it abstains and only the quarantine governs.
+  # The remediation fast lane. Écluse admits a version a synced advisory names as its
+  # exact fix ahead of the min-age quarantine. With no advisory database configured
+  # (no advisories.bucket) the rule abstains, and only the quarantine governs.
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
-  # Opt-in CVE deny gate (OFF by default -- not in this shipped policy). Denies a
-  # version a synced advisory records as affected at or above `minSeverity` (a CVSS
-  # base score, 0-10). It also blocks the npm malware feed: those advisories carry
-  # no score and are treated as above every threshold, so enabling this makes Écluse
-  # a malware blocklist as well as a severity gate. It sits just below
-  # `AllowByIdentity`, so an explicit identity pin still overrides it.
+  # Opt-in CVE deny gate, off by default and absent from this shipped policy. It
+  # denies a version a synced advisory records as affected at or above `minSeverity`
+  # (a CVSS base score, 0-10). It also blocks the npm malware feed: those
+  # advisories carry no score, and the rule treats them as above every threshold. So
+  # enabling this makes Écluse a malware blocklist as well as a severity gate. It sits
+  # just below `AllowByIdentity`, so an explicit identity pin still overrides it.
   #
   # ONBOARD BEFORE ENABLING. On a cold mirror this can deny historical versions your
   # existing builds depend on that an advisory now covers. First let normal traffic
-  # pull your must-have packages through so they are mirrored into the trusted store
-  # (which rules never re-gate), THEN enable this in your own config. Keep any
+  # pull your must-have packages through, so the worker mirrors them into the trusted
+  # store, which rules never re-gate. THEN enable this in your own config. Keep any
   # specific version you must retain despite an advisory with an `AllowByIdentity`
   # rule.
   #
   # deny-known-cves:
   #   type: DenyIfCve
-  #   minSeverity: 8          # CVSS >= 8.0 (high/critical); unscored malware always blocks
-  #   onUnavailable: deny     # fail-closed if the advisory DB cannot answer;
-  #                           # set to "skip" to fail-open (availability over the gate)
+  #   minSeverity: 8          # CVSS >= 8.0 (high/critical). Unscored malware always blocks
+  #   onUnavailable: deny     # fail-closed if the advisory database cannot answer.
+  #                           # Set to "skip" to fail-open (availability over the gate)
