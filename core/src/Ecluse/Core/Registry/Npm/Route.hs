@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 -- TupleSections: local convenience for pairing a parsed name with its trailing
--- segments in 'takeScoped' ((,rest) / (,more)). See STYLE.md §2.
+-- segments in 'takePackage' and 'takeScoped' ((,rest) / (,more)). See STYLE.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | npm's route table: the list of routes an npm mount serves.
@@ -84,7 +84,8 @@ import Network.HTTP.Types (
 import Network.HTTP.Types.Method (StdMethod (GET, HEAD))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
+import Ecluse.Core.Package (PackageName, unscopedName)
+import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Serve (NpmError (NpmError), npmError, npmErrorCodec)
 import Ecluse.Core.Server.Context (
     MountRouter,
@@ -429,37 +430,25 @@ capFilename =
         )
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and the remaining
-segments. Returns 'Nothing' for an empty path or a name whose scope or base 'isSafeComponent'
-rejects, because 'mkScope' and 'mkPackageName' do no validation and an unsafe name would
-otherwise reach an interpolated upstream URL.
+segments. The route parses no name of its own: 'projectName' owns the npm name grammar, so a
+degenerate or hostile name is refused here exactly as it is on every other npm path.
 -}
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
 takePackage (seg : rest)
-    | "@" <- T.take 1 seg = takeScoped seg rest
-    | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
-    | otherwise = Nothing
+    | T.isPrefixOf "@" seg = takeScoped seg rest
+    | otherwise = (,rest) <$> rightToMaybe (projectName seg)
 
 {- Peel a scoped package unit off the leading @\@…@ segment, handling both wire encodings: one
-decoded segment @\@scope\/pkg@, or @\@scope@ and @pkg@ as two segments.
+decoded segment @\@scope\/pkg@, or @\@scope@ and @pkg@ as two segments. Both join into the one
+wire name 'projectName' reads, so the two encodings cannot disagree.
 -}
 takeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
-takeScoped seg rest =
-    case T.breakOn "/" (T.drop 1 seg) of
-        (scope, base)
-            | not (T.null base) ->
-                (,rest) <$> scopedName scope (T.drop 1 base)
-        _ -> case rest of
-            (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
-            _ -> Nothing
-
--- Both arguments arrive with the leading '@' already stripped, so requiring two safe components
--- rejects a degenerate or hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg').
-scopedName :: Text -> Text -> Maybe PackageName
-scopedName scope base
-    | isSafeComponent scope && isSafeComponent base =
-        Just (mkPackageName Npm (Just (mkScope scope)) base)
-    | otherwise = Nothing
+takeScoped seg rest
+    | T.isInfixOf "/" seg = (,rest) <$> rightToMaybe (projectName seg)
+    | otherwise = case rest of
+        (base : more) -> (,more) <$> rightToMaybe (projectName (seg <> "/" <> base))
+        [] -> Nothing
 
 {- | Parse an npm tarball-slot @file@ into the 'Version' and verbatim 'Filename' it names for
 @name@. The npm convention is @{unscoped-name}-{version}.tgz@, and a basename that does not begin

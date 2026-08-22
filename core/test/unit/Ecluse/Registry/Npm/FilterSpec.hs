@@ -28,6 +28,7 @@ import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSour
 import Ecluse.Core.Registry.Npm.Filter (
     assembleMergedPackument,
     rewriteVersion,
+    safeName,
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Rules.Types (
@@ -42,10 +43,20 @@ import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
 spec :: Spec
 spec = do
+    nameGateSpec
     rewriteSpec
     filterSpec
     coherenceSpec
     propertiesSpec
+
+{- | The gate on the upstream-controlled @name@ the rewrite interpolates. It is the shared npm
+name grammar read as a predicate, so it agrees with the route and the projection by construction.
+-}
+nameGateSpec :: Spec
+nameGateSpec = describe "safeName -- the one npm name grammar" $
+    for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
+        it (NpmFixture.nameVerdictLabel raw valid) $
+            safeName raw `shouldBe` valid
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic.
 now :: UTCTime
@@ -183,17 +194,15 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
                     `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
             NoSurvivors _ -> expectationFailure "expected survivors, got NoSurvivors"
 
-    it "leaves a tarball untouched when the document's name carries a traversal" $ do
-        -- The fused rewrite gates the upstream-controlled name component-wise. It never
-        -- interpolates an unsafe name, so it relays the upstream URL unrewritten.
-        filtered <- filterTo traversalNamePackument
-        tarballAt "1.0.0" (Object (rawObject filtered))
-            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+    it "leaves a tarball untouched when the document's name carries a traversal" $
+        -- The projection refuses such a name first, so the assembly's own gate is defence in
+        -- depth over the raw document. It never interpolates an unsafe name.
+        tarballUnderName traversalNamePackument
+            `shouldReturn` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
-    it "leaves a tarball untouched when the document's name carries a control character" $ do
-        filtered <- filterTo controlCharNamePackument
-        tarballAt "1.0.0" (Object (rawObject filtered))
-            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+    it "leaves a tarball untouched when the document's name carries a control character" $
+        tarballUnderName controlCharNamePackument
+            `shouldReturn` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
     it "drops a version broken in a required field from the served body, keeping the healthy one" $ do
         -- 2.0.0's `dist` is a scalar, and it is 30 days old, so it would clear the quarantine if it
@@ -687,6 +696,18 @@ applyToAt mountBase c rules info value = do
 -- | 'applyToAt' under the canonical fixture mount base.
 applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyTo = applyToAt base
+
+{- | The surviving version's @dist.tarball@ after assembling a document whose own top-level
+@name@ the projection would refuse. The plan comes from a safe twin carrying the same version,
+so the assembly still runs and its own name gate is what decides the rewrite.
+-}
+tarballUnderName :: ByteString -> IO (Maybe Text)
+tarballUnderName body = do
+    (info, _) <- loadPackument oneVersionPackument
+    unprojectable <- decodeValue body
+    applyTo ctx quarantine info unprojectable >>= \case
+        Assembled out -> pure (tarballAt "1.0.0" out)
+        NoSurvivors _ -> fail "expected survivors, got NoSurvivors"
 
 -- | Assemble a fixture body, requiring survivors. Returns the served packument.
 filterTo :: ByteString -> IO FilteredPackument

@@ -99,8 +99,9 @@ import Katip (LogEnv, Severity (DebugS), logFM, ls, sl)
 import Katip.Monadic (runKatipContextT)
 import Lens.Micro ((?~), (^.))
 
-import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (
+    PackageName,
     mkPackageName,
     mkScope,
     pkgEcosystem,
@@ -123,6 +124,8 @@ import Ecluse.Core.Queue (
     queueTransportFault,
     unReceiptHandle,
  )
+import Ecluse.Core.Registry (parseErrorMessage)
+import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Core.Version (mkVersion, renderVersion)
@@ -427,11 +430,13 @@ encodeTraceContext rsc =
         ]
 
 {- | Decode an SQS message body back into a 'MirrorJob'. A missing field, an unknown
-ecosystem, malformed JSON, or a refused artifact URL yields a human-readable error.
+ecosystem, malformed JSON, an unusable package name, or a refused artifact URL yields a
+human-readable error.
 
 The queue payload is a __trust boundary__, so the decode re-forms the artifact URL into
-its 'RegistryUrl' egress witness through the given former, and a tampered message can
-never hand the worker's fetch an unwitnessed URL.
+its 'RegistryUrl' egress witness through the given former, and re-reads the package name
+through its ecosystem's grammar. A tampered message can never hand the worker's fetch an
+unwitnessed URL or a name the front door would have refused.
 -}
 decodeJob :: (Text -> Either Text RegistryUrl) -> Text -> Either Text MirrorJob
 decodeJob egressUrl body =
@@ -446,6 +451,9 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     eco <- maybe (fail (unknownEcosystem ecoName)) pure (parseEcosystem ecoName)
     scope <- o .:? "scope"
     rawName <- o .: "name"
+    -- The payload states the scope and the bare name separately, so re-join them and read the
+    -- result through the ecosystem's own grammar rather than trusting the two fields.
+    package <- either (fail . toString) pure (mirrorJobPackage eco scope rawName)
     rawVersion <- o .: "version"
     rawArtifactUrl <- o .: "artifactUrl"
     -- Re-form the egress witness at the wire boundary: the type the worker's fetch
@@ -457,7 +465,7 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
     traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
     pure
         MirrorJob
-            { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
+            { jobPackage = package
             , jobVersion = mkVersion eco rawVersion
             , jobArtifactUrl = artifactUrl
             , jobArtifactFilename = filename
@@ -465,6 +473,17 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
             }
   where
     unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
+
+{- Rebuild the payload's package identity, reading npm's wire name through 'projectName'. npm is
+the only ecosystem with a name grammar today, so the others take the two fields as given. -}
+mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
+mirrorJobPackage eco scope rawName = case eco of
+    Npm -> first parseErrorMessage (projectName npmWireName)
+    PyPI -> Right asGiven
+    RubyGems -> Right asGiven
+  where
+    asGiven = mkPackageName eco (mkScope <$> scope) rawName
+    npmWireName = maybe rawName (\s -> "@" <> s <> "/" <> rawName) scope
 
 -- The carrier is untrusted opaque transport, so both fields are taken as-is. An
 -- unparseable W3C value yields no link in the tracing port rather than failing the decode.

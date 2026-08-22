@@ -50,15 +50,18 @@ import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
     parseVersionList,
+    projectName,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | Projection tests for the npm adapter: the domain values a fetched packument projects into.
 They drive 'parsePackageInfoFromValue', the same projection the serve path runs on every request.
 -}
 spec :: Spec
 spec = do
+    nameGrammarSpec
     nameValidationSpec
     signalMappingSpec
     integritySpec
@@ -66,6 +69,22 @@ spec = do
     versionLevelLeniencySpec
     gracefulDegradationSpec
     totalitySpec
+
+{- | 'projectName' is the one npm splitter. The shared 'NpmFixture.npmNameVerdicts' table is
+asserted here and at every other entry point, so no two of them can read one name differently.
+-}
+nameGrammarSpec :: Spec
+nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
+    for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
+        it (NpmFixture.nameVerdictLabel raw valid) $
+            isRight (projectName raw) `shouldBe` valid
+
+    it "splits a scoped name into its scope and its bare name" $
+        projectName "@babel/code-frame"
+            `shouldBe` Right (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
+
+    it "reads an unscoped name whole" $
+        projectName "left-pad" `shouldBe` Right (mkPackageName Npm Nothing "left-pad")
 
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do

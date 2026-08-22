@@ -33,6 +33,7 @@ below:
 -}
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
+import Data.Char (isSpace)
 import Data.Text qualified as T
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -211,7 +212,7 @@ refTakePackage :: [Text] -> Maybe (PackageName, [Text])
 refTakePackage [] = Nothing
 refTakePackage (seg : rest)
     | "@" <- T.take 1 seg = refTakeScoped seg rest
-    | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
+    | refComponent seg = Just (mkPackageName Npm Nothing seg, rest)
     | otherwise = Nothing
 
 refTakeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
@@ -225,9 +226,16 @@ refTakeScoped seg rest =
 
 refScopedName :: Text -> Text -> Maybe PackageName
 refScopedName scope base
-    | isSafeComponent scope && isSafeComponent base =
+    | refComponent scope && refComponent base =
         Just (mkPackageName Npm (Just (mkScope scope)) base)
     | otherwise = Nothing
+
+-- One usable npm name component, restated here: a safe path component carrying no '@' and no
+-- whitespace, so one identity has exactly one spelling.
+refComponent :: Text -> Bool
+refComponent c = isSafeComponent c && T.all usable c
+  where
+    usable ch = ch /= '@' && not (isSpace ch)
 
 -- The artifact route claims a request only when the file name parses for that package.
 refTarball :: PackageName -> Text -> Maybe RouteName

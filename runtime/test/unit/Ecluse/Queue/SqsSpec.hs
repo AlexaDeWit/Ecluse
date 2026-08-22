@@ -47,6 +47,7 @@ import Ecluse.Runtime.Queue.Sqs (
     liftReceivedMessages,
  )
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Support (newTestLogEnv)
 
 -- | An unscoped npm job fixture.
@@ -132,6 +133,27 @@ spec = do
                     jobTraceContext job `shouldBe` Nothing
                     jobPackage job `shouldBe` mkPackageName Npm Nothing "left-pad"
                     jobVersion job `shouldBe` mkVersion Npm "1.3.0"
+
+    describe "decodeJob -- the one npm name grammar at the queue trust boundary" $ do
+        -- The payload is untrusted, so its scope and name are re-joined and read through the
+        -- same splitter the front door uses. The verdicts are the shared table's.
+        for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
+            it (NpmFixture.nameVerdictLabel raw valid) $
+                isRight (decodeJob mkRegistryUrl (jobBodyFor "npm" raw)) `shouldBe` valid
+
+        it "rebuilds a scoped name from the payload's separate scope and name fields" $
+            case decodeJob mkRegistryUrl (jobBodyFor "npm" "@babel/core") of
+                Left err -> expectationFailure (toString err)
+                Right job -> jobPackage job `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "core"
+
+        it "names the unusable component when it refuses an npm name" $
+            case decodeJob mkRegistryUrl (jobBodyFor "npm" "@scope/p@g") of
+                Left err -> err `shouldSatisfy` ("unusable npm name component" `T.isInfixOf`)
+                Right job -> expectationFailure ("expected a decode error, got " <> show job)
+
+        it "takes a non-npm name as given: npm is the only ecosystem with a name grammar today" $
+            -- The same spelling npm refuses. PyPI has no scope grammar, so the decode keeps it.
+            decodeJob mkRegistryUrl (jobBodyFor "pypi" "a b") `shouldSatisfy` isRight
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
@@ -263,6 +285,29 @@ spec = do
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
+
+{- | A job body for @ecosystem@ naming @wireName@, split into the payload's separate @scope@ and
+@name@ fields the way 'encodeJob' writes them. Every other field is well-formed, so only the name
+decides the verdict.
+-}
+jobBodyFor :: Text -> Text -> Text
+jobBodyFor ecosystem wireName =
+    "{\"ecosystem\":"
+        <> quoted ecosystem
+        <> ",\"scope\":"
+        <> scopeField
+        <> ",\"name\":"
+        <> quoted bare
+        <> ",\"version\":\"1.0.0\""
+        <> ",\"artifactUrl\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\""
+        <> ",\"filename\":\"x-1.0.0.tgz\"}"
+  where
+    (scopeField, bare) = case T.breakOn "/" wireName of
+        (before, rest)
+            | Just after <- T.stripPrefix "/" rest ->
+                (quoted (fromMaybe before (T.stripPrefix "@" before)), after)
+        _ -> ("null", wireName)
+    quoted t = "\"" <> t <> "\""
 
 {- | One well-formed message and one of each drop cause: missing body, missing receipt,
 undecodable body. Distinct message ids make the drop log's id field assertable.

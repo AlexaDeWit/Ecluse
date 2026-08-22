@@ -92,6 +92,11 @@ untrusted for this request and drop its contribution. The served name is therefo
 always a value an upstream genuinely reported, never a substituted or manufactured
 one. An /absent/ or otherwise undecodable name is a 'ParseError', distinct from a
 present-but-different name.
+
+'projectName' is also the __one splitter__ for npm identifiers. The route, the URL rewrite,
+the publish guard, and the queue decode all read a name through it, so one spelling has one
+verdict everywhere. A scope or bare name that is not a usable path component is a
+'ParseError', and a bare @\@foo@ is a malformed scoped name, never an unscoped one.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -102,10 +107,12 @@ module Ecluse.Core.Registry.Npm.Project (
     -- * Name validation
     Projection (..),
     projectName,
+    projectScope,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import Data.Char (isSpace)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -144,6 +151,7 @@ import Ecluse.Core.Registry.WireSupport (
     checkNameAgreement,
     partitionLenient,
  )
+import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (lastPathSegment)
 import Ecluse.Core.Version (Version, mkVersion, unVersion)
 
@@ -363,29 +371,49 @@ tarballFilename url version =
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
-{- | Parse an npm package name into the domain 'PackageName', splitting a scoped
-@\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an empty name.
+{- | Parse an npm package name into the domain 'PackageName': the one splitter every npm entry
+point reads a name through. It splits a scoped @\@scope\/name@ once and applies 'nameComponent'
+to the scope and to the bare name alike.
+
+A malformed scoped name is a 'ParseError', never an unscoped name that happens to carry an
+@\@@. So @\@foo@, @\@foo\/@, @\@\/pkg@, @\@scope\/a\/b@, and the empty string are all
+refused.
 
 The read and publish paths both compare names through this canonicaliser, never byte-for-byte,
 so an encoding variant cannot pass an agreement check silently.
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw
-    | T.null raw = Left (ParseError "empty package name")
-    | otherwise = case scopeOf raw of
-        Just (scope, base) -> Right (mkPackageName Npm (Just scope) base)
-        Nothing -> Right (mkPackageName Npm Nothing raw)
+    | T.isPrefixOf "@" raw = scopedName raw
+    | otherwise = mkPackageName Npm Nothing <$> nameComponent raw
 
-{- Split a scoped @\@scope\/name@ into its 'Scope' and bare name. A malformed scope yields
-'Nothing', so the caller treats the whole string as an unscoped name. -}
-scopeOf :: Text -> Maybe (Scope, Text)
-scopeOf raw = do
-    afterAt <- T.stripPrefix "@" raw
-    let (scopeText, rest) = T.break (== '/') afterAt
-        base = T.drop 1 rest
-    guard (not (T.null scopeText))
-    guard (not (T.null base))
-    pure (mkScope scopeText, base)
+{- Split a scoped @\@scope\/name@ at its one separator. A scope with nothing after it is a
+malformed scoped name, so the whole string never falls back to an unscoped reading. -}
+scopedName :: Text -> Either ParseError PackageName
+scopedName raw = case T.stripPrefix "/" afterScope of
+    Nothing -> Left (ParseError ("scoped npm name with no package name: " <> show raw))
+    Just base -> do
+        scope <- projectScope scopeWire
+        mkPackageName Npm (Just scope) <$> nameComponent base
+  where
+    (scopeWire, afterScope) = T.break (== '/') raw
+
+{- | Parse an npm scope, with or without its leading @\@@ (@\@myorg@ and @myorg@ both give the
+scope @myorg@). The scope is a path component like any other, so 'nameComponent' decides it.
+-}
+projectScope :: Text -> Either ParseError Scope
+projectScope raw = mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
+
+{- One component of an npm name, the scope or the bare name. The component reaches an
+interpolated upstream URL, so it must clear 'isSafeComponent'. It carries no @\@@ and no
+whitespace either, so one identity has exactly one spelling. -}
+nameComponent :: Text -> Either ParseError Text
+nameComponent component
+    | T.null component = Left (ParseError "empty npm name component")
+    | isSafeComponent component && T.all usable component = Right component
+    | otherwise = Left (ParseError ("unusable npm name component: " <> show component))
+  where
+    usable ch = ch /= '@' && not (isSpace ch)
 
 -- Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
 projectPerson :: Wire.Person -> Person

@@ -11,7 +11,6 @@ import Data.Aeson (FromJSON (..), Value (..), withObject, withText, (.!=), (.:),
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
-import Data.Char (isSpace)
 import Data.IP (IPRange)
 import Data.Map.Strict qualified as Map
 import Data.Scientific (toBoundedInteger)
@@ -24,9 +23,10 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
-import Ecluse.Core.Package (Scope, mkScope)
+import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
+import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
@@ -74,16 +74,13 @@ parseScopes = withText "Scopes" $ \t ->
         else traverse parseScopeEntry (T.splitOn "," t)
 
 -- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
--- typo fails the load instead of seeding an allow-list that refuses every publish.
+-- typo fails the load instead of seeding an allow-list that refuses every publish. The scope
+-- grammar is npm's own, so the allow-list and the request path cannot read one entry differently.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
-    let trimmed = T.strip entry
-        body = fromMaybe trimmed (T.stripPrefix "@" trimmed)
-     in if T.null body || T.any invalidScopeChar body
-            then fail ("invalid scope in publishAllow: " <> show trimmed)
-            else pure (mkScope trimmed)
+    either (const (fail ("invalid scope in publishAllow: " <> show trimmed))) pure (projectScope trimmed)
   where
-    invalidScopeChar c = c == '/' || c == '@' || isSpace c
+    trimmed = T.strip entry
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" appConfigParser
