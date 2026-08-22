@@ -60,11 +60,14 @@ short, and write it so a reader who has not opened the diff understands it on it
  now. Name a deliberate trade-off in one sentence if there was one. Closes #NNN.>
 
 ## Checklist
-- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
-- [ ] Docs updated in this PR where behaviour, interfaces, or config changed
+- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep, weeder, stan)
+- [ ] Docs updated in this PR (README / `docs/` / AGENTS.md) where behaviour, interfaces, or config changed
 - [ ] Conventional Commit subjects; commits are GPG-signed
 - [ ] Every commit is signed off, DCO (`git commit -s`), as the author
 - [ ] Tests added or updated for the change
+
+## Sign-off (DCO)
+Signed off on every commit as the author.
 
 ## AI assistance
 - [x] Disclosed: assisted by AI; `Assisted-by:` trailer on the relevant commits.
@@ -102,8 +105,9 @@ Rules for the Summary:
 - **Verify the gate with `gh pr checks`, not `gh run watch`'s exit code** (it can exit 0 on failure).
   The gating jobs are *Build & tests*, *Static checks*, *Haddock builds*, *End-to-end tests*,
   *Dead-code check (weeder)*, *Haskell static analysis (stan)*, and the terminal *CI gate*.
-  **`codecov/patch` and `codecov/project` are non-gating** backstops that read integration-tier-
-  covered code as under-covered; a red there does not block hand-off. Note it and proceed.
+  **`codecov/project` is a context the ruleset requires**, so it must be green before the flip.
+  **`codecov/patch` is informational**: it reads integration-tier-covered code as under-covered,
+  so a red there does not block hand-off. Note it and proceed.
 
 ## 4. If the DCO check goes red
 
