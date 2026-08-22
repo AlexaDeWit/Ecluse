@@ -59,12 +59,12 @@ parseRegistryUrl field = \case
                         <> ")"
                     )
             | otherwise -> pure url
-    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
 parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
 parseEnum parser field = \case
     String t -> either (\e -> fail (field <> ": " <> T.unpack e)) pure (parser t)
-    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
 valueKind :: Value -> String
 valueKind = \case
@@ -100,8 +100,8 @@ parseUrl :: String -> Value -> Parser Url
 parseUrl field = \case
     String t
         | Left reason <- refuseCredentialMaterial (T.pack field) (T.strip t) -> fail (T.unpack reason)
-        | otherwise -> either (fail . T.unpack) pure (mkUrl t)
-    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+        | otherwise -> either (fail . T.unpack) pure (mkUrl (T.strip t))
+    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
 {- | An @http(s)@ URL Écluse itself serves, rewrites against, or fetches from, such as the
 public URL and the OSV export base. Plain http stays legal for loopback development. The
@@ -115,7 +115,7 @@ value as written.
 parseHttpUrl :: String -> Value -> Parser Url
 parseHttpUrl field = \case
     String t -> httpUrlOf field (T.strip t)
-    other -> fail (field <> " expected a string, but encountered a " <> valueKind other)
+    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
 -- The credential refusal runs first, because the two refusals under it quote the value.
 httpUrlOf :: String -> Text -> Parser Url
