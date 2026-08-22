@@ -1,7 +1,7 @@
 :root {
-  /* Brand palette, extracted from the SVG artwork. docs/branding/colours.md
-     documents the full palette and its roles. Cream-and-charcoal paper-and-ink,
-     sand/tan lock steps, sage-teal water. */
+  /* Brand palette, extracted from the SVG artwork under docs/branding, which is
+     the source of truth. Cream-and-charcoal paper-and-ink, sand/tan lock steps,
+     sage-teal water. */
   --charcoal: #211f1c;
   --cream:    #f4efe3;
   --sand:     #ece4d2;

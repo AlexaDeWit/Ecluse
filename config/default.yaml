@@ -19,7 +19,7 @@ server:
 # The mirror queue, read only when a mount mirrors. The shape of url picks the
 # backend. An SQS queue URL (https://sqs.{region}.amazonaws.com/...) selects the
 # durable SQS backend and takes its region from the host. A Pub/Sub topic resource
-# (projects/{p}/topics/{t}) names the GCP backend, which is not yet built. Unset,
+# (projects/{p}/topics/{t}) names the GCP backend, which Écluse refuses at boot. Unset,
 # mirroring runs on the bounded in-memory queue: non-durable, best-effort, and warned
 # loudly at boot. That is fine for a single node or a trial.
 queue:

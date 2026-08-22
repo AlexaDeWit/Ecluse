@@ -4,8 +4,7 @@
 -- regenerates the register, and nobody hand-copies it into prose, so the docs
 -- cannot drift from the model.
 --
--- This mirrors web/mermaid.lua: the pandoc pass replaces a CodeBlock that carries
--- a known class. No commit-back and no extra dependency, because pandoc (>= 3.1)
+-- The pandoc pass replaces a CodeBlock that carries a known class. No commit-back and no extra dependency, because pandoc (>= 3.1)
 -- decodes the JSON itself via pandoc.json.decode. The owning fence may name an
 -- alternate model path as its body. An empty fence uses the default below.
 
