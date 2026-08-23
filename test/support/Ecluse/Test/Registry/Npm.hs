@@ -2,23 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared npm fixtures: faithful packument and version-object builders plus the
-public-registry defaults the suites build 'NpmClientConfig' values from.
+{- | Shared npm fixtures: packument and version-object builders, the public-registry
+defaults, the name grammar as a table, and the URL path-segment generators.
 
-'VersionSpec', 'versionValue', and 'packumentValue' keep cross-suite JSON fixtures
-structurally aligned while leaving each suite's axis-specific values at the call site.
-'publishedDaysAgo' gives age-sensitive fixtures the same clock-relative timestamp
-calculation without owning their clock.
-
-'npmNameVerdicts' is the npm name grammar as a table. Every suite that owns an entry point
-which splits a name asserts that one list, so a verdict cannot drift between the read path,
-the route, the URL rewrite, the publish allow-list, and the queue decode.
-
-'defaultNpmConfig' is the anonymous public-registry config a suite hands to the npm data
-plane ("Ecluse.Core.Registry.Npm"). 'publicRegistryBaseUrl' and 'publicRegistryUrl' give
-the canonical public npm registry as text and as an https 'RegistryUrl'. That
-'RegistryUrl' comes from 'Ecluse.Test.Package.unsafeRegistryUrl', over the https-only
-'Ecluse.Core.Security.Egress.mkRegistryUrl'.
+'npmNameVerdicts' is the one list every entry point that splits an npm name asserts
+against, so a verdict cannot drift between the read path, the route, the URL rewrite,
+the publish allow-list, and the queue decode.
 -}
 module Ecluse.Test.Registry.Npm (
     -- * Packument fixtures
@@ -35,7 +24,9 @@ module Ecluse.Test.Registry.Npm (
     -- * Client fixtures
     defaultNpmConfig,
     publicRegistryBaseUrl,
-    publicRegistryUrl,
+
+    -- * URL path generators
+    genPathSegments,
 ) where
 
 import Data.Aeson (Value (Object), object, (.=))
@@ -44,12 +35,13 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Hedgehog (Gen)
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Test.Package (unsafeRegistryUrl)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
 @\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
@@ -170,12 +162,6 @@ The default target when no managed backend is configured.
 publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
-{- | The canonical public npm registry as a 'RegistryUrl', validated through the https-only
-'Ecluse.Core.Security.Egress.mkRegistryUrl'.
--}
-publicRegistryUrl :: RegistryUrl
-publicRegistryUrl = unsafeRegistryUrl publicRegistryBaseUrl
-
 {- | An anonymous client config against the public registry, with the secure-default response
 bounds ('Ecluse.Core.Security.defaultLimits'). Override 'npmBaseUrl', 'npmToken', or 'npmLimits'
 for a managed backend or a per-deployment budget.
@@ -188,3 +174,63 @@ defaultNpmConfig manager =
         , npmToken = Nothing
         , npmLimits = defaultLimits
         }
+
+-- | A URL path of arbitrary segments, at the length a router's property explores.
+genPathSegments :: Gen [Text]
+genPathSegments = Gen.list (Range.linear 0 4) genPathSegment
+
+{- | One path segment. The weights keep every arm a router property samples: plain names,
+scoped names, the literal pool, and free text over the punctuation a path carries.
+-}
+genPathSegment :: Gen Text
+genPathSegment =
+    Gen.frequency
+        [ (5, genSegmentName)
+        , (2, genScopedSegmentName)
+        , (4, Gen.element pathSegmentPool)
+        , (4, Gen.text (Range.linear 0 8) (Gen.element segmentChars))
+        ]
+
+genSegmentName :: Gen Text
+genSegmentName = Gen.text (Range.linear 1 8) (Gen.frequency [(8, Gen.alphaNum), (2, Gen.element ['.', '-', '_'])])
+
+genScopedSegmentName :: Gen Text
+genScopedSegmentName = do
+    scope <- genSegmentName
+    Gen.choice
+        [ pure ("@" <> scope)
+        , (\base -> "@" <> scope <> "/" <> base) <$> genSegmentName
+        ]
+
+-- Traversal, separator, control, and extension fragments a segment must never be trusted with,
+-- alongside the real names and route words a table has to keep matching.
+pathSegmentPool :: [Text]
+pathSegmentPool =
+    [ ""
+    , "."
+    , ".."
+    , "-"
+    , "-foo"
+    , "@"
+    , "@/x"
+    , "@scope"
+    , "@scope/"
+    , "@scope/pkg"
+    , "a/b"
+    , "a\\b"
+    , "a\tb"
+    , "a\0b"
+    , "../evil.tgz"
+    , "x.tgz"
+    , "foo/bar"
+    , "lodash"
+    , "pkg"
+    , "ping"
+    , "v1"
+    , "search"
+    , "lodash-1.0.0.tgz"
+    , "code-frame-7.0.0.tgz"
+    ]
+
+segmentChars :: String
+segmentChars = ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1', '2', '3', '4']

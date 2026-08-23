@@ -7,25 +7,25 @@ module Ecluse.PilotSpec (spec) where
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
 import Database.SQLite.Simple (Only (..), close, open, query_)
-import Katip (Environment (..), initLogEnv)
 import Network.HTTP.Types.Status (status200)
 import System.Directory (doesFileExist)
 import System.FilePath (takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 spec :: Spec
 spec = do
     describe "runPilotCompile (one-shot compile mode)" $ do
         it "compiles a served OSV zip into the requested directory and returns the artifact's path" $ do
-            le <- initLogEnv "test" (Environment "test")
-            appCfg <- defaultAppConfig
+            le <- newTestLogEnv
+            appCfg <- expectAppConfig [] Nothing
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
             withSystemTempDirectory "ecluse-pilot-compile" $ \outDir -> do
                 dbFile <- withStub status200 zipData $ \stub ->
@@ -44,8 +44,8 @@ spec = do
                 map fromOnly rows `shouldBe` ["hono"]
 
         it "fails loudly when an upload is requested without a configured bucket" $ do
-            le <- initLogEnv "test" (Environment "test")
-            appCfg <- defaultAppConfig
+            le <- newTestLogEnv
+            appCfg <- expectAppConfig [] Nothing
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
             withSystemTempDirectory "ecluse-pilot-compile" $ \outDir -> do
                 let action = withStub status200 zipData $ \stub ->
@@ -65,8 +65,3 @@ compileOptions baseUrl outDir =
         , pcoOutDir = outDir
         , pcoUpload = False
         }
-
-defaultAppConfig :: IO AppConfig
-defaultAppConfig = case loadConfig [] Nothing of
-    Right c -> pure (configApp c)
-    Left e -> fail ("Config error: " <> show e)

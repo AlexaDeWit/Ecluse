@@ -5,23 +5,13 @@
 {- | Labelling and reaping scope for the Docker containers the integration and
 end-to-end suites spin up.
 
-Integration ('TestContainers.Hspec.withContainers') and e2e (the raw @docker@
-harness in "Ecluse.E2E.Harness.Docker") both stamp every container they create with two
-labels. A killed or interrupted run can then be swept up afterwards, rather than left to
-accumulate:
-
-  * @com.ecluse.test@ names the suite (@integration@ or @e2e@).
-  * @com.ecluse.test.scope@ carries a per-worktree id, from @ECLUSE_TEST_SCOPE@. The
-    container-running @task@ targets set it: the @test-*@ suites and the @coverage@ tier
-    @task check@ runs. A scoped reap therefore removes only /this/ worktree's containers,
-    never a sibling worktree's live ones.
-
-@scripts\/test-containers.sh@ is the reaper that reads these labels. This module is the
-matching writer, so the two cannot drift on the label spelling. See @docs\/testing.md@
--> "Tests and Docker".
+Both harnesses stamp every container with @com.ecluse.test@ (the suite) and
+@com.ecluse.test.scope@ (a per-worktree id from @ECLUSE_TEST_SCOPE@, which the
+container-running @task@ targets pin). A scoped reap therefore removes only this
+worktree's containers, never a sibling's. @scripts\/test-containers.sh@ is the matching
+reader, so the two cannot drift on the spelling. See @docs\/testing.md@.
 -}
 module Ecluse.Test.Containers (
-    testScope,
     testContainerLabels,
     dockerLabelArgs,
 ) where

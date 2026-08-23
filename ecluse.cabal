@@ -492,6 +492,8 @@ library ecluse-test-support
     Ecluse.Test.Corpus
     Ecluse.Test.Credential
     Ecluse.Test.Cve
+    Ecluse.Test.Json
+    Ecluse.Test.Log
     Ecluse.Test.Metrics
     Ecluse.Test.Osv
     Ecluse.Test.OsvDb
@@ -531,12 +533,14 @@ library ecluse-test-support
     , ram               ^>=0.22
     , resourcet         ^>=1.3
     , retry             ^>=0.9
+    , scientific        ^>=0.3
     , temporary         ^>=1.3
     , unliftio          ^>=0.2.25
     , sqlite-simple     ^>=0.4
     , text              ^>=2.1
     , time              ^>=1.12
     , universe-base     ^>=1.1
+    , vector            ^>=0.13
     , wai               ^>=3.2
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
@@ -546,6 +550,7 @@ library ecluse-runtime-test-support
   import:          shared
   hs-source-dirs:  runtime/test-support
   exposed-modules:
+    Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.Support
 
   build-depends:
@@ -554,6 +559,7 @@ library ecluse-runtime-test-support
     , ecluse:ecluse-test-support
     , http-client       ^>=0.7
     , katip             ^>=0.8.8
+    , unliftio          ^>=0.2.25
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends. That absence enforces the
@@ -825,6 +831,7 @@ test-suite ecluse-runtime-unit
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
     , bytestring        ^>=0.12

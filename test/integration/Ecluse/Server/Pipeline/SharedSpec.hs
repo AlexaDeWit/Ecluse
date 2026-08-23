@@ -10,13 +10,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Ecluse.Server.Pipeline.TestSupport
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
-import UnliftIO (bracket)
 import UnliftIO.Exception (impureThrow, throwString)
-import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
@@ -30,6 +27,7 @@ import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (noFaultReporter)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -230,22 +228,6 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0", "3.0.0"]
-
-captureStdout :: IO () -> IO Text
-captureStdout act =
-    withSystemTempFile "ecluse-pipeline-log.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
-            act
-            hFlush stdout
-            hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
-  where
-    restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
-        hClose saved
 
 captureBreachLog :: LByteString -> IO Text
 captureBreachLog privateBody = do

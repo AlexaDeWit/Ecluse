@@ -6,10 +6,8 @@ module Ecluse.Registry.Npm.RouteSpec (spec) where
 
 import Data.Char (isControl)
 import Data.Text qualified as T
-import Hedgehog (Gen, forAll)
+import Hedgehog (forAll)
 import Hedgehog qualified as H
-import Hedgehog.Gen qualified as Gen
-import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -28,6 +26,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Registry.Npm (genPathSegments)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
@@ -266,7 +265,7 @@ spec = do
         -- Each component is checked alone, because a scoped name renders with a structural '/'.
         it "an accepted route never carries an unsafe component" $
             hedgehog $ do
-                segs <- forAll genSegments
+                segs <- forAll genPathSegments
                 let route = classify segs
                 -- Non-vacuity: the same generator must reach both arms often.
                 H.cover 5 "accepted (packument/artifact)" (isAccepted route)
@@ -306,45 +305,3 @@ safe c =
         && c /= "."
         && c /= ".."
         && T.all (\ch -> ch /= '/' && ch /= '\\' && not (isControl ch)) c
-
-{- | A path generator that mixes real-looking segments with hostile fragments, so 'classify' runs
-down both its accepting and its denying paths.
--}
-genSegments :: Gen [Text]
-genSegments = Gen.list (Range.linear 0 4) genSegment
-
--- | One segment: usually a benign name, often a hostile or structural fragment.
-genSegment :: Gen Text
-genSegment =
-    Gen.frequency
-        [ (5, genName)
-        , (2, genScopedSegment)
-        , (4, Gen.element hostile)
-        ]
-  where
-    hostile =
-        [ ""
-        , "."
-        , ".."
-        , "-"
-        , "@"
-        , "a/b"
-        , "a\\b"
-        , "a\tb"
-        , "a\0b"
-        , "../evil.tgz"
-        , "x.tgz"
-        ]
-
--- | A benign unscoped-style name: letters, digits, and the safe punctuation npm allows.
-genName :: Gen Text
-genName = Gen.text (Range.linear 1 8) (Gen.frequency [(8, Gen.alphaNum), (2, Gen.element ['.', '-', '_'])])
-
--- | A @\@scope\/name@ one-segment form (and bare-scope @\@scope@) to drive scoped parsing.
-genScopedSegment :: Gen Text
-genScopedSegment = do
-    scope <- genName
-    Gen.choice
-        [ pure ("@" <> scope)
-        , (\base -> "@" <> scope <> "/" <> base) <$> genName
-        ]

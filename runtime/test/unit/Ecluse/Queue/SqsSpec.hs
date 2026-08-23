@@ -5,24 +5,8 @@
 module Ecluse.Queue.SqsSpec (spec) where
 
 import Data.Text qualified as T
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
-import Katip (
-    ColorStrategy (ColorLog),
-    Environment (Environment),
-    LogEnv,
-    Namespace (Namespace),
-    Severity (DebugS),
-    Verbosity (V2),
-    closeScribes,
-    defaultScribeSettings,
-    initLogEnv,
-    permitItem,
-    registerScribe,
- )
-import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
+import Katip (closeScribes)
 import Test.Hspec
-import UnliftIO (bracket)
-import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkPackageName, mkScope)
@@ -46,9 +30,9 @@ import Ecluse.Runtime.Queue.Sqs (
     encodeJob,
     liftReceivedMessages,
  )
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
-import Ecluse.Test.Support (newTestLogEnv)
 
 -- | An unscoped npm job fixture.
 npmJob :: MirrorJob
@@ -332,31 +316,3 @@ deliveredWithCount raw =
         , rmMessageId = Just "m-good"
         , rmReceiveCount = raw
         }
-
-{- | A 'LogEnv' with a single stdout scribe in the compact one-line JSON form, every
-severity admitted. 'captureStdout' can then assert a drop line's serialised bytes.
--}
-jsonLogEnv :: IO LogEnv
-jsonLogEnv = do
-    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
-    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    registerScribe "stdout" scribe defaultScribeSettings base
-
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file and return what was
-written. The original 'stdout' is restored on every exit path.
--}
-captureStdout :: IO () -> IO Text
-captureStdout act =
-    withSystemTempFile "ecluse-sqs-log.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
-            act
-            hFlush stdout
-            hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
-  where
-    restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
-        hClose saved

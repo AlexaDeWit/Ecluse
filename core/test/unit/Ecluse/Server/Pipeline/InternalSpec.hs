@@ -9,27 +9,9 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
-import Katip (
-    ColorStrategy (ColorLog),
-    Environment (Environment),
-    LogEnv,
-    Namespace (Namespace),
-    Severity (DebugS),
-    SimpleLogPayload,
-    Verbosity (V2),
-    closeScribes,
-    defaultScribeSettings,
-    initLogEnv,
-    permitItem,
-    registerScribe,
-    toObject,
- )
+import Katip (SimpleLogPayload, closeScribes, toObject)
 import Katip.Monadic (runKatipContextT)
-import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
 import Test.Hspec
-import UnliftIO (bracket)
-import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -86,6 +68,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv)
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
@@ -321,32 +304,3 @@ artifactWith hashes =
         , artYanked = False
         , artProvenance = Nothing
         }
-
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning everything
-written. The helper restores the original 'stdout' on every exit path.
--}
-captureStdout :: IO () -> IO Text
-captureStdout act =
-    withSystemTempFile "ecluse-pipeline-internal-log.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
-            act
-            hFlush stdout
-            hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
-  where
-    restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
-        hClose saved
-
-{- | A stdout scribe over @katip@'s own @jsonFormat@, admitting every severity. The application
-builds its own scribe in @Ecluse.Runtime.Log@, which is unreachable here and renders a different
-line shape, so these assertions read only the structured payload both shapes carry.
--}
-jsonLogEnv :: IO LogEnv
-jsonLogEnv = do
-    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
-    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    registerScribe "stdout" scribe defaultScribeSettings base

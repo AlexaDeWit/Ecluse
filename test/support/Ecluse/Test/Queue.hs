@@ -4,26 +4,13 @@
 
 {- | The production in-memory mirror queue, configured for tests.
 
-Suites that need a 'MirrorQueue' assemble the same bounded backend the
-composition root rolls over to when no @ECLUSE_QUEUE__URL@ is set
-('Ecluse.Core.Queue.Memory.newBoundedInMemoryQueue'). The knobs are test-sized,
-not the production ones:
-
-* a depth cap far above what any spec enqueues, so the bounded backend's
-  drop-newest overflow shed can never fire under a test's job volume.
-* a short idle-poll window, so a 'Ecluse.Core.Queue.receive' on an empty queue
-  returns its healthy @[]@ promptly instead of waiting out the production
-  long-poll cadence.
-* a drop callback that throws, so a drop (a broken test premise: some spec
-  outgrew the cap) fails the test loudly instead of silently losing a job the
-  spec meant to observe.
-
-A spec asserting the backend's own cap or drop-reporting behaviour builds its
-own 'Ecluse.Core.Queue.Memory.MemoryQueueConfig' instead (see
-@Ecluse.Queue.MemorySpec@).
+A suite gets the same bounded backend the composition root rolls over to when no
+@ECLUSE_QUEUE__URL@ is set. The knobs are test-sized: a depth cap far above what any spec
+enqueues, a short idle poll so a receive on an empty queue returns promptly, and a drop
+callback that throws, because a drop means a spec outgrew the cap. A spec asserting the
+backend's own cap or drop reporting builds its own config instead.
 -}
 module Ecluse.Test.Queue (
-    UnexpectedTestQueueDrop (..),
     newTestMemoryQueue,
 ) where
 
@@ -40,7 +27,7 @@ newtype UnexpectedTestQueueDrop = UnexpectedTestQueueDrop Int
 
 instance Exception UnexpectedTestQueueDrop
 
--- | See the module header for the knobs and why each is what it is.
+-- | The bounded in-memory queue at the test knobs the module header describes.
 newTestMemoryQueue :: IO MirrorQueue
 newTestMemoryQueue =
     newBoundedInMemoryQueue

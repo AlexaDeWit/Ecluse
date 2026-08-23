@@ -4,13 +4,7 @@
 
 module Ecluse.Registry.Npm.ProjectSpec (spec) where
 
-import Data.Aeson (
-    Value (Array, Bool, Null, Number, Object, String),
-    eitherDecodeStrict,
-    encode,
-    object,
-    (.=),
- )
+import Data.Aeson (Value (Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BL
@@ -19,7 +13,6 @@ import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Vector qualified as V
 import Hedgehog (PropertyT, annotateShow, forAll)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -53,8 +46,10 @@ import Ecluse.Core.Registry.Npm.Project (
     projectName,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
+import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 {- | Projection tests for the npm adapter: the domain values a fetched packument projects into.
 They drive 'parsePackageInfoFromValue', the same projection the serve path runs on every request.
@@ -266,7 +261,7 @@ versionListSpec = describe "parseVersionList" $ do
         fmap (map unVersion) (parseVersionList (RegistryResponse body)) `shouldBe` Right ["3.0.1"]
 
     it "lists every key for a multi-version inline packument, in key order" $ do
-        vs <- orFailParse (parseVersionList (RegistryResponse multiVersionPackument))
+        vs <- expectRight (parseVersionList (RegistryResponse multiVersionPackument))
         map unVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
 {- | One version broken in a required or security-decisive field is dropped from the decision
@@ -305,7 +300,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         -- The complement to the drop cases: advisory junk degrades the field but the version
         -- survives. It runs through parsePackageInfoFromValue, so field-level and version-level
         -- leniency compose on the production decode path.
-        value <- decodeValue advisoryJunkPackument
+        value <- decodeJsonOrFail advisoryJunkPackument
         case parsePackageInfoFromValue (unscoped "adv") value of
             Right (Projected info) -> do
                 Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
@@ -426,30 +421,38 @@ showResult = \case
 encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
-{- | A recursive, depth- and breadth-bounded arbitrary 'Value' that shrinks toward the scalars, so
-it terminates. Object keys lean toward the real packument field names, so a generated object
-routinely reaches the projection's success arm.
+{- | The object-key pool the generated documents draw from. Without the bias toward the field
+names the projection reads, almost every object would miss @name@ and @versions@, leaving the
+success arm unsampled.
 -}
-genValue :: H.Gen Value
-genValue =
-    Gen.recursive
-        Gen.choice
-        [ pure Null
-        , Bool <$> Gen.bool
-        , Number . fromInteger <$> genInteger
-        , String <$> genJsonText
-        ]
-        [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
-        , Object . KeyMap.fromList
-            <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
-        ]
+packumentKeys :: [Text]
+packumentKeys =
+    [ "name"
+    , "version"
+    , "dist-tags"
+    , "versions"
+    , "time"
+    , "dist"
+    , "tarball"
+    , "shasum"
+    , "integrity"
+    , "scripts"
+    , "license"
+    , "deprecated"
+    , "hasInstallScript"
+    , "_npmUser"
+    , "maintainers"
+    , "dependencies"
+    , "1.0.0"
+    , "latest"
+    ]
 
 {- | A body generator mixing fully-arbitrary JSON with packument-shaped objects, so a property
 reaches both the rejecting and the projecting arm. It biases the shape only, never a
 valid-document oracle.
 -}
 genBody :: H.Gen Value
-genBody = Gen.frequency [(1, genValue), (1, genPackumentish)]
+genBody = Gen.frequency [(1, genValue packumentKeys), (1, genPackumentish)]
 
 {- | A top-level object shaped like an npm packument. The values inside stay arbitrary, so this
 biases only the shape toward the projection's success arm.
@@ -458,7 +461,7 @@ genPackumentish :: H.Gen Value
 genPackumentish = do
     name <- Gen.text (Range.linear 1 8) Gen.alphaNum
     versionObj <- genVersionish
-    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey <*> genValue)
+    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey packumentKeys <*> genValue packumentKeys)
     pure . Object . KeyMap.fromList $
         [ (Key.fromText "name", String name)
         , (Key.fromText "versions", Object (KeyMap.singleton (Key.fromText "1.0.0") versionObj))
@@ -471,49 +474,13 @@ the artifact projection to find a tarball.
 genVersionish :: H.Gen Value
 genVersionish = do
     tarball <- genJsonText
-    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey <*> genValue)
+    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey packumentKeys <*> genValue packumentKeys)
     pure . Object . KeyMap.fromList $
         [ (Key.fromText "name", String "pkg")
         , (Key.fromText "version", String "1.0.0")
         , (Key.fromText "dist", Object (KeyMap.singleton (Key.fromText "tarball") (String tarball)))
         ]
             <> extra
-
--- | A small arbitrary integer to seed a JSON number, kept in a modest range.
-genInteger :: H.Gen Integer
-genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
-
--- | A short arbitrary JSON string value (unicode, to probe text handling).
-genJsonText :: H.Gen Text
-genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
-
-{- | An object key drawn from a pool biased toward the packument field names the projection reads.
-Without the bias almost every object would miss @name@ and @versions@, leaving the success arm
-unsampled.
--}
-genKey :: H.Gen Key.Key
-genKey = Key.fromText <$> Gen.choice [Gen.element packumentKeys, genJsonText]
-  where
-    packumentKeys =
-        [ "name"
-        , "version"
-        , "dist-tags"
-        , "versions"
-        , "time"
-        , "dist"
-        , "tarball"
-        , "shasum"
-        , "integrity"
-        , "scripts"
-        , "license"
-        , "deprecated"
-        , "hasInstallScript"
-        , "_npmUser"
-        , "maintainers"
-        , "dependencies"
-        , "1.0.0"
-        , "latest"
-        ]
 
 {- | A full-form packument whose single version declares a @postinstall@ script
 and __no__ @hasInstallScript@ key, so the projection must derive install-script presence.
@@ -657,10 +624,6 @@ runsCode = \case
     RunsCodeOnInstall _ -> True
     _ -> False
 
--- | Decode a JSON literal into a 'Value', failing the example on an undecodable literal.
-decodeValue :: ByteString -> IO Value
-decodeValue bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
-
 {- | Read a committed fixture body by name (under @core\/test\/unit\/fixtures\/npm\/@,
 the path Cabal runs tests from).
 -}
@@ -702,7 +665,7 @@ routeNameOf v = npmName (nameOf v)
 the serve path runs, validating against the body's own self-reported name.
 -}
 projectInfoOf :: ByteString -> IO PackageInfo
-projectInfoOf body = decodeValue body >>= projectedInfo
+projectInfoOf body = decodeJsonOrFail body >>= projectedInfo
 
 {- | Project an already-decoded packument 'Value' into its 'PackageInfo' through the live
 'parsePackageInfoFromValue', validating against the value's own self-reported name.
@@ -712,7 +675,7 @@ projectedInfo value =
     case parsePackageInfoFromValue (routeNameOf value) value of
         Right (Projected info) -> pure info
         Right (NameMismatch reported) -> fail ("unexpected name mismatch: " <> toString reported)
-        Left e -> expectationFailureWith e
+        Left e -> fail ("unexpected ParseError: " <> show e)
 
 {- | Look up one version's 'PackageDetails' from a packument body via the live whole-packument
 projection, or 'Nothing' when the version is absent or dropped.
@@ -733,16 +696,6 @@ projectVersionOf body version =
 -- | Project one version of a fixture file into its 'PackageDetails' through the live projection.
 projectVersion :: FilePath -> Version -> IO PackageDetails
 projectVersion name version = readFixture name >>= (`projectVersionOf` version)
-
-{- | Unwrap a projection result, failing the example with the 'ParseError' message
-rather than crashing, which keeps the suite total (no partial @error@).
--}
-orFailParse :: Either ParseError a -> IO a
-orFailParse = either expectationFailureWith pure
-
--- | Fail the running example with a 'ParseError' message.
-expectationFailureWith :: ParseError -> IO a
-expectationFailureWith e = fail ("unexpected ParseError: " <> show e)
 
 {- | Parse an ISO-8601 timestamp for an expectation, in the example's own
 'MonadFail' so an unparseable literal fails the test rather than crashing.

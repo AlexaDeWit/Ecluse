@@ -2,19 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Ecluse.Osv.CompileSpec (spec) where
 
-import Conduit
-import Control.Monad.Catch (MonadCatch, MonadMask)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text (unpack)
 import Data.Text qualified as T
 import Data.Version (showVersion)
 import Database.SQLite.Simple
-import Katip (Environment (..), Katip (..), KatipContext (..), LogEnv, initLogEnv)
 import Paths_ecluse (version)
 import System.Directory (removeFile)
 import System.FilePath (takeFileName)
@@ -30,37 +26,18 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
-import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.Osv (osvZipOf, runOsvTestM)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
 
-newtype TestM a = TestM {runTestM :: ReaderT LogEnv (ResourceT IO) a}
-    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, MonadCatch, MonadMask, PrimMonad, MonadUnliftIO)
-
-instance Katip TestM where
-    getLogEnv = TestM ask
-    localLogEnv f (TestM m) = TestM (local f m)
-
-instance KatipContext TestM where
-    getKatipContext = pure mempty
-    localKatipContext _ m = m
-    getKatipNamespace = pure mempty
-    localKatipNamespace _ m = m
-
 spec :: Spec
 spec = describe "SQLite OSV Compilation" $ do
     it "fetches an OSV zip and compiles it into a named, stamped SQLite artifact" $ do
-        le <- initLogEnv "test" (Environment "test")
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
-        dbFile <- withStub status200 zipData $ \stub -> do
-            runResourceT $
-                runReaderT
-                    ( runTestM $
-                        compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/sample.zip")
-                    )
-                    le
+        dbFile <- withStub status200 zipData $ \stub ->
+            runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/sample.zip"))
 
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double)]
@@ -102,7 +79,6 @@ spec = describe "SQLite OSV Compilation" $ do
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
 
     it "aborts the compile without publishing when the drop rate is systemic" $ do
-        le <- initLogEnv "test" (Environment "test")
         -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
         -- abandon the run rather than finalise an artifact that silently omits most advisories.
         zipData <-
@@ -113,12 +89,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         let action =
                 withStub status200 zipData $ \stub ->
-                    runResourceT $
-                        runReaderT
-                            ( runTestM $
-                                compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/all.zip")
-                            )
-                            le
+                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/all.zip"))
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
         -- The abandoned pass still records its tally, and its run reads as aborted, so an

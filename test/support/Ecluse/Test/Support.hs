@@ -2,19 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared test-support library for Écluse's suites.
+{- | Cross-cutting test helpers no single subsystem owns.
 
-The unit, integration, smoke, and end-to-end suites draw helpers, fixtures, and
-specs from here instead of each carrying its own copy. 'supportLinkageSpec' is a
-linkage probe every suite imports and runs. It proves the library is built, links
-against the library under test, and is reachable from each suite's discovered
-specs.
+A helper that belongs to one subsystem lives in that subsystem's @Ecluse.Test.*@
+module instead.
 -}
-module Ecluse.Test.Support (supportLinkageSpec, testServeAdmission, newTestLogEnv) where
+module Ecluse.Test.Support (
+    supportLinkageSpec,
+    testServeAdmission,
+    newTestClock,
+    expectRight,
+    decodeJsonOrFail,
+    TestContractEscape (..),
+) where
+
+import Data.Aeson (FromJSON, eitherDecodeStrict)
+import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (HashAlg (SHA256), renderHashAlg)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 {- | A trivial spec that touches a stable export of the library under test. A suite
@@ -27,13 +33,32 @@ supportLinkageSpec =
         it "is linked into the suite and can see the library under test" $
             renderHashAlg SHA256 `shouldBe` "sha256"
 
-{- | A serve admission for suites that do not test overload. Its capacity sits far above any test's
-in-flight load, so it never sheds, standing in for the bounded admission the boot path sizes from
-@ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT@.
+{- | A serve admission for suites that do not test overload. Its capacity sits far above any
+test's in-flight load, so it never sheds.
 -}
 testServeAdmission :: IO ServeAdmission
 testServeAdmission = newServeAdmission 1_000_000
 
--- | A scribe-free LogEnv (no stdout output during the test run).
-newTestLogEnv :: IO LogEnv
-newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+{- | An IORef-backed clock a test advances by hand, so a case can elapse wall-clock time
+without sleeping. The pair is the read action and the setter.
+-}
+newTestClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
+newTestClock start = do
+    ref <- newIORef start
+    pure (readIORef ref, writeIORef ref)
+
+-- | Assert a 'Right' and return its value, failing the running example otherwise.
+expectRight :: (Show e) => Either e a -> IO a
+expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure
+
+-- | Decode JSON, failing the running example with the aeson error rather than crashing.
+decodeJsonOrFail :: forall a. (FromJSON a) => ByteString -> IO a
+decodeJsonOrFail bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
+
+{- | A typed stand-in for an exception thrown past a handle's typed contract. A test double
+that must never be called throws this instead of a stringly exception.
+-}
+newtype TestContractEscape = TestContractEscape Text
+    deriving stock (Eq, Show)
+
+instance Exception TestContractEscape

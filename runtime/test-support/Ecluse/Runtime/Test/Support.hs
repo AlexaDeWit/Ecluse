@@ -11,7 +11,6 @@ pure core 'ecluse-test-support'.
 module Ecluse.Runtime.Test.Support (
     newTestEnv,
     newTestEnvWith,
-    newTestLogEnv,
 ) where
 
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
@@ -20,9 +19,10 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (newTestLogEnv, testServeAdmission)
+import Ecluse.Test.Support (testServeAdmission)
 
 {- | The default test environment: the memory queue, a standard HTTP manager, and
 telemetry disabled.

@@ -7,7 +7,7 @@ module Ecluse.Cve.SyncSpec (spec) where
 import Conduit (runConduit, yieldMany, (.|))
 import Control.Concurrent.STM (check)
 import Data.Conduit.Combinators qualified as C
-import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
+import Katip (KatipContextT)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -37,6 +37,8 @@ import Ecluse.Runtime.Cve.Sync (
     runCveSync,
     syncStep,
  )
+import Ecluse.Runtime.Test.Cve (headOnlyFetch)
+import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb)
 import Ecluse.Test.Port (
     noopAdvisorySyncMetricsPort,
@@ -44,6 +46,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | An env over a fresh slot and a temp data dir, handed to each case.
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
@@ -59,14 +62,6 @@ withSyncEnv use =
                     }
         use dir slot envWith
 
-{- | A typed stand-in for an exception that escapes the fetch's typed contract.
-No test double in this spec throws a stringly exception.
--}
-newtype SyncSpecEscape = SyncSpecEscape Text
-    deriving stock (Eq, Show)
-
-instance Exception SyncSpecEscape
-
 {- | A fetch whose HEAD answers the given ETag and whose download builds an
 artifact via the given writer, returning the same ETag.
 -}
@@ -75,7 +70,7 @@ fetchServing mEtag write =
     CveFetch
         { fetchHeadEtag = pure (Right (DbEtag <$> mEtag))
         , fetchDownload = \dest -> case mEtag of
-            Nothing -> throwIO (SyncSpecEscape "download called with no object present")
+            Nothing -> throwIO (TestContractEscape "download called with no object present")
             Just etag -> write dest $> Right (DbEtag etag)
         }
 
@@ -125,12 +120,6 @@ newSwapCounter = do
     swaps <- newTVarIO (0 :: Int)
     pure (swaps, atomically (modifyTVar' swaps (+ 1)))
 
--- | Run a Katip-constrained action against a scribe-less environment.
-runQuiet :: KatipContextT IO a -> IO a
-runQuiet action = do
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
-
 -- | The sync task over inert observation ports, for the scheduling cases.
 runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
 runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
@@ -155,7 +144,7 @@ observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
     (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
     (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
-    withAsync (runQuiet (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
+    withAsync (runQuietKatip (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
         waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
         Observed <$> readSpans <*> readAttempts <*> readDurations
 
@@ -179,22 +168,14 @@ spec = do
     describe "syncStep" $ do
         it "reports the object absent without attempting a download" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch =
-                        CveFetch
-                            { fetchHeadEtag = pure (Right Nothing)
-                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
-                            }
+                let fetch = headOnlyFetch (Right Nothing)
                 syncStep (envWith fetch) Nothing >>= \case
                     SyncAbsent -> pass
                     other -> expectationFailure ("expected SyncAbsent, got " <> show other)
 
         it "does nothing when the remote ETag matches the last seen one" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch =
-                        CveFetch
-                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
-                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
-                            }
+                let fetch = headOnlyFetch (Right (Just (DbEtag "e1")))
                 syncStep (envWith fetch) (Just (DbEtag "e1")) >>= \case
                     SyncUnchanged -> pass
                     other -> expectationFailure ("expected SyncUnchanged, got " <> show other)
@@ -248,11 +229,7 @@ spec = do
 
         it "a head fault is a SyncFetchFaulted outcome; nothing is downloaded" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch =
-                        CveFetch
-                            { fetchHeadEtag = pure (Left transportDown)
-                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
-                            }
+                let fetch = headOnlyFetch (Left transportDown)
                 syncStep (envWith fetch) Nothing >>= \case
                     SyncFetchFaulted fault -> fault `shouldBe` transportDown
                     other -> expectationFailure ("expected SyncFetchFaulted, got " <> show other)
@@ -266,7 +243,7 @@ spec = do
                             { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
                             , fetchDownload = \dest -> do
                                 writeFileBS dest "partial bytes"
-                                throwIO (SyncSpecEscape "connection reset mid-stream")
+                                throwIO (TestContractEscape "connection reset mid-stream")
                             }
                     env = envWith fetch
                 syncStep env Nothing `shouldThrow` anyException
@@ -341,7 +318,7 @@ spec = do
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
-                withAsync (runQuiet (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
+                withAsync (runQuietKatip (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
                     awaitCount "the first swap to publish" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
                     readTVarIO swaps `shouldReturn` 1
@@ -365,7 +342,7 @@ spec = do
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
                     -- Mirrors bootBurstPolicy in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
                     burstAttempts = length (schedBootBackoff schedule) + 1
-                withAsync (runQuiet (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
+                withAsync (runQuietKatip (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
                     -- Each attempt reads the flag in one transaction with the counter, so
                     -- the burst spends its whole budget before the publication below.
                     awaitCount "the boot burst to spend every attempt" attempted burstAttempts
@@ -386,7 +363,7 @@ spec = do
                                 pure (Right (DbEtag "bad"))
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
-                withAsync (runQuiet (runUnobserved (envWith fetch) schedule pass)) $ \_ -> do
+                withAsync (runQuietKatip (runUnobserved (envWith fetch) schedule pass)) $ \_ -> do
                     threadDelay 200_000
                     -- One download despite the burst budget and several polls:
                     -- identical bytes cannot verify differently, so the
@@ -405,21 +382,13 @@ spec = do
 
         it "observes an unpublished artifact as one attempt" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch =
-                        CveFetch
-                            { fetchHeadEtag = pure (Right Nothing)
-                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
-                            }
+                let fetch = headOnlyFetch (Right Nothing)
                 observed <- observeAttempts 1 oneAttempt (envWith fetch)
                 observed `shouldObserve` [(Npm, AdvisoryNonePublished)]
 
         it "observes a failed fetch as one attempt, so a broken bucket still meters" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch =
-                        CveFetch
-                            { fetchHeadEtag = pure (Left transportDown)
-                            , fetchDownload = \_ -> throwIO (SyncSpecEscape "must not download")
-                            }
+                let fetch = headOnlyFetch (Left transportDown)
                 observed <- observeAttempts 1 oneAttempt (envWith fetch)
                 observed `shouldObserve` [(Npm, AdvisoryFetchFailed)]
 
@@ -441,7 +410,7 @@ spec = do
             withSyncEnv $ \_ slot envWith -> do
                 (swaps, onSwap) <- newSwapCounter
                 let env = envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))
-                withAsync (runQuiet (runUnobserved env oneAttempt onSwap)) $ \_ -> do
+                withAsync (runQuietKatip (runUnobserved env oneAttempt onSwap)) $ \_ -> do
                     awaitCount "the first swap to publish" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
                     readTVarIO swaps `shouldReturn` 1

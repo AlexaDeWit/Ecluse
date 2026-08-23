@@ -36,6 +36,7 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
  )
 import Ecluse.Test.Rules (inertRuleDeps, noFaultReporter)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestClock)
 
 -- The spec builds 'PreparedRule's directly with a fake 'prepEval', exercising the
 -- resilience harness and the parallel engine without a closure on the closed 'Rule' data.
@@ -47,27 +48,13 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 {- | An 'EvalContext' at a given instant, the request snapshot the age rules read. The
-breaker ignores it and takes its clock from 'newClock' instead.
+breaker ignores it and takes its clock from 'newTestClock' instead.
 -}
 ctxAt :: UTCTime -> EvalContext
 ctxAt t = EvalContext t Nothing
 
 ctx :: EvalContext
 ctx = ctxAt now
-
--- | A typed stand-in for a direct rule breaking its no-effects contract.
-newtype DirectRuleEscape = DirectRuleEscape Text
-    deriving stock (Eq, Show)
-
-instance Exception DirectRuleEscape
-
-{- | An IORef-backed clock a test advances by hand, so a breaker test elapses wall-clock
-time without sleeping.
--}
-newClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
-newClock start = do
-    ref <- newIORef start
-    pure (readIORef ref, writeIORef ref)
 
 -- | A single inert artifact. The rules under test do not inspect artifacts.
 sampleArtifact :: Artifact
@@ -117,7 +104,7 @@ mkRuleR ::
 mkRuleR = mkRuleClocked (pure now)
 
 {- | As 'mkRuleR', but with an injected breaker clock, so a cooldown test drives the
-breaker's timing through 'newClock' rather than through the request context.
+breaker's timing through 'newTestClock' rather than through the request context.
 -}
 mkRuleClocked ::
     IO UTCTime -> BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
@@ -307,7 +294,7 @@ spec = do
                         { prepName = "DirectBomb"
                         , prepPrecedence = 300
                         , prepResilience = Nothing
-                        , prepEval = \_ _ -> throwIO (DirectRuleEscape "the rule threw")
+                        , prepEval = \_ _ -> throwIO (TestContractEscape "the rule threw")
                         }
             decision <- evalRules ctx [bomb, pureAt 200 (AllowScope (mkScope "myorg"))] (pkg (Just "myorg") 0)
             case decision of
@@ -456,7 +443,7 @@ spec = do
             outcomes `shouldBe` replicate 4 (Decided (CannotVet FailDeny "no advisory database loaded"))
             readIORef evals `shouldReturn` 4 -- one evaluation per call: no retry, no fast-fail
         it "half-opens after the cooldown and recovers on a successful probe" $ do
-            (clock, setClock) <- newClock now
+            (clock, setClock) <- newTestClock now
             attempts <- newIORef (0 :: Int)
             failRef <- newIORef True
             rule <- mkRuleClock clock "Recover" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
@@ -476,7 +463,7 @@ spec = do
             outcome `shouldBe` Unavailable (WillResolve Nothing) FailNoDecision "EffAllow: the rule could not be evaluated"
 
         it "re-opens the breaker when the half-open probe also fails" $ do
-            (clock, setClock) <- newClock now
+            (clock, setClock) <- newTestClock now
             attempts <- newIORef (0 :: Int)
             rule <- mkRuleClock clock "Down" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
@@ -494,7 +481,7 @@ spec = do
         it "opens the cooldown from the failure-commit instant, not the attempt start (#705)" $ do
             -- The retry run consumes wall-clock time, so the breaker opens its cooldown from
             -- the failure-commit instant. The pre-retry instant would half-open it early.
-            (clock, setClock) <- newClock now
+            (clock, setClock) <- newTestClock now
             attempts <- newIORef (0 :: Int)
             rule <- mkRuleClock clock "Slow" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 5} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
@@ -523,7 +510,7 @@ spec = do
             outcome `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule could not be evaluated"
 
         it "reports the breaker trip → probe → reset transitions through its reporter" $ do
-            (clock, setClock) <- newClock now
+            (clock, setClock) <- newTestClock now
             (breakerLog, reporter) <- capturingBreakerReporter
             recovered <- newIORef False
             rule <- mkRuleClocked clock reporter "Down" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 30} FailDeny $ \_ ->

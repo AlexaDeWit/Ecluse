@@ -1,29 +1,20 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE UndecidableInstances #-}
 
-{- | The shared OSV advisory fixture corpus and the artifacts derived from it.
+{- | The shared OSV advisory fixture corpus, the artifacts derived from it, and the
+monad the derivation runs in.
 
-The committed JSON advisories under @test\/fixtures\/osv\/@ are the single
-source of truth for advisory-shaped test data. Every suite derives what it
-consumes from them at test time. 'osvCorpusZip' assembles the osv.dev-shaped
-export archive in memory, and @Ecluse.Test.OsvDb@ compiles that archive into a
-real @osv.db@ through the same pipeline Pilot runs. Deriving instead of
-committing binaries means a fixture can never drift from the artifact contract
-("Ecluse.Core.Osv.Schema").
-
-The corpus is versioned. 'CorpusV2' is 'CorpusV1' plus an advisory for a package
-V1 leaves clean. A V1-to-V2 shadow-swap therefore flips an observable rule
-outcome as well as the artifact's ETag.
-
-The hostile builders are the deliberate exception to "the real compiler is
-the only writer". They model tampered artifacts the compiler must never
-produce, for the reader's rejection tests.
+The committed JSON advisories under @test\/fixtures\/osv\/@ are the single source of
+truth for advisory-shaped test data, so a fixture can never drift from the artifact
+contract ("Ecluse.Core.Osv.Schema"). 'CorpusV2' is 'CorpusV1' plus an advisory for a
+package V1 leaves clean, so a V1-to-V2 shadow swap flips an observable rule outcome.
+The hostile builders model tampered artifacts the real compiler must never produce.
 -}
 module Ecluse.Test.Osv (
     -- * The corpus
     CorpusVersion (..),
-    osvCorpusFiles,
     osvCorpusZip,
     osvZipOf,
 
@@ -35,17 +26,24 @@ module Ecluse.Test.Osv (
     mkDbWithLaxSchema,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
+
+    -- * The monad the OSV pipeline runs in
+    OsvTestM,
+    runOsvTestM,
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
-import Conduit (runConduit, sinkLazy, yieldMany, (.|))
+import Conduit (MonadResource, MonadThrow, MonadUnliftIO, PrimMonad, ResourceT, runConduit, runResourceT, sinkLazy, yieldMany, (.|))
+import Control.Monad.Catch (MonadCatch, MonadMask)
 import Data.ByteString qualified as BS
 import Data.Time (LocalTime (..), fromGregorian, midnight)
 import Database.SQLite.Simple (Connection, Only (Only), Query (Query), execute, execute_, withConnection)
+import Katip (Katip (..), KatipContext (..), LogEnv)
 import System.FilePath (takeFileName, (</>))
 import System.IO (SeekMode (AbsoluteSeek), hSeek, withBinaryFile)
 
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
+import Ecluse.Test.Log (newTestLogEnv)
 
 data CorpusVersion = CorpusV1 | CorpusV2
     deriving stock (Bounded, Enum, Eq, Show)
@@ -238,3 +236,25 @@ createMetaTable conn = execute_ conn (Query metaTableDdl)
 
 setEpoch :: Connection -> Int -> IO ()
 setEpoch conn epoch = execute_ conn (fromString ("PRAGMA user_version = " <> show epoch))
+
+{- | The monad the OSV ingest and compile pipelines run in: resource-scoped, with a 'Katip'
+environment their log lines need.
+-}
+newtype OsvTestM a = OsvTestM {unOsvTestM :: ReaderT LogEnv (ResourceT IO) a}
+    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, MonadCatch, MonadMask, PrimMonad, MonadUnliftIO)
+
+instance Katip OsvTestM where
+    getLogEnv = OsvTestM ask
+    localLogEnv f (OsvTestM m) = OsvTestM (local f m)
+
+instance KatipContext OsvTestM where
+    getKatipContext = pure mempty
+    localKatipContext _ m = m
+    getKatipNamespace = pure mempty
+    localKatipNamespace _ m = m
+
+-- | Run an 'OsvTestM' action against a scribe-free log environment.
+runOsvTestM :: OsvTestM a -> IO a
+runOsvTestM action = do
+    logEnv <- newTestLogEnv
+    runResourceT (runReaderT (unOsvTestM action) logEnv)

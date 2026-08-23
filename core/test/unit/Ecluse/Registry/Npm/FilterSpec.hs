@@ -41,6 +41,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
+import Ecluse.Test.Support (decodeJsonOrFail)
 
 spec :: Spec
 spec = do
@@ -99,7 +100,7 @@ rewriteSpec = describe "rewriteVersion" $ do
         bareDistKey "fileCount" r `shouldBe` Just (Aeson.Number 7)
 
     it "leaves a version with no dist object untouched" $ do
-        v <- decodeValue "{\"name\":\"thing\",\"version\":\"1.0.0\"}"
+        v <- decodeJsonOrFail "{\"name\":\"thing\",\"version\":\"1.0.0\"}"
         rewriteVersion thingPrefix v `shouldBe` v
 
     it "leaves a tarball with no filename segment untouched" $ do
@@ -636,9 +637,6 @@ upstreamTarball name ver = "https://upstream.test/" <> name <> "/-/" <> baseName
   where
     baseName n = snd (T.breakOnEnd "/" n)
 
-decodeValue :: ByteString -> IO Value
-decodeValue bs = either (fail . ("decode failure: " <>)) pure (eitherDecodeStrict bs)
-
 {- | The route-requested 'PackageName' for a fixture: the body's own top-level @name@. The
 projection's name validation therefore passes, so these tests exercise filtering only.
 -}
@@ -667,7 +665,7 @@ fixtureName v = npmName (nameOf v)
 -}
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
-    v <- decodeValue bs
+    v <- decodeJsonOrFail bs
     info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
     pure (info, v)
 
@@ -704,7 +702,7 @@ refuse. The plan comes from a safe twin, so the assembly runs and its own name g
 tarballUnderName :: ByteString -> IO (Maybe Text)
 tarballUnderName body = do
     (info, _) <- loadPackument oneVersionPackument
-    unprojectable <- decodeValue body
+    unprojectable <- decodeJsonOrFail body
     applyTo ctx quarantine info unprojectable >>= \case
         Assembled out -> pure (tarballAt "1.0.0" out)
         NoSurvivors _ -> fail "expected survivors, got NoSurvivors"
@@ -777,7 +775,7 @@ tarballAt ver v = do
 with the fixture name\/version and the given tarball URL and extras.
 -}
 versionValue :: Text -> [(Text, Text)] -> IO Value
-versionValue tarball extras = decodeValue (encode (snd (versionLit "thing" "1.0.0" tarball extras)))
+versionValue tarball extras = decodeJsonOrFail (encode (snd (versionLit "thing" "1.0.0" tarball extras)))
 
 -- | The @dist.tarball@ of a bare version object.
 versionTarball :: Value -> Maybe Text

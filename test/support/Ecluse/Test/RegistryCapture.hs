@@ -2,36 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared registry-capture support: one curated package catalogue and one
-live-registry fetch path for the test tiers that reach real registries.
+{- | One curated package catalogue and one live-registry fetch path, for the tiers that
+reach real registries.
 
-The curated package lists and the registry fetch live here in one place instead of
-being re-spelled per consumer:
-
-  * the __catalogue__ ('Catalogue') is the one source for the curated package
-    lists. Those are the gnarly-version names the version-oracle smoke
-    differential exercises ('smokeRegistryPackages') and the benchmark-corpus
-    capture pins ('catBenchPins'). A language-neutral JSON file holds it
-    ('cataloguePath'), so
-    the Haskell consumers here and the Node corpus-capture script read the same
-    committed source.
-
-  * the __fetch__ ('fetchPackumentBody', 'fetchVersions') is the single live
-    HTTP path to a registry's version-listing endpoint ('registryUrl'). Parsing
-    routes through each ecosystem's canonical wire decoder
-    ('parseRegistryVersions').
-
-Per-consumer processing stays at the call site. The version-oracle differential keeps
-every published version, prereleases included, because ordering is the point. The
-benchmark corpus trims to stable releases in its own Node capture script.
-
-Every fetch is total. A network failure, a non-2xx status, or an undecodable body yields
-'Nothing', so a live tier pends on absence instead of crashing.
+A language-neutral JSON file holds the catalogue, so the Haskell consumers here and the
+Node corpus-capture script read the same committed source. Per-consumer processing stays
+at the call site: the version-oracle differential keeps every published version because
+ordering is the point, and the benchmark corpus trims to stable releases. Every fetch is
+total, so a live tier pends on absence instead of crashing.
 -}
 module Ecluse.Test.RegistryCapture (
     -- * The curated catalogue
     Catalogue (..),
-    cataloguePath,
     loadCatalogue,
     decodeCatalogue,
     smokeRegistryPackages,
