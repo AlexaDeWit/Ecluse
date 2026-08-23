@@ -157,6 +157,15 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme,,@beta")] Nothing
             `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
 
+    describe "a publishAllow entry reads through npm's own scope grammar" $
+        -- The allow-list and the request path must not disagree about what a scope is, so the
+        -- entry goes through the same splitter the route and the projection use.
+        for_ scopeEntryVerdicts $ \(entry, valid) ->
+            it (show entry <> (if valid then " is a scope" else " is refused")) $
+                if valid
+                    then loadPublishAllow entry `shouldSatisfy` isRight
+                    else loadPublishAllow entry `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+
     it "accepts a well-formed comma-separated publishAllow (trimmed, leading sigil tolerated)" $
         case loadConfig
             ( pubUrlEnv
@@ -584,6 +593,29 @@ spec = describe "decodeDocument" $ do
 -- decode example stays about its own concern.
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+{- Each publishAllow entry the loader must agree with the npm route about: the leading sigil is
+optional, and anything that is not one usable path component is refused. -}
+scopeEntryVerdicts :: [(Text, Bool)]
+scopeEntryVerdicts =
+    [ ("@scope", True)
+    , ("scope", True)
+    , ("@", False)
+    , ("sc/ope", False)
+    , ("sc@ope", False)
+    , ("..", False)
+    ]
+
+-- Load a config whose npm mount allows exactly the given publishAllow entry.
+loadPublishAllow :: Text -> Either [ConfigError] Config
+loadPublishAllow entry =
+    loadConfig
+        ( pubUrlEnv
+            <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+               , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", toString entry)
+               ]
+        )
+        Nothing
 
 -- Values the env layer would JSON-coerce into non-strings if secrets took the
 -- ordinary parse path.

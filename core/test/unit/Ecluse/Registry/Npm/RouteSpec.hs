@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
 path, and what that route's captures parse to. The routes carry actions, not comparable values.
@@ -80,11 +81,27 @@ scoped scope = mkPackageName Npm (Just (mkScope scope))
 npmVersion :: Text -> Version
 npmVersion = mkVersion Npm
 
+{- | A scoped name's two-segment wire encoding (@\@scope@ then @pkg@), or 'Nothing' when the name
+carries no separator to split at.
+-}
+twoSegments :: Text -> Maybe [Text]
+twoSegments raw = case T.breakOn "/" raw of
+    (scopeSeg, rest) | Just baseSeg <- T.stripPrefix "/" rest -> Just [scopeSeg, baseSeg]
+    _ -> Nothing
+
 {- | The npm routing table, asserted as @pathInfo → Route@. The path arrives percent-decoded, so
 each scoped case appears in both wire encodings and both must agree.
 -}
 spec :: Spec
 spec = do
+    describe "takePackage -- the one npm name grammar, in both wire encodings" $
+        for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
+            it (NpmFixture.nameVerdictLabel raw valid) $ do
+                isJust (takePackage [raw]) `shouldBe` valid
+                -- A percent-decoded path splits a scoped name across two segments as readily
+                -- as one. Both encodings reach the same verdict, and the same name.
+                for_ (twoSegments raw) $ \segs -> takePackage segs `shouldBe` takePackage [raw]
+
     describe "classify -- packuments" $ do
         it "routes an unscoped package to its packument" $
             classify ["is-odd"] `shouldBe` ToPackument (unscoped "is-odd")
