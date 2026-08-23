@@ -507,6 +507,7 @@ library ecluse-test-support
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version
+    Ecluse.Test.WireVocab
     Ecluse.Test.Worker
 
   build-depends:

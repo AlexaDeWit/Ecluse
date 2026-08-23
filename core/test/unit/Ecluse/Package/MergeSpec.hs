@@ -27,6 +27,7 @@ import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge
 import Ecluse.Core.Version (mkVersion, unVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, unsafeHash)
+import Ecluse.Test.WireVocab (wireRoundTrips)
 
 name :: PackageName
 name = mkPackageName Npm Nothing "thing"
@@ -345,6 +346,8 @@ spec = do
                         , (GatedSource, packument [("1.0.0", sriPublic)])
                         ]
             (Map.null . mpSurvivors . applyDivergencePolicy FailClosed <$> onlyDivergent) `shouldBe` Just True
+
+    wireRoundTrips @DivergencePolicy
 
     describe "parseDivergencePolicy (the ECLUSE_INTEGRITY__DIVERGENCE_POLICY value)" $ do
         it "parses warn and fail-closed, case- and spelling-tolerant" $ do

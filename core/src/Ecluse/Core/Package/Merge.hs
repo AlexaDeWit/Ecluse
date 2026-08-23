@@ -84,6 +84,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Package (
     Artifact (..),
@@ -178,7 +180,10 @@ data DivergencePolicy
       version then fails to resolve it rather than receive a contested copy.
       -}
       FailClosed
-    deriving stock (Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+-- Derived from Generic so the wire-table round-trip test needs no hand-maintained list.
+instance Universe DivergencePolicy where universe = universeGeneric
 
 instance WireVocab DivergencePolicy where
     wireKind = "divergence policy"

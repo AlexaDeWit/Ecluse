@@ -16,7 +16,6 @@ module Ecluse.Core.Version.Token (
     isAsciiAlphaNum,
     digitRuns,
     classifyRun,
-    maxVersionLength,
     withinVersionLength,
 ) where
 
@@ -37,15 +36,13 @@ instance Ord VToken where
     compare (VNum _) (VStr _) = GT
     compare (VStr _) (VNum _) = LT
 
-{- | The maximum length of a version string the version grammars parse. It bounds the quadratic
-cost of reading a digit run into an 'Integer', which hostile registry metadata could otherwise
-turn into an algorithmic-complexity DoS. A version past it gets no ordering key and is served raw.
--}
+-- The bound caps the quadratic cost of reading a digit run into an 'Integer', which hostile
+-- registry metadata could otherwise turn into an algorithmic-complexity DoS.
 maxVersionLength :: Int
 maxVersionLength = 1024
 
-{- | Whether a raw version string is inside 'maxVersionLength'. Every grammar applies it
-before any numeric parsing, so no digit run is read into an 'Integer' unbounded.
+{- | Whether a raw version string is short enough for the grammars to parse. Past the bound a
+version gets no ordering key and is served raw.
 -}
 withinVersionLength :: Text -> Bool
 withinVersionLength raw = T.compareLength raw maxVersionLength /= GT

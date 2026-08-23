@@ -35,9 +35,8 @@ newtype SemverKey = SemverKey SemVer
     deriving stock (Show)
     deriving newtype (Eq, Ord)
 
-{- | Parse a semver version. A parse failure becomes 'Nothing', so an ordering rule abstains
-rather than dropping the version. 'withinVersionLength' bounds the text, and @maxNumericRun@
-refuses a digit run that would silently overflow the @versions@ library's fixed-width components.
+{- | Parse a semver version, or 'Nothing' so an ordering rule abstains rather than drops it.
+The length bound and @maxNumericRun@ refuse input that would overflow the @versions@ library.
 -}
 parseSemver :: Text -> Maybe SemverKey
 parseSemver raw = do

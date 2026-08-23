@@ -63,9 +63,11 @@ parseWire raw = maybeToRight unknown (lookupWire raw)
             <> T.intercalate ", " (toList (fmap snd (wireTable @a)))
             <> ")"
 
-{- | The canonical wire name of a value. A value the 'wireTable' omits breaches the class
-contract, and renders as the table's first name rather than crashing a caller.
+{- | The canonical wire name of a value, read out of the 'wireTable'. It is total, so the
+class contract that the table lists every inhabitant is what keeps it correct.
 -}
 renderWire :: forall a. (WireVocab a, Eq a) => a -> Text
 renderWire value = case wireTable @a of
-    first'@(_, firstName) :| rest -> fromMaybe firstName (lookup value (first' : rest))
+    (v0, n0) :| rest
+        | value == v0 -> n0
+        | otherwise -> maybe n0 snd (find ((value ==) . fst) rest)
