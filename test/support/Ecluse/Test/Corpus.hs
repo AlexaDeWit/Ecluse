@@ -2,11 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The curated real-world npm packument corpus the performance harnesses share.
+{- | The curated real-world npm packument corpus the performance harnesses share, with
+the constants they measure it under ('syntheticProxyBase', 'permissiveAgeRules').
 
 'corpusPackages' names every capture once: its package identity, its committed path, its
 size tier, and its serve weight. The captures are frozen data. @bench\/corpus\/pins.json@
-pins the version each is taken at, @make gen-bench-corpus@ re-captures them deliberately,
+pins the version each is taken at, @task gen-bench-corpus@ re-captures them deliberately,
 and each keeps its real heterogeneous shape rather than a trimmed model of one.
 -}
 module Ecluse.Test.Corpus (
@@ -25,9 +26,11 @@ import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageNa
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
--- | A corpus package's size and shape tier, which labels the rendered benchmark groups.
+{- | A corpus package's size and shape tier, which labels the rendered benchmark groups.
+The declaration order is the tier order, so 'Ord' sorts a corpus small-to-heavy.
+-}
 data CorpusTier = Medium | Large | Heavy
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 -- | One curated real-world packument capture and what the harnesses do with it.
 data CorpusPackage = CorpusPackage

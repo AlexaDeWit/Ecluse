@@ -68,9 +68,9 @@ import Ecluse.Test.Package (validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
--- | The curated corpus small-to-heavy, the order the rendered benchmark groups read in.
+-- | The curated corpus small-to-heavy, and lightest first within a tier.
 corpus :: [CorpusPackage]
-corpus = reverse corpusPackages
+corpus = sortOn cpTier (reverse corpusPackages)
 
 -- | A corpus package paired with its loaded raw bytes and decoded JSON 'Value'.
 type LoadedEntry = (CorpusPackage, ByteString, Value)
