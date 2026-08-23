@@ -38,6 +38,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
@@ -121,7 +122,7 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
 
     endpointE :: Text -> Either BootError SqsEndpoint
     endpointE override = case parseEndpointUrl override of
-        Nothing -> Left (QueueEndpointMalformed override)
+        Nothing -> Left (QueueEndpointMalformed (mkSecret override))
         Just (secure, host, port) ->
             Right SqsEndpoint{endpointSecure = secure, endpointHost = host, endpointPort = port}
 

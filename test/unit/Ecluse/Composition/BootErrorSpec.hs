@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Config (PolicyError (UnknownRuleType))
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 
 spec :: Spec
@@ -25,7 +26,11 @@ spec = describe "renderBootError" $
         renderBootError (QueueUrlUnrecognised "https://queue.example.test/q")
             `shouldSatisfy` infixed "https://queue.example.test/q"
         renderBootError (QueueUrlUnrecognised "x") `shouldSatisfy` infixed "projects/{project}/topics/{topic}"
-        renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
+        -- The endpoint-override render names the variable, never the value it refused.
+        renderBootError (QueueEndpointMalformed (mkSecret "http://u:tok@h"))
+            `shouldSatisfy` infixed "endpoint"
+        renderBootError (QueueEndpointMalformed (mkSecret "http://u:tok@h"))
+            `shouldNotSatisfy` infixed "tok"
         -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"

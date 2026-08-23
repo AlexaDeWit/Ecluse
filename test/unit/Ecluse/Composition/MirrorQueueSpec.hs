@@ -20,6 +20,7 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Composition.Support (expectConfig, expectEnv, overrideEnv, staticEnvVars, withoutQueueUrl)
 import Ecluse.Config (AppConfig)
 import Ecluse.Config.Ambient (AmbientAws (..))
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
@@ -128,12 +129,12 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
     it "fails fast on a malformed SQS endpoint override" $ do
         env <- expectEnv staticEnvVars
         planMirrorQueue (withRegion "us-east-1"){ambientAwsEndpointUrlSqs = Just "not-a-url"} env
-            `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
+            `shouldBe` Left [QueueEndpointMalformed (mkSecret "not-a-url")]
 
     it "aggregates a missing region and a malformed override in one report" $ do
         env <- expectEnv staticEnvVars
         planMirrorQueue noAmbient{ambientAwsEndpointUrlSqs = Just "not-a-url"} env
-            `shouldBe` Left [QueueRegionMissing, QueueEndpointMalformed "not-a-url"]
+            `shouldBe` Left [QueueRegionMissing, QueueEndpointMalformed (mkSecret "not-a-url")]
 
     it "carries the configured redelivery budget into the SQS backend's config" $ do
         -- The plan carries the operator's floor to the backend. The backend then
