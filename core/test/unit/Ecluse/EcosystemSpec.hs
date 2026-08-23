@@ -10,8 +10,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
 
 {- | The wire vocabulary of the ecosystem tag. 'ecosystemName' reads its answer out of the
-'Ecluse.Core.Wire.wireTable', so a value the table omits would render as another value's
-name. The round trip over 'universe' is what makes that unrepresentable.
+table, so the round trip over 'universe' is what keeps an omitted value unrepresentable.
 -}
 spec :: Spec
 spec = describe "Ecluse.Core.Ecosystem" $ do

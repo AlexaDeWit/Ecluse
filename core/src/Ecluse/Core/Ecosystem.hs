@@ -3,13 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The ecosystem tag, the shared vocabulary the rest of the system dispatches on. The
-package vocabulary ("Ecluse.Core.Package") keys a @PackageName@ by it, the version
-engine ("Ecluse.Core.Version") selects a per-ecosystem parser by it, the registry
-adapters dispatch on it, and configuration keys a mount by it.
+package vocabulary keys a @PackageName@ by it, the version engine selects a per-ecosystem
+parser by it, the registry adapters dispatch on it, and configuration keys a mount by it.
 
-It sits in its own module to break the import cycle between "Ecluse.Core.Package"
-(whose @PackageDetails@ holds a @Version@) and "Ecluse.Core.Version" (whose parsers
-dispatch on the ecosystem).
+It sits in its own module to break the import cycle between "Ecluse.Core.Package" (whose
+@PackageDetails@ holds a @Version@) and "Ecluse.Core.Version" (whose parsers dispatch on
+the ecosystem).
 -}
 module Ecluse.Core.Ecosystem (
     Ecosystem (..),

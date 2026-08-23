@@ -31,9 +31,8 @@ class WireVocab a where
     -}
     wireKind :: Text
 
-    {- | Every value paired with its canonical wire name, listed in the order the
-    accepted-set message names them. The table must list every inhabitant of @a@,
-    because 'renderWire' reads a value's name out of it.
+    {- | Every value paired with its canonical wire name, in the order the accepted-set
+    message names them. It must list every inhabitant, because 'renderWire' reads from it.
     -}
     wireTable :: NonEmpty (a, Text)
 

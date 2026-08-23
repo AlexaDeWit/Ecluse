@@ -198,8 +198,7 @@ refreshingProviderWith afterClaim cfg = do
     pure CredentialProvider{currentToken = serve afterClaim cfg stateVar}
 
 {- An async exception between the single-flight claim and the run that releases it would
-orphan the flag and wedge every later expired caller on the 'decide' 'retry'. Both stay in
-one masked scope so that gap does not exist. -}
+wedge every later expired caller on the 'decide' 'retry', so both stay in one masked scope. -}
 serve :: IO () -> RefreshConfig -> TVar CacheState -> IO AuthToken
 serve afterClaim cfg stateVar = mask $ \restore -> do
     now <- rcClock cfg

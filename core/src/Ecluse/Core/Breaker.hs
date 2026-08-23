@@ -93,9 +93,8 @@ reportBreakerChange (BreakerReporter report) old new
     | breakerState old == breakerState new = pass
     | otherwise = report new
 
-{- | The breaker's coarse observable state, the bounded value the
-@ecluse.rule.breaker.state@ gauge records. It drops the failure tally inside 'Closed',
-so two 'Closed' breakers project alike however many failures each counted.
+{- | The breaker's coarse observable state, the bounded value the @ecluse.rule.breaker.state@
+gauge records. It drops the failure tally, so two 'Closed' breakers project alike.
 -}
 breakerState :: Breaker -> Metric.BreakerState
 breakerState = \case

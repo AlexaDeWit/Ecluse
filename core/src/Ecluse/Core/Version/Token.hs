@@ -4,12 +4,10 @@
 
 {- | The lexical atoms and the length bound the per-ecosystem version grammars share.
 
-A 'VToken' is a single numeric or textual run. Its ordering rule is the one the
-RubyGems and PEP 440-local grammars have in common. Numeric tokens outrank textual
-ones, numerics compare numerically, and text compares lexically. The semver
-prerelease rule is the opposite, ranking numeric identifiers /below/ alphanumeric
-ones, so it lives with the semver grammar instead. Everything here is purely lexical:
-no ecosystem ordering policy lives in this module.
+A 'VToken' is a single numeric or textual run. Its ordering rule is the one the RubyGems
+and PEP 440-local grammars have in common: numeric tokens outrank textual ones, numerics
+compare numerically, and text compares lexically. The semver prerelease rule is the
+opposite, so it lives with the semver grammar. Everything here is purely lexical.
 -}
 module Ecluse.Core.Version.Token (
     VToken (..),
