@@ -5,29 +5,25 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-{- | A table-driven codec for the small "named-enum" wire vocabularies the
-configuration boundary speaks: a credential provider, the log format, the telemetry
-switch. Each is a fixed, finite set of wire names. The alternative is a parse
-@\\case@ and a separately maintained "(expected one of: …)" string, kept in step by
-hand.
+{- | A table-driven codec for the small named-enum vocabularies the system speaks: the
+ecosystem key, the log format and level, the telemetry switch, the divergence policy.
+A 'WireVocab' instance carries one @(value, name)@ table plus the human noun for the
+set. 'lookupWire', 'parseWire' and 'renderWire' all read that table, so a parse, a
+render, and the accepted-set message cannot drift apart.
 
-A 'WireVocab' instance carries the vocabulary as one @(value, name)@ table plus the
-human noun for the set. 'parseWire' derives from it once and dispatches by type, so the
-parse and the accepted-set message can no longer drift apart. There is a single list of
-names per type.
-
-The vocabulary keys on the type, so each type speaks exactly one vocabulary: the one
-'wireTable' names its values in.
+The vocabulary keys on the type, so each type speaks exactly one vocabulary.
 -}
 module Ecluse.Core.Wire (
     WireVocab (..),
+    lookupWire,
     parseWire,
+    renderWire,
 ) where
 
 import Data.Text qualified as T
 
 {- | The wire vocabulary of a named-enum type. The @(value, name)@ table is the single source of
-truth for 'parseWire'.
+truth for the codec.
 -}
 class WireVocab a where
     {- | The human noun for the vocabulary, e.g. @"log format"@. Names the
@@ -35,28 +31,42 @@ class WireVocab a where
     -}
     wireKind :: Text
 
-    {- | Every value paired with its wire name, listed in the order the accepted-set
-    message names them. The table must list every inhabitant of @a@.
+    {- | Every value paired with its canonical wire name, listed in the order the
+    accepted-set message names them. The table must list every inhabitant of @a@,
+    because 'renderWire' reads a value's name out of it.
     -}
     wireTable :: NonEmpty (a, Text)
 
-{- | Parse a wire name to its value through the 'wireTable', or report the accepted set on an
-unrecognised input. The failure message is
+    {- | Further spellings 'lookupWire' accepts. An alias never reaches the accepted-set
+    message, and 'renderWire' never emits one. Empty by default.
+    -}
+    wireAliases :: [(a, Text)]
+    wireAliases = []
+
+{- | The value a wire name denotes, through 'wireTable' and then 'wireAliases'.
+'Nothing' for a name in neither.
+-}
+lookupWire :: forall a. (WireVocab a) => Text -> Maybe a
+lookupWire raw = fst <$> find ((raw ==) . snd) (toList (wireTable @a) <> wireAliases @a)
+
+{- | Parse a wire name, or report the accepted set on an unrecognised input. The message is
 @unknown \\<kind\\> "\\<raw\\>" (expected one of: \\<names\\>)@, with the names in table order.
 -}
 parseWire :: forall a. (WireVocab a) => Text -> Either Text a
-parseWire raw =
-    case find ((raw ==) . snd) table of
-        Just (value, _name) -> Right value
-        Nothing ->
-            Left
-                ( "unknown "
-                    <> wireKind @a
-                    <> " \""
-                    <> raw
-                    <> "\" (expected one of: "
-                    <> T.intercalate ", " (toList (fmap snd table))
-                    <> ")"
-                )
+parseWire raw = maybeToRight unknown (lookupWire raw)
   where
-    table = wireTable @a
+    unknown =
+        "unknown "
+            <> wireKind @a
+            <> " \""
+            <> raw
+            <> "\" (expected one of: "
+            <> T.intercalate ", " (toList (fmap snd (wireTable @a)))
+            <> ")"
+
+{- | The canonical wire name of a value. A value the 'wireTable' omits breaches the class
+contract, and renders as the table's first name rather than crashing a caller.
+-}
+renderWire :: forall a. (WireVocab a, Eq a) => a -> Text
+renderWire value = case wireTable @a of
+    first'@(_, firstName) :| rest -> fromMaybe firstName (lookup value (first' : rest))
