@@ -4,16 +4,11 @@
 
 {- | Shared @ministack@ bootstrapping for the integration suite.
 
-The mirror-queue and mirror-worker specs both drive the real AWS SQS
-'Ecluse.Core.Queue.MirrorQueue' backend against a @ministack@ container, launched via
-@testcontainers@. They point at the emulator with throwaway credentials. Both are
-hermetic and gating, but require a Docker daemon and no real AWS. This module stands
-the bootstrapping up __once__: the container, its ASCII-relabelled image, the
-endpoint-overridden @amazonka@ environment, and a fresh per-test queue. Both specs
-share it rather than each re-deriving it.
-
-This is test support, not a spec. It carries no @hspec@ 'Test.Hspec.Spec' of its own,
-and its name avoids the @Spec@ suffix so @hspec-discover@ does not collect it.
+The specs that drive the real AWS SQS and S3 backends launch a @ministack@ container
+through @testcontainers@ and point at it with throwaway credentials. This module owns the
+container, its ASCII-relabelled image, the endpoint-overridden @amazonka@ environment, and
+a fresh per-test queue. It carries no 'Test.Hspec.Spec' of its own, and its name avoids the
+@Spec@ suffix so @hspec-discover@ does not collect it.
 -}
 module Ecluse.Integration.Ministack (
     -- * Container lifecycle
@@ -49,7 +44,6 @@ import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
-import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
 import System.Environment (setEnv)
@@ -57,8 +51,9 @@ import System.Environment (setEnv)
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
-import Ecluse.Test.Container.Image (PinnedImageRef, mkPinnedImageRef, renderPinnedImageRef)
+import Ecluse.Test.Container.Image (PinnedImageRef, ministackImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
+import Ecluse.Test.Poll (pollUntil)
 
 -- | The SQS gateway port @ministack@ serves on.
 ministackPort :: TC.Port
@@ -76,8 +71,8 @@ withMinistack body = do
     setEnv "AWS_ACCESS_KEY_ID" "test"
     setEnv "AWS_SECRET_ACCESS_KEY" "test"
     labels <- testContainerLabels "integration"
-    -- Fail the suite if the image literal is not digest-pinned, so no mutable tag reaches @FROM@.
-    image <- either (fail . toString) pure (mkPinnedImageRef ministackImage)
+    -- Fail the suite if the pin does not validate, so no mutable tag reaches @FROM@.
+    image <- either (fail . toString) pure ministackImage
     withContainers (ministack labels image) body
 
 -- The reaping labels are threaded in rather than baked into the image, so the container
@@ -90,10 +85,6 @@ ministack labels image =
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable ministackPort))
             & TC.setRm True
             & withLabels labels
-
--- ministack, tag 1.3-full, pinned by digest.
-ministackImage :: Text
-ministackImage = "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
 
 -- ASCII description label (see 'withMinistack' for why), plus the coarse test marker so
 -- `task test-clean-all` can prune a stale build image.
@@ -224,21 +215,22 @@ envFor endpoint = do
             )
             regioned
 
--- Create the queue, retrying while ministack's SQS service warms up.
+-- Create the queue, retrying while ministack's SQS service warms up. The last attempt's
+-- diagnostic is the one that reaches the test.
 createQueueWithRetry :: AWS.Env -> Text -> Int -> IO Text
-createQueueWithRetry env queueName attemptsLeft = do
-    outcome <- try (runResourceT (AWS.send env (SQS.newCreateQueue queueName)))
-    case outcome of
-        Right response
-            | Just url <- response ^. SQS.createQueueResponse_queueUrl -> pure url
-        _
-            | attemptsLeft > 1 -> do
-                threadDelay 500_000
-                createQueueWithRetry env queueName (attemptsLeft - 1)
-        Left (e :: SomeException) ->
-            fail ("ministack CreateQueue never succeeded: " <> show e)
-        Right _ ->
-            fail "ministack CreateQueue returned no queue URL"
+createQueueWithRetry env queueName attempts =
+    pollUntil attempts 500_000 isRight attempt >>= either (fail . toString) pure
+  where
+    attempt :: IO (Either Text Text)
+    attempt =
+        try (runResourceT (AWS.send env (SQS.newCreateQueue queueName))) >>= \case
+            Left (e :: SomeException) -> pure (Left ("ministack CreateQueue never succeeded: " <> show e))
+            Right response ->
+                pure $
+                    maybe
+                        (Left "ministack CreateQueue returned no queue URL")
+                        Right
+                        (response ^. SQS.createQueueResponse_queueUrl)
 
 {- | Poll until a non-empty batch arrives, bounded at about 10s, so an empty long poll does
 not flake and a genuinely empty queue fails the test rather than hanging.
@@ -250,18 +242,15 @@ receiveUntil = receiveUntilWithin 20
 visibility window. Each attempt waits the queue's long poll plus about 500ms.
 -}
 receiveUntilWithin :: Int -> MirrorQueue -> IO [QueueMessage]
-receiveUntilWithin = go
+receiveUntilWithin attempts queue =
+    pollUntil attempts 500_000 arrived (receive queue) >>= \case
+        Right messages@(_ : _) -> pure messages
+        -- A transient transport fault retries like an empty poll, so a fault that survives
+        -- the budget is the last attempt's and names the cause.
+        Left fault -> fail ("receive faulted against ministack: " <> show fault)
+        Right [] -> fail "receiveUntilWithin: no message arrived within the retry budget"
   where
-    go 0 _ = fail "receiveUntilWithin: no message arrived within the retry budget"
-    go n queue =
-        receive queue >>= \case
-            -- A transient transport fault retries like an empty poll. The last attempt
-            -- fails loudly with the classified fault.
-            Left fault
-                | n > 1 -> threadDelay 500_000 >> go (n - 1) queue
-                | otherwise -> fail ("receive faulted against ministack: " <> show fault)
-            Right [] -> threadDelay 500_000 >> go (n - 1) queue
-            Right messages -> pure messages
+    arrived = either (const False) (not . null)
 
 {- | Unwrap a queue outcome from a backend the test expects to be healthy. A 'Left' fails
 the test with the classified fault.

@@ -16,7 +16,6 @@ module Ecluse.E2E.Harness.Proxy (
 ) where
 
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -31,10 +30,8 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types (hContentLength, statusCode)
-import System.Process.Typed (proc, readProcess)
-import UnliftIO (handleAny)
-import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
 import Ecluse.E2E.Harness.Types
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
@@ -92,24 +89,6 @@ awaitCollectorLog e2e matches attempts =
     case e2eCollectorContainer e2e of
         Nothing -> fail "awaitCollectorLog: this environment was booted without a collector"
         Just coll -> awaitContainerLog coll matches attempts
-
--- Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
-awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
-awaitContainerLog cname matches = go
-  where
-    go n
-        | n <= 0 = pure False
-        | otherwise = do
-            logs <- containerLogs cname
-            if matches logs then pure True else threadDelay 250000 >> go (n - 1)
-
--- A container's combined stdout+stderr so far ('docker logs'). Empty on any docker
--- error, such as the container not existing yet, mid image-pull.
-containerLogs :: String -> IO Text
-containerLogs cname =
-    handleAny (\_ -> pure "") $ do
-        (_, out, err) <- readProcess (proc "docker" ["logs", cname])
-        pure (decodeUtf8 (LBS.toStrict out) <> decodeUtf8 (LBS.toStrict err))
 
 {- | Whether any @dd@ object in the log text carries a __populated__ @trace_id@. The value must
 begin with a digit, so an absent or empty id does not satisfy it.

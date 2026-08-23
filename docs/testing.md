@@ -160,9 +160,8 @@ is `Ecluse.Test.Containers`, kept in lock-step with the reaper.
 never pulled.** A tag can be re-pointed to a poisoned image between pulls, while a digest is
 immutable. A *type* enforces it: a pull site accepts only a validated `PinnedImageRef`
 (`Ecluse.Test.Container.Image`), so an unpinned pull is unrepresentable and aborts the suite before
-pulling. The pins live at the harness sites naming each image (`test/e2e/…/Harness/Docker.hs`, and
-`test/integration/…/Ministack.hs` plus the telemetry specs), each with a comment recording the
-human-readable version. To absorb Docker Hub throttling on the shared runners, the CI jobs warm those
+pulling. Every pin lives in that same module beside the validator, and a harness names the pin
+rather than the digest. To absorb Docker Hub throttling on the shared runners, the CI jobs warm those
 exact references first through `scripts/docker-prepull.sh`. The `ci.yml` comments own that rationale.
 
 ## What gates, and what doesn't

@@ -85,8 +85,7 @@ jobs:
       # testcontainers `docker build FROM` here. That tier therefore gets the same
       # buffer. The docker CLI is a host binary, and "Set up toolchain" above
       # relocated the data-root. The refs mirror the pins in
-      # test/integration/Ecluse/Integration/Ministack.hs and the telemetry integration
-      # specs, which are the source of truth.
+      # test/support/Ecluse/Test/Container/Image.hs, the source of truth.
       - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
@@ -253,8 +252,8 @@ jobs:
       # the images pre-warmed, the harness's own `docker run` finds them cached. The
       # docker CLI is a host binary here (no nix shell needed), and "Set up toolchain"
       # above relocated the data-root. The refs mirror the pins in
-      # test/e2e/Ecluse/E2E/Harness/Docker.hs, the source of truth. This step copies
-      # the digest pins verbatim, so it adds no new trust surface.
+      # test/support/Ecluse/Test/Container/Image.hs, the source of truth. This step
+      # copies the digest pins verbatim, so it adds no new trust surface.
       - name: Pre-pull pinned e2e images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
