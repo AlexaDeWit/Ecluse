@@ -430,19 +430,15 @@ capFilename =
         )
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and the remaining
-segments. The route parses no name of its own: 'projectName' owns the npm name grammar, so a
-degenerate or hostile name is refused here exactly as it is on every other npm path.
--}
+segments. The route parses no name of its own: 'projectName' owns the npm name grammar. -}
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
 takePackage (seg : rest)
     | T.isPrefixOf "@" seg = takeScoped seg rest
     | otherwise = (,rest) <$> rightToMaybe (projectName seg)
 
-{- Peel a scoped package unit off the leading @\@…@ segment, handling both wire encodings: one
-decoded segment @\@scope\/pkg@, or @\@scope@ and @pkg@ as two segments. Both join into the one
-wire name 'projectName' reads, so the two encodings cannot disagree.
--}
+{- Peel a scoped package unit off the leading @\@…@ segment. Both wire encodings, one decoded
+segment or two, join into the one wire name 'projectName' reads. -}
 takeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
 takeScoped seg rest
     | T.isInfixOf "/" seg = (,rest) <$> rightToMaybe (projectName seg)

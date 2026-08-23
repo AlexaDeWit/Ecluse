@@ -103,6 +103,12 @@ nameValidationSpec = describe "name validation against the requested name" $ do
         parsePackageInfoFromValue (mkPackageName Npm (Just (mkScope "scope")) "a") (packumentValueNamed "@scope/b")
             `shouldBe` Right (NameMismatch "@scope/b")
 
+    it "refuses a document whose self-reported name is not a usable npm name" $
+        -- The "../evil" traversal name the URL rewrite must never interpolate. The name gate
+        -- runs here, so it is a ParseError, not a PackageName that fails agreement later.
+        parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "../evil")
+            `shouldSatisfy` isLeft
+
     it "never substitutes the served name: a match carries the upstream's own name" $ do
         -- The route name is the validation authority, not a rewrite. infoName is the
         -- name the upstream reported, here equal to the request because it matched.

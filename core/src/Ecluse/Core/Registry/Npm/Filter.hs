@@ -90,11 +90,7 @@ import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a rewritten
-@dist.tarball@ path: the npm name grammar read as a predicate. A scoped name's own separator
-passes, so a slash anywhere else (a traversal, a path injection) is still refused.
-
-The projection refuses such a document first, so this gate is defence in depth over the raw
-'Value' the assembly reads independently of the typed model.
+@dist.tarball@ path. The projection refuses such a name first, so this gate is defence in depth.
 -}
 safeName :: Text -> Bool
 safeName = isRight . projectName

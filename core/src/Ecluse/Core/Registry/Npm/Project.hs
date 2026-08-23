@@ -372,15 +372,7 @@ projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
 {- | Parse an npm package name into the domain 'PackageName': the one splitter every npm entry
-point reads a name through. It splits a scoped @\@scope\/name@ once and applies 'nameComponent'
-to the scope and to the bare name alike.
-
-A malformed scoped name is a 'ParseError', never an unscoped name that happens to carry an
-@\@@. So @\@foo@, @\@foo\/@, @\@\/pkg@, @\@scope\/a\/b@, and the empty string are all
-refused.
-
-The read and publish paths both compare names through this canonicaliser, never byte-for-byte,
-so an encoding variant cannot pass an agreement check silently.
+point reads a name through. A bare @\@foo@ is a malformed scoped name, never an unscoped one.
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw
@@ -399,14 +391,13 @@ scopedName raw = case T.stripPrefix "/" afterScope of
     (scopeWire, afterScope) = T.break (== '/') raw
 
 {- | Parse an npm scope, with or without its leading @\@@ (@\@myorg@ and @myorg@ both give the
-scope @myorg@). The scope is a path component like any other, so 'nameComponent' decides it.
+scope @myorg@).
 -}
 projectScope :: Text -> Either ParseError Scope
 projectScope raw = mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
 
-{- One component of an npm name, the scope or the bare name. The component reaches an
-interpolated upstream URL, so it must clear 'isSafeComponent'. It carries no @\@@ and no
-whitespace either, so one identity has exactly one spelling. -}
+{- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
+URL, so an unsafe spelling must never parse. -}
 nameComponent :: Text -> Either ParseError Text
 nameComponent component
     | T.null component = Left (ParseError "empty npm name component")

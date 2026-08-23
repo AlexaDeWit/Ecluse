@@ -429,14 +429,8 @@ encodeTraceContext rsc =
         , "tracestate" .= rscTracestate rsc
         ]
 
-{- | Decode an SQS message body back into a 'MirrorJob'. A missing field, an unknown
-ecosystem, malformed JSON, an unusable package name, or a refused artifact URL yields a
-human-readable error.
-
-The queue payload is a __trust boundary__, so the decode re-forms the artifact URL into
-its 'RegistryUrl' egress witness through the given former, and re-reads the package name
-through its ecosystem's grammar. A tampered message can never hand the worker's fetch an
-unwitnessed URL or a name the front door would have refused.
+{- | Decode an SQS message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
+the decode re-forms the artifact URL's egress witness and re-reads the package name.
 -}
 decodeJob :: (Text -> Either Text RegistryUrl) -> Text -> Either Text MirrorJob
 decodeJob egressUrl body =
@@ -474,8 +468,8 @@ parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
   where
     unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
 
-{- Rebuild the payload's package identity, reading npm's wire name through 'projectName'. npm is
-the only ecosystem with a name grammar today, so the others take the two fields as given. -}
+{- Rebuild the payload's package identity. npm has a name grammar, so its wire name goes through
+'projectName'. PyPI and RubyGems have none, so both take the two fields as given. -}
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 mirrorJobPackage eco scope rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)

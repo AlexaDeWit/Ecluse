@@ -697,9 +697,8 @@ applyToAt mountBase c rules info value = do
 applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyTo = applyToAt base
 
-{- | The surviving version's @dist.tarball@ after assembling a document whose own top-level
-@name@ the projection would refuse. The plan comes from a safe twin carrying the same version,
-so the assembly still runs and its own name gate is what decides the rewrite.
+{- | The surviving version's @dist.tarball@ after assembling a document the projection would
+refuse. The plan comes from a safe twin, so the assembly runs and its own name gate decides.
 -}
 tarballUnderName :: ByteString -> IO (Maybe Text)
 tarballUnderName body = do

@@ -74,8 +74,7 @@ parseScopes = withText "Scopes" $ \t ->
         else traverse parseScopeEntry (T.splitOn "," t)
 
 -- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
--- typo fails the load instead of seeding an allow-list that refuses every publish. The scope
--- grammar is npm's own, so the allow-list and the request path cannot read one entry differently.
+-- typo fails the load instead of seeding an allow-list that refuses every publish.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
     either (const (fail ("invalid scope in publishAllow: " <> show trimmed))) pure (projectScope trimmed)

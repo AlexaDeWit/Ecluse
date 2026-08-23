@@ -151,9 +151,12 @@ spec = do
                 Left err -> err `shouldSatisfy` ("unusable npm name component" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
 
-        it "takes a non-npm name as given: npm is the only ecosystem with a name grammar today" $
-            -- The same spelling npm refuses. PyPI has no scope grammar, so the decode keeps it.
+        it "takes a PyPI name as given: PyPI has no scope grammar to read it through" $
+            -- The same spelling npm refuses, kept because no PyPI grammar rejects it.
             decodeJob mkRegistryUrl (jobBodyFor "pypi" "a b") `shouldSatisfy` isRight
+
+        it "takes a RubyGems name as given: RubyGems has no scope grammar either" $
+            decodeJob mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
@@ -287,8 +290,7 @@ spec = do
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
 {- | A job body for @ecosystem@ naming @wireName@, split into the payload's separate @scope@ and
-@name@ fields the way 'encodeJob' writes them. Every other field is well-formed, so only the name
-decides the verdict.
+@name@ fields the way 'encodeJob' writes them. Every other field is well-formed.
 -}
 jobBodyFor :: Text -> Text -> Text
 jobBodyFor ecosystem wireName =

@@ -164,7 +164,7 @@ genSegment =
             , "@/x"
             , "@scope/"
             ]
-        , Gen.text (Range.linear 0 8) (Gen.element ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', '1', '2', '3', '4'])
+        , Gen.text (Range.linear 0 8) (Gen.element ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1', '2', '3', '4'])
         ]
 
 -- The independent reference ---------------------------------------------------
