@@ -9,12 +9,15 @@ covers the byte-valued bounds ("Ecluse.Composition.MemoryPlan").
 
 Each resolution is a pure function of the validated configuration, plus, for the
 pools, the process file-descriptor limit 'openFileSoftLimit' reads once. An explicit
-config value always wins. A computed default returns its boot-log line alongside the
-number, so the decision's provenance lands in the standard boot log. Nothing here
-opens a socket or reads a clock. The composition root applies the results when it
-builds the managers and the admission gate.
+config value always wins, and 'resolveSized' pairs the result with the boot-log line
+naming its provenance. The composition root applies the results when it builds the
+managers and the admission gate.
 -}
 module Ecluse.Composition.Sizing (
+    -- * A resolved bound and its boot-log line
+    resolveSized,
+    renderSized,
+
     -- * Connection pools and admission
     connectionPoolSettings,
     resolveServeAdmission,
@@ -30,6 +33,24 @@ module Ecluse.Composition.Sizing (
 import Network.HTTP.Client (ManagerSettings (managerConnCount))
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 
+{- | A resolved bound and its boot-log line: an explicit config value wins, else the
+computed default. Every sizing and every memory-plan bound resolves through this.
+-}
+resolveSized :: Text -> Maybe Int -> Int -> Text -> (Int, Text)
+resolveSized subject explicit computed computedClause =
+    (value, renderSized subject value explicit computedClause)
+  where
+    value = fromMaybe computed explicit
+
+{- | The boot-log line for a bound already resolved elsewhere. The explicit config value
+decides the provenance clause, and the caller supplies the computed alternative.
+-}
+renderSized :: Text -> Int -> Maybe Int -> Text -> Text
+renderSized subject value explicit computedClause =
+    subject <> " " <> show value <> " (" <> provenance <> ")"
+  where
+    provenance = if isJust explicit then "from config" else computedClause
+
 {- | Apply an explicit per-host connection bound to an HTTP manager's settings. Callers
 apply it after telemetry instrumentation, so it cannot discard the instrumented hooks.
 -}
@@ -43,11 +64,12 @@ Callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' runs, so the cap
 count is the post-posture one. It bounds metadata materialisation only.
 -}
 resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
-resolveServeAdmission explicit capabilities = case explicit of
-    Just n -> (n, "runtime: serve admission " <> show n <> " (from config)")
-    Nothing ->
-        let computed = max serveAdmissionFloor (serveAdmissionPerCapability * capabilities)
-         in (computed, "runtime: serve admission " <> show computed <> " (computed from " <> show capabilities <> " capabilities)")
+resolveServeAdmission explicit capabilities =
+    resolveSized
+        "runtime: serve admission"
+        explicit
+        (max serveAdmissionFloor (serveAdmissionPerCapability * capabilities))
+        ("computed from " <> show capabilities <> " capabilities")
 
 -- The floor keeps a tiny pod admitting a useful burst. 'resolveServeAdmission' explains
 -- the multiplier.
@@ -65,11 +87,12 @@ caps retention, not concurrency, so sizing up retains more idle connections for 
 and never opens more sockets.
 -}
 resolvePrivateConnections :: Maybe Int -> Int -> (Int, Text)
-resolvePrivateConnections explicit fdLimit = case explicit of
-    Just n -> (n, "runtime: private connection pool " <> show n <> " (from config)")
-    Nothing ->
-        let computed = clampPrivateConnections (fdLimit `div` privateConnectionsFdShare)
-         in (computed, "runtime: private connection pool " <> show computed <> " (computed from file-descriptor limit " <> show fdLimit <> ")")
+resolvePrivateConnections explicit fdLimit =
+    resolveSized
+        "runtime: private connection pool"
+        explicit
+        (clampPrivateConnections (fdLimit `div` privateConnectionsFdShare))
+        (fdLimitClause fdLimit)
 
 -- The floor keeps a small file-descriptor limit reusing a useful number of connections.
 -- The cap stops an enormous limit retaining an absurd idle cache to one upstream.
@@ -95,11 +118,15 @@ burst tracks the inbound fan-out. Sizing up is safe for the reason
 'resolvePrivateConnections' gives.
 -}
 resolvePublicConnections :: Maybe Int -> Int -> (Int, Text)
-resolvePublicConnections explicit fdLimit = case explicit of
-    Just n -> (n, "runtime: public connection pool " <> show n <> " (from config)")
-    Nothing ->
-        let computed = clampPublicConnections (fdLimit `div` publicConnectionsFdShare)
-         in (computed, "runtime: public connection pool " <> show computed <> " (computed from file-descriptor limit " <> show fdLimit <> ")")
+resolvePublicConnections explicit fdLimit =
+    resolveSized
+        "runtime: public connection pool"
+        explicit
+        (clampPublicConnections (fdLimit `div` publicConnectionsFdShare))
+        (fdLimitClause fdLimit)
+
+fdLimitClause :: Int -> Text
+fdLimitClause fdLimit = "computed from file-descriptor limit " <> show fdLimit
 
 -- The floor keeps a small limit reusing connections across an onboarding burst. The cap
 -- and the reasoning match 'clampPrivateConnections'.

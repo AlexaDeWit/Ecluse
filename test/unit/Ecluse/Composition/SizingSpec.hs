@@ -13,10 +13,23 @@ import Ecluse.Composition.Sizing (
     resolvePrivateConnections,
     resolvePublicConnections,
     resolveServeAdmission,
+    resolveSized,
  )
 
 spec :: Spec
-spec = connectionPoolSpec
+spec = do
+    resolveSizedSpec
+    connectionPoolSpec
+
+resolveSizedSpec :: Spec
+resolveSizedSpec = describe "resolveSized" $ do
+    it "takes the explicit value and names config as the provenance" $
+        resolveSized "memory plan: cache byte bound" (Just 7) 3 "computed from the heap ceiling"
+            `shouldBe` (7, "memory plan: cache byte bound 7 (from config)")
+
+    it "takes the computed value and names the datapoint behind it" $
+        resolveSized "memory plan: cache byte bound" Nothing 3 "computed from the heap ceiling"
+            `shouldBe` (3, "memory plan: cache byte bound 3 (computed from the heap ceiling)")
 
 connectionPoolSpec :: Spec
 connectionPoolSpec = do
