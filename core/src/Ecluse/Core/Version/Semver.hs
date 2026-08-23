@@ -26,7 +26,7 @@ import Data.Text qualified as T
 import Data.Versions (SemVer (..))
 import Data.Versions qualified as V
 
-import Ecluse.Core.Version.Token (maxVersionLength)
+import Ecluse.Core.Version.Token (digitRuns, withinVersionLength)
 
 {- | A parsed semver version. Its 'Ord' is the @versions@ library's semver §11 precedence, which
 excludes build metadata.
@@ -36,12 +36,12 @@ newtype SemverKey = SemverKey SemVer
     deriving newtype (Eq, Ord)
 
 {- | Parse a semver version. A parse failure becomes 'Nothing', so an ordering rule abstains
-rather than dropping the version. 'maxVersionLength' bounds the text, and @maxNumericRun@ refuses
-a digit run that would silently overflow the @versions@ library's fixed-width numeric components.
+rather than dropping the version. 'withinVersionLength' bounds the text, and @maxNumericRun@
+refuses a digit run that would silently overflow the @versions@ library's fixed-width components.
 -}
 parseSemver :: Text -> Maybe SemverKey
 parseSemver raw = do
-    guard (T.compareLength raw maxVersionLength /= GT)
+    guard (withinVersionLength raw)
     guard (not (hasOverlongNumericRun raw))
     SemverKey <$> rightToMaybe (V.semver raw)
 
@@ -54,11 +54,8 @@ maxNumericRun = 18
 {- Whether @raw@ holds a digit run long enough to overflow the @versions@ library's fixed-width
 numeric components. -}
 hasOverlongNumericRun :: Text -> Bool
-hasOverlongNumericRun = any overlong . T.groupBy sameClass
+hasOverlongNumericRun = any overlong . digitRuns
   where
-    sameClass a b = isDigit a == isDigit b
-    -- A run is homogeneous by 'sameClass', so 'T.all' 'isDigit' identifies a
-    -- digit run. An over-long one fails the bound.
     overlong run = T.all isDigit run && T.compareLength run maxNumericRun == GT
 
 -- | Whether a semver version is stable: a final release with no prerelease component.
