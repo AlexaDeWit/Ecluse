@@ -29,8 +29,36 @@ permissions:
 # public repository, so each value clears a fully cold run. Raise one that starts to
 # cancel real runs, and never tighten one towards the observed mean.
 jobs:
+  changes:
+    name: Classify the change
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # read the PR's changed-file list
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The allow-list of documentation paths lives in the script, which fails closed:
+      # an unlisted path, an unreadable file list, or any non-PR event runs every job.
+      - name: Classify the change
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci-classify-change.sh
+
   build-test:
     name: Build & tests (core-unit + app-unit + integration)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     # One job builds the project once, then runs every Haskell tier against those same
     # on-disk artifacts. Two runners would otherwise race to populate one shared,
     # first-writer-wins cabal cache that ends up incomplete for the widest plan.
@@ -148,6 +176,8 @@ jobs:
 
   smoke:
     name: Smoke tests (live registries, non-gating)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Hits public npm and PyPI to catch protocol drift when those registries change
@@ -179,6 +209,8 @@ jobs:
 
   e2e:
     name: End-to-end tests (whole-system, real npm)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -263,6 +295,8 @@ jobs:
 
   docs:
     name: Haddock builds
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     # Sized for a cold run after a dependency-overlay change in flake.nix, which
     # rebuilds the overridden closure's doc outputs from source.
@@ -296,6 +330,8 @@ jobs:
 
   weeder:
     name: Dead-code check (weeder)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Reports library code not reachable from the app entry (`Ecluse.run`), and any
@@ -345,6 +381,8 @@ jobs:
 
   stan:
     name: Haskell static analysis (stan)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # HIE-based partial-function and bug analysis at the floor in .stan.toml, which
@@ -391,16 +429,28 @@ jobs:
   gate:
     name: CI gate
     # The single Required check. Wire a new required check in by adding it to `needs`
-    # here, never as another required check. The smoke job is intentionally absent: it
-    # runs on PRs for visibility but is non-gating, so the gate never waits on it.
-    needs: [build-test, static-checks, docs, e2e, weeder, stan]
+    # here AND to scripts/ci-gate-verdict.sh, never as another required check. The smoke
+    # job is intentionally absent: it runs on PRs for visibility but is non-gating.
+    needs: [changes, build-test, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Fail if any dependency did not succeed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
-        run: exit 1
+      # The script accepts a skip only from the documentation-only filter, and only for
+      # the jobs that filter may skip. Every other skip still fails the gate.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: All checks passed
-        run: echo "All required checks passed."
+      - name: Require every gating job
+        env:
+          DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
+          CHANGES: ${{ needs.changes.result }}
+          STATIC_CHECKS: ${{ needs.static-checks.result }}
+          BUILD_TEST: ${{ needs.build-test.result }}
+          DOCS: ${{ needs.docs.result }}
+          E2E: ${{ needs.e2e.result }}
+          WEEDER: ${{ needs.weeder.result }}
+          STAN: ${{ needs.stan.result }}
+        run: bash scripts/ci-gate-verdict.sh

@@ -185,6 +185,13 @@ from the entry point (`Ecluse.run`). **`stan`** runs HIE-based partial-function 
 the floor in `.stan.toml`. Each is its own parallel job the CI `gate` depends on, and a finding above
 its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
 
+A PR that edits documentation only skips the Haskell jobs. The `changes` job classifies it
+against an allow-list of documentation paths in
+[`scripts/ci-classify-change.sh`](../scripts/ci-classify-change.sh), which fails closed: an
+unlisted path runs everything. The static checks run on every PR either way, because the site,
+link, and metadata gates read the very files such a PR edits. The `gate` job accepts a skipped
+job from that filter and from nothing else, so a job that silently never ran still fails the gate.
+
 ## Coverage: Codecov (gating)
 
 CI measures coverage per gating suite and reports it to [Codecov](https://about.codecov.io/).
