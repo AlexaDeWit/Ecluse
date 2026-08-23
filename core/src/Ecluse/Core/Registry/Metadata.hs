@@ -2,37 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The serve-path metadata handle: the read boundary between the request pipeline
-and a registry mount, expressed as two __implementation-agnostic intent operations__.
-
-This is the read counterpart to the publish-side "Ecluse.Core.Registry" handle, and
-deliberately distinct from it. The publish handle is the write and worker side: one
-client minted once at the composition root. This handle is the serve path's read
-boundary, constructed __per request__. It captures what a serve fetch needs: the
-per-origin manager, credential posture, base URL, response budget, and the shared
-metadata cache. The pipeline never reaches for a registry's wire format. It asks a
-mount for one of two things, and the mount owns both fetch and parse behind the
-answer.
-
-The two operations are asymmetric __by design__:
-
-* 'fetchFullManifest' yields the packument-level 'Ecluse.Core.Package.PackageInfo'
-  /and/ the raw document the mount decoded it from. The serve path needs the raw
-  document. It edits the packument in place, dropping filtered versions and rewriting
-  artifact locations, then re-serialises it to the client.
-  'Ecluse.Core.Package.PackageInfo' is a lossy projection that cannot reconstruct the
-  document.
-
-* 'fetchVersionMetadata' yields only one version's
-  'Ecluse.Core.Package.PackageDetails'. It never re-serialises, so it need not carry
-  the raw document. That is what lets a mount make it the cheap path (a smaller
-  endpoint, or a selective parse) without changing this boundary.
-
-Both operations are total. A failure comes back as a 'MetadataError' __value__, never
-a throw, so the caller decides how each maps onto a served response. A transport fault
-is in the same channel ('MetadataUnreachable'). Unobtainable metadata therefore arrives
-typed whatever the cause: a parse failure, a policy refusal, or an unreachable
-upstream.
+{- | The serve-path metadata handle: the read boundary between the request pipeline and a
+registry mount, constructed per request. The pipeline asks a mount for one of two things, and
+the mount owns both fetch and parse behind the answer. The two are asymmetric by design.
+'fetchFullManifest' also yields the raw document, because the serve path edits the packument in
+place and re-serialises it. 'fetchVersionMetadata' never re-serialises, which is what lets a
+mount make it the cheap path (a smaller endpoint, or a selective parse) without changing this
+boundary. Both are total: a failure comes back as a 'MetadataError' __value__, the upstream
+exchange's own faults included ('MetadataFetch').
 -}
 module Ecluse.Core.Registry.Metadata (
     -- * The read handle
@@ -46,7 +23,6 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * Errors
     MetadataError (..),
-    fetchFaultError,
 
     -- * Single-version resolution
     VersionEvaluation (..),
@@ -56,12 +32,8 @@ module Ecluse.Core.Registry.Metadata (
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.ByteArray qualified as BA
 
-import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
-    UrlFormationError,
- )
+import Ecluse.Core.Registry (FetchFault)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
@@ -111,8 +83,12 @@ path maps onto its own response, so a name mismatch (the anti-shadowing defence)
 degrades like a transient outage.
 -}
 data MetadataError
-    = {- | The upstream body breached a response bound (its size, version count, or
-      nesting depth). Carries the 'LimitError' so the breach is diagnosable.
+    = {- | The upstream exchange never delivered a body, carried as the shared
+      'Ecluse.Core.Registry.FetchFault' so a config fault and an outage stay distinct.
+      -}
+      MetadataFetch FetchFault
+    | {- | The decoded document breached a structural bound (version count, nesting depth),
+      distinct from the exchange's response-size bound, which arrives as 'MetadataFetch'.
       -}
       MetadataBoundExceeded LimitError
     | {- | The upstream answered, but its body did not decode into a usable manifest
@@ -124,31 +100,7 @@ data MetadataError
       this request, so the proxy drops it and never serves it as the requested package.
       -}
       MetadataNameMismatch Text
-    | {- | The upstream request URL could not be formed from configuration (an empty or
-      unparseable base URL). A __config fault__, held distinct from a decode failure or
-      a transient outage, mirroring the write path's
-      'Ecluse.Core.Registry.PublishUrlUnformable'. A misconfigured base URL therefore
-      stays what it is, never laundered into a retryable degrade. Carries the
-      'Ecluse.Core.Registry.UrlFormationError'.
-      -}
-      MetadataUrlUnformable UrlFormationError
-    | {- | The upstream could not be reached at all: the transport failed before a
-      usable body returned (a timeout, a refused connection, a TLS refusal). Carried
-      as the adapter-classified 'TransportFault'. The __outage__ cause, held distinct
-      from a decode failure or a config fault, so the serve path degrades it as the
-      transient it is.
-      -}
-      MetadataUnreachable TransportFault
     deriving stock (Eq, Show)
-
-{- | Fold the shared upstream fault channel ('FetchFault') onto the serve-path error
-vocabulary. Every adapter's metadata layer threads its bounded fetch's fault through it.
--}
-fetchFaultError :: FetchFault -> MetadataError
-fetchFaultError = \case
-    FetchBoundExceeded err -> MetadataBoundExceeded err
-    FetchUrlUnformable urlErr -> MetadataUrlUnformable urlErr
-    FetchTransport transport -> MetadataUnreachable transport
 
 {- | The outcome of resolving one version's metadata for a policy decision. The serve-time
 gate and the mirror worker share it, so both reach the same outcome from one fetch.

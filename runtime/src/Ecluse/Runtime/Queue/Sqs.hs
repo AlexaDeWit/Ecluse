@@ -34,7 +34,7 @@ dead-letter queue rather than being discarded. A deployment with no dead-letter 
 has nothing to fall to. The worker's redelivery budget retires such a message instead
 (see "Ecluse.Core.Queue"), rather than letting it cycle until the retention window
 discards it unseen. Every operation reports its AWS failure as the handle's typed
-'Ecluse.Core.Queue.QueueFault' value, classified into the core transport vocabulary at
+'Ecluse.Core.Fault.TransportFault' value, classified into the core transport vocabulary at
 this edge ("Ecluse.Runtime.Aws.Fault"). A queue outage never rides the exception channel
 through a caller.
 
@@ -100,6 +100,7 @@ import Katip.Monadic (runKatipContextT)
 import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
+import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (
     PackageName,
     mkPackageName,
@@ -114,14 +115,12 @@ import Ecluse.Core.Queue (
     DeliveryBudget (DeliveryBudget),
     MirrorJob (..),
     MirrorQueue (..),
-    QueueFault,
     QueueMessage (..),
     RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate),
     Seconds (..),
     defaultDeliveryBudget,
     effectiveDeliveryBudget,
     mkReceiptHandle,
-    queueTransportFault,
     unReceiptHandle,
  )
 import Ecluse.Core.Registry (parseErrorMessage)
@@ -203,9 +202,9 @@ newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO Mi
 newSqsQueue logEnv egressUrl cfg = do
     env <- mkEnv cfg
     -- 'AWS.sendEither' keeps the AWS error out of the exception channel, so every operation
-    -- reports its failure as the handle's 'QueueFault' value.
-    let run :: (AWS.AWSRequest a) => a -> IO (Either QueueFault (AWS.AWSResponse a))
-        run = fmap (first (queueTransportFault . classifyAwsTransport)) . runResourceT . AWS.sendEither env
+    -- reports its failure as the handle's 'TransportFault' value.
+    let run :: (AWS.AWSRequest a) => a -> IO (Either TransportFault (AWS.AWSResponse a))
+        run = fmap (first classifyAwsTransport) . runResourceT . AWS.sendEither env
         queueUrl = sqsQueueUrl cfg
         Seconds terminalBackoffSecs = sqsTerminalBackoff cfg
     -- SQS keeps the redrive configuration on the queue, not on a message, so the backend

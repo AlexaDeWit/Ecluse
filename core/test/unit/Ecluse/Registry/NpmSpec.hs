@@ -96,7 +96,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
 
     it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
         -- The read-path URL-formation fault is a value (mirroring the write path's
-        -- PublishUrlUnformable), not a thrown UrlFormationError laundered by a broad catch.
+        -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
         let config = (defaultNpmConfig manager){npmBaseUrl = ""}
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd

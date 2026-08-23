@@ -45,7 +45,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (InvalidEntry, PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
-    PublishRelayFault,
+    FetchFault,
     PublishRelayResponse,
     UrlFormationError,
  )
@@ -163,7 +163,7 @@ the codec to the shared publish transport per mounted ecosystem
 ('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
 data AdapterPublish = AdapterPublish
-    { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either PublishRelayFault PublishRelayResponse)
+    { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the publication target, returning its response.
     , publishCanonicaliseName :: Text -> Maybe PackageName
     -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.

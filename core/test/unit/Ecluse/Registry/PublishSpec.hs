@@ -16,7 +16,7 @@ import Ecluse.Core.Package (HashAlg (SHA1), PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
-    PublishFault (PublishUrlUnformable),
+    PublishFault (PublishFetch),
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
@@ -83,6 +83,21 @@ spec = do
                     publish = newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec
                 outcome <- mpProbeMetadata publish isOdd
                 outcome `shouldSatisfy` isBoundExceededFetch
+
+        it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
+            -- The write reads the target's answer through the same bounded exchange as the
+            -- probe, so a pathological response body never buffers whole.
+            withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
+                manager <- Client.newManager Client.defaultManagerSettings
+                let transport =
+                        MirrorTransport
+                            { ptManager = manager
+                            , ptMintToken = pure Nothing
+                            , ptLimits = defaultLimits{maxBodyBytes = 16}
+                            }
+                    publish = newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec
+                outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact "bytes"
+                outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
@@ -151,5 +166,10 @@ isBoundExceededFetch = \case
 
 isUrlUnformablePublish :: Either PublishFault a -> Bool
 isUrlUnformablePublish = \case
-    Left (PublishUrlUnformable _) -> True
+    Left (PublishFetch (FetchUrlUnformable _)) -> True
+    _ -> False
+
+isBoundExceededPublish :: Either PublishFault a -> Bool
+isBoundExceededPublish = \case
+    Left (PublishFetch (FetchBoundExceeded _)) -> True
     _ -> False

@@ -19,17 +19,19 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount))
 import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishError (PublishError),
-    PublishFault (PublishRejected, PublishTransport, PublishUrlUnformable),
+    PublishFault (PublishFetch, PublishRejected),
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataUndecodable, MetadataUnreachable),
+    MetadataError (MetadataFetch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
+import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
@@ -37,7 +39,6 @@ import Ecluse.Core.Worker (
     processBatch,
     processJob,
  )
-import Ecluse.Core.Worker.Fetch (ArtifactFetchFault (ArtifactOverCap, ArtifactUnavailable))
 import Ecluse.Core.Worker.Job (outcomeOfFetchFault)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
@@ -46,16 +47,22 @@ import Ecluse.Worker.Support
 
 spec :: Spec
 spec = do
-    describe "outcomeOfFetchFault (issue #846: over-cap is terminal, dead-lettered, not retried)" $ do
-        -- An over-cap fault is terminal, so the backend dead-letters it. Treating every fetch
-        -- Left as a retry would redeliver a deterministically over-cap tarball forever.
-        it "dead-letters an over-cap artifact (it can never succeed, so it rides the terminus)" $
-            outcomeOfFetchFault (ArtifactOverCap "artifact exceeded the response bound")
-                `shouldBe` DeadLettered "artifact exceeded the response bound"
+    describe "outcomeOfFetchFault (the worker's one retry-versus-drop table)" $ do
+        -- One table serves the artifact fetch and the mirror write, so no exchange fault can
+        -- drop on one leg and retry on the other.
+        it "drops an unformable URL (a redelivery re-forms the same URL from the same inputs)" $
+            outcomeOfFetchFault renderFault (FetchUrlUnformable EmptyBaseUrl)
+                `shouldBe` Dropped "unformable"
 
-        it "retries a transient fetch fault (a redelivery may succeed)" $
-            outcomeOfFetchFault (ArtifactUnavailable "artifact fetch failed: connection reset")
-                `shouldBe` Retried "artifact fetch failed: connection reset"
+        -- An over-bound response is terminal, so the backend dead-letters it. Treating every
+        -- fetch Left as a retry would redeliver a deterministically over-cap tarball forever.
+        it "dead-letters an over-bound response (it can never succeed, so it rides the terminus)" $
+            outcomeOfFetchFault renderFault (FetchBoundExceeded (BodyTooLarge 1024))
+                `shouldBe` DeadLettered "over the bound"
+
+        it "retries a transport fault (a redelivery may succeed)" $
+            outcomeOfFetchFault renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
+                `shouldBe` Retried "transport failed"
 
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
@@ -179,7 +186,7 @@ spec = do
             -- The consumer renders the reason prefix, once. A fault carrying the prefix as raw text
             -- would make the consumer add it again, doubling it in the log line.
             withUpstream $ \url ->
-                withRuntime (Left (PublishTransport (transportFault TransportUnreachable "connection refused"))) $ \runtime queue _logRef -> do
+                withRuntime (Left (PublishFetch (FetchTransport (transportFault TransportUnreachable "connection refused")))) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
                     case outcome of
@@ -188,13 +195,13 @@ spec = do
                             T.count "publish transport failure:" reason `shouldBe` 1
                         other -> expectationFailure ("expected a Retried transport outcome, got " <> show other)
 
-        it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
-            -- An artifact URL that cannot be formed never reaches a fetch. The worker treats that
-            -- as a transient reason rather than crashing the iteration.
+        it "drops a job (non-retryable) when the artifact URL is unformable (no publish)" $
+            -- A redelivery re-forms the same unformable URL from the same job payload, so the
+            -- worker retires the job, the same verdict the publish leg reaches below.
             withRuntime (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl)
                 outcome <- runWM runtime (processJob receipt job)
-                outcome `shouldSatisfy` isRetried
+                outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
@@ -203,7 +210,7 @@ spec = do
             -- drops the job rather than re-enqueueing it forever. That is distinct from a retryable
             -- rejection.
             withUpstream $ \url ->
-                withRuntime (Left (PublishUrlUnformable EmptyBaseUrl)) $ \runtime queue _logRef -> do
+                withRuntime (Left (PublishFetch (FetchUrlUnformable EmptyBaseUrl))) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
@@ -289,15 +296,15 @@ spec = do
                     decoyPublished <- plDocuments <$> readIORef decoyLog
                     decoyPublished `shouldBe` []
 
-        it "retries when the job ecosystem's own request formation refuses the URL, without publishing" $
-            -- The npm bundle's own builder refuses, with no other builder to fall back to, so the
-            -- worker leaves the job for redelivery.
+        it "drops the job when the job ecosystem's own request formation refuses the URL, without publishing" $
+            -- The npm bundle's own builder refuses, with no other builder to fall back to. A
+            -- redelivery would refuse identically, so the worker retires the job.
             withRuntimePolicies (withArtifactRequest (\_ _ _ _ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 case outcome of
-                    Retried reason -> reason `shouldSatisfy` T.isInfixOf "unformable artifact URL"
-                    other -> expectationFailure ("expected a Retried outcome from the refused request formation, got " <> show other)
+                    Dropped reason -> reason `shouldSatisfy` T.isInfixOf "unformable artifact URL"
+                    other -> expectationFailure ("expected a Dropped outcome from the refused request formation, got " <> show other)
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
@@ -455,7 +462,7 @@ spec = do
                 `shouldReturn` VersionMetadataUnavailable
 
         it "classifies an unreachable upstream as unavailable (transport in the typed channel)" $
-            fetchVersionDetails (versionClient (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))) pkg ver
+            fetchVersionDetails (versionClient (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))) pkg ver
                 `shouldReturn` VersionMetadataUnavailable
 
         it "propagates a client that escapes its total contract (the invariant channel)" $ do
@@ -563,3 +570,11 @@ spec = do
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])
+
+-- A stand-in reason renderer. The unit pins the verdict and that the reason is rendered from
+-- the very fault being judged, never the wording each worker leg chooses.
+renderFault :: FetchFault -> Text
+renderFault = \case
+    FetchUrlUnformable _ -> "unformable"
+    FetchBoundExceeded _ -> "over the bound"
+    FetchTransport _ -> "transport failed"

@@ -2,34 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The registry-protocol vocabulary: the payload and typed-fault types every
-registry-facing capability shares.
-
-This is the __ecosystem (protocol) axis__' common ground (see
-@docs\/architecture\/registry-model.md@ → "Registry Abstraction"). It holds the raw
-fetched document ('RegistryResponse'), the mirror-write descriptor
-('MirrorArtifact'), and the digest selector ('firstHashValue') that reads it. It
-also holds one typed fault channel per exchange: 'FetchFault' for a metadata read,
-'PublishFault' for the mirror write, and 'PublishRelayFault' for the first-party
-relay. 'UrlFormationError' is the protocol-independent request-formation failure
-they all share. The capabilities that speak a protocol over these types live
-beside them. The metadata read handle is in "Ecluse.Core.Registry.Metadata", the
-mirror write's codec-over-transport split in "Ecluse.Core.Registry.Publish", and
-each ecosystem's capability record in "Ecluse.Core.Registry.Adapter".
-
-Two design points are load-bearing:
-
-* __Failures are values.__ Each exchange reports every failure, transport
-  included, in its typed channel, never a throw. A consumer's fall-through or
-  retry-vs-drop decision is therefore total at the call site
-  (/parse, don't validate/).
-
-* __The vocabulary carries no authentication.__ Protocol and authentication are
-  orthogonal axes. Every managed npm registry (AWS CodeArtifact, GCP Artifact
-  Registry, a self-hosted Verdaccio) speaks the same npm protocol. They differ
-  only in how a credential provider mints a bearer token, which lives behind the
-  separate "Ecluse.Core.Credential" handle. One protocol implementation therefore
-  serves every cloud instead of a near-duplicate per provider.
+{- | The registry-protocol vocabulary: the payload and typed-fault types every registry-facing
+capability shares. Failures are __values__ here, never throws, so a consumer's fall-through or
+retry-versus-drop decision stays total at the call site. The vocabulary carries no
+authentication, because protocol and credential are orthogonal axes, and one protocol
+implementation therefore serves every managed npm registry. The capabilities that speak a
+protocol over these types live beside it: "Ecluse.Core.Registry.Metadata" for the read handle,
+"Ecluse.Core.Registry.Publish" for the mirror write, and "Ecluse.Core.Registry.Adapter" for
+each ecosystem's capability record.
 -}
 module Ecluse.Core.Registry (
     -- * Fetch payload
@@ -47,7 +27,6 @@ module Ecluse.Core.Registry (
     UrlFormationError (..),
     renderUrlFormationError,
     PublishRelayResponse (..),
-    PublishRelayFault (..),
 ) where
 
 import Ecluse.Core.Fault (TransportFault)
@@ -139,35 +118,18 @@ renderUrlFormationError = \case
     EmptyBaseUrl -> "EmptyBaseUrl"
     UnparseableUrl url -> "UnparseableUrl " <> authorityLabel url
 
-{- | Why a metadata fetch could not produce a response body, reported as a value rather than
-thrown. Total over the read fetch: no fetch failure rides up outside this type.
+{- | Why a bounded exchange could not produce a usable response, reported as a value.
+Total over every exchange the proxy runs: no failure rides up outside this type.
 -}
 data FetchFault
-    = -- | The request URL could not be formed from configuration (an empty or unparseable base URL).
+    = -- | The request URL could not be formed from the base URL and the package identity.
       FetchUrlUnformable UrlFormationError
-    | -- | The upstream body crossed the response-size bound, and the read refused it fail-closed.
+    | -- | The peer's body crossed the response-size bound, and the read refused it fail-closed.
       FetchBoundExceeded LimitError
-    | {- | The request never completed: the transport failed before a usable body
-      returned (a timeout, an unreachable peer, a TLS refusal). Carried as the
-      'TransportFault' the adapter edge classified out of its client library's
-      exception.
-      -}
-      FetchTransport TransportFault
-    deriving stock (Eq, Show)
-
-{- | Why a first-party publish relay produced no response from the publication target,
-reported as a value. The serve path renders an unformable target URL as @500@, and a transport
-fault or an overstepped response bound as @502@. Total over the relay: no fault escapes this type.
--}
-data PublishRelayFault
-    = -- | The publication target URL could not be formed from configuration.
-      RelayUrlUnformable UrlFormationError
-    | {- | The write never produced a usable response: the transport failed,
+    | {- | The request never completed (a timeout, an unreachable peer, a TLS refusal),
       carried as the 'TransportFault' the adapter edge classified.
       -}
-      RelayTransport TransportFault
-    | -- | The target's response body overstepped the response-size bound.
-      RelayBoundExceeded LimitError
+      FetchTransport TransportFault
     deriving stock (Eq, Show)
 
 {- | The response from the publication target after relaying a publish document. The proxy
@@ -182,30 +144,14 @@ data PublishRelayResponse = PublishRelayResponse
     }
     deriving stock (Eq, Show)
 
-{- | Why a publish could not complete, surfaced as a value rather than thrown. The cases
-differ in retryability, so the mirror worker decides retry against drop by an exhaustive
-pattern match.
+{- | Why a publish could not complete, surfaced as a value. The cases differ in
+retryability, so the worker decides retry against drop by an exhaustive match.
 -}
 data PublishFault
-    = {- | The request URL could not be formed (e.g. an empty base URL): a
-      configuration fault carried as its 'UrlFormationError'. __Not retryable__:
-      redelivering the job cannot change a misconfigured base URL, so the worker
-      drops the job and alerts rather than re-enqueueing forever.
+    = {- | The exchange never produced a status to read, carried as the shared 'FetchFault'
+      so the worker reads one retry-versus-drop table for the write and the artifact fetch.
       -}
-      PublishUrlUnformable UrlFormationError
-    | {- | The registry rejected the write (a non-2xx, non-@409@ status), carried
-      as a 'PublishError'. __Retryable__: the worker leaves the job un-acked for
-      redelivery.
-      -}
+      PublishFetch FetchFault
+    | -- | The registry answered and rejected the write (a non-2xx, non-@409@ status). Retryable.
       PublishRejected PublishError
-    | {- | The write never reached the registry: the HTTP request threw before any
-      status returned (a connection failure, a TLS error, a timeout). Carried as the
-      'TransportFault' the adapter edge classified out of its client library's
-      exception, exactly as 'FetchTransport' and 'RelayTransport' carry theirs.
-      __Retryable__: the transport may recover, so the worker leaves the job un-acked
-      for redelivery, exactly as for a 'PublishRejected'. Surfacing it as a value is
-      what lets the mirror write ('Ecluse.Core.Registry.Publish.mpPublishArtifact')
-      honour its total, never-thrown contract.
-      -}
-      PublishTransport TransportFault
     deriving stock (Eq, Show)

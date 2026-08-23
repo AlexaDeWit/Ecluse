@@ -25,7 +25,6 @@ import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
-    queueTransportFault,
  )
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure), defaultSqsConfig)
 
@@ -203,4 +202,4 @@ deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do
             { sqsMaxReceiveCount = DeliveryBudget 2
             }
 
-    probeFault = queueTransportFault (transportFault TransportUnreachable "access denied by the emulator")
+    probeFault = transportFault TransportUnreachable "access denied by the emulator"

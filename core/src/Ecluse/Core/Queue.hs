@@ -2,77 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-queue handle: the durable hand-off from the request path to the
-mirror worker.
-
-Mirroring is demand-driven. When a client fetches an artifact whose version passes
-the rules, the proxy 'enqueue's a 'MirrorJob'. It then serves the artifact at once,
-never blocking on the mirror. A separate worker 'receive's jobs, fetches and verifies
-the artifact, publishes it to the mirror target, and 'ack's the job (see
-@docs\/architecture\/cloud-backends.md@ → "Mirror Queue").
-
-The queue is the one cloud surface whose API differs materially per provider. It is
-therefore its own handle: a record of functions (the Handle pattern). AWS SQS speaks
-@SendMessage@\/@ReceiveMessage@+visibility-timeout\/@DeleteMessage@, and GCP Pub\/Sub
-speaks @Publish@\/@Pull@+ack-deadline\/@Acknowledge@. Both providers fit the same
-receive → process → ack shape. Their differences (visibility timeout vs ack deadline,
-batch limits, dead-letter wiring) stay behind the handle, and 'ReceiptHandle' is opaque
-so neither leaks.
-
-Like the other handles, the effectful fields return 'IO' rather than @App@. An
-adapter therefore stays decoupled from the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions").
-
-== Conventions
-
-The two cloud backends both give at-least-once delivery, which is safe here because
-publishing is idempotent (a registry treats versions as immutable). The handle's
-contract reflects that:
-
-* __'enqueue' is best-effort__. It runs on the request hot path (enqueue, then serve
-  immediately), so the caller logs and meters a failure and never fails the client
-  response. The artifact is already served, and a later pull re-enqueues.
-* __Retry is "don't 'ack'"__. A job that fails processing transiently (a flaky fetch,
-  a registry blip) is simply not acked. The visibility timeout \/ ack deadline
-  redelivers it, and it may succeed next time. There is deliberately no @nack@ for
-  the transient case.
-* __'deadLetter' is the terminal terminus__. A job that can never succeed (an artifact
-  past the plan-sized byte cap) is a terminal verdict, and each backend realises it
-  its own way. The in-memory backend drops the delivery, its only terminus. The SQS
-  backend returns the message with a backoff visibility timeout without deleting it.
-  It then rides the operator's redrive policy to the dead-letter queue for forensic
-  retention rather than being silently discarded. This is not a @nack@ (a retry) and
-  not an 'ack' (a clean retire). It is the third, terminal outcome.
-* __The 'deliveryBudget' is the backstop terminus__. Returning a message only has a
-  terminus if something captures it. A queue with no dead-letter terminus would
-  otherwise cycle a poison message until the retention window discarded it unseen,
-  re-fetching on every delivery. So every delivery carries its 'msgReceiveCount'. The
-  worker retires a delivery that spends the budget ('deliveryBudgetSpent'), killing
-  the job with an alarm rather than letting it churn. 'effectiveDeliveryBudget' raises
-  the budget past an attached terminus's own capture count. A dead-letter queue
-  therefore always captures first.
-* __'extendVisibility'__ lets the worker hold a long publish (a large artifact) past
-  the visibility window. It is an /optimisation/, not correctness-critical, since
-  idempotency already makes redelivery harmless.
-
-This module provides the handle, its payload types, and the building blocks a backend
-implementation reaches for. "Ecluse.Core.Queue.Memory" holds the STM-backed bounded,
-best-effort production backend that mirroring rolls over to when no
-@ECLUSE_QUEUE__URL@ is set.
-
-It also provides 'newEnqueueBuffer', a bounded producer-side hand-off buffer that
-wraps any backend. The serve path's 'enqueue' then completes in microseconds, while a
-composition-root drain loop delivers to the (possibly slow) backend off the request
-path.
+{- | The mirror-queue handle: the durable hand-off from the request path to the mirror worker.
+Mirroring is demand-driven, so the serve path 'enqueue's a 'MirrorJob' and answers at once while
+a worker 'receive's it, verifies the artifact, publishes it, and 'ack's. The queue is the one
+cloud surface whose API differs materially per provider, so it is a record of functions (the
+Handle pattern) and 'ReceiptHandle' is opaque. At-least-once delivery is safe because publishing
+is idempotent, which is why retry is "do not 'ack'" and there is no @nack@. 'deadLetter' is the
+third, terminal outcome, and 'deliveryBudget' is the backstop when nothing else captures a poison
+message. See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue".
 -}
 module Ecluse.Core.Queue (
     -- * Queue handle
     MirrorQueue (..),
     noMirrorQueue,
-
-    -- * Faults
-    QueueFault (..),
-    queueTransportFault,
 
     -- * Payloads
     MirrorJob (..),
@@ -107,7 +49,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, rea
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault (TransportFault), transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -200,28 +142,6 @@ data QueueMessage = QueueMessage
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
 
-{- | Why the handle could not deliver a queue operation to the backend, reported as a value
-on every handle field rather than on the exception channel. The cause vocabulary is
-"Ecluse.Core.Fault"'s 'TransportCause': a backend's service-level refusal (a throttle, an
-access denial) classifies as 'TransportProtocol'.
--}
-data QueueFault = QueueFault
-    { qfCause :: TransportCause
-    -- ^ The closed classification a consumer or an operator reads.
-    , qfDetail :: Text
-    {- ^ The backend's rendered detail, bounded to a log-line-sized budget.
-    Diagnostic text only: it is never parsed, and no decision may branch on it.
-    -}
-    }
-    deriving stock (Eq, Show)
-
-{- | Adopt an already-classified 'TransportFault' as a 'QueueFault'.
-'Ecluse.Core.Fault.transportFault' has already truncated the detail to the shared log-line
-budget, so the two vocabularies cannot drift on what bounded means.
--}
-queueTransportFault :: TransportFault -> QueueFault
-queueTransportFault (TransportFault cause detail) = QueueFault cause detail
-
 {- | How many deliveries of one message a queue grants before the worker itself
 retires it. A 'newtype', so no caller confuses a count of receives with some other
 'Int'.
@@ -276,30 +196,28 @@ message through its terminal path rather than letting it cycle. A backend suppli
 deliveryBudgetSpent :: DeliveryBudget -> QueueMessage -> Bool
 deliveryBudgetSpent budget message = msgReceiveCount message >= retiringDelivery budget
 
-{- | The mirror-queue handle: a record of functions over a backend whose private state the
-closures capture. Each operation reports backend failure as a 'QueueFault' value, so no queue
-outage rides the exception channel through a caller. See the module header for the
-best-effort @enqueue@, retry-by-not-acking, and no-@nack@ conventions.
+{- | The mirror-queue handle: a record of functions over a backend whose state the closures
+capture. Every operation reports failure as an 'Ecluse.Core.Fault.TransportFault' value.
 -}
 data MirrorQueue = MirrorQueue
-    { enqueue :: MirrorJob -> IO (Either QueueFault ())
+    { enqueue :: MirrorJob -> IO (Either TransportFault ())
     {- ^ Producer. Best-effort: the caller counts and logs a 'Left' and never fails the client
-    response, since a later pull re-enqueues (see the header).
+    response, since a later pull re-enqueues.
     -}
-    , receive :: IO (Either QueueFault [QueueMessage])
+    , receive :: IO (Either TransportFault [QueueMessage])
     {- ^ Consumer. One long-poll for a batch, with @Right []@ on timeout: an empty, healthy poll
     the worker simply repeats. A 'Left' is a failed poll and does not advance the liveness
     heartbeat, so a persistently failing backend surfaces through @\/livez@.
     -}
-    , ack :: ReceiptHandle -> IO (Either QueueFault ())
+    , ack :: ReceiptHandle -> IO (Either TransportFault ())
     {- ^ Acknowledge a processed message so the backend does not redeliver it. The caller logs
     a 'Left' and absorbs it, since idempotent publishing makes the repeat harmless.
     -}
-    , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either QueueFault ())
+    , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either TransportFault ())
     {- ^ Extend a received message's visibility window to hold a long publish. An optimisation,
     not correctness-critical, so the caller absorbs a 'Left' silently.
     -}
-    , deadLetter :: ReceiptHandle -> IO (Either QueueFault ())
+    , deadLetter :: ReceiptHandle -> IO (Either TransportFault ())
     {- ^ Realise a terminal fault: a job that can never succeed, decided as a verdict at the
     read site. Each backend routes it to its own dead-letter terminus (see the header). The
     caller logs a 'Left' and absorbs it, like 'ack'.
@@ -309,7 +227,7 @@ data MirrorQueue = MirrorQueue
     ('deliveryBudgetSpent'). The backend settles it once at construction with
     'effectiveDeliveryBudget', so judging a delivery costs no per-message work.
     -}
-    , deadLetterTerminus :: Either QueueFault DeadLetterTerminus
+    , deadLetterTerminus :: Either TransportFault DeadLetterTerminus
     {- ^ What this backend's dead-letter probe found at construction, or the fault that stopped
     the probe. The composition root reads it once to decide its boot warning. A 'Left' leaves
     the configured budget standing and never blocks boot.
@@ -333,9 +251,7 @@ noMirrorQueue =
         , deadLetterTerminus = Right TerminusAbsent
         }
   where
-    inertFault =
-        queueTransportFault
-            (transportFault TransportProtocol "no mount mirrors, so no mirror queue is built")
+    inertFault = transportFault TransportProtocol "no mount mirrors, so no mirror queue is built"
 
 {- | Hand a job to a bounded queue inside the caller's transaction. At the cap it drops the newest
 job and returns the running drop total, a safe loss because the next demand re-enqueues it.
@@ -415,7 +331,7 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
   where
     go consecutiveFailures = do
         job <- atomically (readTBQueue buffer)
-        -- The backend reports delivery failures as 'QueueFault' values, so this match is total. An
+        -- Delivery failures arrive as 'TransportFault' values, so this match is total. An
         -- exception escaping here is an invariant break, left to the loop's supervisor.
         enqueue backend job >>= \case
             Right () -> go 0
@@ -423,7 +339,7 @@ drainLoop buffer failureCount onDeliveryFailure backend = go 0
                 n <- atomically (bumpCount failureCount)
                 -- 'onDeliveryFailure' is a best-effort observer. Guard it so a throwing
                 -- observer can never escape the loop and tear down the composition root.
-                void (tryAny (onDeliveryFailure n (qfDetail fault)))
+                void (tryAny (onDeliveryFailure n (tfDetail fault)))
                 threadDelay (backoffMicros drainBackoff consecutiveFailures)
                 go (consecutiveFailures + 1)
 

@@ -98,6 +98,7 @@ import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Package (
     Artifact (artFilename, artUrl),
     PackageDetails,
@@ -116,9 +117,7 @@ import Ecluse.Core.Package.Admission (
  )
 import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
-    QueueFault,
     enqueue,
-    qfDetail,
  )
 import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
@@ -527,11 +526,11 @@ enqueueMirror rt deps name version artifact =
 
     -- Project the swallowed enqueue outcome onto the producer span's status, so a trace
     -- explains why the mirror was not enqueued.
-    enqueueErrorDetail :: Either QueueFault () -> Maybe Text
+    enqueueErrorDetail :: Either TransportFault () -> Maybe Text
     enqueueErrorDetail = either (Just . enqueueFailureDetail) (const Nothing)
 
-    enqueueFailureDetail :: QueueFault -> Text
-    enqueueFailureDetail fault = "mirror enqueue failed: " <> qfDetail fault
+    enqueueFailureDetail :: TransportFault -> Text
+    enqueueFailureDetail fault = "mirror enqueue failed: " <> tfDetail fault
 
 {- A @403@ for an artifact whose authoritative @url@ the tarball-host gate refuses. This is
 a gate denial rather than a rule outcome, and it renders on the same @403@ surface with a

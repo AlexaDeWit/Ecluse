@@ -7,15 +7,13 @@ module Ecluse.Server.FaultSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Fault (
     RenderEscape (RenderEscape),
     RequestFault (rqCause, rqDetail),
     classifyEscape,
  )
 import Ecluse.Core.Telemetry.Metrics (
-    RequestFaultCause (GateFault, RenderFault, UnclassifiedFault),
+    RequestFaultCause (RenderFault, UnclassifiedFault),
  )
 
 -- | A typed stand-in for an escape nothing classifies.
@@ -26,9 +24,6 @@ instance Exception UnknownEscape
 
 spec :: Spec
 spec = describe "classifyEscape (the request perimeter's vocabulary)" $ do
-    it "classifies a response-bound breach as a GateFault" $
-        rqCause (classifyEscape (toException (ResponseBoundExceeded (BodyTooLarge 1024)))) `shouldBe` GateFault
-
     it "classifies the render marker as a RenderFault carrying the inner escape's detail" $ do
         let fault = classifyEscape (toException (RenderEscape (toException (UnknownEscape "assembly bottomed"))))
         rqCause fault `shouldBe` RenderFault

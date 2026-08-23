@@ -2,29 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-write capability: a shared publish transport, an adapter-provided
-protocol codec, and the married 'MirrorPublish' handle the worker's per-ecosystem
-bundle carries.
-
-The mirror write splits along what genuinely varies per ecosystem. The
-'PublishCodec' is protocol. It assembles a publish document, shapes it into a
-request, and reads a mirror listing for the presence probe. It also says what the
-registry's status answer means.
-
-The 'MirrorTransport' is everything else: the trusted-path connection manager, the
-credential-minting action, the response bound, and the fault classification into the
-typed channels. Whatever refresh and breaker apparatus the mint needs sits behind
-that action. 'newMirrorPublish' marries the two against one mirror-target endpoint.
-The composition root performs that marriage once per mounted ecosystem, so a new
-ecosystem contributes a codec and never a transport.
-
-Both effectful operations report failure as a __value__, never a throw: 'FetchFault'
-on the probe, 'PublishFault' on the write. The worker's fall-through and
-retry-vs-drop decisions therefore stay total at the call site. The codec carries no
-authentication. The transport mints the bearer per call and hands it to the codec's
-request formers. They attach it at the shared single attach point
-('Ecluse.Core.Registry.Npm.Request.withToken' for npm). That preserves the
-credential-redirect invariant per married client.
+{- | The mirror-write capability: a shared publish transport, an adapter-provided protocol codec,
+and the married 'MirrorPublish' handle a worker bundle carries. The split follows what genuinely
+varies per ecosystem. The 'PublishCodec' is protocol: it assembles and shapes the request and
+says what the registry's status answer means. The 'MirrorTransport' is everything else, so a new
+ecosystem contributes a codec and never a transport. Both effectful operations report failure as
+a __value__, 'FetchFault' on the probe and 'PublishFault' on the write, so the worker's decisions
+stay total at the call site. The codec carries no authentication: the transport mints the bearer
+per call, and the codec attaches it at its single attach point.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * The adapter's protocol codec
@@ -38,28 +23,19 @@ module Ecluse.Core.Registry.Publish (
     newMirrorPublish,
 ) where
 
-import Network.HTTP.Client (
-    HttpException,
-    Manager,
-    Request,
-    Response (responseStatus),
-    httpLbs,
- )
-import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (try)
+import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
     MirrorArtifact,
     ParseError,
-    PublishFault (PublishTransport, PublishUrlUnformable),
+    PublishFault (PublishFetch),
     RegistryResponse,
     UrlFormationError,
  )
-import Ecluse.Core.Registry.Exchange (boundedFetch)
+import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Version (Version)
 
@@ -91,7 +67,7 @@ data MirrorTransport = MirrorTransport
     policy live behind the action ("Ecluse.Core.Credential.Refresh").
     -}
     , ptLimits :: Limits
-    -- ^ The response bound the probe's metadata read is held to (fail-closed).
+    -- ^ The response bound every exchange with the mirror target is held to (fail-closed).
     }
 
 {- | The mirror-write capability one worker bundle carries, bound to one mirror-target endpoint
@@ -127,17 +103,24 @@ newMirrorPublish transport targetUrl codec =
 probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault RegistryResponse)
 probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
-    case pcProbeRequest codec targetUrl token name of
-        Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
-        Right request ->
-            boundedFetch (ptManager transport) (ptLimits transport) request
+    formThen
+        FetchUrlUnformable
+        (boundedFetch (ptManager transport) (ptLimits transport))
+        (pcProbeRequest codec targetUrl token name)
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name version artifact bytes = do
     token <- ptMintToken transport
-    case pcPublishRequest codec targetUrl token name version artifact bytes of
-        Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
-        Right request ->
-            try (httpLbs request (ptManager transport)) <&> \case
-                Left (err :: HttpException) -> Left (PublishTransport (classifyTransport err))
-                Right response -> pcPublishOutcome codec (statusCode (responseStatus response))
+    formThen
+        (PublishFetch . FetchUrlUnformable)
+        (writeArtifact transport codec)
+        (pcPublishRequest codec targetUrl token name version artifact bytes)
+
+-- Read the codec's verdict from the answered status. The 'const' projection drops the
+-- target's body, which the write has no use for, and the exchange bounds it either way.
+writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
+writeArtifact transport codec request =
+    boundedExchange const (ptManager transport) (ptLimits transport) request
+        <&> \case
+            Left fault -> Left (PublishFetch fault)
+            Right status -> pcPublishOutcome codec status

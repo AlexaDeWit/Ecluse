@@ -25,18 +25,17 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Fault (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
-import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
-import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (GateFault, UnclassifiedFault))
+import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
 import Ecluse.Core.Worker (heartbeatHealthyNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
@@ -403,11 +402,6 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         statuses `shouldBe` [200]
         observed `shouldBe` []
         outcome `shouldSatisfy` isRight
-
-    it "answers a recognised pre-commit escape with the neutral 500, observed as a GateFault" $ do
-        (statuses, observed, _) <- driveGuard (\_respond -> throwIO (ResponseBoundExceeded (BodyTooLarge 1024)))
-        statuses `shouldBe` [500]
-        observed `shouldBe` [GateFault]
 
     it "answers an unrecognised pre-commit escape with the neutral 500, observed as UnclassifiedFault" $ do
         (statuses, observed, _) <- driveGuard (\_respond -> throwIO (RelayContractEscape "boom"))

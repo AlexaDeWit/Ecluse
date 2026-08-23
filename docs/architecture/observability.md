@@ -47,7 +47,7 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 (CloudWatch, Cloud Monitoring), so Écluse does not re-emit them. Names follow OTel HTTP conventions
 (`http.server.*`) plus an `ecluse.*` namespace for domain signals. The alarm-worthy signals:
 
-- `ecluse.serve.perimeter.faults` (gate/render/unclassified) and `ecluse.serve.relay.anomalies`
+- `ecluse.serve.perimeter.faults` (render/unclassified) and `ecluse.serve.relay.anomalies`
   (odd_shape/non_success) are steady-state zero. Any movement is an invariant break: a pre-commit
   handler escape answered with the neutral 500, or a public relay that was not the admitted
   artifact.

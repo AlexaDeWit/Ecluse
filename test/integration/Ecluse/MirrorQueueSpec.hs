@@ -7,14 +7,13 @@ module Ecluse.MirrorQueueSpec (spec) where
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), tfCause)
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
     MirrorJob (..),
     MirrorQueue (..),
-    QueueFault (qfCause),
     QueueMessage (..),
     Seconds (..),
  )
@@ -120,7 +119,7 @@ spec =
                 queue <- deadEndpointQueue
                 outcome <- receive queue
                 case outcome of
-                    Left fault -> qfCause fault `shouldBe` TransportUnreachable
+                    Left fault -> tfCause fault `shouldBe` TransportUnreachable
                     Right messages -> expectationFailure ("expected a typed transport fault, got " <> show messages)
 
 -- An SQS backend pointed at a loopback port with nothing listening, for the

@@ -43,9 +43,8 @@ mismatching set to drive the tamper refusal.
 admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
 admitAllPolicies = admitAllPoliciesCapped (512 * 1024 * 1024)
 
-{- | 'admitAllPolicies' with an explicit byte cap for the artifact fetch. A body past the cap is a
-terminal 'Ecluse.Core.Worker.Fetch.ArtifactOverCap', and the worker drops the job instead of
-retrying it.
+{- | 'admitAllPolicies' with an explicit byte cap for the artifact fetch. A body past the cap is
+a terminal 'Ecluse.Core.Registry.FetchBoundExceeded' the worker dead-letters.
 -}
 admitAllPoliciesCapped :: Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
 admitAllPoliciesCapped artifactMaxBytes publish currentDigests =

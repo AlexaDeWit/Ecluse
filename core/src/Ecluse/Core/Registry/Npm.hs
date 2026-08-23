@@ -54,12 +54,11 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
-    PublishRelayFault (RelayUrlUnformable),
     PublishRelayResponse,
     RegistryResponse,
  )
 
-import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay)
+import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm,
@@ -98,10 +97,10 @@ fetchMetadataFormBounded ::
     PackageName ->
     IO (Either FetchFault RegistryResponse)
 fetchMetadataFormBounded config form validators name =
-    case metadataRequest (npmBaseUrl config) (npmToken config) form validators name of
-        Left urlErr -> pure (Left (FetchUrlUnformable urlErr))
-        Right request ->
-            boundedFetch (npmManager config) (npmLimits config) request
+    formThen
+        FetchUrlUnformable
+        (boundedFetch (npmManager config) (npmLimits config))
+        (metadataRequest (npmBaseUrl config) (npmToken config) form validators name)
 
 {- | Relay a client's npm publish document to the publication target and return the
 target's own response. It is the first-party publish primitive behind the
@@ -111,9 +110,9 @@ relayPublishDocument ::
     NpmClientConfig ->
     PackageName ->
     ByteString ->
-    IO (Either PublishRelayFault PublishRelayResponse)
+    IO (Either FetchFault PublishRelayResponse)
 relayPublishDocument config name document =
-    case publishRequest (npmBaseUrl config) (npmToken config) name document of
-        Left urlErr -> pure (Left (RelayUrlUnformable urlErr))
-        Right request ->
-            boundedRelay (npmManager config) (npmLimits config) request
+    formThen
+        FetchUrlUnformable
+        (boundedRelay (npmManager config) (npmLimits config))
+        (publishRequest (npmBaseUrl config) (npmToken config) name document)

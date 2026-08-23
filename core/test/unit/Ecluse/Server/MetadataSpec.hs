@@ -24,11 +24,12 @@ import Ecluse.Core.Package (
     Trust (TrustUnknown),
     mkPackageName,
  )
+import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
-    MetadataError (MetadataUndecodable, MetadataUnreachable),
+    MetadataError (MetadataFetch, MetadataUndecodable),
     digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
@@ -159,7 +160,7 @@ spec = do
                     atomicModifyIORef' fetches (\n -> (n + 1, ()))
                     _ <- tryPutMVar started ()
                     takeMVar release
-                    pure (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))
+                    pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
                 countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
                 client =
                     newMetadataClient noopMetricsPort Metric.Public (Cached cache source) countingLog noInvalidLog noFetchLog blockingOutage (failingVersion fetches)
@@ -233,12 +234,12 @@ failingFull calls _name = do
 unreachableFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
 unreachableFull calls _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Left (MetadataUnreachable (transportFault TransportUnreachable "refused")))
+    pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
 
 -- | Whether a full-manifest outcome is the unreachable-upstream fault.
 isUnreachable :: Either MetadataError Manifest -> Bool
 isUnreachable = \case
-    Left (MetadataUnreachable _) -> True
+    Left (MetadataFetch (FetchTransport _)) -> True
     _ -> False
 
 -- | A counting single-version fetch that always fails.
