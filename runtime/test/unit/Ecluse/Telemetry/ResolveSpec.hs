@@ -5,12 +5,16 @@
 module Ecluse.Telemetry.ResolveSpec (spec) where
 
 import Data.List (lookup)
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Data.Version (showVersion)
 import Paths_ecluse (version)
 import System.Environment (unsetEnv)
 import Test.Hspec
 import UnliftIO (bracket_)
+
+import OpenTelemetry.Attributes (Attribute, fromAttribute)
+import OpenTelemetry.Resource.Detect (detectResourceAttributes)
 
 import Ecluse.Test.Support (newTestLogEnv)
 
@@ -25,15 +29,19 @@ import Ecluse.Runtime.Telemetry.Resolve (
     otelEnvironmentOverrides,
     prepareTelemetry,
     resolveTelemetry,
+    telemetryWarnings,
     throttleStep,
  )
 
 {- | Tests the telemetry config resolver and the export-failure throttle. Precedence is the
-Datadog value, then vanilla OpenTelemetry, then the default. Export errors coalesce.
+Datadog value, then vanilla OpenTelemetry, then the default. One W3C baggage grammar reads
+@OTEL_RESOURCE_ATTRIBUTES@ for both the log identity and the span resource. Export errors
+coalesce.
 -}
 spec :: Spec
 spec = do
     resolveSpec
+    resourceAttributeSpec
     overridesSpec
     prepareSpec
     throttleSpec
@@ -103,6 +111,50 @@ resolveSpec = describe "resolveTelemetry" $ do
         hostAddress (teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "2606:4700:4700::1111")])))
             `shouldBe` "2606:4700:4700::1111"
 
+resourceAttributeSpec :: Spec
+resourceAttributeSpec = describe "OTEL_RESOURCE_ATTRIBUTES" $ do
+    it "percent-decodes a value, so the log identity reads what the SDK reads" $
+        rtServiceName (resolveTelemetry [("OTEL_RESOURCE_ATTRIBUTES", "service.name=a%20b")])
+            `shouldBe` "a b"
+
+    it "tolerates a trailing comma and stray spacing" $
+        -- This is operator-authored configuration, so blank members are dropped before the
+        -- baggage grammar sees the value.
+        rtEnvironment
+            (resolveTelemetry [("OTEL_RESOURCE_ATTRIBUTES", " deployment.environment=stg , ")])
+            `shouldBe` Just "stg"
+
+    it "resolves as unset and warns when the baggage grammar rejects the value" $ do
+        -- A non-token key drops the operator's attributes from both halves. The projection
+        -- exports the resolved identity alone, so the log object and the span resource agree.
+        let environment = [("OTEL_RESOURCE_ATTRIBUTES", "bad key=1,service.name=api")]
+        rtServiceName (resolveTelemetry environment) `shouldBe` "ecluse"
+        rtEnvironment (resolveTelemetry environment) `shouldBe` Nothing
+        telemetryWarnings environment
+            `shouldSatisfy` any (T.isInfixOf "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage")
+        detectedResourceAttributes environment
+            `shouldReturn` [("service.name", "ecluse"), ("service.version", buildVersion)]
+
+    it "raises no warning for a value the grammar accepts" $
+        telemetryWarnings
+            [ ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+            , ("OTEL_RESOURCE_ATTRIBUTES", "service.name=api,")
+            ]
+            `shouldBe` []
+
+    it "lands a percent-encoded value identically on the log identity and the span resource" $ do
+        let environment = [("OTEL_RESOURCE_ATTRIBUTES", "service.name=a%20b")]
+        detected <- detectedResourceAttributes environment
+        lookup "service.name" detected `shouldBe` Just (rtServiceName (resolveTelemetry environment))
+        lookup "service.name" detected `shouldBe` Just "a b"
+
+    it "round-trips a value carrying an encoded comma through the SDK's own codec" $
+        detectedResourceAttributes [("OTEL_RESOURCE_ATTRIBUTES", "team=core%2Cplatform")]
+            `shouldReturn` [ ("service.name", "ecluse")
+                           , ("service.version", buildVersion)
+                           , ("team", "core,platform")
+                           ]
+
 overridesSpec :: Spec
 overridesSpec = describe "otelEnvironmentOverrides" $ do
     it "projects the resolved identity to the canonical OTEL_* the SDK reads" $ do
@@ -112,28 +164,27 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
         lookup "OTEL_EXPORTER_OTLP_PROTOCOL" overrides `shouldBe` Just "http/protobuf"
 
     it "overlays the resolved attributes onto operator-set resource attributes, preserving extras" $
-        lookup
-            "OTEL_RESOURCE_ATTRIBUTES"
-            ( otelEnvironmentOverrides
-                [ ("DD_SERVICE", "api")
-                , ("DD_ENV", "prod")
-                , ("DD_VERSION", "1.2.3")
-                , ("OTEL_RESOURCE_ATTRIBUTES", "team=core")
-                ]
-            )
-            `shouldBe` Just "deployment.environment=prod,service.name=api,service.version=1.2.3,team=core"
+        detectedResourceAttributes
+            [ ("DD_SERVICE", "api")
+            , ("DD_ENV", "prod")
+            , ("DD_VERSION", "1.2.3")
+            , ("OTEL_RESOURCE_ATTRIBUTES", "team=core")
+            ]
+            `shouldReturn` [ ("deployment.environment", "prod")
+                           , ("service.name", "api")
+                           , ("service.version", "1.2.3")
+                           , ("team", "core")
+                           ]
 
     it "lets a resolved attribute win over a same-key inherited OTEL_RESOURCE_ATTRIBUTES value" $
-        -- The merge is left-biased with the resolved map on the left, so a stale operator-set value
-        -- of the same key never overrides the resolution.
-        lookup
-            "OTEL_RESOURCE_ATTRIBUTES"
-            ( otelEnvironmentOverrides
-                [ ("DD_SERVICE", "api")
-                , ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")
-                ]
-            )
-            `shouldBe` Just (toString ("service.name=api,service.version=" <> buildVersion <> ",team=core"))
+        -- The resolved attributes are inserted over the inherited baggage, so a stale
+        -- operator-set value of the same key never overrides the resolution.
+        detectedResourceAttributes
+            [("DD_SERVICE", "api"), ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")]
+            `shouldReturn` [ ("service.name", "api")
+                           , ("service.version", buildVersion)
+                           , ("team", "core")
+                           ]
 
 prepareSpec :: Spec
 prepareSpec = describe "prepareTelemetry" $ do
@@ -150,19 +201,33 @@ prepareSpec = describe "prepareTelemetry" $ do
             prepareTelemetry logEnv []
             lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
         endpoint `shouldBe` Just "http://localhost:4318"
-  where
-    -- Run an action, then clear the OTEL_* variables prepareTelemetry writes, so a
-    -- mutated process environment never leaks into another spec.
-    withCleanOtelEnv :: IO a -> IO a
-    withCleanOtelEnv = bracket_ (pure ()) (mapM_ unsetEnv otelVars)
 
-    otelVars :: [String]
-    otelVars =
-        [ "OTEL_SERVICE_NAME"
-        , "OTEL_EXPORTER_OTLP_ENDPOINT"
-        , "OTEL_EXPORTER_OTLP_PROTOCOL"
-        , "OTEL_RESOURCE_ATTRIBUTES"
-        ]
+{- The resource attributes the OpenTelemetry SDK detects from the environment the projection
+writes, sorted by key. This is the span-resource half of the identity, read through the SDK's
+own detector. The encoder emits members in hash order, so only the decoded set is stable. -}
+detectedResourceAttributes :: [(String, String)] -> IO [(Text, Text)]
+detectedResourceAttributes environment = do
+    logEnv <- newTestLogEnv
+    detected <- withCleanOtelEnv $ do
+        prepareTelemetry logEnv environment
+        detectResourceAttributes
+    pure (sortOn fst (mapMaybe textAttribute detected))
+  where
+    textAttribute :: (Text, Attribute) -> Maybe (Text, Text)
+    textAttribute (key, attribute) = (key,) <$> fromAttribute attribute
+
+-- Run an action, then clear the OTEL_* variables prepareTelemetry writes, so a
+-- mutated process environment never leaks into another spec.
+withCleanOtelEnv :: IO a -> IO a
+withCleanOtelEnv = bracket_ (pure ()) (mapM_ unsetEnv otelVars)
+
+otelVars :: [String]
+otelVars =
+    [ "OTEL_SERVICE_NAME"
+    , "OTEL_EXPORTER_OTLP_ENDPOINT"
+    , "OTEL_EXPORTER_OTLP_PROTOCOL"
+    , "OTEL_RESOURCE_ATTRIBUTES"
+    ]
 
 -- The build version the resolver falls back to, read from the same generated module
 -- the resolver reads. A version bump therefore does not red these expectations.
