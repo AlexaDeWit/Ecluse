@@ -2,15 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared process-boot bracket for Écluse service roles.
-
-'withBootEnv' applies @*_FILE@ secret indirection, locates the configuration document
-under the @ECLUSE_CONFIG@ semantics, and validates it. It then applies the runtime
-posture, builds the process logger, resolves the 'BootPlan'
-("Ecluse.Composition.Plan"), and brackets the telemetry substrate. This is the one
-place the boot log's plan lines are emitted. It hands the resulting 'BootEnv' to
-role-specific composition roots such as "Ecluse.Proxy", which build their own service
-resources, and apply the plan's decisions, only after boot succeeds.
+{- | The shared process-boot bracket for Écluse service roles. 'withBootEnv' applies the
+@*_FILE@ secret indirection, loads the configuration under the @ECLUSE_CONFIG@ semantics,
+applies the runtime posture, builds the process logger, resolves the 'BootPlan', and
+brackets the telemetry substrate. It is the one place the plan's lines reach the boot log.
+It then hands the 'BootEnv' to a role-specific composition root such as "Ecluse.Proxy",
+which applies the plan's decisions and builds its own service resources.
 -}
 module Ecluse.Boot (
     BootEnv (..),
@@ -72,9 +69,8 @@ import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, Telem
 import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 
-{- | The boot context 'withBootEnv' assembles once at start-up and hands to each
-subcommand. Each subcommand builds the heavier serve- and worker-side handles later: the
-HTTP managers, the mirror queue, and the metadata cache (see "Ecluse.Proxy").
+{- | The boot context 'withBootEnv' assembles once at start-up. Each subcommand builds the
+heavier serve- and worker-side handles later (see "Ecluse.Proxy").
 -}
 data BootEnv = BootEnv
     { beConfig :: AppConfig
@@ -97,14 +93,8 @@ data BootEnv = BootEnv
     -}
     }
 
-{- | Apply the @*_FILE@ secret indirection: a recognised secret variable supplied as
-@\<VAR\>_FILE@ names a file whose contents become its value, one trailing newline
-stripped. A token then never has to enter the environment itself.
-
-Only secret-typed keys are eligible, so any other @*_FILE@ spelling fails the strict
-parser as an unknown key. Setting both a base variable and its @_FILE@ form is a
-fail-loud conflict, and an unreadable file fails the same way. Failures aggregate into
-one report.
+{- | Apply the @*_FILE@ secret indirection: a secret-typed @\<VAR\>_FILE@ names a file whose
+contents become its value, one trailing newline stripped. Both spellings at once refuse.
 -}
 applySecretFileIndirection :: [(String, String)] -> IO (Either Text [(String, String)])
 applySecretFileIndirection envVars = do
@@ -144,11 +134,8 @@ applySecretFileIndirection envVars = do
     secretFileSuffixes :: [Text]
     secretFileSuffixes = map (<> "_FILE") secretEnvSpellings
 
-{- | Read the config document per the @ECLUSE_CONFIG@ semantics: the bytes when a document
-exists, no bytes at an absent default path, and a refusal when an explicit @ECLUSE_CONFIG@
-resolves to nothing. A misconfiguration must never silently boot without the document the
-operator pointed at. Any other read failure refuses too, naming the path and the error but
-never the file contents.
+{- | Read the config document per the @ECLUSE_CONFIG@ semantics. An absent default path
+yields no bytes, and an explicit path that resolves to nothing refuses.
 -}
 readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString))
 readConfigDocument envVars = do
@@ -175,9 +162,8 @@ readConfigDocument envVars = do
                         <> T.pack (ioeGetErrorString err)
                     )
 
-{- | Assemble the 'BootEnv' and run @action@ within it. A configuration error fails the
-boot before the runtime posture is applied. The plan's own refusals come after it,
-because the plan sizes from the posture the boot ended up with.
+{- | Assemble the 'BootEnv' and run @action@ within it. A configuration error refuses before
+the runtime posture applies, and the plan's own refusals follow it.
 -}
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
@@ -189,14 +175,12 @@ withBootEnv action = do
     let env = configApp config
         observability = cfgObservability env
         runtimeSettings = cfgRuntime env
-    -- Resolve the log identity from the same table the SDK reads
-    -- ("Ecluse.Runtime.Telemetry.Resolve"), before any OTEL_* projection applies. A boot
-    -- line then carries the same identity as a served request.
+    -- Resolve the log identity from the table the SDK reads, before any OTEL_* projection
+    -- applies, so a boot line carries the same identity as a served request.
     ddIdentity <- ddIdentityFromEnvironment
     logEnv <- newLogEnv (obsLogFormat observability) (obsLogLevel observability) ddIdentity (Environment "production")
-    -- Resolve and apply the runtime posture before anything else spins up. This may
-    -- exec the binary in place to enforce a heap ceiling (same PID, see Ecluse.Rts).
-    -- Nothing stateful must precede it beyond config and the logger.
+    -- Apply the runtime posture before anything else spins up. It may exec the binary in
+    -- place to enforce a heap ceiling (same PID, see Ecluse.Rts).
     runtimePlan <-
         applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings)
     fdLimit <- openFileSoftLimit
@@ -217,10 +201,8 @@ withBootEnv action = do
                 , beBootPlan = bootPlan
                 }
 
-{- Build the config-selected mirror queue: the durable AWS SQS backend, or the bounded
-in-memory backend. Only the memory arm spends @memoryDepth@, so the memory plan allocates
-that tenant after the backend selection. The backend's own boot warning rides the
-'BootPlan'. 'deadLetterTerminusWarning' needs the built handle, so it is decided here. -}
+{- Build the config-selected mirror queue. Only the memory arm spends @memoryDepth@, and
+'deadLetterTerminusWarning' is decided here because it needs the built handle. -}
 buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv memoryDepth plan = do
     queue <- case plan of
@@ -242,9 +224,8 @@ logBootInfo :: LogEnv -> Text -> IO ()
 logBootInfo logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM InfoS (ls message))
 
-{- Log every wired mount's resolved rule boot order, the same total order evaluation walks,
-so an operator reads the effective policy resolution from the start-up log. A mount with
-no packument deps (the unserved stub) contributes nothing. -}
+{- Log every wired mount's resolved rule boot order, the same total order evaluation walks.
+A mount with no packument deps (the unserved stub) contributes nothing. -}
 logRuleBootOrder :: LogEnv -> [MountBinding] -> IO ()
 logRuleBootOrder logEnv = traverse_ logMount
   where
@@ -254,26 +235,23 @@ logRuleBootOrder logEnv = traverse_ logMount
         logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
         traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
-{- | Raised to abort start-up after a boot phase reported its failure to stderr. A distinct
-type rather than a bare 'exitFailure' lets a test observe the abort without the process
-exiting. Uncaught, it reaches 'main' and the runtime exits non-zero.
+{- | Raised to abort start-up after a boot phase reported its failure to stderr. A typed
+abort, rather than 'exitFailure', lets a test observe it without the process exiting.
 -}
 data BootAborted = BootAborted
     deriving stock (Eq, Show)
 
 instance Exception BootAborted
 
-{- Report the rendered failure to stderr and throw 'BootAborted' when a phase fails,
-otherwise yield its value. It writes the whole aggregated block, so an operator sees every
-problem from one failed launch. -}
+{- Report the rendered failure to stderr and throw 'BootAborted', otherwise yield the value.
+It writes the whole aggregated block, so one failed launch shows every problem. -}
 orExit :: (e -> Text) -> Either e a -> IO a
 orExit render = \case
     Right a -> pure a
     Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
 
-{- Prepare the telemetry substrate before the SDK initialises, through
-"Ecluse.Runtime.Telemetry.Resolve.prepareTelemetry". With @ECLUSE_OBSERVABILITY__TELEMETRY@
-off it is a no-op, reading no process environment. -}
+{- Prepare the telemetry substrate before the SDK initialises. With
+@ECLUSE_OBSERVABILITY__TELEMETRY@ off it is a no-op, reading no process environment. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
 prepareTelemetryBoot switch logEnv = case switch of
     TelemetryOff -> pass

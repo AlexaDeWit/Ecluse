@@ -2,20 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | @ecluse check-config@: validate the configuration exactly as a boot would and
-print the whole resolved posture, without starting anything.
-
-The subcommand loads the configuration through 'Ecluse.Config.loadConfig' and hands it
-to 'Ecluse.Composition.Plan.resolveBootPlan', the one function a boot takes its
-decisions from. It prints that plan's lines and applies none of it: no socket opens, no
-capability count changes, no re-exec, no cloud call. It predicts the runtime posture
-from 'appliedRuntimePlan', because the checker's own process posture says nothing about
-the boot it is checking.
-
-A failure prints the same aggregated report a boot would log and exits @2@ through the
-shared 'Ecluse.Boot.BootAborted' path. A valid configuration prints the boot's lines
-and exits @0@. An operator or a CI step reads exactly what a boot would do before
-running one.
+{- | @ecluse check-config@: validate the configuration exactly as a boot would and print
+the resolved posture, without starting anything. It hands the loaded config to
+'Ecluse.Composition.Plan.resolveBootPlan' and prints that plan's lines, applying none of
+it: no socket opens, no capability count changes, no re-exec, no cloud call. It predicts
+the posture from 'appliedRuntimePlan', because the checker's own process posture is not
+the boot's. It exits @0@ on a valid configuration and @2@ on a refused one.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 

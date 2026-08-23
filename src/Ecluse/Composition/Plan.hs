@@ -3,13 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The composition root's boot plan: every decision a boot resolves once the
-configuration has loaded, plus the ordered lines that report those decisions.
-
-'resolveBootPlan' is pure and total. The boot ('Ecluse.Boot.withBootEnv') logs its
-lines and hands its decisions to the role, which applies them. The dry-run checker
-('Ecluse.CheckConfig.runCheckConfig') prints the same lines and applies nothing, so a
-checker transcript and a boot log carry the same text in the same order. A new boot
-decision belongs here, so neither caller can hold a copy of it.
+configuration has loaded, plus the ordered lines that report them. The boot
+('Ecluse.Boot.withBootEnv') logs the lines and hands the decisions to the role. The
+dry-run checker ('Ecluse.CheckConfig.runCheckConfig') prints the same lines and applies
+nothing, so the two transcripts carry the same text in the same order.
 -}
 module Ecluse.Composition.Plan (
     BootPlan (..),
@@ -71,13 +68,8 @@ data BootPlan = BootPlan
     }
     deriving stock (Eq, Show)
 
-{- | Resolve every boot decision from the loaded configuration, the resolved runtime
-posture, and the process file-descriptor soft limit.
-
-The 'EffectiveRuntimePlan' is the one input the callers vary: the boot passes the
-posture it applied, and the checker the posture a boot would apply. A structural
-composition error, an unresolvable mirror runtime, and an unsafe memory-plan override
-each refuse, aggregated in that order.
+{- | Resolve every boot decision from the loaded config, the caller's runtime posture, and
+the file-descriptor soft limit. A composition, mirror-runtime, or override fault refuses.
 -}
 resolveBootPlan ::
     [(String, String)] ->

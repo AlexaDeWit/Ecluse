@@ -124,10 +124,8 @@ run = do
         _ -> pass
     exitWith (exitCodeFor outcome)
 
-{- Dispatch one subcommand under the process perimeter. check-config validates and prints
-without booting anything, so it runs outside 'withBootEnv': no logger, no telemetry, no
-services. It refuses through the same 'BootAborted' every boot phase raises, which
-'exitCodeFor' maps to exit 2. -}
+{- Dispatch one subcommand under the process perimeter. check-config runs outside
+'withBootEnv': no logger, no telemetry, no services. -}
 runCommand :: AppCommand -> IO ()
 runCommand = \case
     RunCheckConfig -> runCheckConfig
@@ -154,15 +152,8 @@ data ProcessOutcome
       RunCancelled
     deriving stock (Eq, Show)
 
-{- | Run the whole service under the typed process perimeter and classify its ending. This is
-the one place that reads the process's exception channel, so nothing above it interprets
-exceptions.
-
-An 'ExitCode' and any unrecognised asynchronous exception rethrow, so a deliberate exit keeps
-its code and a 'System.Timeout.timeout' or @async@ cancellation around 'run' keeps its own
-semantics. The base 'Exception.try' and 'Exception.throwIO' are deliberate. The
-async-hygienic @unliftio@ catches would rethrow a kill before the classification arm could
-run, and what leaves here async must leave async.
+{- | Run the service under the typed process perimeter and classify its ending. The base
+'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
 -}
 superviseProcess :: IO () -> IO ProcessOutcome
 superviseProcess service =

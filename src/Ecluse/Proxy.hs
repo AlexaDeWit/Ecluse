@@ -2,13 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The proxy role's effectful composition root.
-
-'runProxy' receives validated process state from "Ecluse.Boot" and resolves the
-proxy-specific plans. It builds the runtime-edge handles and mount bindings, then
-coordinates the HTTP server with the optional mirror worker and advisory-sync tasks.
-Pure plan derivation remains in "Ecluse.Composition" and its sibling modules. This
-module is the boundary where those decisions become running services.
+{- | The proxy role's effectful composition root. 'runProxy' receives the validated 'BootEnv'
+from "Ecluse.Boot", applies its 'BootPlan' decisions, and resolves the proxy-specific plans:
+the runtime-edge handles and the mount bindings. It then coordinates the HTTP server with the
+optional mirror worker and the advisory-sync tasks. Pure plan derivation stays in
+"Ecluse.Composition" and its siblings, so this module is where those decisions become running
+services.
 -}
 module Ecluse.Proxy (
     runProxy,
@@ -96,9 +95,8 @@ import Ecluse.Runtime.Telemetry.Reporters (
  )
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDataPlaneManagerSettings)
 
-{- | Assemble and run the proxy role from an already validated 'BootEnv'.
-
-Écluse refuses unsafe or incomplete wiring before it opens the listener.
+{- | Assemble and run the proxy role from an already validated 'BootEnv'. It refuses unsafe
+or incomplete wiring before it opens the listener.
 -}
 runProxy :: BootEnv -> IO ()
 runProxy bootEnv = do
@@ -171,10 +169,8 @@ runProxy bootEnv = do
         NoMirroring -> pure (noMirrorQueue, Nothing)
     metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
 
-    -- Registry egress is https-only by construction, and certificate validation authenticates the
-    -- dialled host, so a rebound or internal address cannot present a CA-trusted certificate for
-    -- the requested name. That closes the SSRF and resolve-to-internal class. The split stays
-    -- because public reads are anonymous and private reads forward the client's credential.
+    -- The two managers stay split: public reads are anonymous and private reads forward the
+    -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     manager <- newManager (connectionPoolSettings (bpPublicConnections bootPlan) publicSettings)
@@ -188,9 +184,7 @@ runProxy bootEnv = do
         -- A dropped job re-enqueues on the next demand and a cancelled sync resumes on next boot.
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
         -- Racing the server against an empty task list would cancel it instantly, so the no-task
-        -- shape below runs the server alone. Under 'MirrorWith', the only branch that builds a
-        -- worker, the mirror-artifact tenant is always present, so the fallback guards an
-        -- impossible case.
+        -- shape below runs the server alone. 'MirrorWith' always carries the artifact tenant.
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant plan)
         case mirrorDrain of
             Just drainEnqueueBuffer ->
@@ -227,8 +221,7 @@ enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 
 {- Attach each ecosystem's advisory-database age to the observable gauge, once at boot. The
-callback reads the slot, which outlives the supervised sync tasks below, so the reported age
-keeps climbing from the last install across a task restart. -}
+callback reads the slot, which outlives the sync tasks, so the age survives a task restart. -}
 registerAdvisoryAges :: Env -> Map.Map Ecosystem CveSyncHandle -> IO ()
 registerAdvisoryAges builtEnv plan =
     for_ (Map.toList plan) $ \(eco, handle) ->
@@ -271,11 +264,8 @@ runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
 runServices serverConfig policies env =
     Server.raceServerAgainstLoop (runServer serverConfig env) (runWorker policies env)
 
-{- | Run the proxy's HTTP front door over the composition-root 'Env' with the
-config-derived 'ServerConfig'.
-
-'mountBindingFor' projects each adapter's serve surface into the bindings, so the web
-layer stays ecosystem-neutral.
+{- | Run the proxy's HTTP front door over the composition-root 'Env' with the config-derived
+'ServerConfig'. The bindings carry each adapter's serve surface, so the web layer stays neutral.
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp cfg (`Server.tracedApplication` env)
@@ -293,11 +283,8 @@ warpExceptionHook logEnv mRequest err =
         sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
             <> sl "detail" (displayExceptionT err)
 
-{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
-ecosystem has no registered adapter.
-
-The path prefix is derived from the ecosystem ('prefixFor'), never configured (see
-@docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts").
+{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that ecosystem
+has no registered adapter. The path prefix derives from the ecosystem ('prefixFor'), never config.
 -}
 mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 mountBindingFor eco packumentDeps publishDeps =
@@ -315,11 +302,8 @@ mountOf adapter packumentDeps publishDeps =
         , bindingPublishDeps = publishDeps
         }
 
-{- | Run the supervised mirror worker over the composition-root 'Env' and the
-per-ecosystem bundles.
-
-The loop is consume → probe → re-evaluate → fetch → verify → publish → ack, so the worker
-re-runs current policy against a job before it mirrors.
+{- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem
+bundles. The loop re-runs current policy against a job before it mirrors.
 -}
 runWorker :: WorkerPolicies -> Env -> IO ()
 runWorker policies env = do

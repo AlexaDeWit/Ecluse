@@ -24,9 +24,7 @@ spec :: Spec
 spec = describe "resolveBootPlan" $ do
     it "orders every boot line into the one list both entry points emit" $ do
         -- The golden the acceptance criterion rests on: the boot logs this list and
-        -- check-config prints it, so a transcript and a boot log cannot diverge. The
-        -- provenance and mount-posture blocks come from their own renderers, whose text
-        -- "Ecluse.ConfigSpec" pins; this fixes their position and their completeness.
+        -- check-config prints it, so the two transcripts cannot diverge.
         config <- expectConfig staticEnvVars Nothing
         plan <- expectPlan staticEnvVars Nothing config noCeiling
         bpLines plan
