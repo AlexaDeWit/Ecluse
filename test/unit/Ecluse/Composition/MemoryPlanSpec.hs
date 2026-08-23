@@ -14,10 +14,13 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (..),
     MirrorArtifactTenant (matMaxBytes),
+    OverridePins (..),
     PublishTenant (ptAggregateBytes),
     QueueTenantDemand (MemoryQueueTenant, MirroringWithoutMemoryQueue, NoQueueTenant),
+    TenantDemands (..),
     attributeOverrideViolations,
     mirrorArtifactEnvelopeMultiplier,
+    noOverridePins,
     overrideMinShedSum,
     overrideSubstitutions,
     planCacheConfig,
@@ -223,48 +226,46 @@ spec = describe "resolveMemoryPlan" $ do
     describe "overrideMinShedSum (the substitution arithmetic, in isolation)" $ do
         it "charges nothing extra for a queue depth pinned to the floor the ladder would compute" $ do
             -- queue.memoryMaxDepth at the queue-depth floor (5000) is zero-delta.
-            let base = 100000000
-                atFloor = overrideMinShedSum base 26214400 False True False (Nothing, Nothing, Nothing, Nothing, Just 5000, Nothing)
-                unpinned = overrideMinShedSum base 26214400 False True False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
+            let demands = baseDemands{tdMemoryBacked = True}
+                atFloor = overrideMinShedSum demands noOverridePins{opDepth = Just 5000}
+                unpinned = overrideMinShedSum demands noOverridePins
             atFloor `shouldBe` unpinned
 
         it "charges nothing for a queue depth under a non-memory backend (queueCharge is zero)" $ do
             -- With no memory-backed queue the depth pin cannot move a byte, however large.
-            let base = 100000000
-                huge = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Just 100000, Nothing)
-                unpinned = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
+            let huge = overrideMinShedSum baseDemands noOverridePins{opDepth = Just 100000}
+                unpinned = overrideMinShedSum baseDemands noOverridePins
             huge `shouldBe` unpinned
 
         it "charges an explicit cache its full value where a computed cache sheds to zero" $ do
-            -- cacheReclaimable is zero for an explicit cache: it adds its whole value.
-            let base = 100000000
-                withCache = overrideMinShedSum base 26214400 False False False (Just 12345678, Nothing, Nothing, Nothing, Nothing, Nothing)
-                without = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
+            -- The reclaimable share is zero for an explicit cache: it adds its whole value.
+            let withCache = overrideMinShedSum baseDemands noOverridePins{opCache = Just 12345678}
+                without = overrideMinShedSum baseDemands noOverridePins
             withCache - without `shouldBe` 12345678
 
         it "charges an explicit artifact cap its envelope (cap x multiplier) when mirroring, nothing otherwise" $ do
             -- An explicit limits.maxArtifactBytes never sheds. It adds cap x 4 to the
             -- minimum when mirroring, and nothing when no mount mirrors.
-            let base = 100000000
-                mirroring = overrideMinShedSum base 26214400 False False True (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
-                notMirroring = overrideMinShedSum base 26214400 False False False (Nothing, Nothing, Nothing, Nothing, Nothing, Just 10000000)
-                unpinned = overrideMinShedSum base 26214400 False False True (Nothing, Nothing, Nothing, Nothing, Nothing, Nothing)
+            let mirroringDemands = baseDemands{tdMirrors = True}
+                mirroring = overrideMinShedSum mirroringDemands noOverridePins{opArtifact = Just 10000000}
+                notMirroring = overrideMinShedSum baseDemands noOverridePins{opArtifact = Just 10000000}
+                unpinned = overrideMinShedSum mirroringDemands noOverridePins
             mirroring - unpinned `shouldBe` 40000000
             notMirroring `shouldBe` unpinned
 
     describe "overrideSubstitutions (the per-pin substitution)" $ do
         it "pairs each present override with the pin set that substitutes only it out" $
-            overrideSubstitutions (Just 1, Just 2, Just 3, Just 4, Just 5, Just 6)
-                `shouldBe` [ ("cache.maxBytes", (Nothing, Just 2, Just 3, Just 4, Just 5, Just 6))
-                           , ("runtime.serveMaxInFlight", (Just 1, Nothing, Just 3, Just 4, Just 5, Just 6))
-                           , ("limits.maxResponseBytes", (Just 1, Just 2, Nothing, Just 4, Just 5, Just 6))
-                           , ("limits.maxRequestBytes", (Just 1, Just 2, Just 3, Nothing, Just 5, Just 6))
-                           , ("queue.memoryMaxDepth", (Just 1, Just 2, Just 3, Just 4, Nothing, Just 6))
-                           , ("limits.maxArtifactBytes", (Just 1, Just 2, Just 3, Just 4, Just 5, Nothing))
+            overrideSubstitutions allPins
+                `shouldBe` [ ("cache.maxBytes", allPins{opCache = Nothing})
+                           , ("runtime.serveMaxInFlight", allPins{opAdmission = Nothing})
+                           , ("limits.maxResponseBytes", allPins{opResponse = Nothing})
+                           , ("limits.maxRequestBytes", allPins{opRequest = Nothing})
+                           , ("queue.memoryMaxDepth", allPins{opDepth = Nothing})
+                           , ("limits.maxArtifactBytes", allPins{opArtifact = Nothing})
                            ]
 
         it "yields no substitution for an absent override" $
-            map fst (overrideSubstitutions (Nothing, Just 2, Nothing, Nothing, Nothing, Nothing)) `shouldBe` ["runtime.serveMaxInFlight"]
+            map fst (overrideSubstitutions noOverridePins{opAdmission = Just 2}) `shouldBe` ["runtime.serveMaxInFlight"]
 
     it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
         -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
@@ -330,6 +331,35 @@ spec = describe "resolveMemoryPlan" $ do
             + mpQueueTenantBytes plan
             + mpFixedBufferBytes plan
             + maybe 0 ((* mirrorArtifactEnvelopeMultiplier) . matMaxBytes) (mpMirrorArtifactTenant plan)
+
+    -- The substitution arithmetic reads only the base bytes no pin moves, the computed
+    -- request floor, and the tenant-presence flags. Every other demand is inert here.
+    baseDemands :: TenantDemands
+    baseDemands =
+        TenantDemands
+            { tdCeiling = 0
+            , tdReserve = 100000000
+            , tdFixedBuffers = 0
+            , tdPins = noOverridePins
+            , tdCacheDesired = 0
+            , tdCacheEntriesExplicit = Nothing
+            , tdMaterialDesired = 0
+            , tdMaterialMinimum = 0
+            , tdAdmissionDesired = 1
+            , tdPublishConfigured = False
+            , tdPublishDesired = 0
+            , tdRequestFinal = 26214400
+            , tdRequestComputed = 26214400
+            , tdDepthDesired = 0
+            , tdMemoryBacked = False
+            , tdMirrors = False
+            , tdArtifactCapDesired = 0
+            , tdMirrorChargeDesired = 0
+            }
+
+    allPins :: OverridePins
+    allPins =
+        OverridePins{opCache = Just 1, opAdmission = Just 2, opResponse = Just 3, opRequest = Just 4, opDepth = Just 5, opArtifact = Just 6}
 
     bareCache :: CacheSettings
     bareCache = CacheSettings{csTtl = 60, csMaxEntries = Nothing, csMaxBytes = Nothing}
