@@ -117,24 +117,24 @@ import Ecluse.Proxy
 run :: IO ()
 run = do
     cmd <- execCLI
-    case cmd of
-        -- check-config validates and prints without booting anything, and owns
-        -- its own exit codes (0 valid, 2 refused): no services, no supervision.
-        RunCheckConfig -> runCheckConfig
-        serviceCmd -> do
-            outcome <- superviseProcess (withBootEnv (dispatch serviceCmd))
-            case outcome of
-                ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
-                RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
-                _ -> pass
-            exitWith (exitCodeFor outcome)
-  where
-    dispatch cmd bootEnv = case cmd of
-        RunProxy -> runProxy bootEnv
-        RunPilot -> runPilot bootEnv
-        RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
-        RunDredger -> runDredger bootEnv
-        RunCheckConfig -> pass
+    outcome <- superviseProcess (runCommand cmd)
+    case outcome of
+        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
+        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
+        _ -> pass
+    exitWith (exitCodeFor outcome)
+
+{- Dispatch one subcommand under the process perimeter. check-config runs outside
+'withBootEnv': no logger, no telemetry, no services. -}
+runCommand :: AppCommand -> IO ()
+runCommand = \case
+    RunCheckConfig -> runCheckConfig
+    RunProxy -> withBootEnv runProxy
+    RunPilot -> withBootEnv runPilot
+    RunPilotCompile opts ->
+        withBootEnv $ \bootEnv ->
+            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
+    RunDredger -> withBootEnv runDredger
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.
@@ -152,15 +152,8 @@ data ProcessOutcome
       RunCancelled
     deriving stock (Eq, Show)
 
-{- | Run the whole service under the typed process perimeter and classify its ending. This is
-the one place that reads the process's exception channel, so nothing above it interprets
-exceptions.
-
-An 'ExitCode' and any unrecognised asynchronous exception rethrow, so a deliberate exit keeps
-its code and a 'System.Timeout.timeout' or @async@ cancellation around 'run' keeps its own
-semantics. The base 'Exception.try' and 'Exception.throwIO' are deliberate. The
-async-hygienic @unliftio@ catches would rethrow a kill before the classification arm could
-run, and what leaves here async must leave async.
+{- | Run the service under the typed process perimeter and classify its ending. The base
+'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
 -}
 superviseProcess :: IO () -> IO ProcessOutcome
 superviseProcess service =

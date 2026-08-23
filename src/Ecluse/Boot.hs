@@ -2,13 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared process-boot bracket for Écluse service roles.
-
-'withBootEnv' applies @*_FILE@ secret indirection, locates the configuration
-document under the @ECLUSE_CONFIG@ semantics, and validates it. It then applies the
-runtime posture, builds the process logger, and brackets the telemetry substrate. It
-hands the resulting 'BootEnv' to role-specific composition roots such as
-"Ecluse.Proxy", which build their own service resources only after boot succeeds.
+{- | The shared process-boot bracket for Écluse service roles. 'withBootEnv' applies the
+@*_FILE@ secret indirection, loads the configuration under the @ECLUSE_CONFIG@ semantics,
+applies the runtime posture, builds the process logger, resolves the 'BootPlan', and
+brackets the telemetry substrate. It is the one place the plan's lines reach the boot log.
+It then hands the 'BootEnv' to a role-specific composition root such as "Ecluse.Proxy",
+which applies the plan's decisions and builds its own service resources.
 -}
 module Ecluse.Boot (
     BootEnv (..),
@@ -33,21 +32,27 @@ import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (throwIO, tryIO)
 
+import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     deadLetterTerminusWarning,
     memoryQueueDropWarning,
-    mirrorQueuePlanWarning,
  )
+import Ecluse.Composition.Plan (
+    BootPlan (bpLines, bpWarnings),
+    configDocumentPath,
+    defaultConfigPath,
+    explicitConfigPath,
+    resolveBootPlan,
+ )
+import Ecluse.Composition.Sizing (openFileSoftLimit)
 import Ecluse.Config (
     AppConfig (cfgObservability, cfgRuntime),
     Config (configApp),
     ObservabilitySettings (obsLogFormat, obsLogLevel, obsTelemetry),
     RuntimeSettings (rtCores, rtMaxHeapBytes),
     loadConfig,
-    mountCollisionWarnings,
     renderConfigError,
-    resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Config.Resolve (secretEnvSpellings)
@@ -56,7 +61,7 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
-import Ecluse.Rts (EffectiveRuntimePlan, applyRuntimePosture)
+import Ecluse.Rts (applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleField, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
@@ -64,9 +69,8 @@ import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, Telem
 import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 
-{- | The boot context 'withBootEnv' assembles once at start-up and hands to each
-subcommand. Each subcommand builds the heavier serve- and worker-side handles later: the
-HTTP managers, the mirror queue, and the metadata cache (see "Ecluse.Proxy").
+{- | The boot context 'withBootEnv' assembles once at start-up. Each subcommand builds the
+heavier serve- and worker-side handles later (see "Ecluse.Proxy").
 -}
 data BootEnv = BootEnv
     { beConfig :: AppConfig
@@ -83,20 +87,14 @@ data BootEnv = BootEnv
     {- ^ The whole loaded configuration document, for subcommands that need more than
     'beConfig' (the serve path's mount and rule wiring, for one).
     -}
-    , beRuntimePlan :: EffectiveRuntimePlan
-    {- ^ The resolved runtime posture (capabilities and heap ceiling, each with its provenance).
-    The downstream sizings and the memory plan compute from it.
+    , beBootPlan :: BootPlan
+    {- ^ Every decision the boot resolved: the mirror runtime, the memory plan, and the
+    connection-pool sizes. 'withBootEnv' has already logged the plan's lines.
     -}
     }
 
-{- | Apply the @*_FILE@ secret indirection: a recognised secret variable supplied as
-@\<VAR\>_FILE@ names a file whose contents become its value, one trailing newline
-stripped. A token then never has to enter the environment itself.
-
-Only secret-typed keys are eligible, so any other @*_FILE@ spelling fails the strict
-parser as an unknown key. Setting both a base variable and its @_FILE@ form is a
-fail-loud conflict, and an unreadable file fails the same way. Failures aggregate into
-one report.
+{- | Apply the @*_FILE@ secret indirection: a secret-typed @\<VAR\>_FILE@ names a file whose
+contents become its value, one trailing newline stripped. Both spellings at once refuse.
 -}
 applySecretFileIndirection :: [(String, String)] -> IO (Either Text [(String, String)])
 applySecretFileIndirection envVars = do
@@ -136,23 +134,19 @@ applySecretFileIndirection envVars = do
     secretFileSuffixes :: [Text]
     secretFileSuffixes = map (<> "_FILE") secretEnvSpellings
 
-{- | Locate and read the config document per the @ECLUSE_CONFIG@ semantics: the bytes and
-the path when a document exists, no bytes at an absent default path, and a refusal when an
-explicit @ECLUSE_CONFIG@ resolves to nothing. A misconfiguration must never silently boot
-without the document the operator pointed at. Any other read failure refuses too, naming
-the path and the error but never the file contents.
+{- | Read the config document per the @ECLUSE_CONFIG@ semantics. An absent default path
+yields no bytes, and an explicit path that resolves to nothing refuses.
 -}
-readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString, FilePath))
+readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString))
 readConfigDocument envVars = do
-    let explicitPath = nonBlankPath =<< lookup "ECLUSE_CONFIG" envVars
-        docPath = fromMaybe defaultConfigPath explicitPath
+    let docPath = configDocumentPath envVars
     mDocBlob <- tryIO (BS.readFile docPath)
     pure $ case mDocBlob of
-        Right bytes -> Right (Just bytes, docPath)
+        Right bytes -> Right (Just bytes)
         Left err
             | isDoesNotExistError err ->
-                case explicitPath of
-                    Nothing -> Right (Nothing, docPath)
+                case explicitConfigPath envVars of
+                    Nothing -> Right Nothing
                     Just path ->
                         Left
                             ( "ECLUSE_CONFIG points at "
@@ -168,43 +162,37 @@ readConfigDocument envVars = do
                         <> T.pack (ioeGetErrorString err)
                     )
 
--- The shipped default. A non-blank ECLUSE_CONFIG relocates it.
-defaultConfigPath :: FilePath
-defaultConfigPath = "/etc/ecluse/config.yaml"
-
-nonBlankPath :: FilePath -> Maybe FilePath
-nonBlankPath p = if T.null (T.strip (T.pack p)) then Nothing else Just p
-
-{- | Assemble the 'BootEnv' and run @action@ within it. The boot fails fast on any
-configuration error, before it applies the runtime posture.
+{- | Assemble the 'BootEnv' and run @action@ within it. A configuration error refuses before
+the runtime posture applies, and the plan's own refusals follow it.
 -}
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     rawEnvVars <- getEnvironment
     envVars <- applySecretFileIndirection rawEnvVars >>= orExit id
     let ambient = ambientAwsFromEnv envVars
-    (docBlob, docPath) <- readConfigDocument envVars >>= orExit id
+    docBlob <- readConfigDocument envVars >>= orExit id
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
         observability = cfgObservability env
         runtimeSettings = cfgRuntime env
-    -- Resolve the log identity from the same table the SDK reads
-    -- ("Ecluse.Runtime.Telemetry.Resolve"), before any OTEL_* projection applies. A boot
-    -- line then carries the same identity as a served request.
+    -- Resolve the log identity from the table the SDK reads, before any OTEL_* projection
+    -- applies, so a boot line carries the same identity as a served request.
     ddIdentity <- ddIdentityFromEnvironment
     logEnv <- newLogEnv (obsLogFormat observability) (obsLogLevel observability) ddIdentity (Environment "production")
-    -- Resolve and apply the runtime posture before anything else spins up. This may
-    -- exec the binary in place to enforce a heap ceiling (same PID, see Ecluse.Rts).
-    -- Nothing stateful must precede it beyond config and the logger.
+    -- Apply the runtime posture before anything else spins up. It may exec the binary in
+    -- place to enforce a heap ceiling (same PID, see Ecluse.Rts).
     runtimePlan <-
         applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings)
-    logBootInfo logEnv $ case docBlob of
-        Just _ -> "Config document: " <> T.pack docPath
-        Nothing -> "Config document: none at " <> T.pack docPath <> " (defaults and environment only)"
-    -- One provenance line per resolved config key (secrets redacted), so an operator reads the
-    -- effective posture and its origin straight from the boot log.
-    traverse_ (logBootInfo logEnv) (resolvedKeyProvenance envVars docBlob)
-    traverse_ (logBootWarning logEnv) (mountCollisionWarnings config)
+    fdLimit <- openFileSoftLimit
+    let (preamble, planE) = resolveBootPlan envVars docBlob config runtimePlan fdLimit
+    -- The provenance block logs ahead of every refusable phase, so a refusal that names a
+    -- config key stays traceable to the layer that set it.
+    traverse_ (logBootInfo logEnv) preamble
+    bootPlan <- orExit (T.unlines . map renderBootError) planE
+    -- @ecluse check-config@ prints the same two lists in this order, so a transcript and a
+    -- boot log agree line for line.
+    traverse_ (logBootInfo logEnv) (bpLines bootPlan)
+    traverse_ (logBootWarning logEnv) (bpWarnings bootPlan)
     prepareTelemetryBoot (obsTelemetry observability) logEnv
     withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
         action
@@ -214,16 +202,13 @@ withBootEnv action = do
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
                 , beConfigFull = config
-                , beRuntimePlan = runtimePlan
+                , beBootPlan = bootPlan
                 }
 
-{- Build the config-selected mirror queue: the durable AWS SQS backend, or the bounded
-in-memory backend. Only the memory arm spends @memoryDepth@, so the memory plan allocates
-that tenant after the backend selection. 'mirrorQueuePlanWarning' and
-'deadLetterTerminusWarning' decide the warnings, and this is only the call site. -}
+{- Build the config-selected mirror queue. Only the memory arm spends @memoryDepth@, and
+'deadLetterTerminusWarning' is decided here because it needs the built handle. -}
 buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 buildMirrorQueue logEnv memoryDepth plan = do
-    whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
     queue <- case plan of
         SqsBackend sqsConfig -> newSqsQueue logEnv mkRegistryUrl sqsConfig
         MemoryBackend ->
@@ -243,9 +228,8 @@ logBootInfo :: LogEnv -> Text -> IO ()
 logBootInfo logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM InfoS (ls message))
 
-{- Log every wired mount's resolved rule boot order, the same total order evaluation walks,
-so an operator reads the effective policy resolution from the start-up log. A mount with
-no packument deps (the unserved stub) contributes nothing. -}
+{- Log every wired mount's resolved rule boot order, the same total order evaluation walks.
+A mount with no packument deps (the unserved stub) contributes nothing. -}
 logRuleBootOrder :: LogEnv -> [MountBinding] -> IO ()
 logRuleBootOrder logEnv = traverse_ logMount
   where
@@ -255,26 +239,23 @@ logRuleBootOrder logEnv = traverse_ logMount
         logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
         traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
-{- | Raised to abort start-up after a boot phase reported its failure to stderr. A distinct
-type rather than a bare 'exitFailure' lets a test observe the abort without the process
-exiting. Uncaught, it reaches 'main' and the runtime exits non-zero.
+{- | Raised to abort start-up after a boot phase reported its failure to stderr. A typed
+abort, rather than 'exitFailure', lets a test observe it without the process exiting.
 -}
 data BootAborted = BootAborted
     deriving stock (Eq, Show)
 
 instance Exception BootAborted
 
-{- Report the rendered failure to stderr and throw 'BootAborted' when a phase fails,
-otherwise yield its value. It writes the whole aggregated block, so an operator sees every
-problem from one failed launch. -}
+{- Report the rendered failure to stderr and throw 'BootAborted', otherwise yield the value.
+It writes the whole aggregated block, so one failed launch shows every problem. -}
 orExit :: (e -> Text) -> Either e a -> IO a
 orExit render = \case
     Right a -> pure a
     Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
 
-{- Prepare the telemetry substrate before the SDK initialises, through
-"Ecluse.Runtime.Telemetry.Resolve.prepareTelemetry". With @ECLUSE_OBSERVABILITY__TELEMETRY@
-off it is a no-op, reading no process environment. -}
+{- Prepare the telemetry substrate before the SDK initialises. With
+@ECLUSE_OBSERVABILITY__TELEMETRY@ off it is a no-op, reading no process environment. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
 prepareTelemetryBoot switch logEnv = case switch of
     TelemetryOff -> pass

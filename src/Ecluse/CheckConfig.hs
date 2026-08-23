@@ -2,54 +2,30 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | @ecluse check-config@: validate the configuration exactly as a boot would and
-print the whole resolved posture, without starting anything.
-
-The subcommand runs the same resolution chain the proxy boots through:
-'Ecluse.Config.loadConfig', the runtime plan, the admission and pool sizings, the
-memory plan, and the mirror-queue selection. It applies none of it: no socket
-opens, no capability count changes, no re-exec, no cloud call.
-
-A failure prints the same aggregated reports a boot would log and exits @2@. A valid
-configuration prints per-key provenance and every resolver's decision lines, then
-exits @0@. An operator or a CI step reads exactly what a boot would do before
-running one.
+{- | @ecluse check-config@: validate the configuration exactly as a boot would and print
+the resolved posture, without starting anything. It hands the loaded config to
+'Ecluse.Composition.Plan.resolveBootPlan' and prints that plan's lines, applying none of
+it: no socket opens, no capability count changes, no re-exec, no cloud call. It predicts
+the posture from 'appliedRuntimePlan', because the checker's own process posture is not
+the boot's. It exits @0@ on a valid configuration and @2@ on a refused one.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 
+import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
-import System.Exit (ExitCode (ExitFailure))
 
-import Ecluse.Boot (applySecretFileIndirection, readConfigDocument)
-import Ecluse.Composition (validateComposition)
-import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
-import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpDegradations, mpOverrideViolations, mpQueueMemoryMaxDepth),
- )
-import Ecluse.Composition.MirrorQueue (
-    MirrorQueuePlan (MemoryBackend, SqsBackend),
-    MirrorRuntimePlan (MirrorWith, NoMirroring),
-    memoryQueueBootWarning,
-    planMirrorRuntime,
- )
-import Ecluse.Composition.Plan (resolveMemoryPlanFor)
-import Ecluse.Composition.Sizing (
-    openFileSoftLimit,
-    resolvePrivateConnections,
-    resolvePublicConnections,
- )
+import Ecluse.Boot (applySecretFileIndirection, orExit, readConfigDocument)
+import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.Plan (BootPlan (bpLines, bpWarnings), resolveBootPlan)
+import Ecluse.Composition.Sizing (openFileSoftLimit)
 import Ecluse.Config (
     AppConfig (cfgRuntime),
     Config (configApp),
-    RuntimeSettings (rtCores, rtMaxHeapBytes, rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost),
+    RuntimeSettings (rtCores, rtMaxHeapBytes),
     loadConfig,
-    mountCollisionWarnings,
-    mountPostureLines,
     renderConfigError,
-    resolvedKeyProvenance,
  )
-import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Rts (
     appliedRuntimePlan,
     currentRtsPosture,
@@ -57,78 +33,36 @@ import Ecluse.Rts (
     renderEffectivePosture,
     resolveRuntimePlan,
  )
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
 
--- | Validate, print the resolved posture, and exit: @0@ valid, @2@ refused.
+{- | Validate the configuration and print the resolved posture. A valid configuration
+returns (exit @0@) and a refused one aborts (exit @2@).
+-}
 runCheckConfig :: IO ()
 runCheckConfig = do
     rawEnvVars <- getEnvironment
-    envVars <- applySecretFileIndirection rawEnvVars >>= either refuseWith pure
-    docE <- readConfigDocument envVars
-    (docBlob, docPath) <- either refuseWith pure docE
-    TIO.putStrLn $ case docBlob of
-        Just _ -> "config document: " <> toText docPath
-        Nothing -> "config document: none at " <> toText docPath <> " (defaults and environment only)"
-    config <- either (refuseWith . renderErrs renderConfigError) pure (loadConfig envVars docBlob)
-    -- The same validateComposition the boot's composeBindings runs, so a configuration the
-    -- proxy would refuse can never validate here.
-    case validateComposition config of
-        [] -> pass
-        errs -> refuseWith (renderErrs renderBootError errs)
-    let env = configApp config
-        runtimeSettings = cfgRuntime env
-    -- Resolved exactly as a boot would, never applied (no capability change, no re-exec).
-    -- The sizings compute from 'appliedRuntimePlan', because the checker's own process
-    -- posture says nothing about the boot it is checking.
+    envVars <- applySecretFileIndirection rawEnvVars >>= orRefuse id
+    docBlob <- readConfigDocument envVars >>= orRefuse id
+    config <- orRefuse (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit
-    -- Backend selection precedes the plan, exactly as a boot orders it: the queue
-    -- tenant exists only when that selection picks the memory backend.
-    runtimePlan <-
-        either
-            (refuseWith . renderErrs renderBootError)
-            pure
-            (planMirrorRuntime (ambientAwsFromEnv envVars) config)
-    let plan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
-        effective = appliedRuntimePlan cgroup plan rts
-        (_, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) fdLimit
-        (_, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) fdLimit
-        (memoryPlan, memoryPlanLines) = resolveMemoryPlanFor env effective runtimePlan
-    traverse_ TIO.putStrLn $
-        concat
-            [ resolvedKeyProvenance envVars docBlob
-            , renderEffectivePosture effective
-            , [privateLine, publicLine]
-            , memoryPlanLines
-            , -- The shed ladder, printed exactly as the boot would warn it. A
-              -- degraded-but-coherent plan validates, because shrinking makes the
-              -- plan safe. Only an explicit override refuses below.
-              map ("warning: " <>) (mpDegradations memoryPlan)
-            , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) runtimePlan
-            , mountPostureLines config
-            , map ("warning: " <>) (mountCollisionWarnings config)
-            ]
-    unless (null (mpOverrideViolations memoryPlan)) $
-        refuseWith (renderErrs renderBootError [MemoryPlanOverrideUnsafe (mpOverrideViolations memoryPlan)])
+    let runtimeSettings = cfgRuntime (configApp config)
+        runtimePlan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
+        effective = appliedRuntimePlan cgroup runtimePlan rts
+    let (preamble, planE) = resolveBootPlan envVars docBlob config effective fdLimit
+    -- The boot logs these posture lines from 'Ecluse.Rts.applyRuntimePosture', which the
+    -- checker never runs. They stand in that position here.
+    traverse_ TIO.putStrLn (renderEffectivePosture effective)
+    -- Printed ahead of every refusable phase, exactly where the boot logs it.
+    traverse_ TIO.putStrLn preamble
+    bootPlan <- orRefuse (T.unlines . map renderBootError) planE
+    traverse_ TIO.putStrLn (bpLines bootPlan)
+    -- Standard output carries no severity field, so the prefix stands in for the boot's
+    -- katip WarningS.
+    traverse_ (TIO.putStrLn . ("warning: " <>)) (bpWarnings bootPlan)
     TIO.putStrLn "configuration: valid"
-    exitSuccess
   where
-    renderErrs :: (e -> Text) -> [e] -> Text
-    renderErrs render = unlines . map render
-
-    refuseWith :: Text -> IO a
-    refuseWith message = do
-        TIO.hPutStrLn stderr message
-        TIO.hPutStrLn stderr "configuration: refused"
-        exitWith (ExitFailure 2)
-
-    mirrorRuntimeLines :: Int -> MirrorRuntimePlan -> [Text]
-    mirrorRuntimeLines memoryDepth = \case
-        NoMirroring -> ["mirror runtime: disabled (no mount mirrors; no queue is built and no worker starts)"]
-        MirrorWith (SqsBackend sqs) ->
-            ["mirror queue: sqs, " <> sqsQueueUrl sqs <> " (region " <> sqsRegion sqs <> ")"]
-        MirrorWith MemoryBackend ->
-            [ "mirror queue: in-memory (depth " <> show memoryDepth <> ")"
-            , "warning: " <> memoryQueueBootWarning
-            ]
+    {- Print the aggregated report and the verdict, then abort through the boot's own
+    typed path, which 'Ecluse.superviseProcess' maps to exit 2. -}
+    orRefuse :: (e -> Text) -> Either e a -> IO a
+    orRefuse render = orExit (\err -> render err <> "\nconfiguration: refused")

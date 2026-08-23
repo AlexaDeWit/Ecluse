@@ -2,13 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The proxy role's effectful composition root.
-
-'runProxy' receives validated process state from "Ecluse.Boot" and resolves the
-proxy-specific plans. It builds the runtime-edge handles and mount bindings, then
-coordinates the HTTP server with the optional mirror worker and advisory-sync tasks.
-Pure plan derivation remains in "Ecluse.Composition" and its sibling modules. This
-module is the boundary where those decisions become running services.
+{- | The proxy role's effectful composition root. 'runProxy' receives the validated 'BootEnv'
+from "Ecluse.Boot", applies its 'BootPlan' decisions, and resolves the proxy-specific plans:
+the runtime-edge handles and the mount bindings. It then coordinates the HTTP server with the
+optional mirror worker and the advisory-sync tasks. Pure plan derivation stays in
+"Ecluse.Composition" and its siblings, so this module is where those decisions become running
+services.
 -}
 module Ecluse.Proxy (
     runProxy,
@@ -35,26 +34,24 @@ import Ecluse.Composition (
     planMounts,
     planPublishTargets,
  )
-import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe), renderBootError)
+import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpDegradations, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpOverrideViolations, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
     mirrorArtifactBytesCap,
     planCacheConfig,
  )
-import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring), planMirrorRuntime)
-import Ecluse.Composition.Plan (resolveMemoryPlanFor)
+import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
+import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections))
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgRuntime, cfgServer),
+    AppConfig (cfgCache, cfgLimits, cfgServer),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
-    RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
-    mountPostureLines,
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (generationInstalledAt)
@@ -98,9 +95,8 @@ import Ecluse.Runtime.Telemetry.Reporters (
  )
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDataPlaneManagerSettings)
 
-{- | Assemble and run the proxy role from an already validated 'BootEnv'.
-
-Écluse refuses unsafe or incomplete wiring before it opens the listener.
+{- | Assemble and run the proxy role from an already validated 'BootEnv'. It refuses unsafe
+or incomplete wiring before it opens the listener.
 -}
 runProxy :: BootEnv -> IO ()
 runProxy bootEnv = do
@@ -108,6 +104,11 @@ runProxy bootEnv = do
     let config = beConfigFull bootEnv
     let logEnv = beLogEnv bootEnv
     let telemetry = beTelemetry bootEnv
+    -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
+    -- role only applies it.
+    let bootPlan = beBootPlan bootEnv
+    let mirrorRuntime = bpMirrorRuntime bootPlan
+    let memoryPlan = bpMemoryPlan bootPlan
 
     -- The metric instruments do not exist until the telemetry substrate is built well below. The
     -- credential provider built here records through reporters that 'installMetrics' makes live.
@@ -124,43 +125,23 @@ runProxy bootEnv = do
     -- another. Without a bucket the map is empty, rules abstain, and readiness is ungated.
     cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
-    -- Whether a mirror runtime exists, and which queue backend it rides, decides whether the
-    -- memory plan allocates a queue tenant at all. Only the memory backend spends heap.
-    runtimePlan <-
-        orExit (T.unlines . map renderBootError) (planMirrorRuntime (beAmbient bootEnv) config)
-    -- Shed-ladder steps warn loudly and the process boots regardless. Only an explicit
-    -- override that breaks the combined CPU and material-share invariant refuses.
-    let (plan, planLines) = resolveMemoryPlanFor env (beRuntimePlan bootEnv) runtimePlan
-    traverse_ (logBootInfo logEnv) planLines
-    traverse_ (logBootWarning logEnv) (mpDegradations plan)
-    unless (null (mpOverrideViolations plan)) $
-        orExit (T.unlines . map renderBootError) (Left [MemoryPlanOverrideUnsafe (mpOverrideViolations plan)])
     -- Where the plan shed the capability count (the nursery was the pressure),
     -- apply it in-process before the parallel machinery spins up.
-    whenJust (mpShedCapabilities plan) setNumCapabilities
-    serveAdmission <- newServeAdmission (mpAdmissionCapacity plan)
+    whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
+    serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
     -- One process-wide byte aggregate serves every publishing mount. It exists exactly when
     -- a publication target is configured, the same predicate the plan's tenant derives from.
-    publishBudget <- forM (mpPublishTenant plan) $ \tenant -> do
+    publishBudget <- forM (mpPublishTenant memoryPlan) $ \tenant -> do
         bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
-        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes plan}
+        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
     let limits =
             Limits
-                { maxBodyBytes = mpMaxResponseBytes plan
+                { maxBodyBytes = mpMaxResponseBytes memoryPlan
                 , maxVersionCount = limMaxVersionCount (cfgLimits env)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits env)
                 }
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
-    -- The file-descriptor limit is the pool's real ceiling, one descriptor per pooled connection.
-    -- Size it for the un-admitted private-hit streaming fan-out, not admission capacity.
-    fdLimit <- Composition.openFileSoftLimit
-    let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (rtPrivateConnectionsPerHost (cfgRuntime env)) fdLimit
-    logBootInfo logEnv privateConnectionsLine
-    -- Half the private share off the same file-descriptor datapoint. Onboarding fail-over and
-    -- worker back-fill streams ride this manager without coalescing, so retention must cover them.
-    let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (rtPublicConnectionsPerHost (cfgRuntime env)) fdLimit
-    logBootInfo logEnv publicConnectionsLine
     heartbeat <- newWorkerHeartbeat
     let serverConfig =
             (mkServerConfig bindings)
@@ -169,7 +150,7 @@ runProxy bootEnv = do
                 , scCheckReady = cveSyncReady cveSyncPlan
                 , -- Fold the worker heartbeat into /livez exactly when a worker will
                   -- run. A serve-only deployment's liveness is the listener alone.
-                  scCheckLive = case runtimePlan of
+                  scCheckLive = case mirrorRuntime of
                     MirrorWith _ -> heartbeatHealthyNow heartbeat
                     NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
@@ -177,30 +158,23 @@ runProxy bootEnv = do
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
-    -- Écluse derives a mount's mirroring mode from its declared endpoints, so this posture
-    -- line is the loud surface a dropped mirrorTarget shows up on.
-    traverse_ (logBootInfo logEnv) (mountPostureLines config)
     -- The buffered hand-off keeps the serve path off the backend's enqueue latency. The drain
     -- loop below delivers off the request path. Under NoMirroring the inert queue is unreachable.
-    (queue, mirrorDrain) <- case runtimePlan of
+    (queue, mirrorDrain) <- case mirrorRuntime of
         MirrorWith queuePlan -> do
-            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth plan) queuePlan
+            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) queuePlan
             (q, drainEnqueueBuffer) <-
                 bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
             pure (q, Just drainEnqueueBuffer)
-        NoMirroring -> do
-            logBootInfo logEnv "mirror runtime disabled: no mount mirrors, so no queue is built and no worker starts"
-            pure (noMirrorQueue, Nothing)
-    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
+        NoMirroring -> pure (noMirrorQueue, Nothing)
+    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) memoryPlan)
 
-    -- Registry egress is https-only by construction, and certificate validation authenticates the
-    -- dialled host, so a rebound or internal address cannot present a CA-trusted certificate for
-    -- the requested name. That closes the SSRF and resolve-to-internal class. The split stays
-    -- because public reads are anonymous and private reads forward the client's credential.
+    -- The two managers stay split: public reads are anonymous and private reads forward the
+    -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    manager <- newManager (connectionPoolSettings publicConnections publicSettings)
-    privateManager <- newManager (connectionPoolSettings privateConnections privateSettings)
+    manager <- newManager (connectionPoolSettings (bpPublicConnections bootPlan) publicSettings)
+    privateManager <- newManager (connectionPoolSettings (bpPrivateConnections bootPlan) privateSettings)
     withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
@@ -210,10 +184,8 @@ runProxy bootEnv = do
         -- A dropped job re-enqueues on the next demand and a cancelled sync resumes on next boot.
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
         -- Racing the server against an empty task list would cancel it instantly, so the no-task
-        -- shape below runs the server alone. Under 'MirrorWith', the only branch that builds a
-        -- worker, the mirror-artifact tenant is always present, so the fallback guards an
-        -- impossible case.
-        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant plan)
+        -- shape below runs the server alone. 'MirrorWith' always carries the artifact tenant.
+        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
         case mirrorDrain of
             Just drainEnqueueBuffer ->
                 race_
@@ -249,8 +221,7 @@ enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 
 {- Attach each ecosystem's advisory-database age to the observable gauge, once at boot. The
-callback reads the slot, which outlives the supervised sync tasks below, so the reported age
-keeps climbing from the last install across a task restart. -}
+callback reads the slot, which outlives the sync tasks, so the age survives a task restart. -}
 registerAdvisoryAges :: Env -> Map.Map Ecosystem CveSyncHandle -> IO ()
 registerAdvisoryAges builtEnv plan =
     for_ (Map.toList plan) $ \(eco, handle) ->
@@ -293,11 +264,8 @@ runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
 runServices serverConfig policies env =
     Server.raceServerAgainstLoop (runServer serverConfig env) (runWorker policies env)
 
-{- | Run the proxy's HTTP front door over the composition-root 'Env' with the
-config-derived 'ServerConfig'.
-
-'mountBindingFor' projects each adapter's serve surface into the bindings, so the web
-layer stays ecosystem-neutral.
+{- | Run the proxy's HTTP front door over the composition-root 'Env' with the config-derived
+'ServerConfig'. The bindings carry each adapter's serve surface, so the web layer stays neutral.
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp cfg (`Server.tracedApplication` env)
@@ -315,11 +283,8 @@ warpExceptionHook logEnv mRequest err =
         sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
             <> sl "detail" (displayExceptionT err)
 
-{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
-ecosystem has no registered adapter.
-
-The path prefix is derived from the ecosystem ('prefixFor'), never configured (see
-@docs\/architecture\/web-layer.md@ → "Multi-ecosystem mounts").
+{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that ecosystem
+has no registered adapter. The path prefix derives from the ecosystem ('prefixFor'), never config.
 -}
 mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 mountBindingFor eco packumentDeps publishDeps =
@@ -337,11 +302,8 @@ mountOf adapter packumentDeps publishDeps =
         , bindingPublishDeps = publishDeps
         }
 
-{- | Run the supervised mirror worker over the composition-root 'Env' and the
-per-ecosystem bundles.
-
-The loop is consume → probe → re-evaluate → fetch → verify → publish → ack, so the worker
-re-runs current policy against a job before it mirrors.
+{- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem
+bundles. The loop re-runs current policy against a job before it mirrors.
 -}
 runWorker :: WorkerPolicies -> Env -> IO ()
 runWorker policies env = do

@@ -95,9 +95,8 @@ import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 
-{- | The composition root's single entry to the served mount bindings, or every boot
-error at once. The caller injects every capability, so this opens no socket and a
-mount's rules borrow /their/ ecosystem's advisory database, never a neighbour's.
+{- | The composition root's single entry to the served mount bindings, or every boot error
+at once. The caller injects every capability, so this opens no socket.
 -}
 planMounts ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
@@ -110,20 +109,16 @@ planMounts ::
     IO (Either [BootError] [MountBinding])
 planMounts = composeBindings
 
-{- | The publish-side byte discipline: the process-wide aggregate byte admission and
-the per-request cap. Present exactly when a publication target is configured, so a
-publishing mount without a budget is unrepresentable.
+{- | The publish-side byte discipline: the process-wide aggregate admission and the
+per-request cap. It exists exactly when a publication target is configured.
 -}
 data PublishBudget = PublishBudget
     { pbBodyBudget :: ByteAdmission
     , pbMaxRequestBytes :: Int
     }
 
-{- | Turn a validated 'Config' into the served 'MountBinding's, or the boot errors
-aggregated across every mount.
-
-The 'Limits' arrive resolved and every mount's deps carry them, so the data plane
-reads each metadata body bounded (security.md invariant 4).
+{- | Turn a validated 'Config' into the served 'MountBinding's, or the boot errors aggregated
+across every mount. The 'Limits' arrive resolved, so every metadata read is bounded.
 -}
 composeBindings ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
@@ -135,8 +130,8 @@ composeBindings ::
     Config ->
     IO (Either [BootError] [MountBinding])
 composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
-    -- @ecluse check-config@ runs 'validateComposition' too, so the checker and the boot
-    -- cannot drift on what a boot refuses.
+    -- 'Ecluse.Composition.Plan.resolveBootPlan' runs 'validateComposition' first on both
+    -- entry points. This call keeps the structural errors in reach of a caller without a plan.
     let structuralErrs = validateComposition config
         pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg limits publishBudget helpMessage) (cfgMounts app)
     -- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for
@@ -242,10 +237,8 @@ mountBaseUrl publicUrl eco =
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
-{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig'.
-The @ecluse check-config@ command shares it, so the checker can never pass a
-configuration the proxy refuses. It does not check provider initialisation
-('UnresolvedCredential'), which stays with 'composeBindings'.
+{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig'. It
+leaves provider initialisation ('UnresolvedCredential') to 'composeBindings'.
 -}
 validateComposition :: Config -> [BootError]
 validateComposition config = missingAdapters <> publishPolicyErrors
@@ -260,10 +253,8 @@ validateComposition config = missingAdapters <> publishPolicyErrors
             , isJust (mntPublicationTarget mcfg)
             ]
 
-{- | Build the first-party publish dependencies, shared across the mounts. 'Nothing'
-when no publication target is configured, so the publish path is off and a
-@PUT \/{pkg}@ answers @405@. Refusing on the publish policy is 'validateComposition''s
-job: only an error-free compose consumes this result.
+{- | Build the first-party publish dependencies, shared across the mounts. 'Nothing' with no
+publication target configured, so the publish path is off and a @PUT \/{pkg}@ answers @405@.
 -}
 publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
 publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
@@ -300,9 +291,8 @@ publishBootErrors eco mcfg inboundToken = catMaybes [scopesError, edgeError]
         | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)
         | otherwise = Nothing
 
-{- | One ecosystem's resolved publish target: the mirror-target endpoint the worker
-writes approved artifacts to, and the provider that mints its bearer token. The
-publish client resolves here at the composition root rather than per request.
+{- | One ecosystem's resolved publish target: the endpoint the worker writes approved
+artifacts to, and the provider that mints its bearer token. Resolved once, not per request.
 -}
 data PublishTarget = PublishTarget
     { ptEcosystem :: Ecosystem
@@ -313,9 +303,8 @@ data PublishTarget = PublishTarget
     -- ^ The provider minting the mirror-target write token.
     }
 
-{- | Resolve each configured mount to its publish target, or the aggregated boot
-errors. An unresolved credential raises the same boot error 'composeBindings' reports
-for the serve side, so the two surfaces never disagree on what is wired.
+{- | Resolve each configured mount to its publish target, or the aggregated boot errors. An
+unresolved credential raises the same error 'composeBindings' reports for the serve side.
 -}
 planPublishTargets ::
     CredentialProviders ->
