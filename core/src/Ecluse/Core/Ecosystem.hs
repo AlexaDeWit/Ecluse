@@ -29,7 +29,6 @@ data Ecosystem
     | RubyGems
     deriving stock (Eq, Generic, Ord, Show)
 
--- Derived from Generic so the wire-table coverage test needs no hand-maintained list.
 instance Universe Ecosystem where universe = universeGeneric
 
 instance WireVocab Ecosystem where

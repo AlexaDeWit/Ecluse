@@ -103,6 +103,9 @@ import Ecluse.Runtime.Telemetry.Resolve (
     observeExportResult,
  )
 
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
+
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Telemetry is opt-in, so
@@ -115,7 +118,9 @@ data TelemetrySwitch
       @OTEL_*@ environment and the OTLP exporter is active.
       -}
       TelemetryOn
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe TelemetrySwitch where universe = universeGeneric
 
 -- Listed @on@ before @off@: that is the order the accepted-set message names them.
 instance WireVocab TelemetrySwitch where

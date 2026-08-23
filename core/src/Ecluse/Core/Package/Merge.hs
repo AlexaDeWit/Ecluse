@@ -182,7 +182,6 @@ data DivergencePolicy
       FailClosed
     deriving stock (Eq, Generic, Ord, Show)
 
--- Derived from Generic so the wire-table round-trip test needs no hand-maintained list.
 instance Universe DivergencePolicy where universe = universeGeneric
 
 instance WireVocab DivergencePolicy where

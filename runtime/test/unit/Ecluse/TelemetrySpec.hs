@@ -9,6 +9,7 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
 import Ecluse.Test.Support (newTestLogEnv)
+import Ecluse.Test.WireVocab (wireRoundTrips)
 import Katip (Severity (WarningS))
 import OpenTelemetry.Exporter.Metric (MetricExporter (..))
 import OpenTelemetry.Exporter.Span (ExportResult (Failure), SpanExporter (..))
@@ -53,6 +54,8 @@ spec = do
 
 switchSpec :: Spec
 switchSpec = describe "TelemetrySwitch" $ do
+    wireRoundTrips @TelemetrySwitch
+
     it "parses each accepted mode" $ do
         parseTelemetrySwitch "off" `shouldBe` Right TelemetryOff
         parseTelemetrySwitch "on" `shouldBe` Right TelemetryOn

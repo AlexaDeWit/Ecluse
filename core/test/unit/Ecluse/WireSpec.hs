@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+
 module Ecluse.WireSpec (spec) where
 
 import Data.Universe.Class (Universe (..))
