@@ -61,10 +61,13 @@ parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
             parseEndpointUrl "http://h:0x10" `shouldBe` Nothing
         it "refuses a port past 65535" $
             parseEndpointUrl "http://h:65536" `shouldBe` Nothing
-        it "refuses a credential in the authority" $ do
-            -- An operator URL carrying a credential is refused, never silently stripped.
+        it "refuses credential material anywhere in the URL" $ do
+            -- An operator URL carrying userinfo, a query, or a fragment is refused, never
+            -- silently stripped: a pre-signed query is a credential too.
             parseEndpointUrl "http://user:secret@h:1" `shouldBe` Nothing
             parseEndpointUrl "http://@h:80" `shouldBe` Nothing
+            parseEndpointUrl "http://h/?sig=x" `shouldBe` Nothing
+            parseEndpointUrl "http://h#f" `shouldBe` Nothing
         it "refuses a trailing colon with no port digits" $
             -- A written-but-empty port is malformed, never the scheme's default.
             parseEndpointUrl "http://h:" `shouldBe` Nothing

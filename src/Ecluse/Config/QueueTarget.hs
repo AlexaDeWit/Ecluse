@@ -4,15 +4,11 @@
 
 {- | Derive the mirror-queue backend from the queue URL's own shape.
 
-The queue URL is the single source of truth for which backend carries the mirror
-jobs, the same derivation the mirror-write credential follows
-("Ecluse.Config.MirrorCredential"). A real SQS queue URL
-(@https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@) names the SQS backend
-and carries its region in its host. A Pub\/Sub topic resource
-(@projects\/{project}\/topics\/{topic}@) names the GCP backend and carries its
-project. The mechanism comes from the same destination it will serve, so a
-backend\/URL disagreement is unrepresentable rather than merely guarded. No separate
-backend selector exists to disagree with the URL.
+The queue URL is the single source of truth for which backend carries the mirror jobs, the same
+derivation the mirror-write credential follows ("Ecluse.Config.MirrorCredential"). An SQS queue URL
+(@https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@) names the SQS backend and carries its
+region, and a Pub\/Sub topic resource (@projects\/{project}\/topics\/{topic}@) names the GCP one. No
+separate backend selector exists to disagree with the URL.
 -}
 module Ecluse.Config.QueueTarget (
     QueueTarget (..),
@@ -34,12 +30,8 @@ data QueueTarget
       PubSubTarget Text Text
     deriving stock (Eq, Show)
 
-{- | Parse a queue URL into the backend it names, or 'Nothing' when it names neither. The
-caller refuses that loudly rather than guessing a backend.
-
-The SQS form is exactly @https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@, with a
-single-label region, a 12-digit account, one non-empty queue segment, and no port, query, or
-fragment. A nearly-but-not SQS URL is a transcription error to surface, never to repair.
+{- | Parse a queue URL into the backend it names, or 'Nothing' when it names neither. The SQS form
+is exact, and a nearly-but-not SQS URL is a transcription error to surface, never to repair.
 -}
 parseQueueTarget :: Text -> Maybe QueueTarget
 parseQueueTarget raw = sqsTargetOf raw <|> pubSubTargetOf raw

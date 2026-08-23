@@ -2,16 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The ambient cloud-SDK environment: the handful of @AWS_*@ variables Écluse
-itself consults. It reads them straight from the process environment at boot, and
-carries them beside the parsed configuration. They never pass through the config
-document or its environment overlay.
+{- | The ambient cloud-SDK environment: the handful of @AWS_*@ variables Écluse itself consults,
+read straight from the process environment at boot rather than from the config document.
 
-Keeping them out of the config AST makes "secrets never live in the structured
-config" structural. A document key like @awsSecretAccessKey@ is an unknown key and a
-loud parse failure, not a silently ignored ghost. Nothing here touches the AWS SDK's
-own credential discovery (@AWS_ACCESS_KEY_ID@, @AWS_SECRET_ACCESS_KEY@, the instance
-role). This record carries only the values Écluse reads explicitly.
+Keeping them out of the document makes "secrets never live in the structured config" structural,
+because a key like @awsSecretAccessKey@ is then an unknown key and a loud parse failure. Nothing
+here touches the AWS SDK's own credential discovery.
 -}
 module Ecluse.Config.Ambient (
     AmbientAws (..),
@@ -23,7 +19,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 
 import Ecluse.Config.Parser (HttpScheme (..), splitHttpScheme)
-import Ecluse.Core.Security (HostPort (..), carriesUserinfo, hostPortAddressWithDefault)
+import Ecluse.Core.Security (HostPort (..), hostPortAddressWithDefault, refuseCredentialMaterial)
 
 {- | The @AWS_*@ values Écluse consults directly: region scoping and endpoint overrides. A
 field is 'Nothing' when its variable is unset, and each consumer handles a blank value itself.
@@ -57,13 +53,13 @@ ambientAwsFromEnv env =
   where
     look name = T.pack <$> lookup name env
 
-{- | Parse an endpoint override into its (TLS flag, host, port), reading the authority the way
-the egress gate reads one. Userinfo, or a port outside the gate's grammar, yields 'Nothing'.
+{- | Parse an endpoint override into its (TLS flag, host, port), reading the authority the way the
+egress gate reads one. Userinfo, a query, a fragment, or a port outside its grammar yields 'Nothing'.
 -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do
     (scheme, _) <- splitHttpScheme raw
-    guard (not (carriesUserinfo raw))
+    guard (isRight (refuseCredentialMaterial "endpoint override" raw))
     let (secure, portless) = schemeDial scheme
     HostPort host port <- hostPortAddressWithDefault portless raw
     pure (secure, host, fromIntegral port)

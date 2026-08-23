@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The aeson helpers every configuration key is decoded through: the secret-key and
-unknown-key refusals, enumerations, ports, durations, and the URL shapes.
+{- | The shared refusals every configuration key is decoded through: secret and unknown keys,
+enumerations, ports, durations, the @http(s)@ scheme check, and the URL shapes.
 
 A malformed key fails at load with the key named, never at its first use. The URL parsers run
 'refuseCredentialMaterial' ahead of any refusal that quotes the value, because boot echoes every
@@ -46,13 +46,8 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
--- A registry URL must be credential-free and https (mkConfiguredRegistryUrl) and carry an
--- authority the egress gate can extract (hostPortAddress). The gate refuses what it cannot
--- extract, so an entry that fails here could only build a mount that refuses every fetch.
---
--- mkConfiguredRegistryUrl runs first because the refusal below it quotes the value. Once it
--- passes, the value carries no userinfo and no query string, so naming it cannot surface a
--- token.
+-- mkConfiguredRegistryUrl runs first, because the refusal below it quotes the value. An authority
+-- the egress gate cannot extract could only build a mount that refuses every fetch.
 parseRegistryUrl :: String -> Value -> Parser RegistryUrl
 parseRegistryUrl field = \case
     String t -> case mkConfiguredRegistryUrl t of
@@ -95,13 +90,8 @@ rejectUnknownKeys context accepted o =
                         <> intercalate ", " (map (show . Key.toText) unknown)
                     )
 
-{- | An operator-configured URL Écluse hands to a cloud SDK rather than dialling itself, such as
-the mirror-queue target. The value keeps its provider's shape, an SQS queue URL or a Pub\/Sub
-topic resource, and the queue-backend selector reads that shape.
-
-It carries the shared credential refusal ('refuseCredentialMaterial'). The refusal runs at load,
-ahead of the boot echo, the @check-config@ report, and the unrecognised-shape boot error. Each
-of those prints the value as written.
+{- | An operator-configured URL Écluse hands to a cloud SDK rather than dialling itself, such as the
+mirror-queue target. It keeps its provider's shape, and carries the shared credential refusal.
 -}
 parseUrl :: String -> Value -> Parser Url
 parseUrl field = \case
@@ -110,14 +100,8 @@ parseUrl field = \case
         | otherwise -> either (fail . T.unpack) pure (mkUrl (T.strip t))
     other -> fail (field <> " expected a string, but encountered " <> valueKind other)
 
-{- | An @http(s)@ URL Écluse itself serves, rewrites against, or fetches from, such as the
-public URL and the OSV export base. Plain http stays legal for loopback development. The
-authority must be dialable by the same extraction the egress gate authorises
-('hostPortAddress'), so a value no client could fetch fails at load.
-
-The key is operator-configured, so it also carries the shared credential refusal
-('refuseCredentialMaterial'). Boot echoes every resolved key, and that echo prints this
-value as written.
+{- | An @http(s)@ URL Écluse serves, rewrites against, or fetches from. Plain http stays legal for
+loopback, the authority must be one the egress gate can extract, and a credential is refused.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
 parseHttpUrl field = \case
@@ -156,9 +140,8 @@ parsePort field value
     | value >= 0 && value <= 65535 = pure value
     | otherwise = fail (field <> " must be a port in 0..65535 (0 = OS-assigned), got " <> show value)
 
-{- | A CodeArtifact authorisation-token duration in seconds, bounded to the range
-the service accepts (900..43200). An out-of-range value would otherwise fail later,
-at the first mint, with the mirror queue already accepting work.
+{- | A CodeArtifact token duration in seconds, bounded to the 900..43200 the service accepts. An
+out-of-range value would otherwise fail at the first mint, with the queue already accepting work.
 -}
 parseCodeArtifactDuration :: String -> Value -> Parser Natural
 parseCodeArtifactDuration field v = do

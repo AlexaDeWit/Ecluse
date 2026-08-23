@@ -22,9 +22,7 @@ import Ecluse.Core.Security (
     splitHostPort,
  )
 
-{- | The configured upstreams, normalised through 'allowedHostPorts'. Only the
-composed-guard case uses it, to show that a metadata authority is off the allowlist.
--}
+-- | The configured upstreams, normalised through 'allowedHostPorts'.
 upstreams :: AllowedHostPorts
 upstreams = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hp "Private.Internal.Example.com"])
 
@@ -57,9 +55,8 @@ hostAddressSpec = describe "hostAddress" $ do
         -- before it (https://registry.npmjs.org@evil.com → evil.com).
         hostAddress "https://registry.npmjs.org@evil.com/path" `shouldBe` "evil.com"
     it "gates on the scheme authority, not a later :// in the path or query" $
-        -- A crafted dist.tarball can carry a second "://" in its query. The gate must
-        -- read the host actually dialled (the first authority), not the one after the
-        -- last "://" (https://169.254.169.254/x?u=https://ok → 169.254.169.254).
+        -- A crafted dist.tarball can carry a second "://" in its query. The gate reads the
+        -- host actually dialled, never the one after the last "://".
         hostAddress "https://169.254.169.254/x?u=https://registry.npmjs.org"
             `shouldBe` "169.254.169.254"
     it "lower-cases the host" $
@@ -85,9 +82,8 @@ hostAddressSpec = describe "hostAddress" $ do
          in (isBlockedTarget [] (hostAddress url), isAllowedUpstreamHost upstreams <$> hostPortAddress url)
                 `shouldBe` (True, Just False)
 
-{- | The authorisation-side extraction: the same authority stripping as 'hostAddress', with
-the effective port parsed rather than discarded. A lenient port fallback or a mangled colon
-split would alias an attacker-chosen authority onto an authorised one.
+{- | The authorisation-side extraction, with the effective port parsed rather than discarded. A
+lenient port fallback or a mangled colon split would alias an authority onto an authorised one.
 -}
 hostPortAddressSpec :: Spec
 hostPortAddressSpec = describe "hostPortAddress" $ do
