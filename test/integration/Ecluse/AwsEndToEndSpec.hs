@@ -8,30 +8,23 @@ import Data.Aeson (Value, encode, (.=))
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200, status201, status404)
-import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
+import Network.Wai (Application, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody))
 import Test.Hspec
 import TestContainers (Container)
-import UnliftIO (race_, timeout)
-import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (mountBindingFor, runWorker)
+import Ecluse (mountBindingFor)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue)
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
-import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SRI))
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
@@ -42,17 +35,21 @@ import Ecluse.Integration.Ministack (
     quietLogEnv,
     withMinistack,
  )
+import Ecluse.Integration.WorkerLoop (
+    mirrorPoliciesAt,
+    newQueueEnv,
+    publishedAtLeast,
+    runLoopUntil,
+    withMirrorTarget,
+ )
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
-import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The AWS-backed path end to end through the real composition root: the serve
 'Ecluse.Server.application' and the mirror worker 'Ecluse.runWorker' over a real SQS queue in a
@@ -99,10 +96,10 @@ withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
         withPublicUpstream $ \publicUrl ->
-            withMirrorTarget $ \mirrorUrl mirrorLog -> do
+            withMirrorTarget status201 $ \mirrorUrl mirrorLog -> do
                 queue <- configDrivenQueue container queueName
-                env <- buildEnv queue
-                policies <- workerPoliciesAt mirrorUrl
+                env <- newQueueEnv queue
+                policies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
                 let app = application (mkServerConfig (maybeToList binding)) env
                 body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog}
@@ -139,29 +136,6 @@ sqsEnvVars queueUrl endpointUrl =
     , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
--- The guarded data-plane manager opts loopback in, so the upstream and artifact fetches reach
--- the in-process WAI stubs.
-buildEnv :: MirrorQueue -> IO Env
-buildEnv queue = do
-    guardedManager <- newManager defaultManagerSettings
-    trusted <- newManager defaultManagerSettings
-    newTestEnvWith queue (guardedManager, trusted) telemetryDisabled
-
-{- The resolver carries the true digest of the bytes the public stub serves, so verification
-passes and the pipeline publishes. -}
-workerPoliciesAt :: Text -> IO WorkerPolicies
-workerPoliciesAt mirrorUrl = do
-    trusted <- newManager defaultManagerSettings
-    let transport =
-            MirrorTransport
-                { ptManager = trusted
-                , ptMintToken = pure (Just (mkSecret "e2e-publish-token"))
-                , -- The mount's plan-resolved response bound on the probe (production
-                  -- threads 'pdLimits'). The default here, since no override is set.
-                  ptLimits = defaultLimits
-                }
-    pure (admitAllPolicies (newMirrorPublish transport mirrorUrl npmPublishCodec) (unsafeHash SRI sha512Integrity :| []))
-
 -- The private origin 404s, so every request misses to public. The fixed clock and the week-long
 -- quarantine make the rule gate deterministic.
 mountBinding :: Text -> Text -> Text -> IO (Maybe MountBinding)
@@ -193,19 +167,6 @@ withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
     app _req respond = respond (responseLBS status404 [] "{}")
-
-{- The mirror target. It accepts an npm publish @PUT@ (201) and records each PUT's path
-into an 'IORef', so a test can observe the worker's publish. -}
-withMirrorTarget :: (Text -> IORef [ByteString] -> IO a) -> IO a
-withMirrorTarget body = do
-    logRef <- newIORef []
-    testWithApplication (pure (app logRef)) $ \port -> body (localhost port) logRef
-  where
-    app :: IORef [ByteString] -> Application
-    app logRef req respond = do
-        when (requestMethod req == "PUT") $
-            atomicModifyIORef' logRef (\xs -> (rawPathInfo req : xs, ()))
-        respond (responseLBS status201 [] "{}")
 
 -- The artifact bytes the public upstream serves and the worker verifies + publishes.
 tarballBytes :: LByteString
@@ -252,28 +213,3 @@ fixedNow = UTCTime (fromGregorian 2026 6 1) 0
 -- The shipped quarantine: admit a version only once it is older than a week.
 admitOldEnough :: [PrecededRule]
 admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
-
-{- The worker loop never returns on its own, so 'race_' runs it against a condition-poller under
-a hard timeout, and a failing test cannot hang. -}
-runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
-runLoopUntil policies env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
-
--- A generous hard ceiling, far above a healthy fetch → verify → publish cycle even
--- under @-fhpc@ instrumentation. It only ever fires on a genuine hang.
-loopHardTimeout :: Int
-loopHardTimeout = 45_000_000
-
--- Poll a condition until it holds, bounded so a failing test does not hang.
-waitFor :: IO Bool -> IO ()
-waitFor done = go (200 :: Int)
-  where
-    go :: Int -> IO ()
-    go 0 = pure ()
-    go n =
-        done >>= \case
-            True -> pure ()
-            False -> threadDelay 200_000 >> go (n - 1)
-
-publishedAtLeast :: IORef [a] -> Int -> IO Bool
-publishedAtLeast logRef n = (>= n) . length <$> readIORef logRef

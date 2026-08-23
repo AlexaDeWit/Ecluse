@@ -2,24 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Digest-pinned container image references for the integration and end-to-end
-suites.
+{- | Digest-pinned image references for the container test tiers, plus the pins themselves.
 
-Écluse is a supply-chain policy proxy. Every image its test harness pulls, runs, or
-builds @FROM@ must therefore name an immutable @\@sha256:@ digest, never a mutable tag.
-An attacker can re-point a tag at a poisoned image between one pull and the next. A
-content-addressed digest verifies the bytes on every pull. This module makes an unpinned
-reference /unrepresentable/ at a pull site, rather than scanning the harness for stray
-tags after the fact. The only way to obtain a 'PinnedImageRef' is the validating
-'mkPinnedImageRef', which rejects a bare tag. A pull site accepts only a
-'PinnedImageRef', so no unpinned reference can reach it. A harness resolves its raw
-literals through 'mkPinnedImageRef' at startup and fails loudly on a 'Left'. An unpinned
-literal therefore aborts the suite before it pulls anything.
-
-'ImageRef' then distinguishes the two kinds of image a harness names. A 'PinnedExternal'
-image comes from a registry and /must/ be pinned. The run produces a 'LocallyBuilt' image
-itself: built each run, never pulled, so never pinned. The sum type turns that
-distinction into a type-checked fact, instead of a special case at the @docker run@ site.
+An attacker can re-point a mutable tag at a poisoned image between two pulls, so every
+image the harness pulls or builds @FROM@ names an immutable @\@sha256:@ digest.
+'mkPinnedImageRef' is the only way to obtain a 'PinnedImageRef' and a pull site accepts
+nothing else, so an unpinned reference cannot reach one. 'ImageRef' separates an image the
+run pulls, which must be pinned, from one the run builds, which has no digest to pin.
 -}
 module Ecluse.Test.Container.Image (
     -- * A pinned reference
@@ -30,6 +19,12 @@ module Ecluse.Test.Container.Image (
     -- * Either pinned-external or locally-built
     ImageRef (PinnedExternal, LocallyBuilt),
     renderImageRef,
+
+    -- * The pins the container tiers pull
+    collectorImage,
+    ministackImage,
+    nginxImage,
+    verdaccioImage,
 ) where
 
 import Data.Char (isDigit)
@@ -86,3 +81,21 @@ renderImageRef :: ImageRef -> Text
 renderImageRef = \case
     PinnedExternal ref -> renderPinnedImageRef ref
     LocallyBuilt name -> name
+
+{- | The OTLP Collector, version 0.119.0, by its multi-arch index digest. The specs assert on
+this image's exact @debug@ exporter output and readiness line, so the reference cannot move.
+-}
+collectorImage :: Either Text PinnedImageRef
+collectorImage = mkPinnedImageRef "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
+
+-- | @ministack@, tag @1.3-full@: the SQS and S3 emulator both container tiers run against.
+ministackImage :: Either Text PinnedImageRef
+ministackImage = mkPinnedImageRef "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+
+-- | The nginx the e2e run terminates TLS with, in front of both registry stubs.
+nginxImage :: Either Text PinnedImageRef
+nginxImage = mkPinnedImageRef "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
+
+-- | The Verdaccio the e2e run uses as its private upstream and mirror target.
+verdaccioImage :: Either Text PinnedImageRef
+verdaccioImage = mkPinnedImageRef "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c"

@@ -1,8 +1,11 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 
+{- | Pilot's advisory-database upload against a real S3, the @ministack@ container's.
+It proves the object lands under its own file name through the ambient
+@AWS_ENDPOINT_URL@ override a released image carries. Needs a Docker daemon.
+-}
 module Ecluse.Pilot.S3ExportSpec (
     spec,
 ) where
@@ -12,9 +15,6 @@ import Data.Text qualified as T
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import TestContainers (containerAddress)
-import UnliftIO (throwIO)
-import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (catchAny)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
@@ -23,6 +23,7 @@ import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
+import Ecluse.Test.Poll (retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
 spec :: Spec
@@ -45,14 +46,9 @@ spec = do
                                 env
                         regioned = base{AWS.region = AWS.Region' "us-east-1"}
 
-                    let createBucketLoop retries = do
-                            catchAny (void $ runResourceT $ AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket))) $ \e -> do
-                                if retries > 0
-                                    then do
-                                        liftIO $ threadDelay 500000 -- 500ms
-                                        createBucketLoop (retries - 1)
-                                    else throwIO e
-                    createBucketLoop (20 :: Int)
+                    -- The readiness wait only proves the port accepts connections, so the S3
+                    -- gateway may still be warming when the first CreateBucket lands.
+                    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket)))))
 
                     let dummyDb = tmpDir <> "/dummy.sqlite"
                     liftIO $ writeFile dummyDb "dummy sqlite data"

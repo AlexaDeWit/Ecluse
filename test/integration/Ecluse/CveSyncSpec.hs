@@ -33,7 +33,6 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (tryAny)
 import UnliftIO.Async (withAsync)
-import UnliftIO.Concurrent (threadDelay)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
@@ -59,6 +58,7 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
+import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -153,11 +153,11 @@ s3EnvVars endpointUrl bucket =
 -- (the readiness wait only proves the port accepts connections).
 createBucketWithRetry :: AWS.Env -> Text -> Int -> IO ()
 createBucketWithRetry awsEnv bucket attempts =
-    tryAny (runResourceT (AWS.send awsEnv (S3.newCreateBucket (S3.BucketName bucket)))) >>= \case
+    pollUntil attempts 500_000 isRight attempt >>= \case
         Right _ -> pass
-        Left err
-            | attempts <= 1 -> fail ("CveSyncSpec: bucket never became creatable: " <> show err)
-            | otherwise -> threadDelay 500_000 >> createBucketWithRetry awsEnv bucket (attempts - 1)
+        Left err -> fail ("CveSyncSpec: bucket never became creatable: " <> show err)
+  where
+    attempt = tryAny (runResourceT (AWS.send awsEnv (S3.newCreateBucket (S3.BucketName bucket))))
 
 -- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject. The
 -- compile output lands in its own temp dir, apart from the proxy's sync data dir.
@@ -204,9 +204,8 @@ withPublicUpstream k = testWithApplication (pure app) (k . localhost)
     app :: Application
     app _req respond = respond (responseLBS status200 [] (encode packument))
 
-{- The private upstream resolves with no versions, so the public leg and the rules decide every
-version. A 404 would classify as needed-but-unavailable and turn a total public denial into a
-retryable 503, hiding the 403 no-survivors control this test pins. -}
+{- The private upstream resolves with no versions, so the public leg and the rules decide.
+A 404 would turn a total public denial into a retryable 503, hiding the 403 this test pins. -}
 withPrivateUpstream :: (Text -> IO a) -> IO a
 withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
   where
@@ -256,14 +255,13 @@ fixedNow = UTCTime (fromGregorian 2026 6 20) 0
 -- Poll the same request until the proxy serves the packument (the swap landed),
 -- bounded so a broken sync fails the test rather than hanging it.
 awaitAdmitted :: Application -> ByteString -> IO SResponse
-awaitAdmitted app path = go (150 :: Int)
+awaitAdmitted app path = do
+    resp <- pollUntil 150 100_000 admitted (getPath path app)
+    if admitted resp
+        then pure resp
+        else fail "the artifact never swapped in: the request was still denied after the patience window"
   where
-    go 0 = fail "the artifact never swapped in: the request was still denied after the patience window"
-    go n = do
-        resp <- getPath path app
-        if status resp == 200
-            then pure resp
-            else threadDelay 100_000 >> go (n - 1)
+    admitted resp = status resp == 200
 
 runQuiet :: KatipContextT IO a -> IO a
 runQuiet action = do

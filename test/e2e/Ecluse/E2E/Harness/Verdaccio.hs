@@ -17,20 +17,16 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Types (statusCode)
 import UnliftIO (handleAny)
-import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Poll (pollUntil)
 
 {- | Poll Verdaccio (the mirror) until it serves the given version of a package, or the
 timeout lapses. A 'False' means the version never appeared within the patience window.
 -}
 verdaccioHasVersion :: E2E -> Text -> Text -> IO Bool
-verdaccioHasVersion e2e pkg version = go (40 :: Int)
-  where
-    go 0 = pure False
-    go n = do
-        present <- verdaccioHasVersionNow e2e pkg version
-        if present then pure True else threadDelay 500000 >> go (n - 1)
+verdaccioHasVersion e2e pkg version =
+    pollUntil 40 500000 id (verdaccioHasVersionNow e2e pkg version)
 
 {- | Check once whether the mirror already serves a version, with no retry. Use it for an
 absent-now precondition, to skip the patience window 'verdaccioHasVersion' spends.

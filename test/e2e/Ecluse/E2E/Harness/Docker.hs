@@ -19,6 +19,10 @@ module Ecluse.E2E.Harness.Docker (
     -- * Observability
     withUpstreamPaused,
 
+    -- * Container logs
+    awaitContainerLog,
+    containerLogs,
+
     -- * Utilities
     uniqueSuffix,
 ) where
@@ -54,12 +58,20 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import UnliftIO (bracket, bracket_, handleAny)
-import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
 import Ecluse.E2E.Harness.Types
-import Ecluse.Test.Container.Image (ImageRef (LocallyBuilt, PinnedExternal), mkPinnedImageRef, renderImageRef)
+import Ecluse.Test.Container.Image (
+    ImageRef (LocallyBuilt, PinnedExternal),
+    PinnedImageRef,
+    collectorImage,
+    ministackImage,
+    nginxImage,
+    renderImageRef,
+    verdaccioImage,
+ )
 import Ecluse.Test.Containers (dockerLabelArgs)
+import Ecluse.Test.Poll (pollUntil)
 
 {- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
 or @ECLUSE_E2E_IMAGE@ unset. @make test-e2e@ and the CI e2e job build and name the image.
@@ -115,12 +127,11 @@ withGlobalDataPlane action = do
             -- sweep a run that is hard-killed past these brackets (see "Ecluse.Test.Containers").
             labelArgs <- dockerLabelArgs "e2e"
             withFixtureDir $ \workDir -> do
-                -- Resolve each pulled image's pinned reference up front, aborting the suite if a
-                -- literal is not digest-pinned. An attacker can re-point a mutable tag at a
-                -- poisoned image, but not an immutable @sha256@ digest.
-                verdImage <- pinnedExternal "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c"
-                stubImage <- pinnedExternal "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
-                miniImage <- pinnedExternal "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+                -- Resolve each pin up front, so an unvalidated one aborts the suite before any
+                -- pull. A tag can be re-pointed at a poisoned image, a digest cannot.
+                verdImage <- pinnedExternal verdaccioImage
+                stubImage <- pinnedExternal nginxImage
+                miniImage <- pinnedExternal ministackImage
                 let net = "ecluse-e2e-global-net-" <> sfx
                     verd = "ecluse-e2e-global-verd-" <> sfx
                     stub = "ecluse-e2e-global-stub-" <> sfx
@@ -284,11 +295,11 @@ data DockerRun = DockerRun
     -- ^ Arguments after the image, overriding the default CMD. Usually empty.
     }
 
-{- | Resolve a raw external-image reference to a pinned 'ImageRef', failing the suite at
-harness startup rather than at the pull if the literal is not digest-pinned.
+{- | Unwrap a validated pin into an 'ImageRef', failing the suite at harness startup rather
+than at the pull if the literal is not digest-pinned.
 -}
-pinnedExternal :: Text -> IO ImageRef
-pinnedExternal raw = PinnedExternal <$> either (fail . toString) pure (mkPinnedImageRef raw)
+pinnedExternal :: Either Text PinnedImageRef -> IO ImageRef
+pinnedExternal = fmap PinnedExternal . either (fail . toString) pure
 
 {- | The base 'DockerRun' for a named container on a network. The image is an 'ImageRef', so
 a pulled image is digest-pinned by construction and only 'LocallyBuilt' may be unpinned.
@@ -413,12 +424,6 @@ datadogCollectorEnv =
     ]
         <> telemetryExportTuning
 
--- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by its
--- multi-arch manifest-list digest. The scenarios assert on this image's exact `debug`
--- exporter output and readiness line, so its surface must be immutable, not a movable tag.
-collectorImage :: Text
-collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
-
 {- The collector configuration as a single-line flow-style YAML document. It arrives through
 the @env:@ provider, so the distroless image needs no shell, file, or bind mount. -}
 collectorConfig :: Text
@@ -487,7 +492,9 @@ publishedPort cname containerPort = do
 emulator's own host, which nothing dials because the proxy routes by @AWS_ENDPOINT_URL_SQS@.
 -}
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
-createMinistackQueue manager hostPort queueName = go (60 :: Int)
+createMinistackQueue manager hostPort queueName =
+    pollUntil 60 500000 isJust attempt
+        >>= maybe (fail "ministack SQS CreateQueue never succeeded within the timeout") pure
   where
     endpoint =
         "http://127.0.0.1:"
@@ -495,18 +502,15 @@ createMinistackQueue manager hostPort queueName = go (60 :: Int)
             <> "/?Action=CreateQueue&QueueName="
             <> queueName
             <> "&Version=2012-11-05"
-    go :: Int -> IO Text
-    go 0 = fail "ministack SQS CreateQueue never succeeded within the timeout"
-    go n =
-        handleAny (\_ -> retry n) $ do
+    attempt :: IO (Maybe Text)
+    attempt =
+        handleAny (\_ -> pure Nothing) $ do
             base <- parseRequest (toString endpoint)
             resp <- httpLbs base{method = "POST"} manager
             let body = decodeUtf8 (LBS.toStrict (responseBody resp)) :: Text
-            case (statusCode (responseStatus resp), between "<QueueUrl>" "</QueueUrl>" body) of
-                (200, Just url) | not (T.null url) -> pure url
-                _ -> retry n
-    retry :: Int -> IO Text
-    retry n = threadDelay 500000 >> go (n - 1)
+            pure $ case (statusCode (responseStatus resp), between "<QueueUrl>" "</QueueUrl>" body) of
+                (200, Just url) | not (T.null url) -> Just url
+                _ -> Nothing
 
 -- | The text between the first @opening@ and the following @closing@ marker, or 'Nothing'.
 between :: Text -> Text -> Text -> Maybe Text
@@ -520,15 +524,13 @@ between opening closing t =
 
 -- | Poll a URL until it returns the wanted status, up to ~30s.
 waitFor :: Manager -> Text -> Int -> IO Bool
-waitFor manager url want = go (100 :: Int)
+waitFor manager url want = pollUntil 100 300000 id probe
   where
-    go 0 = pure False
-    go n = do
-        got <-
-            handleAny (\_ -> pure Nothing) $ do
-                req <- parseRequest (toString url)
-                Just . statusCode . responseStatus <$> (httpLbs req manager :: IO (Response LByteString))
-        if got == Just want then pure True else threadDelay 300000 >> go (n - 1)
+    probe :: IO Bool
+    probe =
+        handleAny (\_ -> pure False) $ do
+            req <- parseRequest (toString url)
+            (== want) . statusCode . responseStatus <$> (httpLbs req manager :: IO (Response LByteString))
 
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess
@@ -622,18 +624,16 @@ withUpstreamPaused e2e =
         (dockerOk ["pause", e2eStubContainer e2e])
         (dockerOk ["unpause", e2eStubContainer e2e])
 
--- Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
+{- | Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
+'False' means it never held inside the budget.
+-}
 awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
-awaitContainerLog cname matches = go
-  where
-    go n
-        | n <= 0 = pure False
-        | otherwise = do
-            logs <- containerLogs cname
-            if matches logs then pure True else threadDelay 250000 >> go (n - 1)
+awaitContainerLog cname matches attempts =
+    pollUntil attempts 250000 id (matches <$> containerLogs cname)
 
--- A container's combined stdout+stderr so far ('docker logs'). Empty on any docker
--- error, such as the container not existing yet, mid image-pull.
+{- | A container's combined stdout+stderr so far (@docker logs@). Empty on any docker
+error, such as the container not existing yet, mid image-pull.
+-}
 containerLogs :: String -> IO Text
 containerLogs cname =
     handleAny (\_ -> pure "") $ do

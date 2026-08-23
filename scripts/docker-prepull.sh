@@ -16,8 +16,7 @@
 # The caller passes the image references in (the CI e2e and build-test jobs).
 # They MUST stay in sync with the pins in the test harness, which is the source
 # of truth:
-#   - test/e2e/Ecluse/E2E/Harness/Docker.hs
-#   - test/integration/Ecluse/Integration/Ministack.hs (and the telemetry specs)
+#   - test/support/Ecluse/Test/Container/Image.hs
 # Copy a digest pin verbatim. This helper never rewrites a digest to a floating
 # tag, so it adds no new trust surface.
 #
