@@ -8,7 +8,6 @@ import Control.Exception (try)
 import Data.Aeson (Value (Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -21,10 +20,8 @@ import Ecluse.Core.Package (
     HashAlg (SHA1, SRI),
     PackageInfo (infoDistTags, infoName, infoVersions),
     PackageName,
-    Scope,
     mkHash,
     mkPackageName,
-    mkScope,
     renderPackageName,
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
@@ -33,7 +30,7 @@ import Ecluse.Core.Registry.Npm (
     fetchMetadataFormBounded,
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated, Full),
     noValidators,
@@ -125,7 +122,9 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
     for_ ["react", "@types/node", "lodash"] $ \pkg ->
         it ("a real large trusted packument is admissible under the default Limits (" <> toString pkg <> ")") $ do
             manager <- newManager tlsManagerSettings
-            outcome <- try (admissibleUnderDefaults manager (mkPackageName Npm (scopeOf pkg) (bareOf pkg)))
+            -- The live splitter, not a harness copy: a pin the front door would refuse fails here.
+            parsed <- either (fail . show) pure (projectName pkg)
+            outcome <- try (admissibleUnderDefaults manager parsed)
             case outcome of
                 Left (_ :: SomeException) ->
                     pendingWith "npm registry unreachable (offline); smoke test skipped"
@@ -136,15 +135,6 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
   where
     registryBase = "https://registry.npmjs.org"
     abbreviatedAccept = "application/vnd.npm.install-v1+json"
-
-    -- The bare (unscoped) name of a possibly-scoped identifier, for 'mkPackageName'.
-    bareOf :: Text -> Text
-    bareOf p = maybe p (T.drop 1 . snd . T.breakOn "/") (T.stripPrefix "@" p >> Just p)
-
-    scopeOf :: Text -> Maybe Scope
-    scopeOf p = case T.stripPrefix "@" p of
-        Just rest | (sc, rest') <- T.breakOn "/" rest, not (T.null rest') -> Just (mkScope sc)
-        _ -> Nothing
 
 {- | Run the bounded fetch, decode, nesting, projection, and version-count sequence the serve path
 applies, over a live full packument under the default 'Limits'. It throws when any bound refuses

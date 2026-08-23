@@ -10,6 +10,10 @@ structurally aligned while leaving each suite's axis-specific values at the call
 'publishedDaysAgo' gives age-sensitive fixtures the same clock-relative timestamp
 calculation without owning their clock.
 
+'npmNameVerdicts' is the npm name grammar as a table. Every suite that owns an entry point
+which splits a name asserts that one list, so a verdict cannot drift between the read path,
+the route, the URL rewrite, the publish allow-list, and the queue decode.
+
 'defaultNpmConfig' is the anonymous public-registry config a suite hands to the npm data
 plane ("Ecluse.Core.Registry.Npm"). 'publicRegistryBaseUrl' and 'publicRegistryUrl' give
 the canonical public npm registry as text and as an https 'RegistryUrl'. That
@@ -23,6 +27,10 @@ module Ecluse.Test.Registry.Npm (
     versionValue,
     packumentValue,
     publishedDaysAgo,
+
+    -- * The npm name grammar, as a shared table
+    npmNameVerdicts,
+    nameVerdictLabel,
 
     -- * Client fixtures
     defaultNpmConfig,
@@ -42,6 +50,27 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Package (unsafeRegistryUrl)
+
+{- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
+@\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
+-}
+npmNameVerdicts :: [(Text, Bool)]
+npmNameVerdicts =
+    [ ("@scope/pkg", True)
+    , ("pkg", True)
+    , ("@foo", False)
+    , ("@foo/", False)
+    , ("@/pkg", False)
+    , ("@scope/a/b", False)
+    , ("@../pkg", False)
+    , ("", False)
+    , ("@scope/p@g", False)
+    , ("a b", False)
+    ]
+
+-- | The example name for one 'npmNameVerdicts' row, so a failure names the input and its verdict.
+nameVerdictLabel :: Text -> Bool -> String
+nameVerdictLabel raw valid = show raw <> (if valid then " names a package" else " is refused")
 
 {- | The common fields of an npm version object. An extra pair in 'vsExtraPairs' overrides the
 common field with the same key.

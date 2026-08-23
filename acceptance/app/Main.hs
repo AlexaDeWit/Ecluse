@@ -33,7 +33,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime, nominalDay)
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (Manager, newManager)
@@ -41,12 +40,13 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Acceptance (OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, artHashes, mkPackageName, mkScope, pkgArtifacts)
+import Ecluse.Core.Package (PackageName, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -73,30 +73,31 @@ main = do
 the single-version selective decode. A @Left (name, reason)@ marks it unavailable, never a breach.
 -}
 measurePackage :: Manager -> UTCTime -> Text -> IO (Either (Text, Text) Sample)
-measurePackage manager now name = do
-    let pkg = parseNpmName name
-    t0 <- getMonotonicTime
-    mBody <- fetchPackumentBody manager Npm name
-    t1 <- getMonotonicTime
-    case mBody of
-        Nothing -> pure (Left (name, "registry unreachable or non-2xx"))
-        Just body -> case targetVersion body of
-            Nothing -> pure (Left (name, "packument exposed no versions"))
-            Just version -> do
-                let raw = BSL.toStrict body
-                fulls <- replicateM sampleCount (measureFull now pkg body)
-                single <- measureSingleVersion pkg version raw
-                pure $ case (sequence fulls, single) of
-                    (Just fullSecs, Just singleSec) ->
-                        Right
-                            Sample
-                                { sampleName = name
-                                , sampleVersions = maybe 0 length (parseRegistryVersions Npm body)
-                                , sampleUpstreamMs = (t1 - t0) * 1000
-                                , sampleFullOverheadMs = median fullSecs * 1000
-                                , sampleSingleVersionOverheadMs = singleSec * 1000
-                                }
-                    _ -> Left (name, "packument did not decode or project")
+measurePackage manager now name = case projectName name of
+    Left e -> pure (Left (name, "catalogue pin is not a usable npm name: " <> parseErrorMessage e))
+    Right pkg -> do
+        t0 <- getMonotonicTime
+        mBody <- fetchPackumentBody manager Npm name
+        t1 <- getMonotonicTime
+        case mBody of
+            Nothing -> pure (Left (name, "registry unreachable or non-2xx"))
+            Just body -> case targetVersion body of
+                Nothing -> pure (Left (name, "packument exposed no versions"))
+                Just version -> do
+                    let raw = BSL.toStrict body
+                    fulls <- replicateM sampleCount (measureFull now pkg body)
+                    single <- measureSingleVersion pkg version raw
+                    pure $ case (sequence fulls, single) of
+                        (Just fullSecs, Just singleSec) ->
+                            Right
+                                Sample
+                                    { sampleName = name
+                                    , sampleVersions = maybe 0 length (parseRegistryVersions Npm body)
+                                    , sampleUpstreamMs = (t1 - t0) * 1000
+                                    , sampleFullOverheadMs = median fullSecs * 1000
+                                    , sampleSingleVersionOverheadMs = singleSec * 1000
+                                    }
+                        _ -> Left (name, "packument did not decode or project")
 
 {- | The version a single-version read targets: the last key in the packument's version
 list, the realistic install target. 'Nothing' when the packument exposes no versions.
@@ -177,16 +178,6 @@ serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 -- A placeholder proxy origin the transform rewrites the tarball URLs onto.
 proxyBase :: Text
 proxyBase = "https://ecluse.example"
-
--- Parse an npm package name into a 'PackageName', recovering an @\@scope/name@ split.
-parseNpmName :: Text -> PackageName
-parseNpmName raw = case T.stripPrefix "@" raw of
-    Just rest
-        | (scope, slashName) <- T.breakOn "/" rest
-        , Just bare <- T.stripPrefix "/" slashName
-        , not (T.null bare) ->
-            mkPackageName Npm (Just (mkScope scope)) bare
-    _ -> mkPackageName Npm Nothing raw
 
 -- The median of a list, total (0 on empty). 'sampleCount' is odd, so this is the
 -- middle element of the sorted samples.

@@ -65,11 +65,15 @@ decision vs served surface](../docs/architecture/registry-model.md#decision-surf
 
 ```mermaid
 flowchart TD
-    P["Pick a DAG node<br/>(dependencies merged)"] --> B["BUILD<br/>implementer · own worktree · TDD<br/>fast local check, not the full gate"]
-    B --> E["EVALUATE (mandatory)<br/>fresh-context reviewer · Stage A + Stage B<br/>team lead reads the diff"]
-    E -->|critical findings| B
-    E -->|passed| G["GATE<br/>open the draft PR ·<br/>watch the CI gate to green"]
-    G --> H(["HAND OFF<br/>flip ready for review<br/>(only after evaluation passes AND the gate is green)"])
+    P["Pick a DAG node<br/>(dependencies merged)"] --> B["BUILD<br/>implementer · own worktree · TDD<br/>the draft PR opens at the first push"]
+    B --> E["EVALUATE (mandatory)<br/>fresh-context reviewer · Stage A + Stage B<br/>pinned to the head SHA · team lead reads the diff"]
+    B --> G["GATE<br/>watch the CI gate to green<br/>runs beside the evaluation"]
+    E -->|findings| F["FIX<br/>one follow-up commit<br/>re-verify both on the new head"]
+    G -->|red| F
+    F --> E
+    F --> G
+    E -->|passed| H(["HAND OFF<br/>flip ready for review<br/>(only when both hold on the same head)"])
+    G -->|green| H
 ```
 
 > **Two gates, not one**. A PR flips ready for review only when both hold. The independent
@@ -77,6 +81,12 @@ flowchart TD
 > findings, and the CI `gate` is green. A green gate is necessary but not sufficient. It verifies
 > build and test. It does not judge requirements, quality, or security, which the evaluation covers.
 > Neither substitutes for the other. A green gate never flips a PR ready on its own.
+
+**Evaluate beside the gate, not after it**. The implementer opens the draft PR at its first push
+and reports the head SHA at once. The team lead dispatches the reviewer at that moment, pinned to
+that head, while CI runs. Findings from the review and reds from CI land as one follow-up commit,
+and both re-verify on the new head. A review that starts only after a green gate costs a second
+full CI cycle on every PR with a finding.
 
 **Draft until ready**. A PR opens as a draft. It stays one until both gates hold and the team lead
 is confident handing it over. Marking it ready for review is the hand-off signal: ready for the
@@ -131,7 +141,14 @@ deciding to. The implementer then guesses past the gap, the failure _escalate, d
 to prevent. Or it surfaces the gap late and costs a round-trip. So after the architect does the
 alignment work, over-specify. The design-checkpoint is a backstop for a genuine fork, not licence
 for a thin brief. In it the implementer proposes its design and the team lead confirms before deep
-work.
+work. Every brief also carries the comment budget as a numbered acceptance criterion: a function
+comment is one or two lines, a new module header is at most eight, and the implementer reports
+each comment block the diff adds with its line count ([`../docs/haddock.md`](../docs/haddock.md)
+§3 and §5). The brief also restates the owner's boy-scout rule, which every agent loads from
+`CLAUDE.md`: a file the slice edits leaves with its existing comments at the cap, trimmed in the
+same change, scoped to that file and behaviour-preserving, and the PR body names what was trimmed.
+Without that sentence an implementer reads "stay in scope" as "touch nothing beside your hunk" and
+leaves the comment wall standing.
 
 **Pin the model**. There is no effort dial. Left unset, the Agent tool's `model` argument takes the
 general-purpose agent's default. That default may be lighter than the team lead's own model. The
@@ -167,7 +184,8 @@ does. A green CI gate does not stand in for this pass.
   stands in for a criterion (see [Testing strategy: what gates, and what
   doesn't](../docs/testing.md#what-gates-and-what-doesnt)). The slice drops nothing from its
   architecture scope. Changes stay within the slice's file scope, and touching another file needs
-  strong justification. The _same_ PR updates the documentation (per
+  strong justification. A comment trim inside a file the slice already edits is within scope. The
+  _same_ PR updates the documentation (per
   [`../AGENTS.md`](../AGENTS.md)).
 - **Stage B, quality and security**. Idiomatic Haskell per [`../docs/style.md`](../docs/style.md):
   total, `-Werror`-clean, and free of unsafe or partial functions. A security review appropriate to
@@ -176,7 +194,11 @@ does. A green CI gate does not stand in for this pass.
   example. The assertions are not tautological, and the tests cover the foreseeable branches by
   intent. `codecov/patch` ≥ 85% is a CI backstop, not a number to chase. Comment appropriateness:
   Haddock documents the timeless contract and the _why_, never project, roadmap, or slice narration,
-  per [`../docs/haddock.md`](../docs/haddock.md) §11.
+  per [`../docs/haddock.md`](../docs/haddock.md) §11. Comment length is counted, not eyeballed:
+  the reviewer lists every comment block the diff adds, and a function comment over two lines or a
+  new header over eight (§3, §5) is a finding that blocks. The reviewer also lists every
+  pre-existing block over the cap in each file the PR edits, and an untrimmed one is a finding
+  unless the PR body says why it stayed.
 
 A critical finding blocks. Route the fix per **Fix routing** above, then re-verify it.
 
@@ -186,8 +208,8 @@ Per-PR review judges each slice in isolation. It cannot see the whole that paral
 into. Slices built concurrently against the handles drift: divergent idioms, duplicated helpers,
 inconsistent Haddock, type-conversion churn at the boundaries. None of that fails a single-slice
 review. So a dedicated agent audits the integrated tree between waves, with fresh context and
-read-and-verify only. It runs after every PR in a wave merges, before the team lead dispatches the
-next wave. It looks for:
+read-and-verify only. It runs on a cadence, after every few merges, while file-disjoint dispatches
+continue. It looks for:
 
 - **Structural improvements:** cross-slice duplication, misplaced or mis-sized modules, abstractions
   to share or split, leaky handles, and error/idiom patterns that diverged.
@@ -217,9 +239,8 @@ anything. It is a cross-reference only. As each PR lands, the team lead closes i
 with a `Resolved by #PR` note, and only after checking that the PR met that issue's acceptance
 criteria. Never close an issue a PR merely cross-references. As a backstop, scan the open issues
 against the wave's merged PRs and close any whose fix shipped. An issue left open for a real reason
-(partly addressed, or a follow-on tracked separately) keeps a note on what remains. The
-pass gates the next wave: make the integrated base coherent first, and record that in the milestone
-sequence.
+(partly addressed, or a follow-on tracked separately) keeps a note on what remains. The pass
+never holds a file-disjoint dispatch back. Record each pass in the milestone sequence.
 
 ## Verification: fast local, CI gates build and test
 
@@ -261,9 +282,12 @@ formatting, and the PR's CI run is the whole verification loop:
 - Verification is watching the PR: `gh pr checks <pr> --watch`. On a red, run
   `gh run view <run-id> --log-failed`, fix, format, commit, push, and re-watch. An agent supersedes
   only its own branch's runs.
-- The invariant that makes the width safe: disjoint file sets per batch, one owner per file across
-  every open PR. An issue whose files collide with an in-flight branch waits for that merge and
-  starts from the new base.
+- The implementer reports twice and never in between: once when the draft PR opens, with the head
+  SHA, so the reviewer starts at once, and once at the terminal state (green, stuck, or a fork).
+- The invariant that makes the width safe: disjoint hunks across every open PR. Two PRs may touch
+  one file when their hunks do not overlap, and the later PR owns the rebase when the earlier one
+  merges. An issue whose hunks collide with an in-flight branch waits for that merge and starts
+  from the new base.
 - The lead reviews each green draft, then flips it ready.
 
 This is the default for batch work. The fast floor above serves single-slice work on an idle host.
@@ -314,7 +338,10 @@ A PR reaches the architect only when **all** hold:
 - [ ] Foreseeable branches tested by intent. `codecov/project` is a context the ruleset requires,
       so it must be green. `codecov/patch` (≥ 85% on changed lines) prompts a unit or integration
       test. It is not a gate.
-- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11).
+- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11),
+      and within the length caps: a function comment one or two lines, a new header at most eight
+      (§3, §5). Every file the PR edits leaves with its existing comments at the cap, or the PR
+      body says why not.
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
 - [ ] CI `gate` (and every job it needs) green on the PR.

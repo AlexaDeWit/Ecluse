@@ -58,7 +58,7 @@ The fused single pass is deliberate. Restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times
 per request. This transform sits on the serve path's hot loop (see
 @docs\/architecture\/performance.md@). The rewrite gates the interpolated name.
-'safeName' validates the base document's own @name@ component-wise before anything
+'safeName' reads the base document's own @name@ through the npm name grammar before anything
 interpolates it, and a document with no usable name has no URLs rewritten.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
@@ -71,6 +71,9 @@ module Ecluse.Core.Registry.Npm.Filter (
     -- * The served-document boundary (npm's 'CachedDoc' capabilities)
     assembleMergedDocument,
     serialiseMergedDocument,
+
+    -- * The interpolated-name gate (exported for its spec)
+    safeName,
 ) where
 
 import Data.Aeson (Value (Object, String), encode)
@@ -78,27 +81,19 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Server.Path (isSafeComponent)
+import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a rewritten
-@dist.tarball@ path. Splitting an @\@scope\/name@ first lets that name's own slash pass, so
-a slash anywhere else (a traversal, a path injection) is still refused.
+@dist.tarball@ path. The projection refuses such a name first, so this gate is defence in depth.
 -}
 safeName :: Text -> Bool
-safeName name = all isSafeComponent components
-  where
-    components = case T.stripPrefix "@" name of
-        Just scopeAndBase ->
-            let (scope, base) = T.breakOn "/" scopeAndBase
-             in if T.null base then [name] else [scope, T.drop 1 base]
-        Nothing -> [name]
+safeName = isRight . projectName
 
 {- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the client
 fetches the artifact back through this mount. The @{file}@ is the tarball URL's last path
