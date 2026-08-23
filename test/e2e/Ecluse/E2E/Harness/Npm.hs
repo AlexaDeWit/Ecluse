@@ -52,9 +52,8 @@ the pinned isolated environment. For a publish-capable project, see 'withPublish
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
 withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 
-{- The shared body behind 'withNpmProject' and 'withPublishProject'. It pins an isolated
-environment (own cache, userconfig, prefix, and @HOME@), so no developer global state leaks in and
-the only registry is the proxy. -}
+{- The shared body behind 'withNpmProject' and 'withPublishProject'. The pinned cache,
+userconfig, prefix, and @HOME@ keep developer global state out and the proxy the only registry. -}
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withProjectContents e2e packageJson npmrcContents use = do
     sfx <- uniqueSuffix
@@ -79,12 +78,13 @@ withProjectContents e2e packageJson npmrcContents use = do
                     , ("npm_config_fund", "false")
                     , ("npm_config_update_notifier", "false")
                     , ("npm_config_progress", "false")
-                    , -- Écluse is a supply-chain policy proxy, so no npm child it spawns may
-                      -- execute an upstream package's lifecycle scripts, an arbitrary-code-
-                      -- execution surface. This project lives outside the repo tree, so the
-                      -- committed root @.npmrc@'s @ignore-scripts@ is unreachable and the harness
-                      -- sets the guard here instead, on every npm call.
+                    , -- No npm child may run an upstream package's lifecycle scripts. This project
+                      -- sits outside the repo tree, so the root @.npmrc@'s guard cannot reach it.
                       ("npm_config_ignore_scripts", "true")
+                    , -- npm's 10 s then 60 s retry backoff is sized for the public internet, and
+                      -- every registry here is a container on a local network. Keep the retries.
+                      ("npm_config_fetch_retry_mintimeout", "200")
+                    , ("npm_config_fetch_retry_maxtimeout", "1000")
                     , ("HOME", projectDir)
                     ]
                 cleanEnv =
@@ -97,10 +97,8 @@ withProjectContents e2e packageJson npmrcContents use = do
         (\_ -> handleAny (const pass) (removePathForcibly projectDir))
         use
 
-{- | Bracket an isolated, __publishable__ npm project: a @package.json@ with the scoped name and
-version, plus an @.npmrc@ authorising the proxy registry with a bearer token. Without a token npm
-refuses the publish with @ENEEDAUTH@ before it reaches the proxy, and the token's identity is
-immaterial here.
+{- | Bracket an isolated, __publishable__ npm project. Without the @.npmrc@ bearer token npm
+refuses the publish with @ENEEDAUTH@ before it reaches the proxy, so the identity is immaterial.
 -}
 withPublishProject :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withPublishProject e2e name version =
@@ -125,9 +123,8 @@ runNpm proj args = do
 npmInstallIn :: NpmProject -> Text -> IO NpmResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
 
-{- | @npm ci@ in a project: a deterministic install from the lockfile's @resolved@ URLs with an
-@integrity@ check. It never re-resolves through the packument, so it never contacts the public
-upstream.
+{- | @npm ci@ in a project. It installs from the lockfile's @resolved@ URLs and never re-resolves
+through the packument, so it never contacts the public upstream.
 -}
 npmCiIn :: NpmProject -> IO NpmResult
 npmCiIn proj = runNpm proj ["ci"]
@@ -168,11 +165,9 @@ lifecycleProbePackageJson =
 consumerPackageJson :: Text
 consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
 
-{- | The extra proxy environment that turns the first-party publish path __on__, layered over the
-base 'proxyEnv' through @ecExtraEnv@. The target is Verdaccio, the registry the base topology
-also reads as the private upstream, so a published package is readable back over the private
-leg. The publish is passthrough: the relay forwards the client's own bearer, so no static
-target token is set.
+{- | The extra proxy environment that turns the first-party publish path __on__. The target is
+Verdaccio, which the base topology also reads as the private upstream, so a published package is
+readable back over the private leg. The relay forwards the client's own bearer, so no static token.
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
@@ -185,16 +180,14 @@ publishTargetEnv =
 publishScope :: Text
 publishScope = "@acme"
 
-{- | A first-party package __within__ the configured 'publishTargetEnv' scope. The
-anti-shadowing guard admits an @npm publish@ of it, and the relay forwards it to the
-publication target.
+{- | A first-party package __within__ the configured 'publishTargetEnv' scope, which the
+anti-shadowing guard admits and the relay forwards to the publication target.
 -}
 publishInScopeName :: Text
 publishInScopeName = publishScope <> "/e2e-publish"
 
-{- | A package in a scope __outside__ the allow-list: the anti-shadowing guard must
-refuse an @npm publish@ of it __before__ any upstream write. That is the security
-property the refuse-before-write scenario proves.
+{- | A package in a scope __outside__ the allow-list. The guard must refuse an @npm publish@ of it
+__before__ any upstream write, the property the refuse-before-write scenario proves.
 -}
 publishOutOfScopeName :: Text
 publishOutOfScopeName = "@rogue/e2e-shadow"
@@ -203,9 +196,8 @@ publishOutOfScopeName = "@rogue/e2e-shadow"
 publishVersion :: Text
 publishVersion = "1.0.0"
 
--- The bearer token a publishable project's @.npmrc@ carries. It satisfies npm's client-side publish
--- gate (no token means @ENEEDAUTH@), and the target accepts regardless, so the identity is
--- immaterial at this tier.
+-- The bearer token a publishable project's @.npmrc@ carries. It satisfies npm's client-side
+-- publish gate, and the target accepts regardless, so the identity is immaterial at this tier.
 publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 
