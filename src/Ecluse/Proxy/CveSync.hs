@@ -50,8 +50,8 @@ cveRuleDepsFor plan reporter faultReporter eco =
         , rdFaultReporter = faultReporter
         }
 
-{- | A 'FaultReporter' that logs an exhausted rule's fault detail, so a query fault stays
-diagnosable rather than collapsing to a bare @Unavailable@. The detail never reaches a client.
+{- | A 'FaultReporter' logging an exhausted rule's fault detail, so a fault stays diagnosable
+rather than a bare @Unavailable@. The detail is bounded, carries no secret, and reaches no client.
 -}
 katipFaultReporter :: LogEnv -> FaultReporter
 katipFaultReporter logEnv =
