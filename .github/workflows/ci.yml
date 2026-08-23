@@ -98,11 +98,8 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # The unauthenticated runners share a throttled Docker Hub IP pool whose
-      # auth-token endpoint intermittently times out, and one throttled pull inside a
-      # testcontainers `docker build FROM` cascades the tier to red. The refs mirror
-      # the pins in test/integration/Ecluse/Integration/Ministack.hs and the telemetry
-      # specs, which are the source of truth.
+      # One throttled pull from the runners' shared Docker Hub IP pool cascades the tier
+      # to red. The refs mirror the pins in the harness, which is the source of truth.
       - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
@@ -149,10 +146,8 @@ jobs:
           flags: integration
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
-      # This job is the sole writer of the three cabal-side caches, and only from main.
-      # The !cancelled() condition keeps the warm store when a later tier fails: the
-      # deps built fine and are worth caching. A save no-ops when the key already
-      # exists, so a dependency epoch lands once and later runs reuse it untouched.
+      # Sole writer of the three cabal-side caches, and only from main. !cancelled()
+      # keeps the warm store when a later tier fails: the deps built fine either way.
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -180,10 +175,8 @@ jobs:
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Hits public npm and PyPI to catch protocol drift when those registries change
-    # their wire behaviour. It is not a `gate` dependency and it sets
-    # continue-on-error, so a transient live-registry blip never blocks a merge while
-    # a real drift still shows red on the PR.
+    # Catches protocol drift when the live registries change their wire behaviour. Not a
+    # `gate` dependency, so a transient blip shows red on the PR but blocks no merge.
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -215,11 +208,9 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-    # Stands the whole system up as the real OCI image, an nginx stub, and Verdaccio on
-    # a docker network, driven by the real npm CLI. It catches composition-root and
-    # cross-component regressions nothing else does, and unlike smoke it is hermetic,
-    # so it GATES. If it turns flaky, reach for a nightly-only cadence or a larger
-    # runner before dropping it from the gate.
+    # The real OCI image, an nginx stub, and Verdaccio on a docker network, driven by the
+    # real npm CLI. It catches composition-root regressions nothing else does, and unlike
+    # smoke it is hermetic, so it gates. Drop it from the gate only as a last resort.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -261,10 +252,8 @@ jobs:
     name: Static checks (format, lint, Semgrep, workflows, site)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Four sub-minute checks in one job, so the toolchain setup is paid once. Each runs
-    # even if an earlier one failed, so one run reports them all. `task static-checks`
-    # also assembles the pandoc site over stubbed API artefacts, so a dangling link
-    # fails the PR here instead of the Pages deploy after merge.
+    # Sub-minute checks batched so the toolchain setup is paid once. `task static-checks`
+    # also assembles the site, so a dangling link fails here, not on the Pages deploy.
     permissions:
       contents: read
       security-events: write # upload the Semgrep SARIF to code scanning
@@ -301,11 +290,9 @@ jobs:
     # Sized for a cold run after a dependency-overlay change in flake.nix, which
     # rebuilds the overridden closure's doc outputs from source.
     timeout-minutes: 100
-    # Builds the library Haddock, so a broken doc comment fails on the PR rather than
-    # after merge when the Pages deploy fails. It builds the `checks.docs` flake check
-    # rather than `cabal haddock`, which wants a documentation variant of the deps that
-    # build-test's `cabal build` store lacks and so rebuilds the whole closure. It
-    # builds the freeze-sync and amazonka-lockstep checks in the same store.
+    # Builds `checks.docs`, not `cabal haddock`: the cabal path wants a documentation
+    # variant of the deps that build-test's store lacks, so it rebuilds the whole closure
+    # every run. freeze-sync and amazonka-lockstep share this job's store.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -352,11 +339,9 @@ jobs:
           cabal-cache: "true"
           save-nix-store: "false" # build-test is the single writer of the shared store
 
-      # dist-analysis is deliberately NOT cached: weeder scans every .hie under it and
-      # cabal cannot delete the artifacts of removed source files, so a restored
-      # builddir feeds it orphaned .hie for modules that no longer exist. The same
-      # staleness gave stan 132 observations against a true floor of 35. Do not add a
-      # cache here without a per-run orphan-.hie prune.
+      # dist-analysis is deliberately NOT cached. cabal cannot delete the artifacts of
+      # removed source files, so a restored builddir feeds weeder orphaned .hie: that
+      # staleness once gave stan 132 observations against a true floor of 35.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
