@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
 # Select GitHub Actions cache ids to delete, for .github/workflows/cache-cleanup.yml.
-#
-# Reads one TSV row per cache on stdin (as produced by `gh api .../actions/caches`):
+# Reads one TSV row per cache on stdin, as `gh api .../actions/caches` produces it:
 #
 #     id<TAB>ref<TAB>key<TAB>created_at<TAB>size_in_bytes
 #
-# and writes the ids to delete on stdout, one per line, with a reasoned line per id on
-# stderr. Three arms, emitted most urgent first so a capped sweep still does the work
-# that matters: off-main stragglers, superseded epochs, then unwritten keys.
-#
-# Prefix = the key with a trailing `-<16+ hex>` (a hashFiles digest) stripped, so every
-# epoch of one logical cache groups together. KEEP_PER_PREFIX (default 2) is the current
-# epoch plus one fallback for in-flight runs. The heavy single-epoch caches keep only
-# KEEP_DOCS (default 1): the `nix-*` store closures and the Pages `-docs-` doc variants
-# are ~1 GB each, change only on a dependency bump, and have one writer each.
-#
-# Bash + awk/sort (no interval regexes) so it runs on the plain runner without the Nix
-# shell. Try it against a sample:
-#
+# Writes the ids on stdout, most urgent first, and a reasoned line per id on stderr.
+# awk and sort only, so it runs on the plain runner. Try it against a sample:
 #   printf 'id\tref\tkey\tcreated\t123\n' | KEEP_PER_PREFIX=2 scripts/prune-caches.sh
 set -euo pipefail
 
@@ -29,7 +17,8 @@ keep="${KEEP_PER_PREFIX:-2}"
 keep_docs="${KEEP_DOCS:-1}"
 rows="$(cat)"
 
-# Each arm emits "id<TAB>key<TAB>size<TAB>reason".
+# Each arm emits "id<TAB>key<TAB>size<TAB>reason", most urgent first: off-main
+# stragglers, then superseded epochs, then keys no workflow writes.
 selected="$(
   printf '%s\n' "$rows" | awk -F'\t' '
     $1 != "" && $2 != "refs/heads/main" { print $1 "\t" $3 "\t" $5 "\toff-main straggler" }'
@@ -38,6 +27,7 @@ selected="$(
       $1 == "" || $2 != "refs/heads/main" { next }
       {
         key = $3
+        # Group every epoch of one logical cache: strip a trailing hashFiles digest.
         prefix = key
         if (prefix ~ /-[0-9a-f]+$/) {
           seg = prefix; sub(/.*-/, "", seg)

@@ -7,7 +7,9 @@
 set -euo pipefail
 
 threshold_gb="${CI_FREE_DISK_THRESHOLD_GB:-40}"
-avail_gb="$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')"
+# A df that cannot read / must not fail the job, so an unreadable size frees the disk.
+avail_gb="$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')" || true
+avail_gb="${avail_gb:-0}"
 
 if [ "$avail_gb" -ge "$threshold_gb" ]; then
   echo "free-disk: / has ${avail_gb} GB free, at or above the ${threshold_gb} GB threshold. Nothing removed."

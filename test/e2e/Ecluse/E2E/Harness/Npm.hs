@@ -78,8 +78,9 @@ withProjectContents e2e packageJson npmrcContents use = do
                     , ("npm_config_fund", "false")
                     , ("npm_config_update_notifier", "false")
                     , ("npm_config_progress", "false")
-                    , -- No npm child may run an upstream package's lifecycle scripts. This project
-                      -- sits outside the repo tree, so the root @.npmrc@'s guard cannot reach it.
+                    , -- No npm child may run an upstream package's lifecycle scripts, an arbitrary-code-
+                      -- execution surface. This project sits outside the repo tree, so the root @.npmrc@'s
+                      -- guard cannot reach it.
                       ("npm_config_ignore_scripts", "true")
                     , -- npm's 10 s then 60 s retry backoff is sized for the public internet, and
                       -- every registry here is a container on a local network. Keep the retries.

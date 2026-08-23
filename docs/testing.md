@@ -191,6 +191,8 @@ against an allow-list of documentation paths in
 unlisted path runs everything. The static checks run on every PR either way, because the site,
 link, and metadata gates read the very files such a PR edits. The `gate` job accepts a skipped
 job from that filter and from nothing else, so a job that silently never ran still fails the gate.
+Such a PR uploads no coverage, so the required `codecov/project` status stays pending by
+design, and the repo owner merges it by administrator bypass.
 
 ## Coverage: Codecov (gating)
 

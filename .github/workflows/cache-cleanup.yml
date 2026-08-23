@@ -1,14 +1,13 @@
 name: Cache cleanup
 
-# Keep the repo's Actions cache under the 10 GB quota. ci.yml already saves only on
-# main, so this is the backstop for what that policy cannot reach: off-main stragglers,
-# superseded epochs, and keys no workflow writes any more. scripts/prune-caches.sh owns
-# the retention rules and the allow-list of keys this repo writes.
+# Keep the repo's Actions cache under the 10 GB quota. ci.yml saves only on main, so
+# this is the backstop for what that cannot reach: off-main stragglers, superseded
+# epochs, and keys no workflow writes. scripts/prune-caches.sh owns the retention rules
+# and the allow-list.
 #
 # A plain `push` on the dependency-plan files, not `workflow_run` or
 # pull_request_target, keeps the privileged `actions: write` token in this
-# single-purpose workflow. The daily schedule is the only reaper of off-main
-# stragglers, which belong to no main run.
+# single-purpose workflow. The daily schedule is the only reaper of off-main entries.
 
 on:
   push:
