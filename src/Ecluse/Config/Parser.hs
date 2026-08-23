@@ -128,7 +128,7 @@ nestedKey k parse = GroupDecoder [k] (nested . giObject)
   where
     nested o = case KeyMap.lookup k o of
         Nothing -> parse KeyMap.empty
-        Just (Object group) -> parse group
+        Just (Object inner) -> parse inner
         Just other -> fail (Key.toString k <> " must be an object, but encountered " <> valueKind other)
 
 -- | A key the group accepts and no field reads.
