@@ -37,7 +37,7 @@ import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
-import Ecluse.Config.Resolve (envSpellingOf, mountEnvKey)
+import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -321,7 +321,7 @@ renderConfigError PublicUrlRequired =
         <> "set it to the URL clients reach this proxy on (e.g. https://registry.example.com)"
 renderConfigError (MountMissingPrivateUpstream eco) =
     let name = ecosystemName eco
-        envKey = mountEnvKey name (envSpellingOf "privateUpstream")
+        envKey = mountKeyRef eco "privateUpstream"
      in "mount \""
             <> name
             <> "\" declares a mirror target, so it must also define the private upstream the mirror is read back through: set mounts."
@@ -333,7 +333,7 @@ renderConfigError (MountMissingPrivateUpstream eco) =
             <> ".mirrorTarget for a serve-only mount that never mirrors"
 renderConfigError (MirrorSettingWithoutWrite eco key) =
     let name = ecosystemName eco
-        envKey = mountEnvKey name (envSpellingOf key)
+        envKey = mountKeyRef eco key
      in "mount \""
             <> name
             <> "\" declares no mirror target, so mounts."
@@ -347,7 +347,7 @@ renderConfigError (MirrorSettingWithoutWrite eco key) =
             <> ".mirrorTarget to mirror, or remove the setting for a serve-only mount"
 renderConfigError (MirrorCredentialTokenMissing eco) =
     let name = ecosystemName eco
-        envKey = mountEnvKey name (envSpellingOf "mirrorTargetToken")
+        envKey = mountKeyRef eco "mirrorTargetToken"
      in "mount \""
             <> name
             <> "\" mirror target is not a CodeArtifact endpoint, so its write credential is not minted: set a static write token with mounts."
@@ -357,7 +357,7 @@ renderConfigError (MirrorCredentialTokenMissing eco) =
             <> ")"
 renderConfigError (MirrorCredentialConflict eco) =
     let name = ecosystemName eco
-        envKey = mountEnvKey name (envSpellingOf "mirrorTargetToken")
+        envKey = mountKeyRef eco "mirrorTargetToken"
      in "mount \""
             <> name
             <> "\" mirror target is a CodeArtifact endpoint (its write token is minted from the host identity), so a static write token must not also be set: remove mounts."

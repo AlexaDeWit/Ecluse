@@ -62,6 +62,7 @@ import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Text (stripTrailingSlash)
 
 {- HLINT ignore defaultPolicy "Avoid restricted function" -}
 defaultPolicy :: RulePolicy
@@ -262,7 +263,7 @@ collisionWarning eco (aName, a, bName, mb) = do
 sameRegistry :: RegistryUrl -> RegistryUrl -> Bool
 sameRegistry a b = strip a == strip b
   where
-    strip = T.dropWhileEnd (== '/') . registryUrlText
+    strip = stripTrailingSlash . registryUrlText
 
 {- | One line per resolved leaf of the merged configuration: the dotted path, the rendered
 value with secret-typed keys redacted, and the layer that supplied it. That layer is

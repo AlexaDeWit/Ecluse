@@ -14,7 +14,7 @@ module Ecluse.Config.Resolve (
     secretLeafKeys,
     secretEnvSpellings,
     envSpellingOf,
-    mountEnvKey,
+    mountKeyRef,
 ) where
 
 import Data.Aeson (Value (..), eitherDecodeStrict)
@@ -23,6 +23,8 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isUpper)
 
 import Data.Text qualified as T
+
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | Right-biased deep merge of two Aeson Values. Objects merge recursively.
 The right side overwrites any other type, arrays and strings included.
@@ -76,11 +78,12 @@ envSpellingOf = T.toUpper . T.concatMap underscoreUpper
         | isUpper c = "_" <> T.singleton c
         | otherwise = T.singleton c
 
-{- | The full environment key of a mount-scoped setting, @ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@,
-assembled from the ecosystem name and the setting's already env-spelled suffix.
+{- | The environment key a mount-scoped document key resolves from, @mirrorTargetToken@ on npm
+giving @ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN@. Every refusal that names one builds it here.
 -}
-mountEnvKey :: Text -> Text -> Text
-mountEnvKey ecosystem key = "ECLUSE_MOUNTS__" <> T.toUpper ecosystem <> "__" <> key
+mountKeyRef :: Ecosystem -> Text -> Text
+mountKeyRef eco key =
+    "ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName eco) <> "__" <> envSpellingOf key
 
 envVarValue :: (Text, String) -> Value
 envVarValue (key, value) =

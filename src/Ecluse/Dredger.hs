@@ -4,32 +4,19 @@
 
 module Ecluse.Dredger (
     runDredger,
-    dredgerApplication,
 ) where
 
-import Katip (Severity (InfoS), logFM, ls)
-import Katip.Monadic (runKatipContextT)
-import Network.Wai (Application)
+import Katip (Severity (InfoS))
 
-import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgServer), ServerSettings (srvPort))
-import Ecluse.Runtime.Log (moduleField)
-import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
-
--- | The WAI application for the Dredger worker mode: the liveness and readiness probes.
-dredgerApplication :: ServerConfig -> IO Application
-dredgerApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (pure True)))
+import Ecluse.Boot (BootEnv (..), probeServerConfig)
+import Ecluse.Runtime.Log (moduleLog)
+import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, runWarp)
 
 {- | The entry point for the Dredger worker mode, an HTTP server that serves only the
 liveness and readiness probes.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do
-    let logEnv = beLogEnv bootEnv
-        port = srvPort (cfgServer (beConfig bootEnv))
-        cfg = (mkServerConfig []){scPort = port}
-
-    runKatipContextT logEnv (moduleField "Ecluse.Dredger") mempty $ do
-        logFM InfoS (ls ("Dredger mode starting up on port " <> show port :: String))
-
-    runWarp cfg dredgerApplication
+    let cfg = probeServerConfig (beConfig bootEnv)
+    moduleLog (beLogEnv bootEnv) "Ecluse.Dredger" InfoS ("Dredger mode starting up on port " <> show (scPort cfg))
+    runWarp cfg probeOnlyApplication

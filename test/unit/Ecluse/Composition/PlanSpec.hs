@@ -90,6 +90,14 @@ spec = describe "resolveBootPlan" $ do
         listToMaybe preamble `shouldBe` Just "Config document: /srv/ecluse.yaml"
         configDocumentPath staticEnvVars `shouldBe` defaultConfigPath
 
+    it "trims the surrounding whitespace an ECLUSE_CONFIG value carries" $
+        configDocumentPath (overrideEnv "ECLUSE_CONFIG" "  /etc/x.yaml  " staticEnvVars)
+            `shouldBe` "/etc/x.yaml"
+
+    it "falls back to the default path when ECLUSE_CONFIG is all whitespace" $
+        configDocumentPath (overrideEnv "ECLUSE_CONFIG" "   " staticEnvVars)
+            `shouldBe` defaultConfigPath
+
     describe "refusals" $ do
         it "refuses a structural composition error" $ do
             let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars

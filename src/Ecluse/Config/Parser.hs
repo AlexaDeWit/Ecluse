@@ -5,16 +5,33 @@
 {- | The shared refusals every configuration key is decoded through: secret and unknown keys,
 enumerations, ports, durations, the @http(s)@ scheme check, and the URL shapes.
 
-A malformed key fails at load with the key named, never at its first use. The URL parsers run
-'refuseCredentialMaterial' ahead of any refusal that quotes the value, because boot echoes every
-resolved key as written.
+A malformed key fails at load with the key named, never at its first use. A group accepts
+exactly the keys its 'GroupDecoder' declares. The URL parsers run 'refuseCredentialMaterial'
+ahead of any refusal that quotes the value, because boot echoes every resolved key as written.
 -}
 module Ecluse.Config.Parser (
+    -- * Group decoding
+    GroupDecoder,
+    decodeGroup,
+    decodeBareGroup,
+    requiredKey,
+    optionalKey,
+    optionalKeyOr,
+    plainKey,
+    optionalPlainKey,
+    optionalPlainKeyOr,
+    nestedKey,
+    unreadKey,
+
+    -- * Value shapes
+    expectString,
+    commaSeparated,
+    valueKind,
     rejectSecretKeys,
+
+    -- * Leaf parsers
     parseRegistryUrl,
     parseEnum,
-    valueKind,
-    rejectUnknownKeys,
     parseUrl,
     parseHttpUrl,
     HttpScheme (..),
@@ -23,7 +40,7 @@ module Ecluse.Config.Parser (
     parseCodeArtifactDuration,
 ) where
 
-import Data.Aeson (Value (..), parseJSON)
+import Data.Aeson (FromJSON, Value (..), parseJSON, (.!=), (.:), (.:?))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
@@ -32,50 +49,94 @@ import Data.Text qualified as T
 import Ecluse.Config.Types (Url, mkUrl)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
+import Ecluse.Core.Text (nonBlank)
 
-rejectSecretKeys :: KeyMap.KeyMap Value -> Parser ()
-rejectSecretKeys o =
-    case filter (`KeyMap.member` o) secretKeys of
-        [] -> pure ()
-        present ->
-            fail
-                ( "secret key(s) are not allowed in the config document (use environment variables): "
-                    <> intercalate ", " (map (show . Key.toText) present)
-                )
+-- The object a group decodes, with the prefix its value refusals write before each key.
+data GroupInput = GroupInput
+    { giPrefix :: String
+    , giObject :: KeyMap.KeyMap Value
+    }
+
+{- | One config group's decoder. The key helpers below are its only builders, so the accepted
+set and the reads come from one declaration and a read key is always an accepted key.
+-}
+data GroupDecoder a = GroupDecoder
+    { gdKeys :: [Key.Key]
+    , gdRead :: GroupInput -> Parser a
+    }
+
+instance Functor GroupDecoder where
+    fmap f decoder = decoder{gdRead = fmap f . gdRead decoder}
+
+instance Applicative GroupDecoder where
+    pure a = GroupDecoder [] (const (pure a))
+    lhs <*> rhs =
+        GroupDecoder
+            (gdKeys lhs <> gdKeys rhs)
+            (\input -> gdRead lhs input <*> gdRead rhs input)
+
+{- | Decode a group under @noun@. An undeclared key refuses before any value parses, so a typo
+is reported even when a required key is missing too. A value refusal names @noun.key@.
+-}
+decodeGroup :: String -> GroupDecoder a -> KeyMap.KeyMap Value -> Parser a
+decodeGroup noun = runGroupDecoder noun (noun <> ".")
+
+{- | 'decodeGroup' where a value refusal names the bare key, for a group an enclosing error
+already places (a mount's keys, which "Ecluse.Config" reports under its ecosystem).
+-}
+decodeBareGroup :: String -> GroupDecoder a -> KeyMap.KeyMap Value -> Parser a
+decodeBareGroup noun = runGroupDecoder noun ""
+
+runGroupDecoder :: String -> String -> GroupDecoder a -> KeyMap.KeyMap Value -> Parser a
+runGroupDecoder noun prefix decoder o = do
+    rejectUnknownKeys noun (gdKeys decoder) o
+    gdRead decoder (GroupInput{giPrefix = prefix, giObject = o})
+
+{- | A required key, decoded by its own 'FromJSON' instance then refined by @parse@, which is
+handed the key's label so every refusal it raises names the key.
+-}
+requiredKey :: (FromJSON b) => Key.Key -> (String -> b -> Parser a) -> GroupDecoder a
+requiredKey k parse = GroupDecoder [k] (\input -> giObject input .: k >>= parse (labelOf input k))
+
+-- | 'requiredKey' for an optional key: an absent or @null@ one yields 'Nothing'.
+optionalKey :: (FromJSON b) => Key.Key -> (String -> b -> Parser a) -> GroupDecoder (Maybe a)
+optionalKey k parse =
+    GroupDecoder [k] (\input -> giObject input .:? k >>= traverse (parse (labelOf input k)))
+
+-- | 'requiredKey' for an optional key whose absence reads as @fallback@ before @parse@ sees it.
+optionalKeyOr :: (FromJSON b) => Key.Key -> b -> (String -> b -> Parser a) -> GroupDecoder a
+optionalKeyOr k fallback parse =
+    GroupDecoder [k] (\input -> giObject input .:? k .!= fallback >>= parse (labelOf input k))
+
+-- | A required key its own 'FromJSON' instance decodes whole, with no further refusal.
+plainKey :: (FromJSON a) => Key.Key -> GroupDecoder a
+plainKey k = GroupDecoder [k] ((.: k) . giObject)
+
+-- | 'plainKey' for an optional key.
+optionalPlainKey :: (FromJSON a) => Key.Key -> GroupDecoder (Maybe a)
+optionalPlainKey k = GroupDecoder [k] ((.:? k) . giObject)
+
+-- | 'plainKey' for an optional key, with the value an absent one reads as.
+optionalPlainKeyOr :: (FromJSON a) => Key.Key -> a -> GroupDecoder a
+optionalPlainKeyOr k fallback = GroupDecoder [k] ((.!= fallback) . (.:? k) . giObject)
+
+{- | A key holding a nested group. An absent one decodes as an empty object, so the nested
+decoder reports its own required keys as missing.
+-}
+nestedKey :: Key.Key -> (KeyMap.KeyMap Value -> Parser a) -> GroupDecoder a
+nestedKey k parse = GroupDecoder [k] (nested . giObject)
   where
-    secretKeys :: [Key.Key]
-    secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
+    nested o = case KeyMap.lookup k o of
+        Nothing -> parse KeyMap.empty
+        Just (Object group) -> parse group
+        Just other -> fail (Key.toString k <> " must be an object, but encountered " <> valueKind other)
 
--- mkConfiguredRegistryUrl runs first, because the refusal below it quotes the value. An authority
--- the egress gate cannot extract could only build a mount that refuses every fetch.
-parseRegistryUrl :: String -> Value -> Parser RegistryUrl
-parseRegistryUrl field = \case
-    String t -> case mkConfiguredRegistryUrl t of
-        Left reason -> fail (field <> ": " <> T.unpack reason)
-        Right url
-            | isNothing (hostPortAddress t) ->
-                fail
-                    ( field
-                        <> ": registry URL must carry a host and, when a port is written, a decimal port in 1..65535 (got "
-                        <> T.unpack t
-                        <> ")"
-                    )
-            | otherwise -> pure url
-    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
+-- | A key the group accepts and no field reads.
+unreadKey :: Key.Key -> GroupDecoder ()
+unreadKey k = GroupDecoder [k] (const (pure ()))
 
-parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
-parseEnum parser field = \case
-    String t -> either (\e -> fail (field <> ": " <> T.unpack e)) pure (parser t)
-    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
-
-valueKind :: Value -> String
-valueKind = \case
-    Object{} -> "an object"
-    Array{} -> "an array"
-    Number{} -> "a number"
-    Bool{} -> "a boolean"
-    Null -> "null"
-    String{} -> "a string"
+labelOf :: GroupInput -> Key.Key -> String
+labelOf input k = giPrefix input <> Key.toString k
 
 rejectUnknownKeys :: String -> [Key.Key] -> KeyMap.KeyMap Value -> Parser ()
 rejectUnknownKeys context accepted o =
@@ -90,23 +151,79 @@ rejectUnknownKeys context accepted o =
                         <> intercalate ", " (map (show . Key.toText) unknown)
                     )
 
+rejectSecretKeys :: KeyMap.KeyMap Value -> Parser ()
+rejectSecretKeys o =
+    case filter (`KeyMap.member` o) secretKeys of
+        [] -> pure ()
+        present ->
+            fail
+                ( "secret key(s) are not allowed in the config document (use environment variables): "
+                    <> intercalate ", " (map (show . Key.toText) present)
+                )
+  where
+    secretKeys :: [Key.Key]
+    secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
+
+{- | Read a string-valued key, naming the key and the JSON kind found on anything else. It is
+the one string-shape refusal the configuration decoders share.
+-}
+expectString :: String -> (Text -> Parser a) -> Value -> Parser a
+expectString field parse = \case
+    String t -> parse t
+    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
+
+{- | Read a comma-separated string value as its trimmed entries, a blank value being the empty
+list. An empty entry still reaches @parseEntry@, so @a,,b@ fails rather than silently losing one.
+-}
+commaSeparated :: String -> (Text -> Parser a) -> Value -> Parser [a]
+commaSeparated field parseEntry =
+    expectString field (maybe (pure []) (traverse (parseEntry . T.strip) . T.splitOn ",") . nonBlank)
+
+valueKind :: Value -> String
+valueKind = \case
+    Object{} -> "an object"
+    Array{} -> "an array"
+    Number{} -> "a number"
+    Bool{} -> "a boolean"
+    Null -> "null"
+    String{} -> "a string"
+
+-- mkConfiguredRegistryUrl runs first, because the refusal below it quotes the value. An authority
+-- the egress gate cannot extract could only build a mount that refuses every fetch.
+parseRegistryUrl :: String -> Value -> Parser RegistryUrl
+parseRegistryUrl field = expectString field $ \t -> case mkConfiguredRegistryUrl t of
+    Left reason -> fail (field <> ": " <> T.unpack reason)
+    Right url
+        | isNothing (hostPortAddress t) ->
+            fail
+                ( field
+                    <> ": registry URL must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                    <> T.unpack t
+                    <> ")"
+                )
+        | otherwise -> pure url
+
+parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
+parseEnum parser field =
+    expectString field (either (\e -> fail (field <> ": " <> T.unpack e)) pure . parser)
+
 {- | An operator-configured URL Écluse hands to a cloud SDK rather than dialling itself, such as the
 mirror-queue target. It keeps its provider's shape, and carries the shared credential refusal.
 -}
 parseUrl :: String -> Value -> Parser Url
-parseUrl field = \case
-    String t
-        | Left reason <- refuseCredentialMaterial (T.pack field) (T.strip t) -> fail (T.unpack reason)
-        | otherwise -> either (fail . T.unpack) pure (mkUrl (T.strip t))
-    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
+parseUrl field = expectString field (plainUrlOf field . T.strip)
+
+-- The credential refusal runs first, because the refusal under it quotes the value.
+plainUrlOf :: String -> Text -> Parser Url
+plainUrlOf field trimmed
+    | Left reason <- refuseCredentialMaterial (T.pack field) trimmed = fail (T.unpack reason)
+    | otherwise = either (fail . T.unpack) pure (mkUrl trimmed)
 
 {- | An @http(s)@ URL Écluse serves, rewrites against, or fetches from. Plain http stays legal for
 loopback, the authority must be one the egress gate can extract, and a credential is refused.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
-parseHttpUrl field = \case
-    String t -> httpUrlOf field (T.strip t)
-    other -> fail (field <> " expected a string, but encountered " <> valueKind other)
+parseHttpUrl field = expectString field (httpUrlOf field . T.strip)
 
 -- | The scheme a configured @http(s)@ URL writes.
 data HttpScheme = Http | Https

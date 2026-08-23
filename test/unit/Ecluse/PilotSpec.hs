@@ -4,8 +4,6 @@
 
 module Ecluse.PilotSpec (spec) where
 
-import Prelude hiding (get)
-
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
 import Database.SQLite.Simple (Only (..), close, open, query_)
@@ -15,26 +13,15 @@ import System.Directory (doesFileExist)
 import System.FilePath (takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import Test.Hspec.Wai
 
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
-import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), pilotApplication, runPilotCompile)
-import Ecluse.Runtime.Server (mkServerConfig)
+import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 spec :: Spec
 spec = do
-    describe "Pilot worker mode" $ do
-        let app = pilotApplication (mkServerConfig [])
-        with app $ do
-            it "starts up and answers /livez with 200" $
-                get "/livez" `shouldRespondWith` 200
-
-            it "answers /readyz with 200" $
-                get "/readyz" `shouldRespondWith` 200
-
     describe "runPilotCompile (one-shot compile mode)" $ do
         it "compiles a served OSV zip into the requested directory and returns the artifact's path" $ do
             le <- initLogEnv "test" (Environment "test")

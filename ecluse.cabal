@@ -719,7 +719,6 @@ test-suite ecluse-unit
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec
     Ecluse.ConfigSpec
-    Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec

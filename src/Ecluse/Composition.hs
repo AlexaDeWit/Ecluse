@@ -94,6 +94,7 @@ import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
+import Ecluse.Core.Text (stripTrailingSlash)
 
 {- | The composition root's single entry to the served mount bindings, or every boot error
 at once. The caller injects every capability, so this opens no socket.
@@ -231,7 +232,7 @@ mountBaseUrl :: Maybe Url -> Ecosystem -> Text
 mountBaseUrl publicUrl eco =
     case publicUrl of
         Nothing -> mountBasePath eco
-        Just public -> T.dropWhileEnd (== '/') (unUrl public) <> mountBasePath eco
+        Just public -> stripTrailingSlash (unUrl public) <> mountBasePath eco
 
 -- The relative path a client's registry endpoint maps onto (npm becomes /npm).
 mountBasePath :: Ecosystem -> Text

@@ -20,14 +20,14 @@ module Ecluse.Boot (
     logBootInfo,
     logRuleBootOrder,
     buildMirrorQueue,
+    probeServerConfig,
 ) where
 
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), logFM, ls)
-import Katip.Monadic (runKatipContextT)
+import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS))
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (throwIO, tryIO)
@@ -47,10 +47,11 @@ import Ecluse.Composition.Plan (
  )
 import Ecluse.Composition.Sizing (openFileSoftLimit)
 import Ecluse.Config (
-    AppConfig (cfgObservability, cfgRuntime),
+    AppConfig (cfgObservability, cfgRuntime, cfgServer),
     Config (configApp),
     ObservabilitySettings (obsLogFormat, obsLogLevel, obsTelemetry),
     RuntimeSettings (rtCores, rtMaxHeapBytes),
+    ServerSettings (srvPort),
     loadConfig,
     renderConfigError,
  )
@@ -62,9 +63,13 @@ import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Rts (applyRuntimePosture)
-import Ecluse.Runtime.Log (moduleField, newLogEnv)
+import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
-import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
+import Ecluse.Runtime.Server (
+    MountBinding (bindingPackumentDeps, bindingPrefix),
+    ServerConfig (scPort),
+    mkServerConfig,
+ )
 import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
@@ -216,17 +221,19 @@ buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (deadLetterTerminusWarning plan (deliveryBudget queue) (deadLetterTerminus queue)) (logBootWarning logEnv)
     pure queue
 
-{- Log one line at 'WarningS' through the composition-root 'LogEnv'. The boot phase holds
-no @Handler@ reader, so it uses this plain-'IO' katip path. -}
-logBootWarning :: LogEnv -> Text -> IO ()
-logBootWarning logEnv message =
-    runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM WarningS (ls message))
+{- | The server configuration of a probe-only role: the configured port over no mounts, so
+the process answers @\/livez@ and @\/readyz@ and gives every other path the neutral @404@.
+-}
+probeServerConfig :: AppConfig -> ServerConfig
+probeServerConfig appConfig = (mkServerConfig []){scPort = srvPort (cfgServer appConfig)}
 
-{- Log one line at 'InfoS' through the composition-root 'LogEnv', the same plain-'IO'
-katip path 'logBootWarning' uses, for non-warning boot diagnostics. -}
+-- One boot line at 'WarningS', tagged with the root namespace rather than a submodule.
+logBootWarning :: LogEnv -> Text -> IO ()
+logBootWarning logEnv = moduleLog logEnv "Ecluse" WarningS
+
+-- One boot line at 'InfoS', for a non-warning boot diagnostic.
 logBootInfo :: LogEnv -> Text -> IO ()
-logBootInfo logEnv message =
-    runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM InfoS (ls message))
+logBootInfo logEnv = moduleLog logEnv "Ecluse" InfoS
 
 {- Log every wired mount's resolved rule boot order, the same total order evaluation walks.
 A mount with no packument deps (the unserved stub) contributes nothing. -}

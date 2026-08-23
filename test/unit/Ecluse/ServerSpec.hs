@@ -52,6 +52,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     newDrainSignal,
     perimeterGuard,
+    probeOnlyApplication,
     raceServerAgainstLoop,
     runWarp,
  )
@@ -148,6 +149,14 @@ probes matches no mount and is the neutral @404@.
 -}
 neutralApp :: IO Application
 neutralApp = application (mkServerConfig []) <$> newTestEnv
+
+-- | The probe-only front door the Dredger and Pilot worker roles run.
+probeOnlyApp :: IO Application
+probeOnlyApp = probeOnlyApplication (mkServerConfig [])
+
+-- | 'probeOnlyApp' with the injected liveness check failing, which only @\/livez@ reads.
+deadProbeOnlyApp :: IO Application
+deadProbeOnlyApp = probeOnlyApplication ((mkServerConfig []){scCheckLive = pure False})
 
 {- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing in for
 an instance mid-graceful-shutdown without binding a socket.
@@ -356,6 +365,24 @@ spec = do
 
             it "still answers the control-plane health probes (above any mount)" $ do
                 get "/livez" `shouldRespondWith` 200
+                get "/readyz" `shouldRespondWith` 200
+
+    describe "probeOnlyApplication (the worker roles' front door)" $ do
+        with probeOnlyApp $ do
+            it "answers /livez with 200" $
+                get "/livez" `shouldRespondWith` 200
+
+            it "answers /readyz with 200" $
+                get "/readyz" `shouldRespondWith` 200
+
+            it "404s every other path (a worker role serves no mount)" $
+                get "/npm/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
+
+        with deadProbeOnlyApp $ do
+            it "fails /livez with 503 when the injected liveness check fails" $
+                get "/livez" `shouldRespondWith` 503
+
+            it "keeps /readyz at 200 (readiness does not read the liveness check)" $
                 get "/readyz" `shouldRespondWith` 200
 
     describe "mkServerConfig -- defaults" $ do

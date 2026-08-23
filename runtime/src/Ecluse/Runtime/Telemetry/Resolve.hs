@@ -91,15 +91,14 @@ import Data.Version (showVersion)
 import Paths_ecluse (version)
 import System.Environment (setEnv)
 
-import Katip (LogEnv, Severity (WarningS), logFM, ls)
-import Katip.Monadic (runKatipContextT)
+import Katip (LogEnv, Severity (WarningS))
 import OpenTelemetry.Baggage (Baggage)
 import OpenTelemetry.Baggage qualified as Baggage
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Log (moduleLog)
 
 {- | Where a resolved OTLP endpoint came from, so the boot path can distinguish a
 deliberately-configured target from the silent default and warn on the latter.
@@ -357,7 +356,7 @@ never classifies or gates.
 -}
 prepareTelemetry :: LogEnv -> [(String, String)] -> IO ()
 prepareTelemetry logEnv environment = do
-    mapM_ (logResolve logEnv WarningS) (telemetryWarnings environment)
+    mapM_ (moduleLog logEnv resolveModule WarningS) (telemetryWarnings environment)
     mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
 
 {- | The shared export-failure sink: one throttle and one @katip@ target for the span exporter,
@@ -379,7 +378,11 @@ newExportFailureSink now surface = do
 
 -- | The production sink: the wall clock and the composition-root 'LogEnv' as the @katip@ target.
 exportFailureSink :: LogEnv -> IO ExportFailureSink
-exportFailureSink logEnv = newExportFailureSink getCurrentTime (logResolve logEnv)
+exportFailureSink logEnv = newExportFailureSink getCurrentTime (moduleLog logEnv resolveModule)
+
+-- The module name every line this module raises is tagged with.
+resolveModule :: Text
+resolveModule = "Ecluse.Runtime.Telemetry.Resolve"
 
 {- | Route one export-failure diagnostic through the shared throttle into @katip@. The first
 error surfaces plainly and later ones fold into a heartbeat carrying the suppressed count.
@@ -424,10 +427,3 @@ heartbeatMessage suppressed diagnostic =
         <> show suppressed
         <> " export errors since the last report. Latest: "
         <> diagnostic
-
--- Log one line through the composition-root 'LogEnv', tagged with this module: the
--- plain-'IO' katip path the boot phase uses, since it holds no 'Handler' reader.
-logResolve :: LogEnv -> Severity -> Text -> IO ()
-logResolve logEnv severity message =
-    runKatipContextT logEnv (moduleField "Ecluse.Runtime.Telemetry.Resolve") mempty $
-        logFM severity (ls message)

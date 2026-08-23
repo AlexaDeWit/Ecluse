@@ -70,6 +70,7 @@ module Ecluse.Runtime.Server (
     runWarp,
     raceServerAgainstLoop,
     probeApplication,
+    probeOnlyApplication,
 
     -- * The typed request perimeter
     perimeterGuard,
@@ -198,6 +199,13 @@ middleware stack ('serverMiddleware').
 -}
 application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
+
+{- | The WAI 'Application' of a role that serves the health probes and nothing else. Every
+path outside @\/livez@ and @\/readyz@ is the neutral @404@.
+-}
+probeOnlyApplication :: ServerConfig -> IO Application
+probeOnlyApplication cfg =
+    pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg)))
 
 {- | 'application' with the OpenTelemetry server-span middleware wrapped __outermost__, so
 one server span covers the whole request. The wrapper is 'id' when telemetry is off.

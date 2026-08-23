@@ -22,6 +22,7 @@ import Data.Text qualified as T
 import Security.CVSS (cvssScore, parseCVSS)
 
 import Ecluse.Core.Osv.Types (UpperBound (..))
+import Ecluse.Core.Text (joinUrlPath)
 
 {- | An ecosystem's advisory export under an OSV-layout base URL
 (@\<base\>\/\<ecosystem\>\/all.zip@). The base comes from configuration
@@ -31,8 +32,7 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"
 -}
 osvExportUrl :: Text -> Text -> String
-osvExportUrl baseUrl ecosystem =
-    toString (T.dropWhileEnd (== '/') baseUrl) <> "/" <> toString ecosystem <> "/all.zip"
+osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/all.zip"))
 
 -- | Exact model of what osv.dev makes available
 data OsvAdvisory = OsvAdvisory

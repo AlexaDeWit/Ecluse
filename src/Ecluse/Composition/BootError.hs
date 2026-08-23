@@ -13,7 +13,6 @@ its own beyond the rendering.
 module Ecluse.Composition.BootError (
     BootError (..),
     renderBootError,
-    mountEnvKey,
 ) where
 
 import Data.Text qualified as T
@@ -22,7 +21,7 @@ import Ecluse.Config (
     PolicyError,
     renderPolicyError,
  )
-import Ecluse.Config.Resolve qualified as Resolve
+import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -100,16 +99,10 @@ renderBootError = \case
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail
-            <> " (a transient AWS error may clear on retry; a permanent one -- bad domain/region or missing permission -- must be fixed)"
+            <> " (a transient AWS error may clear on retry. A permanent one, such as a bad domain or region or a missing permission, must be fixed)"
     PublishAllowMissing eco ->
-        mountEnvKey eco "PUBLICATION_TARGET" <> " is set but " <> mountEnvKey eco "PUBLISH_ALLOW" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
+        mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publishAllow" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
-        mountEnvKey eco "PUBLICATION_TARGET_TOKEN" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+        mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     MemoryPlanOverrideUnsafe details ->
         "memory plan refused: " <> T.intercalate "; " details
-
-{- | The full environment key of a mount-scoped setting
-(@ECLUSE_MOUNTS__{ECOSYSTEM}__{KEY}@), as the operator must set it.
--}
-mountEnvKey :: Ecosystem -> Text -> Text
-mountEnvKey eco = Resolve.mountEnvKey (ecosystemName eco)

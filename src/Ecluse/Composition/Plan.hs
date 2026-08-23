@@ -172,13 +172,13 @@ mirrorRuntimeWarnings = \case
 defaultConfigPath :: FilePath
 defaultConfigPath = "/etc/ecluse/config.yaml"
 
-{- | The path a non-blank @ECLUSE_CONFIG@ names. 'Nothing' leaves 'defaultConfigPath'
-standing, where an absent document is not a failure.
+{- | The path a non-blank @ECLUSE_CONFIG@ names, trimmed of surrounding whitespace. 'Nothing'
+leaves 'defaultConfigPath' standing, where an absent document is not a failure.
 -}
 explicitConfigPath :: [(String, String)] -> Maybe FilePath
 explicitConfigPath envVars = do
-    path <- lookup "ECLUSE_CONFIG" envVars
-    path <$ nonBlank (toText path)
+    raw <- lookup "ECLUSE_CONFIG" envVars
+    toString <$> nonBlank (toText raw)
 
 -- | The config-document path this environment resolves to.
 configDocumentPath :: [(String, String)] -> FilePath

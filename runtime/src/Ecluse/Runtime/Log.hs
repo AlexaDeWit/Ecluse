@@ -74,6 +74,10 @@ module Ecluse.Runtime.Log (
     -- * Structured context
     moduleField,
 
+    -- * Plain-IO log lines
+    logLine,
+    moduleLog,
+
     -- * Datadog trace correlation
     DdContext (..),
     DdSpan (..),
@@ -103,11 +107,14 @@ import Katip (
     defaultScribeSettings,
     initLogEnv,
     itemJson,
+    logFM,
+    ls,
     permitItem,
     registerScribe,
     sl,
     unLogStr,
  )
+import Katip.Monadic (runKatipContextT)
 import Katip.Scribes.Handle (ItemFormatter, bracketFormat, mkHandleScribeWithFormatter)
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
@@ -297,6 +304,17 @@ log site's payload so a reader filters the stream by emitter without the @katip@
 -}
 moduleField :: Text -> SimpleLogPayload
 moduleField = sl "module"
+
+{- | Log one line through a composition-root 'LogEnv' under @payload@. The boot and worker
+phases hold no @Handler@ reader, so they raise a line this way.
+-}
+logLine :: LogEnv -> SimpleLogPayload -> Severity -> Text -> IO ()
+logLine logEnv payload severity message =
+    runKatipContextT logEnv payload mempty (logFM severity (ls message))
+
+-- | 'logLine' under a 'moduleField' naming the emitting module and nothing else.
+moduleLog :: LogEnv -> Text -> Severity -> Text -> IO ()
+moduleLog logEnv name = logLine logEnv (moduleField name)
 
 {- | The unified-service identity stamped onto every log line, resolved by
 "Ecluse.Runtime.Telemetry.Resolve" so logs and traces share one identity.
