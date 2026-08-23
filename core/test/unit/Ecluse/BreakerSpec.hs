@@ -14,6 +14,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Breaker
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 -- | A fixed instant so the cooldown arithmetic is deterministic.
 now :: UTCTime
@@ -113,6 +114,13 @@ spec = do
             let stepN k = foldl' (\br _ -> failAt now br) initialBreaker [1 .. k]
             stepN threshold `shouldBe` Open (addUTCTime cooldown now)
             stepN (threshold - 1) `shouldBe` Closed (threshold - 1)
+
+    describe "breakerState" $
+        it "projects the breaker onto the bounded gauge value" $ do
+            breakerState (Closed 0) `shouldBe` Metric.Closed
+            breakerState (Closed 7) `shouldBe` Metric.Closed -- the failure tally is not observable
+            breakerState HalfOpen `shouldBe` Metric.HalfOpen
+            breakerState (Open now) `shouldBe` Metric.Open
 
     describe "properties" $ do
         it "recordSuccess always lands on the healthy initial state" $

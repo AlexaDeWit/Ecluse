@@ -7,14 +7,12 @@ module Ecluse.Telemetry.ReportersSpec (spec) where
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Breaker (Breaker (Closed, HalfOpen, Open), BreakerReporter (BreakerReporter))
+import Ecluse.Core.Breaker (Breaker (Closed, Open), BreakerReporter (BreakerReporter))
 import Ecluse.Core.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments (newMetrics)
 import Ecluse.Runtime.Telemetry.Reporters (
-    breakerStateOf,
     deferredBreakerReporter,
     deferredRefreshReporter,
     installMetrics,
@@ -26,13 +24,6 @@ against the no-op meter, is total and silent, so boot-time providers report unco
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Reporters" $ do
-    describe "breakerStateOf" $
-        it "projects the runtime breaker onto the bounded gauge value" $ do
-            breakerStateOf (Closed 0) `shouldBe` Metric.Closed
-            breakerStateOf (Closed 7) `shouldBe` Metric.Closed -- the failure tally is not observable
-            breakerStateOf HalfOpen `shouldBe` Metric.HalfOpen
-            breakerStateOf (Open anInstant) `shouldBe` Metric.Open
-
     describe "deferred reporters are inert when telemetry is off" $
         it "records nothing before installation, and nothing through the no-op meter after" $ do
             deferred <- newDeferredMetrics

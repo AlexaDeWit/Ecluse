@@ -2,23 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The bridge from the telemetry-agnostic reporters the pre-telemetry providers carry
-to the live @ecluse.*@ instruments. It also holds the deferral that lets a provider
-built before the meter exists record once it does.
-
-Boot builds the circuit breaker ("Ecluse.Core.Breaker") and the refreshing credential
-provider ("Ecluse.Core.Credential.Refresh") __before__ the telemetry substrate exists,
-the meter provider included. Neither can take a 'Metrics' at construction. Each instead
-carries a small, telemetry-agnostic reporter callback. This module supplies those
-callbacks, backed by a 'DeferredMetrics' cell. The cell is __inert__ and records
-nothing until the composition root has built the instruments and called
-'installMetrics', and __live__ thereafter. That mirrors the no-op-meter discipline of
-"Ecluse.Runtime.Telemetry.Instruments". Once installed, an inert handle still discards
-every measurement, because telemetry off means the SDK's no-op meter. The providers
-therefore record unconditionally either way.
-
-@docs\/architecture\/observability.md@ describes the catalogue and the cardinality
-rule.
+{- | The bridge from the telemetry-agnostic reporter callbacks the credential and breaker
+layers carry to the live @ecluse.*@ instruments. Boot builds the breaker and the
+refreshing credential provider before the telemetry substrate exists, so neither can take
+a 'Metrics'. Each carries a callback instead, backed here by a 'DeferredMetrics' cell:
+inert until the composition root calls 'installMetrics', live after. Telemetry off means
+the SDK's no-op meter, so the providers record unconditionally either way.
+@docs\/architecture\/observability.md@ describes the catalogue and the cardinality rule.
 -}
 module Ecluse.Runtime.Telemetry.Reporters (
     -- * Deferred metric handle
@@ -30,20 +20,15 @@ module Ecluse.Runtime.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredRefreshReporter,
     deferredMirrorEnqueueFailure,
-
-    -- * Breaker-state projection
-    breakerStateOf,
 ) where
 
-import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..))
+import Ecluse.Core.Breaker (BreakerReporter (..), breakerState)
 import Ecluse.Core.Credential.Refresh (RefreshReporter (..))
 import Ecluse.Core.Telemetry.Metrics (
     BreakerSource,
-    BreakerState,
     CredentialResult (RefreshFailed, Refreshed),
     Provider,
  )
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Runtime.Telemetry.Instruments (
     Metrics,
     recordBreakerState,
@@ -76,7 +61,7 @@ deferredBreakerReporter :: DeferredMetrics -> BreakerSource -> BreakerReporter
 deferredBreakerReporter deferred source =
     BreakerReporter $ \breaker ->
         withDeferredMetrics deferred $ \metrics ->
-            recordBreakerState metrics source (breakerStateOf breaker)
+            recordBreakerState metrics source (breakerState breaker)
 
 {- | A 'RefreshReporter' that records each refresh outcome to @ecluse.credential.refresh@ and the
 reported remaining lifetime to @ecluse.credential.token.ttl.seconds@ under the given provider.
@@ -101,13 +86,3 @@ The composition root hangs it on the enqueue buffer's callbacks
 deferredMirrorEnqueueFailure :: DeferredMetrics -> IO ()
 deferredMirrorEnqueueFailure deferred =
     withDeferredMetrics deferred recordMirrorEnqueueFailure
-
-{- | Project the breaker's runtime state ("Ecluse.Core.Breaker") onto the bounded gauge value
-the catalogue records ("Ecluse.Core.Telemetry.Metrics"). The consecutive-failure tally a
-'Closed' breaker carries is not observable, so it collapses to the single closed value.
--}
-breakerStateOf :: Breaker -> BreakerState
-breakerStateOf = \case
-    Closed{} -> Metric.Closed
-    HalfOpen -> Metric.HalfOpen
-    Open{} -> Metric.Open

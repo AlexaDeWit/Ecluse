@@ -21,7 +21,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString, try)
+import UnliftIO.Exception (throwIO, throwString, try)
 
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
 import Ecluse.Core.Credential
@@ -118,6 +118,14 @@ capturingReporters = do
                 , onRefreshFailed = \mttl -> modifyIORef' refreshLog (<> [ReportedFailure mttl])
                 }
     pure (breakerLog, refreshLog, breakerR, refreshR)
+
+{- | A distinguishable mint failure, so a test can assert the synchronous path rethrows the
+mint's own exception rather than one of its own.
+-}
+data MintBoom = MintBoom
+    deriving stock (Eq, Show)
+
+instance Exception MintBoom
 
 {- | A mint that runs the next scripted action on each call, so a test drives a deterministic
 sequence of mint outcomes. The eager construction mint consumes the head.
@@ -278,6 +286,13 @@ spec = do
             -- Past expiry: no valid token left to serve, and mint fails.
             setClock (addUTCTime 2000 t0)
             currentToken provider `shouldThrow` anyException
+
+        it "rethrows the mint's own exception on the synchronous path" $ do
+            (clock, setClock) <- newClock t0
+            script <- newIORef [pure (tokenExpiringIn "eager" 10), throwIO MintBoom]
+            provider <- refreshingProvider (testConfig clock (scriptedMint script))
+            setClock (addUTCTime 20 t0)
+            currentToken provider `shouldThrow` (== MintBoom)
 
         it "trips the breaker after repeated failures, then recovers on a half-open probe" $ do
             (clock, setClock) <- newClock t0
@@ -537,8 +552,7 @@ spec = do
             let cfg =
                     (testConfig clock (scriptedMint script))
                         { rcBreakerThreshold = 1
-                        , rcBreakerReporter = breakerR
-                        , rcRefreshReporter = refreshR
+                        , rcReporters = CredentialReporters breakerR refreshR
                         }
             provider <- refreshingProvider cfg
             -- Construction's eager mint records nothing: the reporters fire on refreshes.
@@ -563,8 +577,8 @@ spec = do
         it "is silent and never throws on that account when wired with the default no-op reporters" $ do
             (clock, setClock) <- newClock t0
             script <- newIORef [pure (tokenExpiringIn "eager" 10), throwString "mint down"]
-            -- 'defaultRefreshConfig' (via 'testConfig') wires 'noBreakerReporter' /
-            -- 'noRefreshReporter': a refresh that trips the breaker records nothing.
+            -- 'defaultRefreshConfig' (via 'testConfig') wires 'noCredentialReporters':
+            -- a refresh that trips the breaker records nothing.
             provider <- refreshingProvider (testConfig clock (scriptedMint script)){rcBreakerThreshold = 1}
             setClock (addUTCTime 20 t0)
             currentToken provider `shouldThrow` anyException

@@ -92,8 +92,7 @@ providerForEnv reporters env cfg =
         defaultRefreshConfig
             { rcMint = mintToken (regioned env) (tokenRequest cfg)
             , rcClock = getCurrentTime
-            , rcBreakerReporter = crBreakerReporter reporters
-            , rcRefreshReporter = crRefreshReporter reporters
+            , rcReporters = reporters
             }
   where
     regioned :: AWS.Env -> AWS.Env
