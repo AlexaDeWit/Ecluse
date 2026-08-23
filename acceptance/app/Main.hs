@@ -9,8 +9,8 @@ from the registry and times that fetch (the upstream leg). It then times two sli
 of Écluse's work-per-request over it:
 
   * The __full-packument__ transform (decode, project, rule sweep, merge, served-body
-    assembly with the fused URL rewrite, re-serialise, ETag) that a metadata read of
-    every version pays.
+    assembly with the fused URL rewrite, re-serialise) that a metadata read of every
+    version pays.
   * The __single-version__ selective decode the cold tarball gate consults to serve
     one package version (its latest). This is the per-package overhead a
     whole-document decode dominates on the heavy packuments and a selective decode
@@ -28,30 +28,25 @@ in "Ecluse.Acceptance". This module is the live measurement shell.
 module Main (main) where
 
 import Control.Exception qualified as Exception
-import Data.Aeson (eitherDecode, encode)
+import Data.Aeson (eitherDecode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime, getCurrentTime, nominalDay)
+import Data.Time (UTCTime, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Acceptance (OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, artHashes, pkgArtifacts)
-import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
-import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (parseErrorMessage)
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
-import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue, parseRegistryVersions)
-import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
+import Ecluse.Test.Server.Transform (SelectedDepth (Depth), selectiveDepth, serveTransformSize)
 
 main :: IO ()
 main = do
@@ -131,21 +126,14 @@ measureSingleVersion pkg version raw = do
   where
     timePass r = do
         t0 <- getMonotonicTime
-        depth <- Exception.evaluate (selectiveDepth pkg version r)
+        depth <- Exception.evaluate (selectiveDepth pkg (r, version))
         t1 <- getMonotonicTime
-        pure (if depth >= 0 then Just (t1 - t0) else Nothing)
+        pure $ case depth of
+            Depth _ -> Just (t1 - t0)
+            _ -> Nothing
 
--- Reduces the selective decode to an 'Int' over a deep field, so forcing it runs the
--- real projection. -1 marks the version absent, -2 a decode failure.
-selectiveDepth :: PackageName -> Version -> ByteString -> Int
-selectiveDepth pkg version raw =
-    case projectNpmVersion defaultLimits pkg version raw of
-        Right (Just details) -> length (artHashes (NE.head (pkgArtifacts details)))
-        Right Nothing -> -1
-        Left _ -> -2
-
-{- | The full-packument work-per-request transform, mirroring the serve pipeline's composition.
-Returns whether the input decoded and projected, forcing the size so the whole transform runs.
+{- | Decode, project, and run the full serve transform, forcing the served size before the
+timer stops. 'False' marks a body that did not decode or project.
 -}
 runTransform :: UTCTime -> PackageName -> LByteString -> IO Bool
 runTransform now pkg body =
@@ -153,14 +141,7 @@ runTransform now pkg body =
         Left _ -> pure False
         Right value -> case parsePackageInfoFromValue pkg value of
             Right (Projected info) -> do
-                plan <- filterPlan inertRuleDeps (EvalContext now Nothing) serveRules info
-                let size :: Int
-                    size = case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
-                        Just merged
-                            | not (Map.null (mpSurvivors merged)) ->
-                                let out = encode (assembleMergedPackument proxyBase (Map.singleton 0 value) merged value)
-                                 in fromIntegral (BSL.length out)
-                        _ -> 0
+                size <- serveTransformSize (EvalContext now Nothing) (value, info)
                 size `seq` pure True
             Right (NameMismatch _) -> pure False
             Left _ -> pure False
@@ -169,15 +150,6 @@ runTransform now pkg body =
 -- noise.
 sampleCount :: Int
 sampleCount = 5
-
--- A permissive rule set, so the assembly and re-serialise run over the whole
--- packument rather than short-circuiting to a denial: the full per-request cost.
-serveRules :: [PrecededRule]
-serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
-
--- A placeholder proxy origin the transform rewrites the tarball URLs onto.
-proxyBase :: Text
-proxyBase = "https://ecluse.example"
 
 -- The median of a list, total (0 on empty). 'sampleCount' is odd, so this is the
 -- middle element of the sorted samples.
