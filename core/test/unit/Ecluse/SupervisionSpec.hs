@@ -4,7 +4,6 @@
 
 module Ecluse.SupervisionSpec (spec) where
 
-import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
@@ -18,18 +17,13 @@ import Ecluse.Core.Supervision (
     backoffMicros,
     superviseLoop,
  )
+import Ecluse.Test.Log (runQuietKatip)
 
 -- | A typed fault for the loop under test to throw, never stringly.
 newtype StepFault = StepFault Text
     deriving stock (Eq, Show)
 
 instance Exception StepFault
-
--- | Run a Katip-constrained action against a scribe-less environment.
-runQuiet :: KatipContextT IO a -> IO a
-runQuiet action = do
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
 
 -- | A policy over the given classifier with a tiny backoff, so a test never sleeps long.
 fastPolicy :: (SomeException -> FaultDisposition) -> SupervisionPolicy
@@ -62,7 +56,7 @@ spec = do
             let step = do
                     atomicModifyIORef' calls (\n -> (n + 1, ()))
                     throwIO (StepFault "still down")
-            _ <- timeout 200_000 (runQuiet (superviseLoop (fastPolicy (const Transient)) step))
+            _ <- timeout 200_000 (runQuietKatip (superviseLoop (fastPolicy (const Transient)) step))
             attempts <- readIORef calls
             attempts `shouldSatisfy` (>= 3)
 
@@ -74,7 +68,7 @@ spec = do
             let step = do
                     n <- atomicModifyIORef' calls (\k -> (k + 1, k + 1))
                     when (odd n) (throwIO (StepFault "odd blip"))
-            _ <- timeout 300_000 (runQuiet (superviseLoop (fastPolicy (const Transient)) step))
+            _ <- timeout 300_000 (runQuietKatip (superviseLoop (fastPolicy (const Transient)) step))
             attempts <- readIORef calls
             attempts `shouldSatisfy` (>= 30)
 
@@ -83,7 +77,7 @@ spec = do
             let step = do
                     atomicModifyIORef' calls (\n -> (n + 1, ()))
                     throwIO (StepFault "wiring fault")
-            outcome <- try (runQuiet (superviseLoop (fastPolicy (const Permanent)) step))
+            outcome <- try (runQuietKatip (superviseLoop (fastPolicy (const Permanent)) step))
             case outcome of
                 Left fault -> fromException fault `shouldBe` Just (StepFault "wiring fault")
                 Right v -> absurd v
@@ -99,7 +93,7 @@ spec = do
                 classify fault = case fromException fault of
                     Just (StepFault "wiring fault") -> Permanent
                     _ -> Transient
-            outcome <- try (runQuiet (superviseLoop (fastPolicy classify) step))
+            outcome <- try (runQuietKatip (superviseLoop (fastPolicy classify) step))
             case outcome of
                 Left fault -> fromException fault `shouldBe` Just (StepFault "wiring fault")
                 Right v -> absurd v
@@ -108,7 +102,7 @@ spec = do
         it "never absorbs cancellation: a cancelled loop dies like any other thread" $ do
             entered <- newEmptyMVar
             loop <- asyncWithUnmask $ \unmask ->
-                unmask . runQuiet . superviseLoop (fastPolicy (const Transient)) $ do
+                unmask . runQuietKatip . superviseLoop (fastPolicy (const Transient)) $ do
                     putMVar entered ()
                     threadDelay 10_000_000
             takeMVar entered

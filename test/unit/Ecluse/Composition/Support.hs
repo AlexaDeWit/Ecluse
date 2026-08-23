@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared fixtures for the composition-root specs: the minimal valid environment layers,
-their targeted mutations, and the expect-helpers that load them.
+{- | Shared fixtures for the specs that load a real configuration: the minimal valid
+environment layers, their targeted mutations, and the expect-helpers that load them.
 -}
 module Ecluse.Composition.Support (
     fixedNow,
@@ -13,6 +13,7 @@ module Ecluse.Composition.Support (
     withoutQueueUrl,
     overrideEnv,
     expectEnv,
+    expectAppConfig,
     expectProviders,
     expectConfig,
 ) where
@@ -20,7 +21,7 @@ module Ecluse.Composition.Support (
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
-import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Test.Credential (noCredentialReporters)
 
@@ -61,7 +62,11 @@ overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
 
 -- | Load an environment layer, failing the test on a parse error.
 expectEnv :: [(String, String)] -> IO AppConfig
-expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) (pure . configApp) . (`loadConfig` Nothing)
+expectEnv env = expectAppConfig env Nothing
+
+-- | 'expectConfig' reduced to the resolved application settings.
+expectAppConfig :: [(String, String)] -> Maybe ByteString -> IO AppConfig
+expectAppConfig env mDoc = configApp <$> expectConfig env mDoc
 
 -- | Build the credential providers from a resolved 'Config', failing the test on a boot error.
 expectProviders :: Config -> IO CredentialProviders
@@ -71,4 +76,4 @@ expectProviders config =
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
-    either (\errs -> fail ("config load failed: " <> show errs)) pure (loadConfig env mDoc)
+    either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig env mDoc)

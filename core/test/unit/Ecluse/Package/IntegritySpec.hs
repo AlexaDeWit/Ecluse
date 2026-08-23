@@ -38,6 +38,7 @@ import Ecluse.Test.Package (
     validSha384Sri,
     validSha512Sri,
  )
+import Ecluse.Test.Support (expectRight)
 
 -- A tarball carrying a chosen set of integrity digests. Every other field is inert.
 artifactWith :: [Hash] -> Artifact
@@ -204,7 +205,3 @@ spec = do
         it "BelowFloor for a SHA-256-only version when the floor is SHA-512" $ do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)
             classify sha512Floor [unsafeHash SHA256 validSha256] `shouldBe` BelowFloor
-
--- Local: assert a 'Right' and return its value, failing the example otherwise.
-expectRight :: (Show e) => Either e a -> IO a
-expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure

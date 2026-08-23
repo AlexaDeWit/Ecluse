@@ -37,7 +37,6 @@ import Data.Char (isSpace)
 import Data.Text qualified as T
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
-import Hedgehog.Range qualified as Range
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
@@ -49,6 +48,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate
 import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Registry.Npm (genPathSegments)
 
 {- | The route a request takes: the name of the first route to claim it, or 'Nothing' when
 none does (the deny-by-default @404@). These examples assert only which route claimed the
@@ -64,13 +64,13 @@ spec = do
             it "claims the same route as the reference, over generated requests" $
                 hedgehog $ do
                     method <- forAll genMethod
-                    segments <- forAll genSegments
+                    segments <- forAll genPathSegments
                     matchedId method segments === referenceRouteId method segments
 
         modifyMaxSuccess (const 5000) $
             it "parses a package unit exactly as the reference does" $
                 hedgehog $ do
-                    segments <- forAll genSegments
+                    segments <- forAll genPathSegments
                     takePackage segments === refTakePackage segments
 
     describe "the routes it claims" $ do
@@ -133,39 +133,6 @@ spec = do
 
 genMethod :: Gen Method
 genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
-
-{- | Mount-relative segment lists that exercise the tricky grammar: scoped names in
-both encodings, the reserved @"-"@ prefix, tarball shapes, hostile components, and
-random fuzz.
--}
-genSegments :: Gen [Text]
-genSegments = Gen.list (Range.linear 0 4) genSegment
-
-genSegment :: Gen Text
-genSegment =
-    Gen.choice
-        [ Gen.element
-            [ "lodash"
-            , "@scope/pkg"
-            , "@scope"
-            , "pkg"
-            , "-"
-            , "-foo"
-            , "ping"
-            , "v1"
-            , "search"
-            , ".."
-            , "."
-            , "foo/bar"
-            , "lodash-1.0.0.tgz"
-            , "code-frame-7.0.0.tgz"
-            , ""
-            , "@"
-            , "@/x"
-            , "@scope/"
-            ]
-        , Gen.text (Range.linear 0 8) (Gen.element ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1', '2', '3', '4'])
-        ]
 
 -- The independent reference ---------------------------------------------------
 --

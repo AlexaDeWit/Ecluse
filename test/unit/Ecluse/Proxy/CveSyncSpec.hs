@@ -7,31 +7,15 @@ module Ecluse.Proxy.CveSyncSpec (spec) where
 import Control.Retry (simulatePolicy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
-import Katip (
-    ColorStrategy (ColorLog),
-    Environment (Environment),
-    LogEnv,
-    Namespace (Namespace),
-    Severity (DebugS),
-    Verbosity (V2),
-    closeScribes,
-    defaultScribeSettings,
-    initLogEnv,
-    permitItem,
-    registerScribe,
- )
-import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
+import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO (bracket)
-import UnliftIO.Exception (throwIO, throwString)
-import UnliftIO.Temporary (withSystemTempFile)
+import UnliftIO.Exception (throwIO)
 
-import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
@@ -39,16 +23,18 @@ import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (CveFetch (..), SyncEnv (..), SyncSchedule (..), bootBackoffDelays, bootBurstPolicy)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays, bootBurstPolicy)
+import Ecluse.Runtime.Test.Cve (refusingFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Rules (noFaultReporter)
 
 spec :: Spec
 spec = do
     describe "planCveSync -- the per-ecosystem advisory-sync plan" $ do
         it "plans nothing without a configured advisory bucket" $ do
-            cfg <- appConfigFrom [] Nothing
-            logEnv <- quietLogEnv
+            cfg <- expectAppConfig [] Nothing
+            logEnv <- newTestLogEnv
             plan <- planCveSync logEnv (ambientAwsFromEnv []) cfg
             Map.keys plan `shouldBe` []
 
@@ -62,12 +48,12 @@ spec = do
                 writeFileBS (dataDir </> "npm-osv-schema3.db.tmp") "stale partial download"
                 writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
                 cfg <-
-                    appConfigFrom
+                    expectAppConfig
                         [ ("ECLUSE_ADVISORIES__BUCKET", "advisories")
                         , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
                         ]
                         (Just mountedNpmDoc)
-                logEnv <- quietLogEnv
+                logEnv <- newTestLogEnv
                 plan <- planCveSync logEnv (ambientAwsFromEnv []) cfg
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
@@ -81,7 +67,7 @@ spec = do
 
     describe "sweepStep -- the sweep's best-effort filesystem boundary" $ do
         it "propagates a non-IO exception rather than swallowing it" $ do
-            logEnv <- quietLogEnv
+            logEnv <- newTestLogEnv
             sweepStep logEnv "/srv/osv" (throwIO SweepBoom) `shouldThrow` (\SweepBoom -> True)
 
         it "swallows an IOError, logs it at Warning against the path, and returns so boot proceeds" $
@@ -137,7 +123,7 @@ spec = do
 
     describe "cveSyncScheduleFor" $
         it "converts the configured poll interval to microseconds over the shipped burst" $ do
-            cfg <- appConfigFrom [("ECLUSE_ADVISORIES__POLL_INTERVAL", "90")] Nothing
+            cfg <- expectAppConfig [("ECLUSE_ADVISORIES__POLL_INTERVAL", "90")] Nothing
             let schedule = cveSyncScheduleFor cfg
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
@@ -161,11 +147,7 @@ stubSyncHandle = do
             , csReady = ready
             , csEnv =
                 SyncEnv
-                    { syncFetch =
-                        CveFetch
-                            { fetchHeadEtag = throwString "stubSyncHandle: no fetch in these tests"
-                            , fetchDownload = \_ -> throwString "stubSyncHandle: no fetch in these tests"
-                            }
+                    { syncFetch = refusingFetch
                     , syncEcosystem = Npm
                     , syncDbPath = "unused.db"
                     , syncSlot = slot
@@ -175,11 +157,6 @@ stubSyncHandle = do
 -- An owning handle over an in-memory lookup. Closing is a no-op.
 fakeDb :: CveDb
 fakeDb = CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
-
-appConfigFrom :: [(String, String)] -> Maybe ByteString -> IO AppConfig
-appConfigFrom envVars doc = case loadConfig envVars doc of
-    Right c -> pure (configApp c)
-    Left e -> fail ("Config error: " <> show e)
 
 -- The S3 env discovers credentials from the process environment. The plan only wires
 -- the transport and makes no request, so dummies satisfy it.
@@ -202,37 +179,3 @@ data SweepBoom = SweepBoom
     deriving stock (Show)
 
 instance Exception SweepBoom
-
-{- | A scribe-free 'LogEnv'. The planning tests thread a logger but assert on the
-plan, not on any log line, so a no-output environment satisfies the dependency.
--}
-quietLogEnv :: IO LogEnv
-quietLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
-
-{- | A 'LogEnv' with one stdout scribe in compact one-line JSON, every severity admitted,
-so 'captureStdout' can assert on a warning's serialised bytes.
--}
-jsonLogEnv :: IO LogEnv
-jsonLogEnv = do
-    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
-    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    registerScribe "stdout" scribe defaultScribeSettings base
-
-{- | Run an action with 'stdout' redirected to a temporary file and return what it wrote.
-'stdout' is restored on every exit path, so scribe output never leaks into the run.
--}
-captureStdout :: IO () -> IO Text
-captureStdout act =
-    withSystemTempFile "ecluse-cve-sync-log.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
-            act
-            hFlush stdout
-            hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
-  where
-    restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
-        hClose saved

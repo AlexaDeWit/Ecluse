@@ -1,16 +1,13 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Ecluse.Osv.AdvisorySpec (spec) where
 
 import Conduit
 import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString qualified as BS
-import Katip (Environment (..), Katip (..), KatipContext (..), LogEnv, initLogEnv)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
 import Data.ByteString.Lazy qualified as LBS
@@ -27,22 +24,9 @@ import Ecluse.Core.Osv.Stream (
     systemicDrop,
  )
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.Osv (osvZipOf, runOsvTestM)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
-
-newtype TestM a = TestM {runTestM :: ReaderT LogEnv (ResourceT IO) a}
-    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, PrimMonad)
-
-instance Katip TestM where
-    getLogEnv = TestM ask
-    localLogEnv f (TestM m) = TestM (local f m)
-
-instance KatipContext TestM where
-    getKatipContext = pure mempty
-    localKatipContext _ m = m
-    getKatipNamespace = pure mempty
-    localKatipNamespace _ m = m
 
 -- | An advisory carrying only the severity evidence under test.
 advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
@@ -209,18 +193,13 @@ spec = describe "Osv parsing and streaming" $ do
                                ]
 
     it "streams an OSV zip archive and emits ExtractedOsv elements" $ do
-        le <- initLogEnv "test" (Environment "test")
         results <-
-            runResourceT $
-                runReaderT
-                    ( runTestM $ do
-                        ingest <- newOsvIngest defaultIngestLimits
-                        runConduit $
-                            sourceFile "test/unit/fixtures/osv/sample.zip"
-                                .| parseOsvStream Nothing ingest
-                                .| sinkList
-                    )
-                    le
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits
+                runConduit $
+                    sourceFile "test/unit/fixtures/osv/sample.zip"
+                        .| parseOsvStream Nothing ingest
+                        .| sinkList
 
         length results `shouldBe` 1
         case results of
@@ -232,63 +211,43 @@ spec = describe "Osv parsing and streaming" $ do
             _ -> fail "Expected exactly 1 result"
 
     it "handles an empty zip archive gracefully without emitting anything" $ do
-        le <- initLogEnv "test" (Environment "test")
         results <-
-            runResourceT $
-                runReaderT
-                    ( runTestM $ do
-                        ingest <- newOsvIngest defaultIngestLimits
-                        runConduit $
-                            sourceFile "test/unit/fixtures/osv/empty.zip"
-                                .| parseOsvStream Nothing ingest
-                                .| sinkList
-                    )
-                    le
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits
+                runConduit $
+                    sourceFile "test/unit/fixtures/osv/empty.zip"
+                        .| parseOsvStream Nothing ingest
+                        .| sinkList
         results `shouldBe` []
 
     it "skips malformed JSON files inside a zip archive and logs a warning" $ do
-        le <- initLogEnv "test" (Environment "test")
         results <-
-            runResourceT $
-                runReaderT
-                    ( runTestM $ do
-                        ingest <- newOsvIngest defaultIngestLimits
-                        runConduit $
-                            sourceFile "test/unit/fixtures/osv/malformed-json.zip"
-                                .| parseOsvStream Nothing ingest
-                                .| sinkList
-                    )
-                    le
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits
+                runConduit $
+                    sourceFile "test/unit/fixtures/osv/malformed-json.zip"
+                        .| parseOsvStream Nothing ingest
+                        .| sinkList
         results `shouldBe` []
 
     it "throws an exception when streaming a non-zip file" $ do
-        le <- initLogEnv "test" (Environment "test")
         let action =
-                runResourceT $
-                    runReaderT
-                        ( runTestM $ do
-                            ingest <- newOsvIngest defaultIngestLimits
-                            runConduit $
-                                sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
-                                    .| parseOsvStream Nothing ingest
-                                    .| sinkList
-                        )
-                        le
+                runOsvTestM $ do
+                    ingest <- newOsvIngest defaultIngestLimits
+                    runConduit $
+                        sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
+                            .| parseOsvStream Nothing ingest
+                            .| sinkList
         action `shouldThrow` anyException
 
     it "fetches and streams an OSV zip archive over HTTP" $ do
-        le <- initLogEnv "test" (Environment "test")
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         results <- withStub status200 zipData $ \stub -> do
-            runResourceT $
-                runReaderT
-                    ( runTestM $ do
-                        ingest <- newOsvIngest defaultIngestLimits
-                        runConduit $
-                            streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
-                                .| sinkList
-                    )
-                    le
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits
+                runConduit $
+                    streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
+                        .| sinkList
         length results `shouldBe` 1
         case results of
             [ext] -> do
@@ -299,22 +258,16 @@ spec = describe "Osv parsing and streaming" $ do
             _ -> fail "Expected exactly 1 result"
 
     it "throws an exception if the URL is invalid" $ do
-        le <- initLogEnv "test" (Environment "test")
         let action =
-                runResourceT $
-                    runReaderT
-                        ( runTestM $ do
-                            ingest <- newOsvIngest defaultIngestLimits
-                            runConduit $
-                                streamOsvUrl Nothing ingest "not-a-valid-url"
-                                    .| sinkList
-                        )
-                        le
+                runOsvTestM $ do
+                    ingest <- newOsvIngest defaultIngestLimits
+                    runConduit $
+                        streamOsvUrl Nothing ingest "not-a-valid-url"
+                            .| sinkList
         action `shouldThrow` anyException
 
     describe "ingest bounds (issue #571)" $ do
         it "drops an over-large advisory and keeps ingesting the entries after it" $ do
-            le <- initLogEnv "test" (Environment "test")
             -- The stream drops the oversized entry before decode, so its bytes need
             -- not be valid JSON. It comes first, so the good entry after it surfaces
             -- only if the drop drained cleanly to the next entry boundary.
@@ -325,36 +278,27 @@ spec = describe "Osv parsing and streaming" $ do
                     ]
             let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000}
             (results, stats) <-
-                runResourceT $
-                    runReaderT
-                        ( runTestM $ do
-                            ingest <- newOsvIngest limits
-                            rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
-                            st <- readIngestStats ingest
-                            pure (rs, st)
-                        )
-                        le
+                runOsvTestM $ do
+                    ingest <- newOsvIngest limits
+                    rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
+                    st <- readIngestStats ingest
+                    pure (rs, st)
             map extCveId results `shouldBe` ["GHSA-good"]
             statAccepted stats `shouldBe` 1
             statDroppedOversize stats `shouldBe` 1
             statDroppedMalformed stats `shouldBe` 0
 
         it "flags an anomalous fan-out but still ingests every range of the advisory" $ do
-            le <- initLogEnv "test" (Environment "test")
             zipData <-
                 osvZipOf
                     [("fan.json", "{\"id\":\"GHSA-fan\",\"affected\":[{\"package\":{\"name\":\"fan\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"1.1.0\",\"1.2.0\",\"1.3.0\",\"1.4.0\"]}]}")]
             let limits = defaultIngestLimits{ilMaxAdvisoryFanOut = 3}
             (results, stats) <-
-                runResourceT $
-                    runReaderT
-                        ( runTestM $ do
-                            ingest <- newOsvIngest limits
-                            rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
-                            st <- readIngestStats ingest
-                            pure (rs, st)
-                        )
-                        le
+                runOsvTestM $ do
+                    ingest <- newOsvIngest limits
+                    rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
+                    st <- readIngestStats ingest
+                    pure (rs, st)
             length results `shouldBe` 5
             statAccepted stats `shouldBe` 1
 

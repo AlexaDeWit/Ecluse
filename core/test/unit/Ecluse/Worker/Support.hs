@@ -10,11 +10,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
-import Katip (
-    Environment (Environment),
-    Namespace (Namespace),
-    initLogEnv,
- )
 import Network.HTTP.Client (Manager, Request, defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
@@ -76,6 +71,7 @@ import Ecluse.Core.Worker (
     newWorkerHeartbeat,
     runWorkerM,
  )
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (
     defaultMinIntegrity,
     unsafeHash,
@@ -88,6 +84,7 @@ import Ecluse.Test.Package (
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 {- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__ over a
 'WorkerRuntime' of test doubles, with no application 'Ecluse.Env.Env' and no OpenTelemetry SDK.
@@ -420,9 +417,9 @@ recording double ('withPublish'), so any effectful use here fails loudly.
 unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
-        { mpProbeMetadata = const (throwIO (SimulatedContractEscape "unwiredPublish: probe consulted"))
+        { mpProbeMetadata = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
         , mpParseVersionList = const (Left (ParseError "unwiredPublish: nothing to parse"))
-        , mpPublishArtifact = \_ _ _ _ -> throwIO (SimulatedContractEscape "unwiredPublish: publish consulted")
+        , mpPublishArtifact = \_ _ _ _ -> throwIO (TestContractEscape "unwiredPublish: publish consulted")
         }
 
 {- | The default admitting policy. The version resolves present and an always-admit rule
@@ -445,7 +442,7 @@ full-manifest op is unused here and refuses loudly).
 versionClient :: Either MetadataError (Maybe PackageDetails) -> MetadataClient
 versionClient result =
     MetadataClient
-        { fetchFullManifest = const (throwIO (SimulatedContractEscape "versionClient: fetchFullManifest is unused"))
+        { fetchFullManifest = const (throwIO (TestContractEscape "versionClient: fetchFullManifest is unused"))
         , fetchVersionMetadata = \_ _ -> pure result
         }
 
@@ -456,8 +453,8 @@ that the classification boundary propagates the escape rather than absorbing it.
 throwingVersionClient :: MetadataClient
 throwingVersionClient =
     MetadataClient
-        { fetchFullManifest = const (throwIO (SimulatedContractEscape "throwingVersionClient: fetchFullManifest is unused"))
-        , fetchVersionMetadata = \_ _ -> throwIO (SimulatedContractEscape "simulated contract escape")
+        { fetchFullManifest = const (throwIO (TestContractEscape "throwingVersionClient: fetchFullManifest is unused"))
+        , fetchVersionMetadata = \_ _ -> throwIO (TestContractEscape "simulated contract escape")
         }
 
 {- | The loop tests' supervision policy. It drops the shell's wiring-fault classifications,
@@ -476,16 +473,8 @@ scribe, so log lines are discarded.
 -}
 runWM :: WorkerRuntime -> WorkerM a -> IO a
 runWM runtime action = do
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    logEnv <- newTestLogEnv
     runWorkerM logEnv mempty runtime action
-
-{- | A typed stand-in for an exception escaping a dependency's typed contract, an invariant
-break.
--}
-newtype SimulatedContractEscape = SimulatedContractEscape Text
-    deriving stock (Eq, Show)
-
-instance Exception SimulatedContractEscape
 
 {- | A queue whose @receive@ always reports the handle's typed fault, counting each call. The
 loop must survive a faulted poll and poll again, not die.
@@ -510,7 +499,7 @@ throwingReceiveQueue calls = do
         base
             { receive = do
                 atomicModifyIORef' calls (\n -> (n + 1, ()))
-                throwIO (SimulatedContractEscape "receive: simulated queue outage")
+                throwIO (TestContractEscape "receive: simulated queue outage")
             }
 
 {- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the

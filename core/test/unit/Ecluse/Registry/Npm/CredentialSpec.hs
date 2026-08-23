@@ -12,6 +12,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Request (attachCredential, credentialRecover)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
 spec = do
@@ -59,28 +60,25 @@ recoverySpec = describe "npm recovers the bearer token an npm client presents" $
 encodingSpec :: Spec
 encodingSpec = describe "npm carries an outbound credential as Bearer on Authorization" $ do
     it "writes the Bearer header and no other credential header" $ do
-        req <- parseOrFail "https://registry.test/is-odd"
+        req <- parseRequestOrFail "https://registry.test/is-odd"
         let headers = Client.requestHeaders (attachCredential npmCredential (Just (mkSecret "npm_tok-abc")) req)
         lookup "Authorization" headers `shouldBe` Just "Bearer npm_tok-abc"
         lookup "X-Api-Key" headers `shouldBe` Nothing
 
     it "writes no credential header when the request is anonymous" $ do
-        req <- parseOrFail "https://registry.test/is-odd"
+        req <- parseRequestOrFail "https://registry.test/is-odd"
         lookup "Authorization" (Client.requestHeaders (attachCredential npmCredential Nothing req))
             `shouldBe` Nothing
 
     it "refuses to follow a redirect with the credential attached" $ do
-        req <- parseOrFail "https://registry.test/is-odd"
+        req <- parseRequestOrFail "https://registry.test/is-odd"
         Client.redirectCount (attachCredential npmCredential (Just (mkSecret "npm_tok-abc")) req) `shouldBe` 0
 
     it "round-trips a recovered token back onto the wire under the same scheme" $ do
-        req <- parseOrFail "https://registry.test/is-odd"
+        req <- parseRequestOrFail "https://registry.test/is-odd"
         let recovered = recover [("Authorization", "Bearer npm_tok-abc")]
         lookup "Authorization" (Client.requestHeaders (attachCredential npmCredential recovered req))
             `shouldBe` Just "Bearer npm_tok-abc"
 
 recover :: RequestHeaders -> Maybe Secret
 recover = credentialRecover npmCredential
-
-parseOrFail :: Text -> IO Client.Request
-parseOrFail = Client.parseRequest . toString

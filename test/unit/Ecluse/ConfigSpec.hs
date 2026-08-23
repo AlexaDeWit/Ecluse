@@ -9,6 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
+import Ecluse.Composition.Support (expectConfig)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -22,7 +23,6 @@ import Ecluse.Config (
     loadConfig,
     mountCollisionWarnings,
     mountPostureLines,
-    renderConfigError,
     resolvedKeyProvenance,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -163,9 +163,9 @@ spec = do
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
--- | Load a config document, failing the test on any load error.
+-- | Load a config document under the client-facing base URL every active mount needs.
 configFor :: ByteString -> IO Config
-configFor doc = either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig pubUrlEnv (Just doc))
+configFor doc = expectConfig pubUrlEnv (Just doc)
 
 -- | Assert exactly one collision warning whose text carries every phrase.
 shouldWarnOnce :: ByteString -> [Text] -> Expectation

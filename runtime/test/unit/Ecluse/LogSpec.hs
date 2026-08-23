@@ -12,7 +12,6 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Data.Time (UTCTime (..), fromGregorian)
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
     Environment (Environment),
     Item (..),
@@ -28,8 +27,7 @@ import Katip (
     sl,
  )
 import Test.Hspec
-import UnliftIO (bracket, evaluate)
-import UnliftIO.Temporary (withSystemTempFile)
+import UnliftIO (evaluate)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Runtime.Log (
@@ -49,6 +47,7 @@ import Ecluse.Runtime.Log (
     severityFloor,
     severityStatus,
  )
+import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.WireVocab (wireRoundTrips)
 
 -- | A fixed instant, so a rendered line is deterministic across runs.
@@ -118,25 +117,6 @@ ddObjectOf logIdentity logItem = lineObject logIdentity logItem >>= parseMaybe (
 -- | A string field of a @dd@ object.
 ddStr :: Text -> Object -> Maybe Text
 ddStr key = parseMaybe (\ob -> ob .: Key.fromText key)
-
-{- | Run an 'IO' action with 'stdout' redirected to a temporary file and return what was
-written. The original 'stdout' is restored on every exit path.
--}
-captureStdout :: IO () -> IO Text
-captureStdout act =
-    withSystemTempFile "ecluse-log-capture.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
-            act
-            hFlush stdout
-            hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
-  where
-    restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
-        hClose saved
 
 {- | Emit one event through a real 'LogEnv' at the given level and capture what the
 scribe wrote to stdout. The whole admission decision lives in the scribe.

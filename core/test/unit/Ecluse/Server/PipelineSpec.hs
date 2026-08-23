@@ -22,7 +22,6 @@ import Data.Aeson (Value, encode, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 
@@ -60,6 +59,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -201,7 +201,7 @@ and no @dd@ object is attached.
 -}
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    logEnv <- newTestLogEnv
     captured <- newIORef Nothing
     let respond value = writeIORef captured (Just (responseToWai contract value)) >> pure ResponseReceived
     _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)

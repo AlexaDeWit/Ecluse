@@ -16,7 +16,7 @@ import UnliftIO (bracket_)
 import OpenTelemetry.Attributes (Attribute, fromAttribute)
 import OpenTelemetry.Resource.Detect (detectResourceAttributes)
 
-import Ecluse.Test.Support (newTestLogEnv)
+import Ecluse.Test.Log (newTestLogEnv)
 
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Runtime.Telemetry.Resolve (

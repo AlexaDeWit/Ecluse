@@ -19,11 +19,12 @@ import Ecluse.Runtime.Env (Env (..), newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (newTestLogEnv, testServeAdmission)
+import Ecluse.Test.Support (testServeAdmission)
 
 {- | A single npm mount with inert packument-serve dependencies and no publish target,
 resolved the way the composition root resolves it.

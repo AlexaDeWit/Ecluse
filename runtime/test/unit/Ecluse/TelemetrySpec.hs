@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
-import Ecluse.Test.Support (newTestLogEnv)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.WireVocab (wireRoundTrips)
 import Katip (Severity (WarningS))
 import OpenTelemetry.Exporter.Metric (MetricExporter (..))

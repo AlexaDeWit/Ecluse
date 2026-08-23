@@ -11,16 +11,12 @@ module Ecluse.Registry.Npm.WireSpec (spec) where
 import Data.Aeson (
     FromJSON,
     Result (Error, Success),
-    Value (Array, Bool, Null, Number, Object, String),
+    Value (String),
     eitherDecode,
     eitherDecodeStrict,
     fromJSON,
  )
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Data.Scientific (Scientific, scientific)
-import Data.Vector qualified as V
 import Hedgehog (PropertyT, annotateShow, forAll)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -29,6 +25,8 @@ import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Registry.Npm.Wire
+import Ecluse.Test.Json (genValue)
+import Ecluse.Test.Support (decodeJsonOrFail)
 
 {- | Decoding tests for the npm wire types, pure and offline over the fixtures in
 @core\/test\/unit\/fixtures\/npm\/@, live captures of @registry.npmjs.org@.
@@ -65,19 +63,19 @@ versionManifestSpec = describe "VersionManifest" $ do
 
     it "reads a boolean deprecated=false as not deprecated (npm's wire variant)" $ do
         vm <-
-            decodeOrFail @VersionManifest
+            decodeJsonOrFail @VersionManifest
                 "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":false}"
         vmDeprecated vm `shouldBe` Nothing
 
     it "reads a boolean deprecated=true as deprecated with an empty message" $ do
         vm <-
-            decodeOrFail @VersionManifest
+            decodeJsonOrFail @VersionManifest
                 "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":true}"
         vmDeprecated vm `shouldBe` Just ""
 
     it "still reads a string deprecated as the message (inline, not just the fixture)" $ do
         vm <-
-            decodeOrFail @VersionManifest
+            decodeJsonOrFail @VersionManifest
                 "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
         vmDeprecated vm `shouldBe` Just "gone"
 
@@ -169,7 +167,7 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
         it "reads name, email, and url from the full object form" $ do
             -- Exercise each selector directly, beyond the structural equality above.
             p <-
-                decodeOrFail @Person
+                decodeJsonOrFail @Person
                     "{\"name\":\"Sindre\",\"email\":\"s@example.com\",\"url\":\"https://sindresorhus.com\"}"
             personName p `shouldBe` "Sindre"
             personEmail p `shouldBe` Just "s@example.com"
@@ -213,7 +211,7 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
 
     it "decodes a list of version manifests" $ do
         vms <-
-            decodeOrFail @[VersionManifest]
+            decodeJsonOrFail @[VersionManifest]
                 "[{\"name\":\"a\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://x/a.tgz\"}}\
                 \,{\"name\":\"b\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://x/b.tgz\"}}]"
         map vmName vms `shouldBe` ["a", "b"]
@@ -256,7 +254,7 @@ surfaces as a caught failure rather than a pass.
 -}
 valueDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeIsTotal = do
-    v <- forAll genValue
+    v <- forAll (genValue wireKeys)
     annotateShow v
     _ <- H.eval (resultRendering (fromJSON v :: Result a))
     H.success
@@ -276,7 +274,7 @@ of a permissive decoder, so 'valueDecodeIsTotal' is not vacuously all-failures.
 -}
 valueDecodeCoversBothArms :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeCoversBothArms = do
-    v <- forAll genValue
+    v <- forAll (genValue wireKeys)
     let decoded = fromJSON v :: Result a
     annotateShow v
     _ <- H.eval (resultRendering decoded)
@@ -295,76 +293,32 @@ isSuccess = \case
     Success{} -> True
     Error{} -> False
 
-{- | A depth- and breadth-__bounded__ arbitrary 'Value'. The small ranges keep it terminating
-and 'Gen.recursive' shrinks toward the scalar cases, so it covers the JSON shapes a registry
-might send and many it never would.
+{- | The object-key pool the generated documents draw from. Without the bias toward the real
+wire field names, almost every object would miss @.: \"name\"@ and the success arm would go unsampled.
 -}
-genValue :: H.Gen Value
-genValue =
-    Gen.recursive
-        Gen.choice
-        -- non-recursive (leaf) generators, also the shrink targets
-        [ pure Null
-        , Bool <$> Gen.bool
-        , Number <$> genNumber
-        , String <$> genJsonText
-        ]
-        -- recursive generators, small fan-out so the tree stays bounded
-        [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
-        , Object . KeyMap.fromList
-            <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
-        ]
-
-{- | A small arbitrary integer to seed a JSON number, kept in a modest range so 'Show'
-is cheap. 'fromInteger' lifts it into aeson's 'Number' 'Scientific'.
--}
-genInteger :: H.Gen Integer
-genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
-
-{- | A small arbitrary JSON number. A deliberate minority are hostile to a strict 'Int'
-decode, fractional or far out of 'Int' range, built from a bounded coefficient and a wide
-exponent so the magnitude is astronomical yet cheap to render.
--}
-genNumber :: H.Gen Scientific
-genNumber =
-    Gen.frequency
-        [ (3, fromInteger <$> genInteger)
-        , (1, scientific <$> genInteger <*> Gen.int (Range.linearFrom 0 (-20) 400))
-        ]
-
--- | A short arbitrary JSON string value (unicode, to probe text handling).
-genJsonText :: H.Gen Text
-genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
-
-{- | An object key drawn from a pool biased toward the real wire field names. Without the
-bias almost every generated object would miss @.: \"name\"@ and the success arm would go
-unsampled.
--}
-genKey :: H.Gen Key.Key
-genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
-  where
-    wireKeys =
-        [ "name"
-        , "version"
-        , "modified"
-        , "dist"
-        , "dist-tags"
-        , "versions"
-        , "time"
-        , "tarball"
-        , "shasum"
-        , "integrity"
-        , "unpackedSize"
-        , "scripts"
-        , "license"
-        , "type"
-        , "url"
-        , "email"
-        , "maintainers"
-        , "dependencies"
-        , "deprecated"
-        , "hasInstallScript"
-        ]
+wireKeys :: [Text]
+wireKeys =
+    [ "name"
+    , "version"
+    , "modified"
+    , "dist"
+    , "dist-tags"
+    , "versions"
+    , "time"
+    , "tarball"
+    , "shasum"
+    , "integrity"
+    , "unpackedSize"
+    , "scripts"
+    , "license"
+    , "type"
+    , "url"
+    , "email"
+    , "maintainers"
+    , "dependencies"
+    , "deprecated"
+    , "hasInstallScript"
+    ]
 
 {- | Decode a committed fixture by file name under @core\/test\/unit\/fixtures\/npm\/@, a path
 relative to the package root that Cabal runs tests from.
@@ -391,11 +345,3 @@ bareDist tarball =
         , distIntegrity = Nothing
         , distUnpackedSize = Nothing
         }
-
-{- | Decode a JSON literal, failing the example with the aeson error rather than
-returning an 'Either'. An example can then go on to read selectors off the value.
--}
-decodeOrFail :: forall a. (FromJSON a) => LByteString -> IO a
-decodeOrFail json = case eitherDecode json of
-    Right a -> pure a
-    Left e -> fail ("expected a successful decode, got: " <> e)

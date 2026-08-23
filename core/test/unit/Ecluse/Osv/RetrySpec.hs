@@ -31,22 +31,11 @@ import Network.TLS qualified as TLS
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
-import Katip (Environment (..), initLogEnv)
-import Katip.Monadic (KatipContextT, runKatipContextT)
-
 import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Retry
+import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
-
-{- | Run a fetch wrapper in @KatipContextT IO@, which already satisfies
-@withOsvRetry@'s @MonadMask@ + @KatipContext@ constraints. The log environment
-has no scribes, so the retry log lines never reach the output.
--}
-runTest :: KatipContextT IO a -> IO a
-runTest action = do
-    le <- initLogEnv "test" (Environment "test")
-    runKatipContextT le () mempty action
 
 -- | A transient (retryable) fetch failure: a connection timeout to osv.dev.
 transientFailure :: HttpException
@@ -169,7 +158,7 @@ spec = do
     describe "withOsvRetry -- the fetch wrapper" $ do
         it "returns the value on success without retrying" $ do
             attempts <- newIORef (0 :: Int)
-            result <- runTest $ withOsvRetry (limitRetries 5) $ do
+            result <- runQuietKatip $ withOsvRetry (limitRetries 5) $ do
                 modifyIORef' attempts (+ 1)
                 pure ("ok" :: Text)
             result `shouldBe` "ok"
@@ -177,7 +166,7 @@ spec = do
 
         it "retries a transient failure, then succeeds within the budget" $ do
             attempts <- newIORef (0 :: Int)
-            result <- runTest $ withOsvRetry (limitRetries 5) $ do
+            result <- runQuietKatip $ withOsvRetry (limitRetries 5) $ do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 3 then throwIO transientFailure else pure ("recovered" :: Text)
             result `shouldBe` "recovered"
@@ -185,7 +174,7 @@ spec = do
         it "gives up after the retry budget is spent (no tight loop)" $ do
             attempts <- newIORef (0 :: Int)
             outcome <-
-                try (runTest (withOsvRetry (limitRetries 3) (modifyIORef' attempts (+ 1) >> throwIO transientFailure))) ::
+                try (runQuietKatip (withOsvRetry (limitRetries 3) (modifyIORef' attempts (+ 1) >> throwIO transientFailure))) ::
                     IO (Either HttpException ())
             case outcome of
                 Left err -> isRetryableHttpException err `shouldBe` True
@@ -194,7 +183,7 @@ spec = do
         it "re-throws a permanent failure without retrying" $ do
             attempts <- newIORef (0 :: Int)
             outcome <-
-                try (runTest (withOsvRetry (limitRetries 5) (modifyIORef' attempts (+ 1) >> throwIO permanentFailure))) ::
+                try (runQuietKatip (withOsvRetry (limitRetries 5) (modifyIORef' attempts (+ 1) >> throwIO permanentFailure))) ::
                     IO (Either HttpException ())
             case outcome of
                 Left err -> isRetryableHttpException err `shouldBe` False
