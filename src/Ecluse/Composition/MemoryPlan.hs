@@ -276,9 +276,8 @@ fallbackOr :: Text -> Maybe Int -> Int -> (Int, Text)
 fallbackOr name explicit fallback =
     resolveSized ("memory plan: " <> name) explicit fallback "built-in default; no heap-ceiling datapoint"
 
-{- | The desired byte charges and reclaim floors the shed ladder walks, resolved from the
-ceiling before any shedding. A pinned ('Just') bound never sheds and answers for its own
-overshoot.
+{- | The byte charges the shed ladder walks, resolved from the ceiling before any shedding.
+A pinned ('Just') bound never sheds and answers for its own overshoot.
 -}
 data TenantDemands = TenantDemands
     { tdCeiling :: Int
@@ -347,8 +346,7 @@ data MaterialDemand = MaterialDemand
     }
 
 -- Admission is bounded by the CPU capacity and by what the material share holds at the
--- floor response cap. The response cap is then what that share affords at the admitted
--- concurrency ('contractResidentBytes' inverts the envelope).
+-- floor response cap. The response cap is what that share affords at the admitted concurrency.
 materialDemand :: PlanInputs -> Int -> MaterialDemand
 materialDemand inputs appHeap =
     MaterialDemand
