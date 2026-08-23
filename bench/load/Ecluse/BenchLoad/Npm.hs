@@ -29,7 +29,7 @@ many-version packages rather than one synthetic payload, because a trivial few-v
 package stresses nothing. The public upstream serves each package's real captured
 packument by the requested name: the full work-per-request corpus, scoped packages
 included. 'requestedPackage' recovers @\@scope\/name@ from the request path, and the
-captures live under @bench\/corpus\/npm\/@ (see "Ecluse.Bench.Corpus" and
+captures live under @bench\/corpus\/npm\/@ (see "Ecluse.Test.Corpus" and
 @docs\/architecture\/performance.md@).
 
 The @merge-cold@ and @cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix')
@@ -94,7 +94,7 @@ import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian,
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
+import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
@@ -108,7 +108,7 @@ import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveI
 import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolvePublicConnections, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
+import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
@@ -125,7 +125,6 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
@@ -150,12 +149,14 @@ import Ecluse.Core.Worker (
 import Ecluse.Runtime.Env (newEnvWithAdmission)
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpWeight), corpusPackages, cpName, permissiveAgeRules)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps)
+import Ecluse.Test.Support (newTestLogEnv)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.
@@ -377,7 +378,7 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
             privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
             admission <- newServeAdmission admissionCapacity
             cache <- newMetadataCache (benchCacheConfig ttl (max 1 maxEntries))
-            logEnv <- benchLogEnv
+            logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             -- The production memory backend at config/default.yaml's queueMemoryMaxDepth default,
             -- 50000. No worker drains it, so past the cap it sheds drop-newest, like production.
@@ -398,10 +399,10 @@ packageUrl :: Int -> Text -> Text
 packageUrl proxyPort name = localhost proxyPort <> "/npm/" <> name
 
 -- Repeats each package's URL by its serve weight, so the oha drive follows the
--- large-emphasis proportion 'serveCorpus' encodes.
+-- large-emphasis proportion 'corpusPackages' encodes.
 serveMix :: Int -> [Text]
 serveMix proxyPort =
-    concatMap (\cp -> replicate (cpWeight cp) (packageUrl proxyPort (cpName cp))) serveCorpus
+    concatMap (\cp -> replicate (cpWeight cp) (packageUrl proxyPort (cpName cp))) corpusPackages
 
 -- Each package once, so oha cycles them evenly. That reuse thrashes a too-small cache:
 -- the drive asks for an evicted package again and the proxy re-derives it.
@@ -412,29 +413,23 @@ uniformMix pkgs proxyPort = map (packageUrl proxyPort . cpName) pkgs
 -- A tarball path is /npm/{pkg}/-/{unscoped-pkg}-{version}.tgz (npm convention).
 tarballMix :: Int -> [Text]
 tarballMix proxyPort =
-    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> cpUnscopedName cp <> "-9999.0.2.tgz")) serveCorpus
+    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-9999.0.2.tgz")) corpusPackages
 
 -- The cache-eviction working set: the leading 'lkWorkingSet' large corpus packages (in
--- 'serveCorpus' order, heaviest first), so a bound below its length forces eviction.
+-- 'corpusPackages' order, heaviest first), so a bound below its length forces eviction.
 workingSet :: LoadKnobs -> [CorpusPackage]
-workingSet knobs = take (max 1 (lkWorkingSet knobs)) serveCorpus
+workingSet knobs = take (max 1 (lkWorkingSet knobs)) corpusPackages
 
 -- The stub ports are addressed by the @localhost@ DNS name, never a bare IP literal: the
 -- public leg's tarball gate blocks internal ranges, which it only recognises as literals.
 npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
-    prepared <- prepare inertRuleDeps benchPolicy
+    prepared <- prepare inertRuleDeps permissiveAgeRules
     pure
         (npmServeDeps (Just (localhost privatePort)) (localhost publicPort) (MirrorOnAdmit "https://mirror.bench") prepared (pure benchNow))
             { pdMountBaseUrl = "https://bench.proxy"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
-
-{- | A permissive rule set: the gate admits every version older than one day, so the merge
-and rewrite run over the whole packument instead of short-circuiting to a denial.
--}
-benchPolicy :: [PrecededRule]
-benchPolicy = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 
 {- | The mirror worker's hot loop, driven in-process against a stub artifact upstream. The
 mirror-presence probe answers absent, so every job pays the full pipeline rather than the
@@ -460,7 +455,7 @@ workerScenario =
                         (defaultMemoryQueueConfig 16)
                         (\n -> benchFail ("worker scenario: the in-memory mirror queue dropped a job (running total " <> show n <> "); the enqueue-receive cadence broke"))
                 heartbeat <- newWorkerHeartbeat
-                logEnv <- benchLogEnv
+                logEnv <- newTestLogEnv
                 let runtime =
                         WorkerRuntime
                             { wrQueue = queue
@@ -589,17 +584,6 @@ requestedPackage request = case pathInfo request of
     [] -> Nothing
     segments -> Just (T.intercalate "/" segments)
 
--- The unscoped (base) name of a corpus package: the name with any @scope/ prefix dropped.
-cpUnscopedName :: CorpusPackage -> Text
-cpUnscopedName cp = case T.breakOn "/" (cpName cp) of
-    (scope, name)
-        | "@" `T.isPrefixOf` scope && not (T.null name) -> T.drop 1 name
-    _ -> cpName cp
-
-{- | One package in the serve mix. The name is both the request path and the body's
-self-reported name, and the weight is its multiplicity in the large-emphasis mix.
--}
-
 {- | The onboarding fixture: the private stub answers @404@ after the injected latency,
 because an unwarmed pull-through still costs a probe round trip. The public stub self-hosts
 a one-version admissible packument whose @dist.tarball@ names its own authority, so the
@@ -642,7 +626,7 @@ onboardingPackument base name =
   where
     versionObj =
         versionValue
-            ( (versionSpec name onboardingVersion (base <> "/" <> name <> "/-/" <> unscopedName name <> "-" <> onboardingVersion <> ".tgz"))
+            ( (versionSpec name onboardingVersion (base <> "/" <> name <> "/-/" <> tarballStem name <> "-" <> onboardingVersion <> ".tgz"))
                 { vsIntegrity = Just validSha512Sri
                 , vsShasum = Just validSha1
                 }
@@ -655,39 +639,16 @@ onboardingVersion = "1.0.0"
 -- pulls each dependency once, never by popularity weight.
 onboardingMix :: Int -> [Text]
 onboardingMix proxyPort =
-    [localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpName cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- serveCorpus]
-
-data CorpusPackage = CorpusPackage
-    { cpName :: Text
-    , cpFile :: FilePath
-    , cpWeight :: Int
-    }
-
-{- | The serve mix, ordered __heaviest first__ and weighted __large-emphasis__ so the
-many-version packuments drive the merge and cache scenarios. The leading entries are the
-cache-eviction working set ('workingSet'). See @docs\/architecture\/performance.md@.
--}
-serveCorpus :: [CorpusPackage]
-serveCorpus =
-    [ CorpusPackage "@types/node" "bench/corpus/npm/types-node.full.json" 8
-    , CorpusPackage "webpack" "bench/corpus/npm/webpack.full.json" 8
-    , CorpusPackage "@aws-sdk/client-s3" "bench/corpus/npm/aws-sdk-client-s3.full.json" 6
-    , CorpusPackage "express" "core/test/unit/fixtures/npm/express.full.json" 4
-    , CorpusPackage "typescript" "bench/corpus/npm/typescript.full.json" 4
-    , CorpusPackage "@babel/core" "bench/corpus/npm/babel-core.full.json" 3
-    , CorpusPackage "react" "bench/corpus/npm/react.full.json" 2
-    , CorpusPackage "request" "bench/corpus/npm/request.full.json" 2
-    , CorpusPackage "lodash" "bench/corpus/npm/lodash.full.json" 2
-    ]
+    [localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- corpusPackages]
 
 -- Read each corpus package's captured packument into a name-to-body map at boot. A
 -- missing or empty capture fails loudly, a literal harness failure rather than a result.
 loadServeBodies :: IO (Map Text LByteString)
-loadServeBodies = Map.fromList <$> traverse load serveCorpus
+loadServeBodies = Map.fromList <$> traverse load corpusPackages
   where
     load cp = do
-        packument <- readFileLBS (cpFile cp)
-        when (LBS.null packument) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpFile cp)))
+        packument <- readFileLBS (cpPath cp)
+        when (LBS.null packument) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpPath cp)))
         pure (cpName cp, packument)
 
 {- | A trusted-private overlay for the requested package: three versions disjoint from any
@@ -716,13 +677,12 @@ overlayVersionObject artPort name version =
             }
         )
   where
-    unscoped = unscopedName name
+    unscoped = tarballStem name
 
-{- | The npm tarball filename stem for a package: a scoped @\@scope\/name@ drops its
-scope, the npm convention for @dist.tarball@ filenames. An unscoped name is itself.
--}
-unscopedName :: Text -> Text
-unscopedName name = case T.breakOn "/" name of
+-- The npm tarball filename stem for a requested wire name: a scoped @scope/name drops
+-- its scope. A stub recovers the stem from the path, with no PackageName at hand.
+tarballStem :: Text -> Text
+tarballStem name = case T.breakOn "/" name of
     (scope, base)
         | "@" `T.isPrefixOf` scope && not (T.null base) -> T.drop 1 base
     _ -> name
@@ -744,11 +704,3 @@ benchNow = UTCTime (fromGregorian 2026 6 1) 0
 -- so the gate admits every canned version.
 publishedLongAgo :: Text
 publishedLongAgo = toText (iso8601Show (addUTCTime (negate (400 * nominalDay)) benchNow))
-
--- A scribe-less katip log environment: the bench harness wants no log output competing
--- with its machine-readable per-scenario report on stdout.
-benchLogEnv :: IO LogEnv
-benchLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "bench-load")
-
--- A static credential provider with a placeholder token: the serve path strips the
--- public-leg credential and forwards the client's to the private leg, so this is unused.

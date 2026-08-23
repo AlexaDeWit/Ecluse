@@ -2,43 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The input corpus for the work-per-request benchmarks.
+{- | The benchmark inputs: loading the curated corpus ("Ecluse.Test.Corpus"), and the
+synthetic packument generator beside it.
 
-Two sources feed the benches, each with its own job:
-
-  * a __curated real-world packument corpus__ ('corpus'): a pinned set of real npm
-    captures of substantial, many-version packages. It spans the medium (@lodash@,
-    @request@) to heavy (@typescript@, @\@types\/node@, an @aws-sdk@-class package)
-    size\/shape spectrum. The work-per-request figures then sample the real
-    distribution of large package sizes and shapes rather than one anchor. Trivial
-    few-version packages stress nothing, so the corpus leaves them out. The captures
-    live under @bench\/corpus\/npm\/@, plus the pre-existing untrimmed @express@
-    anchor reused in place under @core\/test\/unit\/fixtures\/npm\/@. They are
-    __frozen data__: committed captures pinned in @bench\/corpus\/pins.json@ and
-    re-captured deliberately with @make gen-bench-corpus@ (not dependency-tracked, see
-    @docs\/architecture\/performance.md@). Each keeps its real heterogeneous shape:
-    varied dependency sets, @peerDependencies@\/@engines@\/@deprecated@, many
-    @dist-tags@, and large per-version manifests. The capture trims pure noise only.
-
-  * a __synthetic packument generator__, 'syntheticPackumentValue', which builds an
-    npm full-metadata document with an arbitrary number of versions. A bench can then
-    scale the version count to the order of @100k@, and a complexity assertion can fit
-    the curve. It serves only the complexity-scaling (O(n) fit) case. It is a stress
-    input, not a realistic one: its versions are structurally identical, deliberately
-    degenerate where the real corpus is heterogeneous.
-
-The generator emits a genuine npm-shaped 'Value': name, @dist-tags@, a @versions@
-object, @time@, and @maintainers@. It therefore round-trips through the real wire
-decode ("Ecluse.Core.Registry.Npm.Wire"), the projection
-("Ecluse.Core.Registry.Npm.Project"), and the serve-time URL rewrite
-("Ecluse.Core.Registry.Npm.Filter"). The benchmark's own test cases check its
-invariants (see @bench\/Main.hs@), so a malformed generator fails the run rather than
-silently benching a degenerate input.
+'syntheticPackumentValue' builds an npm document with an arbitrary version count, so a
+bench can scale to the order of @100k@ and fit the curve. Its versions are structurally
+identical, so it serves __only__ that complexity-scaling case. It stays npm-shaped, so it
+round-trips the real decode, projection, and rewrite, and @bench\/Main.hs@ tests that.
 -}
 module Ecluse.Bench.Corpus (
     -- * The curated real-world corpus
-    CorpusEntry (..),
-    CorpusTier (..),
     corpus,
     loadCorpus,
     LoadedEntry,
@@ -55,7 +28,6 @@ module Ecluse.Bench.Corpus (
     -- * Synthetic packument generator (complexity-scaling only)
     syntheticPackumentValue,
     syntheticPackumentBytes,
-    syntheticProxyBase,
     benchPackageText,
     benchPackageName,
 
@@ -91,59 +63,17 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution),
  )
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), CorpusTier (Heavy, Large, Medium), corpusPackages, cpName)
 import Ecluse.Test.Package (validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
-{- | A size and shape tier for a corpus entry. It orders the corpus small-to-heavy and
-labels the rendered benchmark groups.
--}
-data CorpusTier = Medium | Large | Heavy
-    deriving stock (Eq, Show)
+-- | The curated corpus small-to-heavy, the order the rendered benchmark groups read in.
+corpus :: [CorpusPackage]
+corpus = reverse corpusPackages
 
-{- | One curated real-world packument capture: the name the projection validates it
-against, its file, and its size tier.
--}
-data CorpusEntry = CorpusEntry
-    { ceLabel :: Text
-    -- ^ The package's display label (e.g. @"express"@ or @"\@types\/node"@).
-    , cePackage :: PackageName
-    -- ^ The requested name the projection validates the capture's self-reported name against.
-    , cePath :: FilePath
-    -- ^ The capture's path, relative to the package root Cabal runs the benchmark from.
-    , ceTier :: CorpusTier
-    -- ^ The entry's size\/shape tier.
-    }
-
-{- | Where the curated corpus captures live, relative to the package root Cabal runs
-the benchmark from. The unit suite reads its fixtures by the same convention.
--}
-corpusRoot :: FilePath
-corpusRoot = "bench/corpus/npm/"
-
-{- | The curated corpus, ordered small-to-heavy. Every entry but @express@ is a pinned
-capture under @bench\/corpus\/npm\/@, refreshed by @make gen-bench-corpus@. The @express@
-entry reuses the unit suite's untrimmed fixture in place.
--}
-corpus :: [CorpusEntry]
-corpus =
-    [ entry Medium "lodash" (unscoped "lodash") (corpusRoot <> "lodash.full.json")
-    , entry Medium "request" (unscoped "request") (corpusRoot <> "request.full.json")
-    , entry Large "@babel/core" (scoped "babel" "core") (corpusRoot <> "babel-core.full.json")
-    , entry Large "express" (unscoped "express") "core/test/unit/fixtures/npm/express.full.json"
-    , entry Large "react" (unscoped "react") (corpusRoot <> "react.full.json")
-    , entry Large "typescript" (unscoped "typescript") (corpusRoot <> "typescript.full.json")
-    , entry Heavy "@aws-sdk/client-s3" (scoped "aws-sdk" "client-s3") (corpusRoot <> "aws-sdk-client-s3.full.json")
-    , entry Heavy "webpack" (unscoped "webpack") (corpusRoot <> "webpack.full.json")
-    , entry Heavy "@types/node" (scoped "types" "node") (corpusRoot <> "types-node.full.json")
-    ]
-  where
-    entry tier label name path = CorpusEntry{ceLabel = label, cePackage = name, cePath = path, ceTier = tier}
-    unscoped = mkPackageName Npm Nothing
-    scoped s = mkPackageName Npm (Just (mkScope s))
-
--- | A corpus entry paired with its loaded raw bytes and decoded JSON 'Value'.
-type LoadedEntry = (CorpusEntry, ByteString, Value)
+-- | A corpus package paired with its loaded raw bytes and decoded JSON 'Value'.
+type LoadedEntry = (CorpusPackage, ByteString, Value)
 
 {- | Load every corpus capture as raw bytes and a decoded 'Value', in 'corpus' order, for a
 benchmark @env@. It fails loudly on a missing, undecodable, empty, or mis-named capture, so a
@@ -152,36 +82,36 @@ corrupt corpus stops the run rather than benching nothing.
 loadCorpus :: IO [(ByteString, Value)]
 loadCorpus = traverse loadOne corpus
   where
-    loadOne :: CorpusEntry -> IO (ByteString, Value)
-    loadOne ce = do
-        raw <- fixtureBytes (cePath ce)
-        value <- either (failWith ce "did not decode") pure (Aeson.eitherDecodeStrict raw)
-        case parsePackageInfoFromValue (cePackage ce) value of
+    loadOne :: CorpusPackage -> IO (ByteString, Value)
+    loadOne cp = do
+        raw <- fixtureBytes (cpPath cp)
+        value <- either (failWith cp "did not decode") pure (Aeson.eitherDecodeStrict raw)
+        case parsePackageInfoFromValue (cpPackage cp) value of
             Right (Projected info)
                 | not (Map.null (infoVersions info)) -> pure (raw, value)
-                | otherwise -> fail (label ce <> " projected to zero versions")
-            Right (NameMismatch reported) -> fail (label ce <> " self-reports name " <> toString reported)
-            Left err -> failWith ce "did not project" (show err)
+                | otherwise -> fail (label cp <> " projected to zero versions")
+            Right (NameMismatch reported) -> fail (label cp <> " self-reports name " <> toString reported)
+            Left err -> failWith cp "did not project" (show err)
 
-    failWith :: CorpusEntry -> String -> String -> IO a
-    failWith ce what detail = fail (label ce <> " " <> what <> ": " <> detail)
+    failWith :: CorpusPackage -> String -> String -> IO a
+    failWith cp what detail = fail (label cp <> " " <> what <> ": " <> detail)
 
-    label :: CorpusEntry -> String
-    label ce = "corpus capture " <> toString (ceLabel ce)
+    label :: CorpusPackage -> String
+    label cp = "corpus capture " <> toString (cpName cp)
 
 {- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order. This
 inverts the split 'loadCorpus' performs to keep 'PackageName' out of its @env@ value.
 -}
 withLoaded :: [(ByteString, Value)] -> [LoadedEntry]
-withLoaded = zipWith (\ce (raw, value) -> (ce, raw, value)) corpus
+withLoaded = zipWith (\cp (raw, value) -> (cp, raw, value)) corpus
 
 -- | The projected 'PackageInfo' of a loaded corpus entry, against its requested name.
 entryInfo :: LoadedEntry -> PackageInfo
-entryInfo (ce, _, value) = projectInfo (cePackage ce) value
+entryInfo (cp, _, value) = projectInfo (cpPackage cp) value
 
--- | A loaded entry's benchmark name: its label tagged with its size tier.
+-- | A loaded entry's benchmark name: its package name tagged with its size tier.
 entryName :: LoadedEntry -> String
-entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> ")"
+entryName (cp, _, _) = toString (cpName cp) <> " (" <> tierName (cpTier cp) <> ")"
   where
     tierName = \case
         Medium -> "medium"
@@ -201,10 +131,6 @@ benchPackageText = "bench-pkg"
 -- | 'benchPackageText' as an unscoped npm 'PackageName', for the projection benches.
 benchPackageName :: PackageName
 benchPackageName = mkPackageName Npm Nothing benchPackageText
-
--- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto.
-syntheticProxyBase :: Text
-syntheticProxyBase = "https://ecluse.example"
 
 {- | Build a synthetic npm packument 'Value' with @versionCount@ versions (@1.0.0@ ..
 @1.0.{n-1}@), each carrying the fields the hot paths touch. Its versions are structurally

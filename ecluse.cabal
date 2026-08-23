@@ -489,6 +489,7 @@ library ecluse-test-support
   exposed-modules:
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
+    Ecluse.Test.Corpus
     Ecluse.Test.Credential
     Ecluse.Test.Cve
     Ecluse.Test.Metrics
@@ -505,6 +506,7 @@ library ecluse-test-support
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
     Ecluse.Test.Server.Mount
+    Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version

@@ -27,7 +27,6 @@ import Ecluse.Bench.Corpus (
     projectInfo,
     syntheticPackumentBytes,
     syntheticPackumentValue,
-    syntheticProxyBase,
     versionKeysOf,
     withLoaded,
  )
@@ -44,6 +43,7 @@ import Ecluse.Core.ServeBench qualified as ServeBench
 import Ecluse.Core.StreamBench qualified as StreamBench
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
+import Ecluse.Test.Corpus (syntheticProxyBase)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Bench (bgroup, defaultMain)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))

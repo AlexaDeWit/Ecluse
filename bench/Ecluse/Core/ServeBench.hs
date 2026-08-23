@@ -2,29 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Work-per-request benches for the npm serve path: deciding a packument's survivors,
-merging the gated set ("Ecluse.Core.Package.Merge"), assembling the served document with
-the fused tarball rewrite ("Ecluse.Core.Registry.Npm.Filter"), re-serialising the body,
-and computing the own @ETag@ over it ("Ecluse.Core.Server.Conditional"). That is the
-transform a metadata response goes through before the proxy serves it.
+{- | Work-per-request benches for the npm serve path: the transform a metadata response
+goes through before the proxy serves it ("Ecluse.Test.Server.Transform").
 
-The realistic benches run the full serve transform over each corpus package. They
-therefore report the filter\/merge\/assemble\/re-serialise cost across the real
-distribution of sizes and shapes. The re-serialise touches the whole heterogeneous body, so a heavy
-packument is where its cost shows. A synthetic bench scales the version count and asserts
-the serve transform stays linear, guarding the accidentally quadratic class on the
-merge\/assemble\/re-serialise path. The synthetic generator serves __only__ that
-complexity-scaling assertion. Building the filter plan runs the engine's effectful rule
-sweep, so the filter+serve benches are 'IO'.
+The served validator derives from the inputs, so no hash over the output body is measured.
+The realistic benches run over each corpus package and report the cost across the real
+distribution of sizes and shapes. A synthetic bench scales the version count and asserts
+the transform stays linear, guarding the accidentally quadratic class.
 -}
 module Ecluse.Core.ServeBench (
     benchmarks,
 ) where
 
-import Data.Aeson (Value, encode)
-import Data.ByteString.Lazy qualified as BSL
-import Data.Map.Strict qualified as Map
-import Data.Time (nominalDay)
+import Data.Aeson (Value)
 import Ecluse.Bench.Corpus (
     LoadedEntry,
     benchEvalContext,
@@ -33,15 +23,10 @@ import Ecluse.Bench.Corpus (
     entryName,
     projectInfo,
     syntheticPackumentValue,
-    syntheticProxyBase,
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo)
-import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
-import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
+import Ecluse.Test.Server.Transform (serveTransformSize)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | The serve-transform benches: realistic over the corpus, scaled over synthetic versions.
@@ -61,24 +46,8 @@ benchmarks loaded =
                     serveDepth
                ]
 
-{- | The full serve transform, mirroring the serve pipeline: plan, merge, assemble,
-encode. The validator derives from the inputs, not from a hash over the output.
--}
 serveDepth :: (Value, PackageInfo) -> IO Int
-serveDepth (value, info) = do
-    plan <- filterPlan inertRuleDeps benchEvalContext serveRules info
-    pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
-        Just merged
-            | not (Map.null (mpSurvivors merged)) ->
-                let body = encode (assembleMergedPackument syntheticProxyBase (Map.singleton 0 value) merged value)
-                 in fromIntegral (BSL.length body)
-        _ -> 0
-
-{- | A permissive rule set: every legitimately-aged version survives, so the bench never
-short-circuits to a no-survivors denial.
--}
-serveRules :: [PrecededRule]
-serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
+serveDepth = serveTransformSize benchEvalContext
 
 -- | A synthetic packument of the given version count, paired with its projection.
 syntheticServeInput :: Word -> (Value, PackageInfo)
