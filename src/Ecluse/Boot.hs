@@ -184,9 +184,13 @@ withBootEnv action = do
     runtimePlan <-
         applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings)
     fdLimit <- openFileSoftLimit
-    bootPlan <- orExit (T.unlines . map renderBootError) (resolveBootPlan envVars docBlob config runtimePlan fdLimit)
-    -- The one emission site for the plan's report. @ecluse check-config@ prints these two
-    -- lists in this order, so a transcript and a boot log agree line for line.
+    let (preamble, planE) = resolveBootPlan envVars docBlob config runtimePlan fdLimit
+    -- The provenance block logs ahead of every refusable phase, so a refusal that names a
+    -- config key stays traceable to the layer that set it.
+    traverse_ (logBootInfo logEnv) preamble
+    bootPlan <- orExit (T.unlines . map renderBootError) planE
+    -- @ecluse check-config@ prints the same two lists in this order, so a transcript and a
+    -- boot log agree line for line.
     traverse_ (logBootInfo logEnv) (bpLines bootPlan)
     traverse_ (logBootWarning logEnv) (bpWarnings bootPlan)
     prepareTelemetryBoot (obsTelemetry observability) logEnv

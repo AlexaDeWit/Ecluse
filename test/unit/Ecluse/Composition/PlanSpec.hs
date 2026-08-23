@@ -22,27 +22,38 @@ import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (Fr
 
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
-    it "orders every boot line into the one list both entry points emit" $ do
+    it "orders the plan's lines into the one list both entry points emit" $ do
         -- The golden the acceptance criterion rests on: the boot logs this list and
         -- check-config prints it, so the two transcripts cannot diverge.
         config <- expectConfig staticEnvVars Nothing
         plan <- expectPlan staticEnvVars Nothing config noCeiling
         bpLines plan
-            `shouldBe` ["Config document: none at /etc/ecluse/config.yaml (defaults and environment only)"]
-                <> resolvedKeyProvenance staticEnvVars Nothing
-                <> [ "runtime: private connection pool 256 (computed from file-descriptor limit 1024)"
-                   , "runtime: public connection pool 128 (computed from file-descriptor limit 1024)"
-                   , "runtime: serve admission 20 (computed from 2 capabilities)"
-                   , "memory plan: response byte cap 12582912" <> fallbackClause
-                   , "memory plan: request byte cap 26214400" <> fallbackClause
-                   , "memory plan: cache byte bound 268435456" <> fallbackClause
-                   , "memory plan: cache entry bound 1024" <> fallbackClause
-                   , "memory plan: memory-queue depth 50000" <> fallbackClause
-                   , "memory plan: mirror artifact byte cap 536870912" <> fallbackClause
-                   , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
-                   ]
+            `shouldBe` [ "runtime: private connection pool 256 (computed from file-descriptor limit 1024)"
+                       , "runtime: public connection pool 128 (computed from file-descriptor limit 1024)"
+                       , "runtime: serve admission 20 (computed from 2 capabilities)"
+                       , "memory plan: response byte cap 12582912" <> fallbackClause
+                       , "memory plan: request byte cap 26214400" <> fallbackClause
+                       , "memory plan: cache byte bound 268435456" <> fallbackClause
+                       , "memory plan: cache entry bound 1024" <> fallbackClause
+                       , "memory plan: memory-queue depth 50000" <> fallbackClause
+                       , "memory plan: mirror artifact byte cap 536870912" <> fallbackClause
+                       , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
+                       ]
                 <> mountPostureLines config
         bpWarnings plan `shouldBe` []
+
+    it "returns the preamble on the refusing path as well as the succeeding one" $ do
+        -- A refusal that names a config key stays traceable to the layer that set it.
+        let refusingEnv = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
+        ok <- expectConfig staticEnvVars Nothing
+        refused <- expectConfig refusingEnv Nothing
+        let (okPreamble, okPlan) = resolveBootPlan staticEnvVars Nothing ok noCeiling fdLimit
+            (refusedPreamble, refusedPlan) = resolveBootPlan refusingEnv Nothing refused noCeiling fdLimit
+        okPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance staticEnvVars Nothing
+        refusedPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance refusingEnv Nothing
+        refusedPlan `shouldSatisfy` isLeft
+        -- The plan's own lines never repeat the preamble, so no line has two emission sites.
+        fmap (any (`elem` okPreamble) . bpLines) okPlan `shouldBe` Right False
 
     it "decides the mirror runtime, the memory plan, and both connection pools" $ do
         config <- expectConfig staticEnvVars Nothing
@@ -75,21 +86,21 @@ spec = describe "resolveBootPlan" $ do
         let envVars = overrideEnv "ECLUSE_CONFIG" "/srv/ecluse.yaml" staticEnvVars
             document = "server:\n  helpMessage: from the document\n"
         config <- expectConfig envVars (Just document)
-        plan <- expectPlan envVars (Just document) config noCeiling
-        listToMaybe (bpLines plan) `shouldBe` Just "Config document: /srv/ecluse.yaml"
+        let (preamble, _) = resolveBootPlan envVars (Just document) config noCeiling fdLimit
+        listToMaybe preamble `shouldBe` Just "Config document: /srv/ecluse.yaml"
         configDocumentPath staticEnvVars `shouldBe` defaultConfigPath
 
     describe "refusals" $ do
         it "refuses a structural composition error" $ do
             let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
             config <- expectConfig envVars Nothing
-            resolveBootPlan envVars Nothing config noCeiling fdLimit
+            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
                 `shouldBe` Left [MissingAdapter PyPI]
 
         it "refuses a queue URL whose shape names no backend" $ do
             let envVars = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
             config <- expectConfig envVars Nothing
-            resolveBootPlan envVars Nothing config noCeiling fdLimit
+            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
                 `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
 
         it "refuses an explicit memory override the shed ladder cannot work around" $ do
@@ -97,7 +108,7 @@ spec = describe "resolveBootPlan" $ do
             -- the pin is the named cause.
             let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
             config <- expectConfig envVars Nothing
-            case resolveBootPlan envVars Nothing config tightPod fdLimit of
+            case snd (resolveBootPlan envVars Nothing config tightPod fdLimit) of
                 Left [MemoryPlanOverrideUnsafe violations] ->
                     violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
                 other -> expectationFailure ("expected a refused override, got: " <> show other)
@@ -108,12 +119,16 @@ expectPlan envVars docBlob config effective =
     either
         (\errs -> fail ("boot plan refused: " <> show errs))
         pure
-        (resolveBootPlan envVars docBlob config effective fdLimit)
+        (snd (resolveBootPlan envVars docBlob config effective fdLimit))
 
 -- | staticEnvVars with the mirror target and its write token dropped: the mount serves only.
 serveOnlyEnvVars :: [(String, String)]
 serveOnlyEnvVars =
     withoutMirrorTargetUrl (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) staticEnvVars)
+
+-- | The preamble's first line when no document exists at the default path.
+absentDocumentLine :: Text
+absentDocumentLine = "Config document: none at /etc/ecluse/config.yaml (defaults and environment only)"
 
 -- | A pinned file-descriptor soft limit, so both pool sizings are deterministic.
 fdLimit :: Int

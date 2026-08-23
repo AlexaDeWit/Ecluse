@@ -49,10 +49,13 @@ runCheckConfig = do
     let runtimeSettings = cfgRuntime (configApp config)
         runtimePlan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
         effective = appliedRuntimePlan cgroup runtimePlan rts
-    bootPlan <- orRefuse (T.unlines . map renderBootError) (resolveBootPlan envVars docBlob config effective fdLimit)
+    let (preamble, planE) = resolveBootPlan envVars docBlob config effective fdLimit
     -- The boot logs these posture lines from 'Ecluse.Rts.applyRuntimePosture', which the
     -- checker never runs. They stand in that position here.
     traverse_ TIO.putStrLn (renderEffectivePosture effective)
+    -- Printed ahead of every refusable phase, exactly where the boot logs it.
+    traverse_ TIO.putStrLn preamble
+    bootPlan <- orRefuse (T.unlines . map renderBootError) planE
     traverse_ TIO.putStrLn (bpLines bootPlan)
     -- Standard output carries no severity field, so the prefix stands in for the boot's
     -- katip WarningS.

@@ -107,8 +107,8 @@ runProxy bootEnv = do
     -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
     -- role only applies it.
     let bootPlan = beBootPlan bootEnv
-    let runtimePlan = bpMirrorRuntime bootPlan
-    let plan = bpMemoryPlan bootPlan
+    let mirrorRuntime = bpMirrorRuntime bootPlan
+    let memoryPlan = bpMemoryPlan bootPlan
 
     -- The metric instruments do not exist until the telemetry substrate is built well below. The
     -- credential provider built here records through reporters that 'installMetrics' makes live.
@@ -127,16 +127,16 @@ runProxy bootEnv = do
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     -- Where the plan shed the capability count (the nursery was the pressure),
     -- apply it in-process before the parallel machinery spins up.
-    whenJust (mpShedCapabilities plan) setNumCapabilities
-    serveAdmission <- newServeAdmission (mpAdmissionCapacity plan)
+    whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
+    serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
     -- One process-wide byte aggregate serves every publishing mount. It exists exactly when
     -- a publication target is configured, the same predicate the plan's tenant derives from.
-    publishBudget <- forM (mpPublishTenant plan) $ \tenant -> do
+    publishBudget <- forM (mpPublishTenant memoryPlan) $ \tenant -> do
         bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
-        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes plan}
+        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
     let limits =
             Limits
-                { maxBodyBytes = mpMaxResponseBytes plan
+                { maxBodyBytes = mpMaxResponseBytes memoryPlan
                 , maxVersionCount = limMaxVersionCount (cfgLimits env)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits env)
                 }
@@ -150,7 +150,7 @@ runProxy bootEnv = do
                 , scCheckReady = cveSyncReady cveSyncPlan
                 , -- Fold the worker heartbeat into /livez exactly when a worker will
                   -- run. A serve-only deployment's liveness is the listener alone.
-                  scCheckLive = case runtimePlan of
+                  scCheckLive = case mirrorRuntime of
                     MirrorWith _ -> heartbeatHealthyNow heartbeat
                     NoMirroring -> pure True
                 , scOnException = warpExceptionHook logEnv
@@ -160,14 +160,14 @@ runProxy bootEnv = do
     logRuleBootOrder logEnv bindings
     -- The buffered hand-off keeps the serve path off the backend's enqueue latency. The drain
     -- loop below delivers off the request path. Under NoMirroring the inert queue is unreachable.
-    (queue, mirrorDrain) <- case runtimePlan of
+    (queue, mirrorDrain) <- case mirrorRuntime of
         MirrorWith queuePlan -> do
-            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth plan) queuePlan
+            backendQueue <- buildMirrorQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) queuePlan
             (q, drainEnqueueBuffer) <-
                 bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
             pure (q, Just drainEnqueueBuffer)
         NoMirroring -> pure (noMirrorQueue, Nothing)
-    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) plan)
+    metadataCache <- newMetadataCache (planCacheConfig (cfgCache env) memoryPlan)
 
     -- The two managers stay split: public reads are anonymous and private reads forward the
     -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
@@ -185,7 +185,7 @@ runProxy bootEnv = do
         let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
         -- Racing the server against an empty task list would cancel it instantly, so the no-task
         -- shape below runs the server alone. 'MirrorWith' always carries the artifact tenant.
-        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant plan)
+        let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
         case mirrorDrain of
             Just drainEnqueueBuffer ->
                 race_

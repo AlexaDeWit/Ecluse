@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared fixtures for the composition-root specs: the minimal valid environment
-layers, their targeted mutations, and the expect-helpers that load them. Split out
-so each composition module's spec ("Ecluse.Composition.CredentialSpec",
-"Ecluse.Composition.MirrorQueueSpec", "Ecluse.Composition.SizingSpec", and the
-mount-wiring "Ecluse.CompositionSpec") exercises the same environment vocabulary
-without duplicating it.
+{- | Shared fixtures for the composition-root specs: the minimal valid environment layers,
+their targeted mutations, and the expect-helpers that load them.
 -}
 module Ecluse.Composition.Support (
     fixedNow,

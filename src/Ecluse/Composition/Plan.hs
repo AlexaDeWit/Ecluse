@@ -44,7 +44,7 @@ import Ecluse.Config (
     mountPostureLines,
     resolvedKeyProvenance,
  )
-import Ecluse.Config.Ambient (ambientAwsFromEnv)
+import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Rts (EffectiveRuntimePlan)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
@@ -62,14 +62,14 @@ data BootPlan = BootPlan
     , bpPublicConnections :: Int
     -- ^ The public-upstream connection-pool size.
     , bpLines :: [Text]
-    -- ^ The information lines, in emission order.
+    -- ^ The information lines after the preamble, in emission order.
     , bpWarnings :: [Text]
     -- ^ The warning lines, in emission order.
     }
     deriving stock (Eq, Show)
 
-{- | Resolve every boot decision from the loaded config, the caller's runtime posture, and
-the file-descriptor soft limit. A composition, mirror-runtime, or override fault refuses.
+{- | Resolve every boot decision. The preamble, the config document line and the per-key
+provenance lines, comes back even on a refusal, so a refusal naming a key stays traceable.
 -}
 resolveBootPlan ::
     [(String, String)] ->
@@ -77,12 +77,20 @@ resolveBootPlan ::
     Config ->
     EffectiveRuntimePlan ->
     Int ->
-    Either [BootError] BootPlan
-resolveBootPlan envVars docBlob config effective fdLimit = do
+    ([Text], Either [BootError] BootPlan)
+resolveBootPlan envVars docBlob config effective fdLimit =
+    ( configDocumentLine envVars docBlob : resolvedKeyProvenance envVars docBlob
+    , planDecisions (ambientAwsFromEnv envVars) config effective fdLimit
+    )
+
+{- Every decision past the preamble, with the lines reporting them. A composition,
+mirror-runtime, or override fault refuses. -}
+planDecisions :: AmbientAws -> Config -> EffectiveRuntimePlan -> Int -> Either [BootError] BootPlan
+planDecisions ambient config effective fdLimit = do
     refuseOn (validateComposition config)
     -- The backend selection precedes the memory plan, because the queue tenant exists
     -- only when that selection picks the in-memory backend.
-    mirrorRuntime <- planMirrorRuntime (ambientAwsFromEnv envVars) config
+    mirrorRuntime <- planMirrorRuntime ambient config
     let (memoryPlan, memoryPlanLines) = memoryPlanFor appConfig effective mirrorRuntime
         violations = mpOverrideViolations memoryPlan
     -- A degraded-but-coherent plan boots, because shrinking is what makes it safe. Only
@@ -98,9 +106,7 @@ resolveBootPlan envVars docBlob config effective fdLimit = do
             , bpPublicConnections = publicConnections
             , bpLines =
                 concat
-                    [ [configDocumentLine envVars docBlob]
-                    , resolvedKeyProvenance envVars docBlob
-                    , [privateLine, publicLine]
+                    [ [privateLine, publicLine]
                     , memoryPlanLines
                     , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) mirrorRuntime
                     , mountPostureLines config
