@@ -38,7 +38,9 @@ retrievable from repository files.
    need closing by hand. Close only an issue whose acceptance criteria the merged PR met, never one
    it merely cross-references. The inter-wave pass in
    [`.agents/orchestration-strategy.md`](../../orchestration-strategy.md) owns that housekeeping.
-   Wait for explicit architect kickoff before dispatching an implementation build.
+   Wait for explicit architect kickoff before dispatching an implementation build, unless the
+   checkpoint records the architect's kickoff for the active wave and names the next dispatchable
+   issue. Then continue that wave without asking again.
 
 Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/style.md`,
 `docs/haddock.md`, all of `docs/testing.md`, or the architecture set. Retrieve one when the next
