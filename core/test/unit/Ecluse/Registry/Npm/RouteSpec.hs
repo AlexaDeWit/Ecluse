@@ -26,7 +26,6 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Registry.Npm (genPathSegments)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
@@ -265,7 +264,7 @@ spec = do
         -- Each component is checked alone, because a scoped name renders with a structural '/'.
         it "an accepted route never carries an unsafe component" $
             hedgehog $ do
-                segs <- forAll genPathSegments
+                segs <- forAll NpmFixture.genPathSegments
                 let route = classify segs
                 -- Non-vacuity: the same generator must reach both arms often.
                 H.cover 5 "accepted (packument/artifact)" (isAccepted route)

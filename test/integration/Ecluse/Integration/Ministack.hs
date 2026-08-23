@@ -37,7 +37,7 @@ import Amazonka.SQS.GetQueueAttributes qualified as SQS
 import Amazonka.SQS.SetQueueAttributes qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
-import Ecluse.Test.Support (newTestLogEnv)
+import Ecluse.Test.Log (newTestLogEnv)
 import Katip (LogEnv)
 import Lens.Micro ((.~), (?~), (^.))
 import TestContainers (Container, containerAddress)

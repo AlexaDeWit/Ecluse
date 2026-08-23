@@ -11,7 +11,7 @@ module Ecluse.Registry.Npm.WireSpec (spec) where
 import Data.Aeson (
     FromJSON,
     Result (Error, Success),
-    Value,
+    Value (String),
     eitherDecode,
     eitherDecodeStrict,
     fromJSON,
@@ -294,8 +294,7 @@ isSuccess = \case
     Error{} -> False
 
 {- | The object-key pool the generated documents draw from. Without the bias toward the real
-wire field names, almost every generated object would miss @.: \"name\"@ and the success arm
-would go unsampled.
+wire field names, almost every object would miss @.: \"name\"@ and the success arm would go unsampled.
 -}
 wireKeys :: [Text]
 wireKeys =

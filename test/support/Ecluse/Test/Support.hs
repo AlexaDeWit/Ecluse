@@ -13,11 +13,13 @@ module Ecluse.Test.Support (
     newTestClock,
     expectRight,
     decodeJsonOrFail,
+    parseRequestOrFail,
     TestContractEscape (..),
 ) where
 
 import Data.Aeson (FromJSON, eitherDecodeStrict)
 import Data.Time (UTCTime)
+import Network.HTTP.Client qualified as Client
 
 import Ecluse.Core.Package (HashAlg (SHA256), renderHashAlg)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
@@ -52,8 +54,14 @@ expectRight :: (Show e) => Either e a -> IO a
 expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure
 
 -- | Decode JSON, failing the running example with the aeson error rather than crashing.
-decodeJsonOrFail :: forall a. (FromJSON a) => ByteString -> IO a
+decodeJsonOrFail :: (FromJSON a) => ByteString -> IO a
 decodeJsonOrFail bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
+
+{- | Build an HTTP request from a URL, failing the running example on an unparseable one.
+'Client.parseRequest' reports the failure through 'MonadThrow', which is 'IO' here.
+-}
+parseRequestOrFail :: Text -> IO Client.Request
+parseRequestOrFail = Client.parseRequest . toString
 
 {- | A typed stand-in for an exception thrown past a handle's typed contract. A test double
 that must never be called throws this instead of a stringly exception.

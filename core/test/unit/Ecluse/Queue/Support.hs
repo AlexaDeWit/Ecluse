@@ -6,14 +6,11 @@
 buffer tests carry, and the loud unwrapper for backends that should not fault.
 -}
 module Ecluse.Queue.Support (
-    UnexpectedQueueFault (..),
     unwrap,
     sampleJob,
     otherJob,
     thirdJob,
 ) where
-
-import UnliftIO (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Fault (TransportFault)
@@ -21,18 +18,13 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Support (expectRight)
 
-{- | A 'Left' from a backend with no fault to report (bounded in-memory, buffered hand-off)
-is a broken test premise, so re-raise it loudly and typed.
+{- | Unwrap a typed queue outcome from a backend under test that should not fault. A 'Left'
+from the bounded in-memory or buffered hand-off backend is a broken test premise.
 -}
-newtype UnexpectedQueueFault = UnexpectedQueueFault TransportFault
-    deriving stock (Show)
-
-instance Exception UnexpectedQueueFault
-
--- | Unwrap a typed queue outcome from a backend under test that should not fault.
 unwrap :: IO (Either TransportFault a) -> IO a
-unwrap act = act >>= either (throwIO . UnexpectedQueueFault) pure
+unwrap act = act >>= expectRight
 
 {- | A sample mirror job. The in-memory queue never inspects a job's contents, so one fixed
 job serves the FIFO, cap, and drop-reporting assertions.

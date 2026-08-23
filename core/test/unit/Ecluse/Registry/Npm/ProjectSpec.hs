@@ -422,8 +422,7 @@ encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
 {- | The object-key pool the generated documents draw from. Without the bias toward the field
-names the projection reads, almost every object would miss @name@ and @versions@, leaving the
-success arm unsampled.
+names the projection reads, almost every object would miss @name@ and @versions@ and go unsampled.
 -}
 packumentKeys :: [Text]
 packumentKeys =

@@ -27,8 +27,8 @@ testScope =
         Just s | not (null s) -> toText s
         _ -> "local"
 
-{- | The label pairs every test container carries: the suite marker keyed by @com.ecluse.test@ and
-the reaping scope keyed by @com.ecluse.test.scope@.
+{- | The label pairs every test container carries: the suite marker (@integration@ or @e2e@)
+keyed by @com.ecluse.test@, and the reaping scope keyed by @com.ecluse.test.scope@.
 -}
 testContainerLabels :: Text -> IO [(Text, Text)]
 testContainerLabels suite = do

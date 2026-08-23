@@ -641,6 +641,7 @@ test-suite ecluse-core-unit
     Ecluse.SupervisionSpec
     Ecluse.Telemetry.MetricsSpec
     Ecluse.Test.Container.ImageSpec
+    Ecluse.Test.LogSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.TextSpec

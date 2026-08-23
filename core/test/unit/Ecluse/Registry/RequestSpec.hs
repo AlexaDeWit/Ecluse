@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.Request (
     noValidators,
     parseRequestEither,
  )
+import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
 spec = do
@@ -51,50 +52,50 @@ credentialMappingSpec = describe "a credential mapping carries one ecosystem's p
         credentialRecover apiKeyMapping [] `shouldBe` Nothing
 
     it "attaches the credential under the mapping's own header, not an assumed one" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         let headers = Client.requestHeaders (attachCredential apiKeyMapping (Just (mkSecret "tok-abc")) req)
         lookup "X-Api-Key" headers `shouldBe` Just "tok-abc"
         lookup "Authorization" headers `shouldBe` Nothing
 
     it "renders the header value through the mapping's own scheme" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         lookup "Authorization" (Client.requestHeaders (attachCredential schemedMapping (Just (mkSecret "tok-abc")) req))
             `shouldBe` Just "Token tok-abc"
 
     it "attaches no header when the request is anonymous" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.requestHeaders (attachCredential apiKeyMapping Nothing req)
             `shouldBe` Client.requestHeaders req
 
     it "pins the redirect count with the credential attached (the attach cannot bypass it)" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (attachCredential apiKeyMapping (Just (mkSecret "tok-abc")) req) `shouldBe` 0
 
     it "pins the redirect count on an anonymous request too" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (attachCredential apiKeyMapping Nothing req) `shouldBe` 0
 
 finaliseRequestSpec :: Spec
 finaliseRequestSpec = describe "finaliseRequest pins the redirect count for every request" $ do
     it "disables redirect following (redirectCount 0) with an identity attach" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (finaliseRequest id req) `shouldBe` 0
 
     it "disables redirect following even when the attach adds a credential header" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (finaliseRequest (addAuth "Bearer tok") req) `shouldBe` 0
 
     it "applies the injected credential attach" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         lookup "Authorization" (Client.requestHeaders (finaliseRequest (addAuth "Bearer tok") req))
             `shouldBe` Just "Bearer tok"
 
     it "leaves the request unauthenticated when the attach is identity" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         lookup "Authorization" (Client.requestHeaders (finaliseRequest id req)) `shouldBe` Nothing
 
     it "pins the redirect count even when the injected attach itself sets one (un-bypassable)" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (finaliseRequest overrideRedirects req) `shouldBe` 0
 
 artifactByUrlSpec :: Spec
@@ -123,14 +124,14 @@ artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, b
 validatorsSpec :: Spec
 validatorsSpec = describe "conditional-GET validators" $ do
     it "adds both If-None-Match and If-Modified-Since when present" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         let validators = Validators (Just "\"etag-123\"") (Just "Wed, 21 Oct 2015 07:28:00 GMT")
         let hs = Client.requestHeaders (addValidators validators req)
         lookup hIfNoneMatch hs `shouldBe` Just "\"etag-123\""
         lookup hIfModifiedSince hs `shouldBe` Just "Wed, 21 Oct 2015 07:28:00 GMT"
 
     it "adds neither header for noValidators" $ do
-        req <- parseOrFail "https://reg.test/x"
+        req <- parseRequestOrFail "https://reg.test/x"
         let hs = Client.requestHeaders (addValidators noValidators req)
         lookup hIfNoneMatch hs `shouldBe` Nothing
         lookup hIfModifiedSince hs `shouldBe` Nothing
@@ -171,9 +172,6 @@ therefore comes from the mapping, not from a scheme the code assumes.
 -}
 schemedMapping :: CredentialMapping
 schemedMapping = credentialMapping recoverApiKey "Authorization" (\secret -> "Token " <> encodeUtf8 (unSecret secret))
-
-parseOrFail :: Text -> IO Client.Request
-parseOrFail = Client.parseRequest . toString
 
 addAuth :: ByteString -> Client.Request -> Client.Request
 addAuth value req = req{Client.requestHeaders = ("Authorization", value) : Client.requestHeaders req}

@@ -36,6 +36,7 @@ import Ecluse.Core.Credential.Refresh.Internal (
     refreshingProviderWith,
     releaseSingleFlight,
  )
+import Ecluse.Test.Support (newTestClock)
 
 -- | An arbitrary "epoch" the refresh tests advance their injected clock from.
 t0 :: UTCTime
@@ -45,12 +46,6 @@ t0 = UTCTime (fromGregorian 2026 6 22) 0
 tokenExpiringIn :: Text -> NominalDiffTime -> AuthToken
 tokenExpiringIn s ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl t0)}
-
--- | A controllable clock: a mutable instant the test sets, plus a setter.
-newClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
-newClock start = do
-    ref <- newIORef start
-    pure (readIORef ref, writeIORef ref)
 
 {- | A 'RefreshConfig' wired to an injected clock and mint, with zero jitter and a small
 breaker, so a test drives the breaker behaviour deterministically.
@@ -140,7 +135,7 @@ spec :: Spec
 spec = do
     describe "refreshingProvider" $ do
         it "mints once at construction and serves that token while well inside its life" $ do
-            (clock, _setClock) <- newClock t0
+            (clock, _setClock) <- newTestClock t0
             mintCount <- newIORef (0 :: Int)
             let mint = atomicModifyIORef' mintCount (\n -> (n + 1, ())) >> pure (tokenExpiringIn "tok-1" 3600)
             provider <- refreshingProvider (testConfig clock mint)
@@ -154,7 +149,7 @@ spec = do
             readIORef mintCount `shouldReturn` 1
 
         it "refreshes proactively in the background once past the refresh threshold" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             tokenRef <- newIORef (tokenExpiringIn "tok-1" 1000)
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -176,7 +171,7 @@ spec = do
             readIORef mintCount `shouldReturn` 2
 
         it "is single-flight: a cohort past the threshold triggers at most one refresh mint" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             -- The refresh mint blocks on the gate, so it is demonstrably in flight while the
             -- cohort piles in. The seed mint (call #1) does not block.
             gate <- newEmptyTMVarIO
@@ -204,7 +199,7 @@ spec = do
             -- Regression: an async exception (cancellation or timeout) can land between
             -- claiming the single-flight flag and folding the mint result. It must still
             -- release the flag, or every later expired caller wedges on the STM retry.
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             started <- newEmptyTMVarIO
             gate <- newEmptyTMVarIO
             mintCount <- newIORef (0 :: Int)
@@ -233,7 +228,7 @@ spec = do
             -- nothing releases it until the mint runner installs its handler. A cancel in that
             -- handoff must still release the flag, or every later expired caller wedges on the STM
             -- retry.
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             reached <- newEmptyTMVarIO
             release <- newEmptyTMVarIO
             armed <- newIORef True -- only the first claim parks, recovery runs free
@@ -260,7 +255,7 @@ spec = do
             (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
 
         it "keeps serving the still-valid token when a background mint fails" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             failRef <- newIORef False
             let mint = do
                     bad <- readIORef failRef
@@ -276,7 +271,7 @@ spec = do
             unSecret (authSecret tok) `shouldBe` "tok-1"
 
         it "surfaces failure to the caller only once the token has expired and mint still fails" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             failRef <- newIORef False
             let mint = do
                     bad <- readIORef failRef
@@ -288,14 +283,14 @@ spec = do
             currentToken provider `shouldThrow` anyException
 
         it "rethrows the mint's own exception on the synchronous path" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             script <- newIORef [pure (tokenExpiringIn "eager" 10), throwIO MintBoom]
             provider <- refreshingProvider (testConfig clock (scriptedMint script))
             setClock (addUTCTime 20 t0)
             currentToken provider `shouldThrow` (== MintBoom)
 
         it "trips the breaker after repeated failures, then recovers on a half-open probe" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             failRef <- newIORef False
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -330,7 +325,7 @@ spec = do
             readIORef mintCount `shouldReturn` (afterTrip + 1)
 
         it "re-opens the breaker when the half-open probe also fails" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             failRef <- newIORef False
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -351,7 +346,7 @@ spec = do
             readIORef mintCount `shouldReturn` afterProbe
 
         it "waits for an in-flight refresh rather than launching a second mint when expired" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             gate <- newEmptyTMVarIO
             mintCount <- newIORef (0 :: Int)
             -- The refresh mint (call #2) blocks on the gate and the token expires while it is in
@@ -382,7 +377,7 @@ spec = do
             readIORef mintCount `shouldReturn` 2
 
         it "stops hammering the mint once repeated background refreshes trip the breaker" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             -- The token stays valid throughout but sits past its refresh threshold, so every
             -- request wants to refresh. The breaker must cap the failing background mints rather
             -- than retry one per request.
@@ -410,7 +405,7 @@ spec = do
         it "drives the default policy knobs (jitter, refresh fraction, breaker) end to end" $ do
             -- defaultRefreshConfig with only the effectful leaves wired: exercises
             -- the shipped defaults rather than test overrides.
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             tokenRef <- newIORef (tokenExpiringIn "tok-1" 1000)
             mintCount <- newIORef (0 :: Int)
             let mint = atomicModifyIORef' mintCount (\n -> (n + 1, ())) >> readIORef tokenRef
@@ -426,7 +421,7 @@ spec = do
                 `shouldReturn` True
 
         it "never refreshes a token that has no expiry" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             mintCount <- newIORef (0 :: Int)
             let mint = do
                     _ <- atomicModifyIORef' mintCount (\n -> (n + 1, ()))
@@ -444,11 +439,11 @@ spec = do
             -- defaultRefreshConfig leaves rcMint and rcClock unwired, so construction must fail
             -- loudly whichever leaf is the missing one.
             refreshingProvider defaultRefreshConfig `shouldThrow` anyException
-            (clock, _setClock) <- newClock t0
+            (clock, _setClock) <- newTestClock t0
             refreshingProvider defaultRefreshConfig{rcClock = clock} `shouldThrow` anyException
 
         it "trips at the default breaker threshold and cooldown" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             seeded <- newIORef True
             let mint = do
                     firstTime <- readIORef seeded
@@ -541,7 +536,7 @@ spec = do
 
     describe "refresh telemetry reporting" $ do
         it "reports each refresh outcome and the breaker trip → probe → reset transitions" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             (breakerLog, refreshLog, breakerR, refreshR) <- capturingReporters
             script <-
                 newIORef
@@ -575,7 +570,7 @@ spec = do
                 `shouldReturn` [ReportedFailure (Just 0), ReportedSuccess (Just 149)]
 
         it "is silent and never throws on that account when wired with the default no-op reporters" $ do
-            (clock, setClock) <- newClock t0
+            (clock, setClock) <- newTestClock t0
             script <- newIORef [pure (tokenExpiringIn "eager" 10), throwString "mint down"]
             -- 'defaultRefreshConfig' (via 'testConfig') wires 'noCredentialReporters':
             -- a refresh that trips the breaker records nothing.
