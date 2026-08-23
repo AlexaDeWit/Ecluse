@@ -49,6 +49,10 @@ spec = describe "parseQueueTarget" $ do
     it "rejects anything after the queue segment" $
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com/123456789012/mirror/extra" `shouldBe` Nothing
 
+    it "rejects a bracketed host (the canonical form writes no brackets)" $
+        parseQueueTarget "https://[sqs.us-east-1.amazonaws.com]/123456789012/mirror"
+            `shouldBe` Nothing
+
     it "rejects userinfo in the authority (the canonical form carries none)" $ do
         parseQueueTarget "https://user@sqs.us-east-1.amazonaws.com/123456789012/mirror"
             `shouldBe` Nothing

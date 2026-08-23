@@ -115,8 +115,9 @@ renderBootError = \case
         "ECLUSE_QUEUE__URL names no queue backend this build knows: "
             <> url
             <> " (expected an SQS queue URL, https://sqs.{region}.amazonaws.com/{account}/{queue}, or a Pub/Sub topic resource, projects/{project}/topics/{topic}; unset it to run the bounded in-memory queue)"
-    QueueEndpointMalformed url ->
-        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL: " <> url
+    QueueEndpointMalformed{} ->
+        -- The value can carry a credential, so the reason names the variable, never the URL.
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL"
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail

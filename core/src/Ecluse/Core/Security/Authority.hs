@@ -7,9 +7,8 @@
 Pragmatic, comparison-oriented extractors over a URI or bare @host[:port]@ value.
 'hostAddress' recovers the bare host. 'hostPortAddress' recovers the host together
 with its effective port as a 'HostPort' (443 when the URL writes none), and
-'hostPortAddressWithDefault' takes that portless default from its caller.
-'splitHostPort' is the bracket-aware @host[:port]@ split they build on, shared with the
-queue-URL parser in @Ecluse.Config.QueueTarget@. These are not a full RFC 3986 parser. A
+'hostPortAddressWithDefault' takes that default from its caller. 'splitHostPort' is the
+bracket-aware @host[:port]@ split they build on. These are not a full RFC 3986 parser. A
 value with no recognisable authority yields the empty string or 'Nothing', which every
 guard treats as not-allowed. The SSRF policy gates in "Ecluse.Core.Security.Host" consume
 'HostPort', and the parsing here carries no policy of its own.
@@ -53,7 +52,7 @@ data HostPort = HostPort
     { hpHost :: Text
     -- ^ The bare host: no brackets, no port, lower-cased by 'hostPortAddress'.
     , hpPort :: Word16
-    -- ^ The effective port: the explicit @:port@, or 443 when the URL writes none.
+    -- ^ The effective port: the explicit @:port@, or the caller's portless default.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -86,17 +85,8 @@ Just (HostPort {hpHost = "2606:4700::1111", hpPort = 8443})
 hostPortAddress :: Text -> Maybe HostPort
 hostPortAddress = hostPortAddressWithDefault 443
 
-{- | 'hostPortAddress' with the caller's own port for a URL that writes none.
-
-Registry egress is https-only, so 443 is the default the gate reads. A caller whose scheme dials
-elsewhere, an @http@ endpoint override at 80, passes that port here instead. Everything else is
-'hostPortAddress': the same authority split, and the same port grammar on a written port.
-
->>> hostPortAddressWithDefault 80 "http://localhost/thing"
-Just (HostPort {hpHost = "localhost", hpPort = 80})
-
->>> hostPortAddressWithDefault 80 "http://localhost:4566/thing"
-Just (HostPort {hpHost = "localhost", hpPort = 4566})
+{- | 'hostPortAddress' with the caller's own port for a URL that writes none, for a scheme whose
+portless default is not the gate's 443. The authority split and the port grammar do not change.
 -}
 hostPortAddressWithDefault :: Word16 -> Text -> Maybe HostPort
 hostPortAddressWithDefault portless raw = do
@@ -137,10 +127,8 @@ renderHostPort (HostPort host port)
     | ":" `T.isInfixOf` host = "[" <> host <> "]:" <> show port
     | otherwise = host <> ":" <> show port
 
-{- The effective port an authority dials: the digits of an explicit @":port"@, or @portless@ for a
-portless one. Anything else yields 'Nothing', including a written-but-empty port, which
-http-client refuses to dial. 'splitHostPort' collapses the unbracketed @host:@ into an empty
-@rest@, so the authority's trailing colon is what catches that spelling. -}
+{- The port an authority dials: an explicit @":port"@, or @portless@ when it writes none. A
+written-but-empty port is malformed, and the authority's trailing colon is what catches it. -}
 effectivePort :: Word16 -> Text -> Text -> Maybe Word16
 effectivePort portless authority rest = case T.stripPrefix ":" rest of
     Just written -> parsePort written
@@ -228,12 +216,7 @@ afterLast needle hay =
      in if T.null pre then hay else post
 
 {- | Split a @host[:port]@ authority into its bare host and the raw @":port"@ remainder, empty when
-no port is present.
-
-The split is bracket-aware, so an IPv6 literal's inner colons are never read as the port separator.
-The extractors above and the queue-URL parser in @Ecluse.Config.QueueTarget@ share it, so the gate
-and the configuration layer cannot drift on the @[::1]:port@ edge cases. An opening bracket with no
-close yields 'Nothing'.
+no port is present. The split is bracket-aware, and an unclosed opening bracket yields 'Nothing'.
 -}
 splitHostPort :: Text -> Maybe (Text, Text)
 splitHostPort authority

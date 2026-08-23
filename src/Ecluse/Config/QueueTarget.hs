@@ -53,10 +53,10 @@ sqsTargetOf raw = do
     guard (scheme == Https)
     guard (T.all (\c -> c /= '?' && c /= '#') rest)
     let (authority, slashPath) = T.breakOn "/" rest
-    -- The canonical form writes no port, so the authority is the host. Userinfo survives
-    -- the split, and leaves the host without the "sqs." prefix the region parse needs.
-    (host, port) <- splitHostPort authority
-    guard (T.null port)
+    -- The canonical form writes no port and no brackets, so the authority must be exactly
+    -- the host the shared split recovers.
+    (host, _) <- splitHostPort authority
+    guard (host == authority)
     region <- nonBlank =<< T.stripSuffix ".amazonaws.com" =<< T.stripPrefix "sqs." (T.toLower host)
     guard (T.all (/= '.') region)
     case T.splitOn "/" (T.drop 1 slashPath) of

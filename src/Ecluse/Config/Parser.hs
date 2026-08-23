@@ -128,11 +128,8 @@ parseHttpUrl field = \case
 data HttpScheme = Http | Https
     deriving stock (Eq, Show)
 
-{- | Split a URL into the scheme it writes and the text that follows the scheme separator, or
-'Nothing' when it writes neither @http@ nor @https@.
-
-It is the one scheme check the configuration layer shares. The http-URL keys, the ambient endpoint
-override, and the queue URL cannot drift on what counts as a scheme.
+{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
+neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
 -}
 splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
