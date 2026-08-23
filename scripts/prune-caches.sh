@@ -1,76 +1,64 @@
 #!/usr/bin/env bash
 # Select GitHub Actions cache ids to delete, for .github/workflows/cache-cleanup.yml.
 #
-# Reads cache rows on stdin, one TSV row per cache:
+# Reads one TSV row per cache on stdin (as produced by `gh api .../actions/caches`):
 #
-#     id<TAB>ref<TAB>key<TAB>created_at
+#     id<TAB>ref<TAB>key<TAB>created_at<TAB>size_in_bytes
 #
-# (as produced by `gh api .../actions/caches --jq '... | @tsv'`), and writes the ids to
-# delete to stdout, one per line. The workflow feeds those ids to `gh api -X DELETE`.
-#
-# Retention policy (matches the workflow's documented intent):
-#
-#   * ref != refs/heads/main          -> delete. PRs restore caches but never save (see
-#                                        the setup-toolchain action), so any non-main
-#                                        entry is a straggler, for example one left by
-#                                        a deleted branch.
-#   * on main, beyond the newest N     -> delete. Once a dependency epoch advances
-#     per key prefix                     (flake.lock / cabal.project[.freeze] change),
-#                                        the previous epoch's immutable-keyed entries are
-#                                        dead weight.
+# and writes the ids to delete on stdout, one per line, with a reasoned line per id on
+# stderr. Three arms, emitted most urgent first so a capped sweep still does the work
+# that matters: off-main stragglers, superseded epochs, then unwritten keys.
 #
 # Prefix = the key with a trailing `-<16+ hex>` (a hashFiles digest) stripped, so every
-# epoch of one logical cache groups together. N defaults to 2: the current epoch plus
-# one fallback for in-flight runs and quick rollback. Override it via KEEP_PER_PREFIX.
-#
-# The heavy single-epoch caches keep only KEEP_DOCS (default 1) per prefix instead:
-#
-#   * the Pages doc-variant caches (prefixes containing `-docs-`: cabal-store-docs-*,
-#     dist-docs-*), and
-#   * the Nix-store closures (prefixes starting with `nix-`: the shared `nix-*` store
-#     and the docs job's `nix-docs-*` doc closure).
-#
-# These are the biggest entries. Each Nix store is ~1 GB compressed, and the doc-variant
-# closures a few hundred MB more. They change only on a real dependency or flake bump,
-# and each has a single writer. Pages serialises via its `pages` concurrency group, and
-# cache-nix-action writes a Nix entry once per flake epoch, then no-ops on an existing
-# key. So the "fallback for an in-flight parallel run" that justifies keeping 2 elsewhere
-# buys little. Keeping one steady epoch holds the ~10 GB Actions-cache quota comfortably,
-# where a flake bump otherwise strands a ~1 GB stale `nix-*` entry per epoch. The previous
-# epoch survives as a restore-keys or substituter fallback until this daily sweep runs. A
-# bump still gets partial warmth before the sweep prunes the stale epoch.
+# epoch of one logical cache groups together. KEEP_PER_PREFIX (default 2) is the current
+# epoch plus one fallback for in-flight runs. The heavy single-epoch caches keep only
+# KEEP_DOCS (default 1): the `nix-*` store closures and the Pages `-docs-` doc variants
+# are ~1 GB each, change only on a dependency bump, and have one writer each.
 #
 # Bash + awk/sort (no interval regexes) so it runs on the plain runner without the Nix
 # shell. Try it against a sample:
 #
-#   printf 'id\tref\tkey\tcreated\n' | KEEP_PER_PREFIX=2 scripts/prune-caches.sh
+#   printf 'id\tref\tkey\tcreated\t123\n' | KEEP_PER_PREFIX=2 scripts/prune-caches.sh
 set -euo pipefail
+
+# The cache key prefixes this repo's workflows write. A new cache anywhere in .github
+# must be added here, or this sweep reaps its entries and names them in the log.
+allowed_prefixes='nix-|cabal-store-|dist-|determinatesystem-nix-installer-'
 
 keep="${KEEP_PER_PREFIX:-2}"
 keep_docs="${KEEP_DOCS:-1}"
 rows="$(cat)"
 
-# Off-main rows are stragglers. Delete them all, in input order.
-printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "refs/heads/main" { print $1 }'
+# Each arm emits "id<TAB>key<TAB>size<TAB>reason".
+selected="$(
+  printf '%s\n' "$rows" | awk -F'\t' '
+    $1 != "" && $2 != "refs/heads/main" { print $1 "\t" $3 "\t" $5 "\toff-main straggler" }'
 
-# On-main rows: keep the newest per key prefix ($keep, or $keep_docs for the heavy
-# single-epoch prefixes `nix-*` and `-docs-`), delete the rest. Emit
-# "prefix<TAB>created<TAB>id", sort by prefix then created (id breaks created ties)
-# descending, then drop everything past the newest allowance of each prefix.
-printf '%s\n' "$rows" | awk -F'\t' '
-  $1 == "" || $2 != "refs/heads/main" { next }
-  {
-    key = $3
-    if (key ~ /-[0-9a-f]+$/) {                       # ends with -<hex...>?
-      seg = key; sub(/.*-/, "", seg)                 # the final dash-delimited segment
-      if (length(seg) >= 16) sub(/-[0-9a-f]+$/, "", key)   # a digest: strip it
-    }
-    print key "\t" $4 "\t" $1
-  }' \
-  | LC_ALL=C sort -t$'\t' -k1,1 -k2,2r -k3,3r \
-  | awk -F'\t' -v keep="$keep" -v keep_docs="$keep_docs" '
-      $1 != prev { prev = $1; n = 0 }
+  printf '%s\n' "$rows" | awk -F'\t' '
+      $1 == "" || $2 != "refs/heads/main" { next }
       {
-        k = ($1 ~ /^nix-/ || $1 ~ /-docs-/) ? keep_docs : keep   # heavy caches: thinner retention
-        if (++n > k) print $3
-      }'
+        key = $3
+        prefix = key
+        if (prefix ~ /-[0-9a-f]+$/) {
+          seg = prefix; sub(/.*-/, "", seg)
+          if (length(seg) >= 16) sub(/-[0-9a-f]+$/, "", prefix)
+        }
+        print prefix "\t" $4 "\t" $1 "\t" key "\t" $5
+      }' \
+    | LC_ALL=C sort -t$'\t' -k1,1 -k2,2r -k3,3r \
+    | awk -F'\t' -v keep="$keep" -v keep_docs="$keep_docs" '
+        $1 != prev { prev = $1; n = 0 }
+        {
+          k = ($1 ~ /^nix-/ || $1 ~ /-docs-/) ? keep_docs : keep
+          if (++n > k) print $3 "\t" $4 "\t" $5 "\tsuperseded epoch of " $1
+        }'
+
+  printf '%s\n' "$rows" | awk -F'\t' -v allowed="^($allowed_prefixes)" '
+    $1 == "" || $2 != "refs/heads/main" { next }
+    $3 !~ allowed { print $1 "\t" $3 "\t" $5 "\tno workflow writes this key" }'
+)"
+
+printf '%s\n' "$selected" | awk -F'\t' '
+  $1 == "" || seen[$1]++ { next }
+  { printf "prune: %8.1f MB  %s  (%s)\n", $3 / 1048576, $2, $4 > "/dev/stderr"
+    print $1 }'

@@ -1,11 +1,8 @@
 name: CI
 
-# Run on pushes to main (post-merge verification) and on every PR, so a
-# feature-branch push never double-runs alongside its PR. Manual dispatch covers
-# re-runs. The nightly schedule re-runs the workflow on main as a health check, most
-# valuably the smoke tier. That tier catches live-registry protocol drift that lands
-# independent of this repo's commits. A push run therefore always uses main's
-# workflow definition. A PR run uses the PR head's, by GitHub's design.
+# Every push to main and every PR, so a feature-branch push never double-runs beside
+# its PR. The nightly schedule re-runs main as a health check, most valuably the smoke
+# tier, which catches live-registry protocol drift that lands independent of this repo.
 on:
   push:
     branches: [main]
@@ -14,50 +11,36 @@ on:
     - cron: "17 4 * * *" # nightly health check (most valuably the smoke tier)
   workflow_dispatch:
 
-# Cancel superseded runs for the same ref on PRs and branches, but never on main.
-# Main keeps the complete, accurate build history of every commit that lands there.
+# Never cancel on main: it keeps the complete build history of every commit that lands.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# Least privilege by default: a read-only token. Jobs that need more (the
-# coverage upload's OIDC) widen it at the job level.
+# Least privilege by default. Jobs that need more widen it at the job level.
 permissions:
   contents: read
 
-# All gating checks are jobs in this one graph and feed the terminal `gate` job. That
-# job is the single Required status check in branch protection, alongside Codecov's
-# server-side statuses (see docs/testing.md → "Coverage"). Setup actions carry their
-# SHA pins once, in .github/actions/setup-toolchain. CI enters the lean `.#ci` dev
-# shell.
+# Every gating check is a job in this graph feeding the terminal `gate` job, the single
+# Required status check in branch protection alongside Codecov's server-side statuses.
+# Setup actions carry their SHA pins once, in .github/actions/setup-toolchain, whose
+# description owns the caching policy.
 #
-# Caching is restore-everywhere, SAVE-ONLY-ON-main: main builds the heavy
-# compiled-dependency store once, and every PR reuses it without writing its own copy.
-# The build-test job is the single writer. See AGENTS.md → "CI & Security" and the
-# setup-toolchain action.
-#
-# Every timeout-minutes below catches a hang. It is not a budget. CI is free on this
-# public repository, so each value clears a fully cold run and never fires on a healthy
-# one. A cold run rebuilds the dependencies, about 25 min on a cache miss. Raise a
-# timeout that starts to cancel real runs. Do not tighten one towards the observed mean.
+# Every timeout-minutes below catches a hang. It is not a budget: CI is free on this
+# public repository, so each value clears a fully cold run. Raise one that starts to
+# cancel real runs, and never tighten one towards the observed mean.
 jobs:
   build-test:
     name: Build & tests (core-unit + app-unit + integration)
-    # One job builds the project ONCE: library, executable, all three test suites.
-    # It then runs every Haskell test tier against those same on-disk artifacts:
-    # unit, integration, doctest, coverage. Building once, in one workspace, keeps
-    # the ~8-minute dependency build to one run per PR. It also keeps two runners
-    # from racing to populate one shared, first-writer-wins cabal cache that ends up
-    # incomplete for the widest plan. Runs on ubuntu-latest, which ships the Docker
-    # daemon ministack and testcontainers need for the integration tier.
+    # One job builds the project once, then runs every Haskell tier against those same
+    # on-disk artifacts. Two runners would otherwise race to populate one shared,
+    # first-writer-wins cabal cache that ends up incomplete for the widest plan.
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
       contents: read
       id-token: write # OIDC for tokenless Codecov upload (no stored token)
     env:
-      # Pin the cabal store to a deterministic, cacheable location.
-      CABAL_DIR: ${{ github.workspace }}/.cabal
+      CABAL_DIR: ${{ github.workspace }}/.cabal # deterministic, cacheable store location
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,27 +53,38 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # Skipped on an exact cabal-store cache hit: the restored index already
-      # covers cabal.project's pinned index-state, so there is nothing to
-      # refresh. `cabal update` otherwise fetches Hackage's TUF metadata over
-      # the network every run, including its occasional dead-mirror fallback.
+      # Cached here, not in the shared action: no other job builds dist-coverage. A
+      # stale .mix is inert, hpc-codecov reads only the modules the .tix names.
+      - name: Restore dist-coverage
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-coverage
+          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          restore-keys: |
+            dist-coverage-${{ runner.os }}-
+
+      # An exact cabal-store hit means the restored index already covers
+      # cabal.project's pinned index-state, and `cabal update` would only re-fetch
+      # Hackage's TUF metadata over its occasional dead-mirror fallback.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # Warm the pinned Docker Hub images the integration coverage tier builds FROM
-      # (ministack and the OTLP collector) into the local cache first. Retry a
-      # transient Docker Hub pull timeout with backoff. The same throttled Docker Hub
-      # IP pool that can wedge the e2e job reaches the integration tier through its
-      # testcontainers `docker build FROM` here. That tier therefore gets the same
-      # buffer. The docker CLI is a host binary, and "Set up toolchain" above
-      # relocated the data-root. The refs mirror the pins in
-      # test/support/Ecluse/Test/Container/Image.hs, the source of truth.
+      # The unauthenticated runners share a throttled Docker Hub IP pool whose
+      # auth-token endpoint intermittently times out, and one throttled pull inside a
+      # testcontainers `docker build FROM` cascades the tier to red. The refs mirror
+      # the pins in test/integration/Ecluse/Integration/Ministack.hs and the telemetry
+      # specs, which are the source of truth.
       - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
           ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
           otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
+
+      # cache-nix-action trims the store with `nix store gc` before saving, and a dev
+      # shell holds no GC root, so without this profile the saved entry loses `.#ci`.
+      - name: Root the .#ci shell for the Nix-store cache save
+        run: nix develop .#ci --profile "$RUNNER_TEMP/ecluse-ci-profile" --command true
 
       - name: Cabal checks (build, coverage, doctest, cabal-check)
         run: nix develop .#ci --command task cabal-checks
@@ -127,16 +121,10 @@ jobs:
           flags: integration
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
-      # ---- Cache writes: main only, single writer ---------------------------
-      # This job is the sole writer of the cabal store and dist-newstyle caches, and
-      # only from main. A PR restores them (from main's entries) but never saves, so
-      # PRs do not each leave a branch-scoped copy and blow the 10 GB quota.
-      # The !cancelled() condition keeps the warm store when a later tier
-      # (integration, say) fails: the deps built fine and are worth caching. The save
-      # runs from the widest plan above, so the entry is complete. Keys match the
-      # restore keys in setup-toolchain exactly. The actions/cache/save step no-ops
-      # when the key already exists, so a dependency epoch lands once, and later runs
-      # reuse it untouched. See AGENTS.md → "CI & Security".
+      # This job is the sole writer of the three cabal-side caches, and only from main.
+      # The !cancelled() condition keeps the warm store when a later tier fails: the
+      # deps built fine and are worth caching. A save no-ops when the key already
+      # exists, so a dependency epoch lands once and later runs reuse it untouched.
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -151,22 +139,21 @@ jobs:
           path: dist-newstyle
           key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
+      - name: Save dist-coverage (main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-coverage
+          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+
   smoke:
-    name: Smoke tests (live registries — non-gating)
+    name: Smoke tests (live registries, non-gating)
     runs-on: ubuntu-latest
-    # Non-gating. On a cabal-store cache miss this job rebuilds the whole dependency
-    # closure from source before it makes a single registry call. The bound has to
-    # cover that rebuild.
     timeout-minutes: 60
     # Hits public npm and PyPI to catch protocol drift when those registries change
-    # their wire behaviour, a correctness signal worth seeing on EVERY PR. It is not a
-    # `gate` dependency, and it sets continue-on-error. A transient live-registry blip
-    # therefore never reddens a run or blocks a merge, while a real drift still shows
-    # red on the PR. Also runs post-merge on main and nightly (schedule). The
-    # dependency store is warm on PRs, restored from main. This job therefore pays
-    # only the smoke suite's incremental compile and the live calls, never a full
-    # dependency build. On promoting this to a required gate, see AGENTS.md →
-    # "CI & Security".
+    # their wire behaviour. It is not a `gate` dependency and it sets
+    # continue-on-error, so a transient live-registry blip never blocks a merge while
+    # a real drift still shows red on the PR.
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -181,11 +168,8 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # Restore-only for the shared Nix store: build-test is its single
-          # writer.
-          save-nix-store: "false"
+          save-nix-store: "false" # build-test is the single writer of the shared store
 
-      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
@@ -196,28 +180,14 @@ jobs:
   e2e:
     name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
-    # Sanity bound, not a budget: ~40 min typical, and a cold Nix closure adds
-    # a further half hour.
     timeout-minutes: 120
     permissions:
       contents: read
-    # Stands the whole system up as the real OCI image, an nginx stub, and Verdaccio
-    # on a docker network. The harness drives it with the real npm CLI. It catches
-    # composition-root and cross-component regressions nothing else does.
-    #
-    # It is heavy (a Nix image build, containers, npm) and runs as its own parallel
-    # job. It is also hermetic, with no live registry, unlike smoke, and it stays
-    # reliably green. It therefore GATES: a `gate` dependency, run on every PR and
-    # nightly. If its weight starts to hurt PR latency, or it turns flaky, reach for a
-    # nightly-only cadence or a larger runner first. Dropping it from the gate is the
-    # last resort.
-    #
-    # Every binary the harness shells out to comes from `.#ci` (npm, tar, openssl) or
-    # the host (docker). This job therefore enters the same shell as every other gate
-    # job. The image build and `docker load` can exhaust the root partition. The
-    # shared "Set up toolchain" action frees it and moves the Nix store and Docker
-    # data-root onto the ephemeral /mnt volume. Every toolchain job shares that
-    # action, so the benchmark jobs get the same headroom.
+    # Stands the whole system up as the real OCI image, an nginx stub, and Verdaccio on
+    # a docker network, driven by the real npm CLI. It catches composition-root and
+    # cross-component regressions nothing else does, and unlike smoke it is hermetic,
+    # so it GATES. If it turns flaky, reach for a nightly-only cadence or a larger
+    # runner before dropping it from the gate.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -231,29 +201,19 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # Restore the shared Nix-store cache but never write it. This job realises
-          # the same `.#ci` closure build-test does, so it restores a 100% hit. The
-          # build-test job is the single writer, and this job also runs on the nightly
-          # main schedule. A save here would race it for the one nix-<os>-<flakehash>
-          # entry. See setup-toolchain's caching policy.
-          save-nix-store: "false"
+          # `nix build .#dockerImage` links the same ~188-package Nix-built Haskell
+          # closure `checks.docs` does. On the shared "nix" store, which holds the
+          # `.#ci` shell instead, this job rebuilt every one of them from source.
+          nix-cache-prefix: nix-docs
+          save-nix-store: "false" # the docs job is the single writer of nix-docs
 
-      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # Warm the pinned Docker Hub images the e2e data plane pulls (ministack, the
-      # OTLP collector, nginx, Verdaccio) into the local cache first. Retry a
-      # transient Docker Hub auth or pull timeout with backoff. The unauthenticated
-      # runners share a throttled Docker Hub IP pool whose auth-token endpoint
-      # intermittently times out. A single throttled pull inside the suite's setup
-      # hook then cascades every case to pending and reddens this gating job. With
-      # the images pre-warmed, the harness's own `docker run` finds them cached. The
-      # docker CLI is a host binary here (no nix shell needed), and "Set up toolchain"
-      # above relocated the data-root. The refs mirror the pins in
-      # test/support/Ecluse/Test/Container/Image.hs, the source of truth. This step
-      # copies the digest pins verbatim, so it adds no new trust surface.
+      # A single throttled pull inside the suite's setup hook cascades every case to
+      # pending and reddens this gating job. The refs copy the digest pins in
+      # test/e2e/Ecluse/E2E/Harness/Docker.hs verbatim, so they add no trust surface.
       - name: Pre-pull pinned e2e images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
@@ -269,15 +229,10 @@ jobs:
     name: Static checks (format, lint, Semgrep, workflows, site)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Four checks in one job: format/lint, cabal-check, Semgrep, and workflow-lint.
-    # None builds Haskell, so one job pays the ~35s toolchain setup once for four
-    # sub-minute checks. Each check runs even if an earlier one failed
-    # (`if: !cancelled()`), so one run still reports them all. The job fails if any
-    # check fails, the same gate semantics four separate jobs would give.
-    # `task static-checks` also runs `site-stub`: the pandoc site assembled over
-    # stubbed API artefacts, plus the site link and metadata gates. A dangling link
-    # or orphaned page therefore fails the PR here, instead of the Pages deploy after
-    # merge.
+    # Four sub-minute checks in one job, so the toolchain setup is paid once. Each runs
+    # even if an earlier one failed, so one run reports them all. `task static-checks`
+    # also assembles the pandoc site over stubbed API artefacts, so a dangling link
+    # fails the PR here instead of the Pages deploy after merge.
     permissions:
       contents: read
       security-events: write # upload the Semgrep SARIF to code scanning
@@ -290,21 +245,16 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore-only for the shared Nix store: build-test is its single
-          # writer.
-          save-nix-store: "false"
+          save-nix-store: "false" # build-test is the single writer of the shared store
 
       - name: Static checks
         env:
           GH_TOKEN: ${{ github.token }}
         run: nix develop .#ci --command task static-checks
 
+      # Semgrep still gates on every PR (`task sast` fails on findings). This upload is
+      # only the Security-tab view, which tracks main, hence always().
       - name: Upload Semgrep SARIF to code scanning
-        # Surface findings in the Security tab, so the dashboard reflects trunk's
-        # state rather than per-PR or per-branch alerts. Semgrep still GATES on every
-        # PR (`task sast` fails on findings), so nothing slips through. This upload is
-        # only the dashboard view, which tracks main. The always() condition keeps the
-        # upload running even if an earlier step failed.
         if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:
@@ -315,38 +265,13 @@ jobs:
     name: Haddock builds
     runs-on: ubuntu-latest
     # Sized for a cold run after a dependency-overlay change in flake.nix, which
-    # rebuilds the overridden closure's doc outputs from source. Only main writes the
-    # nix-docs cache, so the first PR run pays for all of it. A warm run finishes in
-    # a fraction of this.
+    # rebuilds the overridden closure's doc outputs from source.
     timeout-minutes: 100
-    # Builds the library Haddock, so a broken doc comment or a missing module fails on
-    # the PR, not after merge when the Pages deploy fails. It builds the `checks.docs`
-    # flake check (Nix Haskell builder) rather than `cabal haddock`
-    # (`task docs-check`). The cabal path rebuilds the whole ~188-package dependency
-    # closure every run (~12 min). `cabal haddock` wants a documentation variant of
-    # the deps that build-test's `cabal build` store lacks. The flake check takes the
-    # deps prebuilt from the pinned Haskell set, so only ecluse compiles and haddocks.
-    # The validation is the same: a broken doc comment fails the build. The Pages
-    # publish (`task site`) on main still builds the published, source-linked styling.
-    #
-    # The job builds the other two flake checks as well: freeze-sync and
-    # amazonka-lockstep. They hold cabal.project.freeze and the amazonka rev to the
-    # Nix package set (see flake.nix). Their dependency environment (test and bench
-    # deps plus amazonka) shares this job's dedicated store, and the cache cap below
-    # covers both closures.
-    #
-    # DEDICATED Nix-store cache. The shared "nix" entry build-test writes holds the
-    # `.#ci` shell closure, which lacks the dependency `-doc` outputs `checks.docs`
-    # links against. On that store this job would rebuild the whole doc closure every
-    # run (~6.7 min). It owns a separate "nix-docs" entry instead, sized to its own
-    # ~6.55 GB doc closure. It is the single writer of that key (save on main only),
-    # so it never races build-test for the shared "nix" entry. A warm run then
-    # rebuilds only ecluse and ecluse-core. The cache-cleanup sweep keeps one epoch
-    # per nix- prefix.
-    #
-    # The `with:` block below is load-bearing, not decoration. Without it the job
-    # takes the defaults, rebuilds the doc closure every run, and races build-test for
-    # the shared key. Do not remove it without removing this comment too.
+    # Builds the library Haddock, so a broken doc comment fails on the PR rather than
+    # after merge when the Pages deploy fails. It builds the `checks.docs` flake check
+    # rather than `cabal haddock`, which wants a documentation variant of the deps that
+    # build-test's `cabal build` store lacks and so rebuilds the whole closure. It
+    # builds the freeze-sync and amazonka-lockstep checks in the same store.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -356,13 +281,9 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Own the doc-closure cache (deps and their `-doc` outputs) plus the
-          # freeze-sync dependency environment. Single writer, save on main. The
-          # cap covers the whole store this job accumulates: the restored epoch,
-          # the build-time inputs, and the outputs (~10.5 GB observed). The
-          # checks' output closure alone is smaller. A cap below the store trims
-          # live paths before saving, and every later run then rebuilds them off
-          # a partial hit.
+          # Sole writer of the Nix-built Haskell closure, which the e2e job also
+          # restores for `.#dockerImage`. The cap covers the whole store this job
+          # accumulates (~10.5 GB observed), not just the output closure.
           nix-cache-prefix: nix-docs
           nix-gc-max-store-size: 13G
 
@@ -376,14 +297,10 @@ jobs:
   weeder:
     name: Dead-code check (weeder)
     runs-on: ubuntu-latest
-    # Observed 7 min mean, 19 min worst. Sized so a cold-cache run still fits.
     timeout-minutes: 60
-    # Fails on any finding (a red signal) and IS a `gate` dependency, so a finding
-    # blocks the merge. The weeder tool reports library code not reachable from the
-    # application entry point. It runs on EVERY PR, so the PR that adds an unreachable
-    # definition is the one that catches it. It runs as its own parallel job (a heavy
-    # -fwrite-ide-info build), not folded into static-checks. Warm deps (restored from
-    # main) keep it cheap.
+    # Reports library code not reachable from the app entry (`Ecluse.run`), and any
+    # finding fails the gate, so the PR that adds an unreachable definition catches it.
+    # Its own job because the -fwrite-ide-info build is heavy.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -397,28 +314,13 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # Restore-only for the shared Nix store: build-test is its single
-          # writer.
-          save-nix-store: "false"
+          save-nix-store: "false" # build-test is the single writer of the shared store
 
-      # dist-analysis (the shared -fwrite-ide-info builddir that `task weeder` builds
-      # via analysis-build) is deliberately NOT cached: every run rebuilds it from
-      # scratch. The weeder tool scans every .hie under it, and cabal cannot delete
-      # the artifacts of removed source files. Any restored builddir therefore risks
-      # feeding weeder orphaned .hie for modules that no longer exist. That is a false
-      # red, or a false green now that weeder gates. The same staleness measured on
-      # stan gave 132 observations against a true floor of 35 findings. It scanned
-      # 140 modules where the tree held 122 of them. The dependency closure still
-      # comes warm from the cabal-store cache, so a cold builddir is only the
-      # first-party packages, a few minutes. Do not reintroduce a dist-analysis cache
-      # without a per-run orphan-.hie prune: keying on the source tree alone does not
-      # clean a restored builddir.
-      #
-      # This job and the stan job below run on separate runners, so each still pays
-      # for its own build. Sharing the builddir buys nothing here. It saves a build
-      # only in `task check` locally, where the two run in one checkout.
-      #
-      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
+      # dist-analysis is deliberately NOT cached: weeder scans every .hie under it and
+      # cabal cannot delete the artifacts of removed source files, so a restored
+      # builddir feeds it orphaned .hie for modules that no longer exist. The same
+      # staleness gave stan 132 observations against a true floor of 35. Do not add a
+      # cache here without a per-run orphan-.hie prune.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
@@ -445,12 +347,9 @@ jobs:
     name: Haskell static analysis (stan)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Fails on any finding above the floor (a red signal) and IS a `gate` dependency,
-    # so a finding blocks the merge. Stan analyses GHC HIE files for partial functions
-    # and potential bugs that Semgrep (no Haskell) and hlint (no type info) cannot
-    # see. The .stan.toml file scopes it to a Warning floor. It runs as its own
-    # parallel job (a heavy -fwrite-ide-info build into dist-analysis, like weeder),
-    # not folded into static-checks. Warm deps (restored from main) keep it cheap.
+    # HIE-based partial-function and bug analysis at the floor in .stan.toml, which
+    # Semgrep (no Haskell) and hlint (no type info) cannot see. A finding above the
+    # floor fails the gate. Its own job, like weeder, for the same heavy build.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -464,19 +363,9 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # Restore-only for the shared Nix store: build-test is its single
-          # writer.
-          save-nix-store: "false"
+          save-nix-store: "false" # build-test is the single writer of the shared store
 
-      # dist-analysis is deliberately NOT cached here either, for the reason on the
-      # weeder job above. Stan scans every .hie under the builddir, and cabal cannot
-      # delete the artifacts of removed source files. A restored builddir would hand
-      # stan orphaned .hie for modules that no longer exist. That staleness reported
-      # 132 observations against a true floor of 35 findings. The dependency closure
-      # comes warm from the cabal-store cache, so a fresh builddir is only the
-      # first-party packages.
-      #
-      # Skipped on an exact cabal-store cache hit: see build-test's comment above.
+      # dist-analysis is not cached here either, for the reason on the weeder job.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
@@ -501,15 +390,9 @@ jobs:
 
   gate:
     name: CI gate
-    # The single Required check. Runs after every other gating job regardless of
-    # result, and fails unless all of them succeeded. Wire a new required check in by
-    # adding it to `needs` here, never as another required check. The smoke job is
-    # intentionally absent. It runs on PRs for visibility but is non-gating, so the
-    # gate never waits on it and never fails because of it. The e2e job IS a
-    # dependency: it runs as its own parallel job (hermetic, reliably green), and the
-    # gate blocks on it. The weeder and stan jobs are dependencies too, each its own
-    # parallel -fwrite-ide-info job. A dead-code or static-analysis finding above the
-    # floor blocks the merge.
+    # The single Required check. Wire a new required check in by adding it to `needs`
+    # here, never as another required check. The smoke job is intentionally absent: it
+    # runs on PRs for visibility but is non-gating, so the gate never waits on it.
     needs: [build-test, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest

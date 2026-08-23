@@ -1,39 +1,16 @@
 name: Cache cleanup
 
-# Keep the repo's GitHub Actions cache under the 10 GB quota.
+# Keep the repo's Actions cache under the 10 GB quota. ci.yml already saves only on
+# main, so this is the backstop for what that policy cannot reach: off-main stragglers,
+# superseded epochs, and keys no workflow writes any more. scripts/prune-caches.sh owns
+# the retention rules and the allow-list of keys this repo writes.
 #
-# The CI workflow already does the heavy lifting: it SAVES caches only on main, and a
-# PR restores but never writes (see setup-toolchain). The day-to-day churn of
-# branch-scoped copies is therefore gone. This workflow is the housekeeping backstop
-# for the two cases that policy cannot cover. First, stragglers on non-main refs:
-# anything a non-main run left behind, such as an entry from a branch deleted after
-# merge. Second, superseded main entries: once a dependency epoch advances, the
-# previous epoch's immutable-keyed `cabal-store`, `dist-*`, and `nix` entries are dead
-# weight. A change to flake.lock, cabal.project, or cabal.project.freeze advances the
-# epoch.
-#
-# It runs on two triggers. The primary one is a push to main, restricted to the
-# dependency-plan files (flake.lock / flake.nix / cabal.project[.freeze]). Those are
-# the only commits that mint a new epoch. Each bump then reaps its predecessors right
-# when it lands, rather than letting a day's worth stack against the 10 GB ceiling
-# between sweeps. That push fires ~before build-test saves the bump's own epoch, so it
-# reaps one bump behind (steady state ~2 nix epochs). The daily `schedule` trims that
-# to one, and it is the only reaper of off-main stragglers, which belong to no main
-# run. A plain `push` avoids the `workflow_run` and pull_request_target hazard, and it
-# keeps the privileged `actions: write` token in this single-purpose workflow. The
-# always-on PR workflow, ci.yml, stays at its minimal `contents: read`.
-#
-# It keeps the newest KEEP_PER_PREFIX entries per key prefix on main and deletes the
-# rest. That is the current epoch plus one fallback, for in-flight runs and quick
-# rollback. The heavy single-epoch caches keep only KEEP_DOCS: the Pages doc-variant
-# caches (`-docs-` prefixes) and the Nix-store closures (`nix-*` prefixes, incl. the
-# docs job's `nix-docs-*` closure). Those are the biggest entries (~1 GB each). They
-# change only on a dependency or flake bump, and each has a single writer, so a second
-# epoch buys little (see prune-caches.sh). Everything else is least-privilege.
+# A plain `push` on the dependency-plan files, not `workflow_run` or
+# pull_request_target, keeps the privileged `actions: write` token in this
+# single-purpose workflow. The daily schedule is the only reaper of off-main
+# stragglers, which belong to no main run.
 
 on:
-  # Primary: a dependency bump on main is the only commit that mints a new epoch.
-  # Reap on exactly those pushes (see the note above).
   push:
     branches: [main]
     paths:
@@ -41,7 +18,6 @@ on:
       - flake.nix
       - cabal.project
       - cabal.project.freeze
-  # Heartbeat, and the only reaper of off-main stragglers.
   schedule:
     - cron: "42 3 * * *" # daily, 03:42 UTC
   workflow_dispatch:
@@ -56,7 +32,7 @@ jobs:
   prune:
     name: Prune Actions cache
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read # checkout, to run scripts/prune-caches.sh
       actions: write # delete caches via the REST API
@@ -64,20 +40,22 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       KEEP_PER_PREFIX: "2" # newest N per key prefix to retain on main
-      KEEP_DOCS: "1" # the heavy Pages `-docs-` caches retain only the current epoch
+      KEEP_DOCS: "1" # the heavy `nix-*` and `-docs-` caches retain only the current epoch
+      # One DELETE per cache, so an unbounded backlog would outrun both the job timeout
+      # and GitHub's mutation rate limit. The daily run drains the rest.
+      MAX_DELETES: "1200"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Prune superseded and off-main caches
+      - name: Prune superseded, off-main, and unwritten caches
         run: |
           set -euo pipefail
 
-          # All caches: id, ref, key, created_at. One TSV row each, across pages.
           gh api --paginate "repos/$REPO/actions/caches?per_page=100" \
-            --jq '.actions_caches[] | [.id, .ref, .key, .created_at] | @tsv' \
+            --jq '.actions_caches[] | [.id, .ref, .key, .created_at, .size_in_bytes] | @tsv' \
             > caches.tsv || true
 
           if [ ! -s caches.tsv ]; then
@@ -85,15 +63,14 @@ jobs:
             exit 0
           fi
 
-          # Decide which ids to delete. The selection logic lives in
-          # scripts/prune-caches.sh, where it is reviewable, lintable, and runnable
-          # outside CI. It prunes off-main stragglers and superseded epochs, keyed on
-          # the prefix with the trailing hashFiles digest stripped. It reads the TSV
-          # on stdin and writes the ids to delete on stdout.
-          bash scripts/prune-caches.sh < caches.tsv > to-delete.txt
+          # The script reasons about each id on stderr, so the log names every key it
+          # reaps. Its stdout is the id list, most urgent first.
+          bash scripts/prune-caches.sh < caches.tsv > all-to-delete.txt
+          head -n "$MAX_DELETES" all-to-delete.txt > to-delete.txt
 
+          total=$(wc -l < all-to-delete.txt | tr -d ' ')
           count=$(wc -l < to-delete.txt | tr -d ' ')
-          echo "Caches to delete: $count"
+          echo "Caches selected: $total, deleting this run: $count"
           if [ "$count" -eq 0 ]; then
             echo "Cache already within retention policy."
             exit 0
@@ -101,16 +78,19 @@ jobs:
 
           while read -r id; do
             [ -n "$id" ] || continue
-            echo "Deleting cache id=$id"
             gh api -X DELETE "repos/$REPO/actions/caches/$id" >/dev/null \
-              && echo "  deleted" \
-              || echo "  (already gone)"
+              && echo "deleted $id" \
+              || echo "$id (already gone)"
           done < to-delete.txt
+
+          if [ "$total" -gt "$count" ]; then
+            echo "$((total - count)) selected caches remain for the next run."
+          fi
 
       - name: Report remaining usage
         if: ${{ always() }}
         run: |
           set -euo pipefail
           gh api "repos/$REPO/actions/cache/usage" \
-            --jq '"Active caches: \(.active_caches_count)  —  \(.active_caches_size_in_bytes / 1e9 | (.*100|floor)/100) GB / 10 GB"' \
+            --jq '"Active caches: \(.active_caches_count), \(.active_caches_size_in_bytes / 1e9 | (.*100|floor)/100) GB / 10 GB"' \
             >> "$GITHUB_STEP_SUMMARY"
