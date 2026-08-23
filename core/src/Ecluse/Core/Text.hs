@@ -32,12 +32,12 @@ nonBlank t =
     let trimmed = T.strip t
      in if T.null trimmed then Nothing else Just trimmed
 
--- | Drop a single trailing slash from a URL base when present.
+-- | Drop every trailing slash from a URL base, so @https:\/\/host\/\/@ and @https:\/\/host@ agree.
 stripTrailingSlash :: Text -> Text
-stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
+stripTrailingSlash = T.dropWhileEnd (== '/')
 
-{- | Join a URL base and an already-encoded path with exactly one slash, tolerating one
-trailing slash on the base. It appends the path verbatim, and neither encodes nor validates it.
+{- | Join a URL base and an already-encoded path with exactly one slash, whatever trailing
+slashes the base writes. It appends the path verbatim, and neither encodes nor validates it.
 -}
 joinUrlPath :: Text -> Text -> Text
 joinUrlPath b path = stripTrailingSlash b <> "/" <> path

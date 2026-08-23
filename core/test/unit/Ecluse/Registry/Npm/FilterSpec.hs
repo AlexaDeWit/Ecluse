@@ -38,6 +38,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan),
  )
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
 
@@ -251,7 +252,7 @@ propertiesSpec = describe "properties" $ do
             spec' <- forAll genPackumentSpec
             v <- decodeOrFail (renderPackument spec')
             b <- forAll genBase
-            let p = T.dropWhileEnd (== '/') b <> "/" <> specName spec'
+            let p = joinUrlPath b (specName spec')
                 versions = objKeys "versions" (asObject v)
                 once = fmap (rewriteVersion p) versions
             fmap (rewriteVersion p) once === once
@@ -261,7 +262,7 @@ propertiesSpec = describe "properties" $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
             b <- forAll genBase
-            let prefix = T.dropWhileEnd (== '/') b <> "/" <> specName spec' <> "/-/"
+            let prefix = joinUrlPath b (specName spec') <> "/-/"
             liftIO (applyToAt b ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
                 Assembled out ->

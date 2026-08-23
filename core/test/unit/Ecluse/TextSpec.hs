@@ -15,7 +15,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, renderIso8601Utc, stripTrailingSlash)
 
 {- | Tests for the shared text helpers. They pin the promises callers depend on: absence and
-trimming in 'nonBlank', exactly one tolerated trailing slash on a URL base, 'lastPathSegment'
+trimming in 'nonBlank', every trailing slash dropped from a URL base, 'lastPathSegment'
 after the final slash, and 'renderIso8601Utc' byte-for-byte equal to 'iso8601Show'.
 -}
 spec :: Spec
@@ -51,8 +51,8 @@ trailingSlashSpec = describe "stripTrailingSlash" $ do
     it "leaves a base without a trailing slash untouched" $
         stripTrailingSlash "https://host" `shouldBe` "https://host"
 
-    it "removes at most one trailing slash" $
-        stripTrailingSlash "https://host//" `shouldBe` "https://host/"
+    it "drops every trailing slash" $
+        stripTrailingSlash "https://r.example//" `shouldBe` "https://r.example"
 
     it "leaves an interior slash untouched" $
         stripTrailingSlash "https://host/path" `shouldBe` "https://host/path"
@@ -62,8 +62,11 @@ joinUrlPathSpec = describe "joinUrlPath" $ do
     it "joins a base and a path with exactly one slash" $
         joinUrlPath "https://host" "pkg" `shouldBe` "https://host/pkg"
 
-    it "tolerates one trailing slash on the base without doubling the separator" $
+    it "tolerates a trailing slash on the base without doubling the separator" $
         joinUrlPath "https://host/" "pkg" `shouldBe` "https://host/pkg"
+
+    it "joins under a base written with several trailing slashes" $
+        joinUrlPath "https://r.example//" "pkg" `shouldBe` "https://r.example/pkg"
 
     it "appends the path verbatim" $
         joinUrlPath "https://host" "@scope%2Fname" `shouldBe` "https://host/@scope%2Fname"

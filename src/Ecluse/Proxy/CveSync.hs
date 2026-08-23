@@ -20,8 +20,7 @@ module Ecluse.Proxy.CveSync (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
-import Katip.Monadic (runKatipContextT)
+import Katip (LogEnv, Severity (WarningS), sl)
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
 import System.IO.Error (IOError, catchIOError)
@@ -37,7 +36,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
 import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, s3CveFetchFor)
-import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Log (logLine, moduleField)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
 ecosystem's advisory database, and abstain when the sync plan carries no slot for it.
@@ -51,15 +50,17 @@ cveRuleDepsFor plan reporter faultReporter eco =
         , rdFaultReporter = faultReporter
         }
 
-{- | A 'FaultReporter' that logs an exhausted effectful rule's fault detail at @WarningS@, so an
-advisory-database query fault stays diagnosable instead of collapsing to a bare @Unavailable@. The
-detail is bounded, carries no secret, and never reaches the client response.
+{- | A 'FaultReporter' logging an exhausted rule's fault detail, so a fault stays diagnosable
+rather than a bare @Unavailable@. The detail is bounded, carries no secret, and reaches no client.
 -}
 katipFaultReporter :: LogEnv -> FaultReporter
 katipFaultReporter logEnv =
     FaultReporter $ \ruleName detail ->
-        runKatipContextT logEnv (moduleField "Ecluse.Core.Rules" <> sl "rule" ruleName <> sl "fault" detail) mempty $
-            logFM WarningS (ls ("effectful rule evaluation faulted" :: Text))
+        logLine
+            logEnv
+            (moduleField "Ecluse.Core.Rules" <> sl "rule" ruleName <> sl "fault" detail)
+            WarningS
+            "effectful rule evaluation faulted"
 
 {- | The readiness gate over the sync plan: ready once every ecosystem completes its first sync.
 Each flag flips one way, so readiness never flaps. An empty plan is vacuously ready.
@@ -118,8 +119,8 @@ cveSyncHandleFor appCfg cveSource bucket eco = do
                 }
     pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
 
-{- | Sweep stray in-progress downloads an interrupted run left beside the canonical artifacts, which
-an @emptyDir@ keeps across a container restart. The sweep is best effort, per 'sweepStep'.
+{- | Sweep the in-progress downloads an interrupted run left behind, which an @emptyDir@ keeps
+across a container restart. The sweep is best effort, per 'sweepStep'.
 -}
 sweepStaleTemps :: LogEnv -> FilePath -> IO ()
 sweepStaleTemps logEnv dataDir =
@@ -142,7 +143,6 @@ sweepStep logEnv path step = step `catchIOError` logSweepFailure logEnv path
 -- The logged OS error detail is the operator's own filesystem, not untrusted input.
 logSweepFailure :: LogEnv -> FilePath -> IOError -> IO ()
 logSweepFailure logEnv path err =
-    runKatipContextT logEnv payload mempty (logFM WarningS (ls message))
+    logLine logEnv payload WarningS ("could not sweep stale advisory temp files: " <> show err)
   where
     payload = moduleField "Ecluse.Proxy.CveSync" <> sl "path" (toText path)
-    message = "could not sweep stale advisory temp files: " <> show err :: Text

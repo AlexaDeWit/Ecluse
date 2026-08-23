@@ -7,7 +7,7 @@
 
 module Ecluse.Config.Aeson () where
 
-import Data.Aeson (FromJSON (..), Value (..), withObject, withText, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), Value (..), withObject)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
@@ -32,175 +32,114 @@ import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
 
 instance FromJSON MountConfig where
-    parseJSON = withObject "MountConfig" mountConfigParser
+    parseJSON = withObject "MountConfig" (decodeBareGroup "mount" mountDecoder)
 
-mountConfigParser :: KeyMap.KeyMap Value -> Parser MountConfig
-mountConfigParser o = do
-    rejectUnknownKeys "mount" acceptedMountKeys o
+-- A mount's refusals name the bare key, because "Ecluse.Config" reports the mount around them.
+mountDecoder :: GroupDecoder MountConfig
+mountDecoder =
     MountConfig
-        <$> o .:? "enabled"
-        <*> (o .:? "privateUpstream" >>= traverse (parseRegistryUrl "privateUpstream"))
-        <*> (o .: "publicUpstream" >>= parseRegistryUrl "publicUpstream")
-        <*> (o .:? "mirrorTarget" >>= traverse (parseRegistryUrl "mirrorTarget"))
-        <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse (parseCodeArtifactDuration "mirrorCodeArtifactTokenDuration"))
-        <*> (o .:? "publicationTarget" >>= traverse (parseRegistryUrl "publicationTarget"))
-        <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
-        <*> (o .:? "publishAllow" .!= String "" >>= parseScopes)
-        <*> (o .:? "minTrustedIntegrity" >>= traverse (parseEnum parseMinTrustedIntegrity "minTrustedIntegrity"))
-        <*> (o .:? "divergencePolicy" >>= traverse (parseEnum parseDivergencePolicy "divergencePolicy"))
-        <*> o .:? "rules" .!= RulePatch Map.empty
-
-acceptedMountKeys :: [Key.Key]
-acceptedMountKeys =
-    [ "enabled"
-    , "privateUpstream"
-    , "publicUpstream"
-    , "mirrorTarget"
-    , "mirrorTargetToken"
-    , "mirrorCodeArtifactTokenDuration"
-    , "publicationTarget"
-    , "publicationTargetToken"
-    , "publishAllow"
-    , "minTrustedIntegrity"
-    , "divergencePolicy"
-    , "rules"
-    ]
-
-parseScopes :: Value -> Parser [Scope]
-parseScopes = withText "Scopes" $ \t ->
-    if T.null (T.strip t)
-        then pure []
-        else traverse parseScopeEntry (T.splitOn "," t)
-
--- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
--- typo fails the load instead of seeding an allow-list that refuses every publish.
-parseScopeEntry :: Text -> Parser Scope
-parseScopeEntry entry =
-    either (const (fail ("invalid scope in publishAllow: " <> show trimmed))) pure (projectScope trimmed)
-  where
-    trimmed = T.strip entry
+        <$> optionalPlainKey "enabled"
+        <*> optionalKey "privateUpstream" parseRegistryUrl
+        <*> requiredKey "publicUpstream" parseRegistryUrl
+        <*> optionalKey "mirrorTarget" parseRegistryUrl
+        <*> optionalKey "mirrorTargetToken" parseSecret
+        <*> optionalKey "mirrorCodeArtifactTokenDuration" parseCodeArtifactDuration
+        <*> optionalKey "publicationTarget" parseRegistryUrl
+        <*> optionalKey "publicationTargetToken" parseSecret
+        <*> optionalKeyOr "publishAllow" (String "") parseScopes
+        <*> optionalKey "minTrustedIntegrity" (parseEnum parseMinTrustedIntegrity)
+        <*> optionalKey "divergencePolicy" (parseEnum parseDivergencePolicy)
+        <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
 
 instance FromJSON AppConfig where
-    parseJSON = withObject "AppConfig" appConfigParser
+    parseJSON = withObject "AppConfig" (decodeGroup "document" documentDecoder)
 
-appConfigParser :: KeyMap.KeyMap Value -> Parser AppConfig
-appConfigParser o = do
-    rejectUnknownKeys "document" acceptedDocumentKeys o
+-- @rules@ is accepted here and read by "Ecluse.Config" out of the merged document, never
+-- through this decoder.
+documentDecoder :: GroupDecoder AppConfig
+documentDecoder =
     AppConfig
-        <$> (groupOf "server" o >>= serverParser)
-        <*> (groupOf "queue" o >>= queueParser)
-        <*> (groupOf "limits" o >>= limitsParser)
-        <*> (groupOf "cache" o >>= cacheParser)
-        <*> (groupOf "integrity" o >>= integrityParser)
-        <*> (groupOf "egress" o >>= egressParser)
-        <*> (groupOf "advisories" o >>= advisoriesParser)
-        <*> (groupOf "runtime" o >>= runtimeParser)
-        <*> (groupOf "observability" o >>= observabilityParser)
-        <*> (o .:? "mounts" .!= mempty >>= parseMounts)
+        <$> nestedKey "server" (decodeGroup "server" serverDecoder)
+        <*> nestedKey "queue" (decodeGroup "queue" queueDecoder)
+        <*> nestedKey "limits" (decodeGroup "limits" limitsDecoder)
+        <*> nestedKey "cache" (decodeGroup "cache" cacheDecoder)
+        <*> nestedKey "integrity" (decodeGroup "integrity" integrityDecoder)
+        <*> nestedKey "egress" (decodeGroup "egress" egressDecoder)
+        <*> nestedKey "advisories" (decodeGroup "advisories" advisoriesDecoder)
+        <*> nestedKey "runtime" (decodeGroup "runtime" runtimeDecoder)
+        <*> nestedKey "observability" (decodeGroup "observability" observabilityDecoder)
+        <*> optionalKeyOr "mounts" mempty (const parseMounts)
+        <* unreadKey "rules"
 
--- An absent group reads as empty. Its own parser then reports its required keys,
--- pinned in the embedded defaults, as missing.
-groupOf :: Key.Key -> KeyMap.KeyMap Value -> Parser (KeyMap.KeyMap Value)
-groupOf key o = case KeyMap.lookup key o of
-    Nothing -> pure KeyMap.empty
-    Just v -> case v of
-        Object g -> pure g
-        other -> fail (Key.toString key <> " must be an object, but encountered " <> valueKind other)
-
-serverParser :: KeyMap.KeyMap Value -> Parser ServerSettings
-serverParser o = do
-    rejectUnknownKeys "server" ["port", "publicUrl", "authToken", "helpMessage", "shutdownDrainTimeout"] o
+serverDecoder :: GroupDecoder ServerSettings
+serverDecoder =
     ServerSettings
-        <$> (o .: "port" >>= parsePort "server.port")
-        <*> (o .:? "publicUrl" >>= traverse (parseHttpUrl "server.publicUrl"))
-        <*> (o .:? "authToken" >>= traverse parseSecret)
-        <*> o .:? "helpMessage"
-        <*> (o .: "shutdownDrainTimeout" >>= parsePositiveInt "server.shutdownDrainTimeout")
+        <$> requiredKey "port" parsePort
+        <*> optionalKey "publicUrl" parseHttpUrl
+        <*> optionalKey "authToken" parseSecret
+        <*> optionalPlainKey "helpMessage"
+        <*> requiredKey "shutdownDrainTimeout" parsePositiveInt
 
-queueParser :: KeyMap.KeyMap Value -> Parser QueueSettings
-queueParser o = do
-    rejectUnknownKeys "queue" ["url", "memoryMaxDepth", "maxReceiveCount"] o
+queueDecoder :: GroupDecoder QueueSettings
+queueDecoder =
     QueueSettings
-        <$> (o .:? "url" >>= traverse (parseUrl "queue.url"))
-        <*> (o .:? "memoryMaxDepth" >>= traverse (parsePositiveInt "queue.memoryMaxDepth"))
-        <*> (o .: "maxReceiveCount" >>= parsePositiveInt "queue.maxReceiveCount")
+        <$> optionalKey "url" parseUrl
+        <*> optionalKey "memoryMaxDepth" parsePositiveInt
+        <*> requiredKey "maxReceiveCount" parsePositiveInt
 
-limitsParser :: KeyMap.KeyMap Value -> Parser LimitsSettings
-limitsParser o = do
-    rejectUnknownKeys "limits" ["maxResponseBytes", "maxVersionCount", "maxNestingDepth", "maxRequestBytes", "maxArtifactBytes"] o
+limitsDecoder :: GroupDecoder LimitsSettings
+limitsDecoder =
     LimitsSettings
-        <$> (o .:? "maxResponseBytes" >>= traverse (parsePositiveInt "limits.maxResponseBytes"))
-        <*> (o .: "maxVersionCount" >>= parsePositiveInt "limits.maxVersionCount")
-        <*> (o .: "maxNestingDepth" >>= parsePositiveInt "limits.maxNestingDepth")
-        <*> (o .:? "maxRequestBytes" >>= traverse (parsePositiveInt "limits.maxRequestBytes"))
-        <*> (o .:? "maxArtifactBytes" >>= traverse (parsePositiveInt "limits.maxArtifactBytes"))
+        <$> optionalKey "maxResponseBytes" parsePositiveInt
+        <*> requiredKey "maxVersionCount" parsePositiveInt
+        <*> requiredKey "maxNestingDepth" parsePositiveInt
+        <*> optionalKey "maxRequestBytes" parsePositiveInt
+        <*> optionalKey "maxArtifactBytes" parsePositiveInt
 
-cacheParser :: KeyMap.KeyMap Value -> Parser CacheSettings
-cacheParser o = do
-    rejectUnknownKeys "cache" ["ttl", "maxEntries", "maxBytes"] o
+cacheDecoder :: GroupDecoder CacheSettings
+cacheDecoder =
     CacheSettings
-        <$> (o .: "ttl" >>= parseSeconds "cache.ttl")
-        <*> (o .:? "maxEntries" >>= traverse (parsePositiveInt "cache.maxEntries"))
-        <*> (o .:? "maxBytes" >>= traverse (parsePositiveInt "cache.maxBytes"))
+        <$> requiredKey "ttl" parseSeconds
+        <*> optionalKey "maxEntries" parsePositiveInt
+        <*> optionalKey "maxBytes" parsePositiveInt
 
-integrityParser :: KeyMap.KeyMap Value -> Parser IntegritySettings
-integrityParser o = do
-    rejectUnknownKeys "integrity" ["minPublic", "minTrusted", "divergencePolicy"] o
+integrityDecoder :: GroupDecoder IntegritySettings
+integrityDecoder =
     IntegritySettings
-        <$> (o .: "minPublic" >>= parseEnum parseMinIntegrity "integrity.minPublic")
-        <*> (o .: "minTrusted" >>= parseEnum parseMinTrustedIntegrity "integrity.minTrusted")
-        <*> (o .: "divergencePolicy" >>= parseEnum parseDivergencePolicy "integrity.divergencePolicy")
+        <$> requiredKey "minPublic" (parseEnum parseMinIntegrity)
+        <*> requiredKey "minTrusted" (parseEnum parseMinTrustedIntegrity)
+        <*> requiredKey "divergencePolicy" (parseEnum parseDivergencePolicy)
 
-egressParser :: KeyMap.KeyMap Value -> Parser EgressSettings
-egressParser o = do
-    rejectUnknownKeys "egress" ["additionalBlockedRanges"] o
+egressDecoder :: GroupDecoder EgressSettings
+egressDecoder =
     EgressSettings
-        <$> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
+        <$> optionalKeyOr "additionalBlockedRanges" (String "") parseBlockedRanges
 
-advisoriesParser :: KeyMap.KeyMap Value -> Parser AdvisoriesSettings
-advisoriesParser o = do
-    rejectUnknownKeys "advisories" ["bucket", "pollInterval", "compileInterval", "dataDir", "osvExportBaseUrl", "maxDatabaseBytes"] o
+advisoriesDecoder :: GroupDecoder AdvisoriesSettings
+advisoriesDecoder =
     AdvisoriesSettings
-        <$> o .:? "bucket"
-        <*> (o .: "pollInterval" >>= parseDelaySeconds "advisories.pollInterval")
-        <*> (o .: "compileInterval" >>= parseDelaySeconds "advisories.compileInterval")
-        <*> o .: "dataDir"
-        <*> (o .: "osvExportBaseUrl" >>= parseHttpUrl "advisories.osvExportBaseUrl")
-        <*> (o .: "maxDatabaseBytes" >>= parsePositiveInt "advisories.maxDatabaseBytes")
+        <$> optionalPlainKey "bucket"
+        <*> requiredKey "pollInterval" parseDelaySeconds
+        <*> requiredKey "compileInterval" parseDelaySeconds
+        <*> plainKey "dataDir"
+        <*> requiredKey "osvExportBaseUrl" parseHttpUrl
+        <*> requiredKey "maxDatabaseBytes" parsePositiveInt
 
-runtimeParser :: KeyMap.KeyMap Value -> Parser RuntimeSettings
-runtimeParser o = do
-    rejectUnknownKeys "runtime" ["cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost"] o
+runtimeDecoder :: GroupDecoder RuntimeSettings
+runtimeDecoder =
     RuntimeSettings
-        <$> (o .:? "cores" >>= traverse (parsePositiveInt "runtime.cores"))
-        <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "runtime.maxHeapBytes"))
-        <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "runtime.serveMaxInFlight"))
-        <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "runtime.publicConnectionsPerHost"))
-        <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "runtime.privateConnectionsPerHost"))
+        <$> optionalKey "cores" parsePositiveInt
+        <*> optionalKey "maxHeapBytes" parsePositiveInt
+        <*> optionalKey "serveMaxInFlight" parsePositiveInt
+        <*> optionalKey "publicConnectionsPerHost" parsePositiveInt
+        <*> optionalKey "privateConnectionsPerHost" parsePositiveInt
 
-observabilityParser :: KeyMap.KeyMap Value -> Parser ObservabilitySettings
-observabilityParser o = do
-    rejectUnknownKeys "observability" ["logFormat", "logLevel", "telemetry"] o
+observabilityDecoder :: GroupDecoder ObservabilitySettings
+observabilityDecoder =
     ObservabilitySettings
-        <$> (o .: "logFormat" >>= parseEnum parseLogFormat "observability.logFormat")
-        <*> (o .: "logLevel" >>= parseEnum parseLogLevel "observability.logLevel")
-        <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "observability.telemetry")
-
-acceptedDocumentKeys :: [Key.Key]
-acceptedDocumentKeys =
-    [ "server"
-    , "queue"
-    , "limits"
-    , "cache"
-    , "integrity"
-    , "egress"
-    , "advisories"
-    , "runtime"
-    , "observability"
-    , "mounts"
-    , "rules"
-    ]
+        <$> requiredKey "logFormat" (parseEnum parseLogFormat)
+        <*> requiredKey "logLevel" (parseEnum parseLogLevel)
+        <*> requiredKey "telemetry" (parseEnum parseTelemetrySwitch)
 
 {- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem templates
 included. "Ecluse.Config" decides which of them are active and must be complete.
@@ -216,21 +155,26 @@ parseMountEntry (k, v) = do
     mcfg <- parseJSON v
     pure (eco, mcfg)
 
-parseSecret :: Value -> Parser Secret
-parseSecret = withText "Secret" (pure . mkSecret)
+parseSecret :: String -> Value -> Parser Secret
+parseSecret field = expectString field (pure . mkSecret)
 
-parseAdditionalBlockedRanges :: Value -> Parser [IPRange]
-parseAdditionalBlockedRanges = withText "IPRange list" $ \t ->
-    if T.null (T.strip t)
-        then pure []
-        else traverse parseBlockedRangeEntry (T.splitOn "," t)
+parseScopes :: String -> Value -> Parser [Scope]
+parseScopes field = commaSeparated field parseScopeEntry
+
+-- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
+-- typo fails the load instead of seeding an allow-list that refuses every publish.
+parseScopeEntry :: Text -> Parser Scope
+parseScopeEntry entry =
+    either (const (fail ("invalid scope in publishAllow: " <> show entry))) pure (projectScope entry)
+
+parseBlockedRanges :: String -> Value -> Parser [IPRange]
+parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry
 
 parseBlockedRangeEntry :: Text -> Parser IPRange
 parseBlockedRangeEntry entry =
-    let trimmed = T.strip entry
-     in case parseBlockedRange trimmed of
-            Just range -> pure range
-            Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack trimmed)
+    case parseBlockedRange entry of
+        Just range -> pure range
+        Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack entry)
 
 parseSeconds :: String -> Value -> Parser NominalDiffTime
 parseSeconds field = \case
@@ -243,7 +187,7 @@ parseSeconds field = \case
     Number n -> case toBoundedInteger n :: Maybe Int64 of
         Just val -> boundedSeconds field (toInteger val)
         Nothing -> secondsFailure field (show n)
-    other -> fail (field <> " must be a non-negative integer count of seconds, but encountered a " <> valueKind other)
+    other -> fail (field <> " must be a non-negative integer count of seconds, but encountered " <> valueKind other)
 
 boundedSeconds :: String -> Integer -> Parser NominalDiffTime
 boundedSeconds field n
@@ -280,13 +224,16 @@ instance FromJSON RulePatch where
 instance FromJSON RuleEntry where
     parseJSON = withObject "rule" $ \o -> do
         rejectSecretKeys o
-        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope", "identity", "minSeverity", "onUnavailable"] o
-        RuleEntry
-            <$> o .:? "type"
-            <*> o .:? "precedence"
-            <*> o .:? "enabled"
-            <*> o .:? "ageSeconds"
-            <*> o .:? "scope"
-            <*> o .:? "identity"
-            <*> o .:? "minSeverity"
-            <*> o .:? "onUnavailable"
+        decodeGroup "rule" ruleEntryDecoder o
+
+ruleEntryDecoder :: GroupDecoder RuleEntry
+ruleEntryDecoder =
+    RuleEntry
+        <$> optionalPlainKey "type"
+        <*> optionalPlainKey "precedence"
+        <*> optionalPlainKey "enabled"
+        <*> optionalPlainKey "ageSeconds"
+        <*> optionalPlainKey "scope"
+        <*> optionalPlainKey "identity"
+        <*> optionalPlainKey "minSeverity"
+        <*> optionalPlainKey "onUnavailable"

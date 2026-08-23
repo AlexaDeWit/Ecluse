@@ -4,7 +4,6 @@
 
 module Ecluse.Pilot (
     runPilot,
-    pilotApplication,
 
     -- * One-shot compilation
     PilotCompileOptions (..),
@@ -16,17 +15,15 @@ import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadMask)
 import Katip (KatipContext, LogEnv, Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
-import Network.Wai (Application)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Boot (BootEnv (..))
+import Ecluse.Boot (BootEnv (..), probeServerConfig)
 import Ecluse.Config (
     AdvisoriesSettings (advBucket, advCompileInterval, advDataDir, advOsvExportBaseUrl),
-    AppConfig (cfgAdvisories, cfgServer),
+    AppConfig (cfgAdvisories),
     Config (configApp),
-    ServerSettings (srvPort),
     unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
@@ -41,36 +38,24 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Runtime.Log (moduleField)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Runtime.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, raceServerAgainstLoop, runWarp, serverMiddleware)
+import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, raceServerAgainstLoop, runWarp)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisoryCompileMetricsPortOf, newMetrics)
 
--- | The WAI application for the Pilot worker mode: the liveness and readiness probes.
-pilotApplication :: ServerConfig -> IO Application
-pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (pure True)))
-
-{- | The entry point for the Pilot worker mode.
-
-The export loop never returns, so the server's graceful return on shutdown must cancel
-it. A cancelled export cycle resumes from the remote artifact on the next boot.
+{- | The entry point for the Pilot worker mode. The export loop never returns, so the
+server's graceful return on shutdown must cancel it, resuming from the remote artifact next boot.
 -}
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
-    let logEnv = beLogEnv bootEnv
-        port = srvPort (cfgServer (beConfig bootEnv))
-        cfg = (mkServerConfig []){scPort = port}
-
-    runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
-        logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
+    let cfg = probeServerConfig (beConfig bootEnv)
+    runKatipContextT (beLogEnv bootEnv) (moduleField "Ecluse.Pilot") mempty $ do
+        logFM InfoS (ls ("Pilot mode starting up on port " <> show (scPort cfg) :: String))
         raceServerAgainstLoop
-            (liftIO $ runWarp cfg pilotApplication)
+            (liftIO $ runWarp cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (beAmbient bootEnv) (beConfigFull bootEnv))
 
-{- | Compile the npm OSV artifact and upload it to the configured bucket, once per sync
-interval, or idle when no bucket is configured.
-
-Every fault is transient here because a cycle has no wiring fault to fail up on, and the
-backoff is pinned at the sync interval on both ends.
+{- | Compile and upload one OSV artifact per sync interval, or idle with no bucket configured.
+Every fault is transient, because a cycle has no wiring fault to fail up on.
 -}
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> Config -> m ()
 runExportLoop telemetry ambient config = do
@@ -96,11 +81,8 @@ runExportLoop telemetry ambient config = do
                     runResourceT (exportEcosystem metrics Npm telemetry ambient appCfg bucketName)
                     threadDelay intervalMicros
 
-{- | Compile one ecosystem's OSV artifact and upload it to the given bucket: one full cycle.
-
-The metric label, the artifact's name, and the export path all derive from @eco@. osv.dev spells
-@npm@ the way 'ecosystemName' does. An ecosystem it spells differently needs that spelling split
-out from the artifact name, which reads 'ecosystemName' on both the compile and the sync side.
+{- | One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
+@npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
 -}
 exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
 exportEcosystem metrics eco telemetry ambient appCfg bucketName = do
@@ -137,10 +119,8 @@ data PilotUploadUnconfigured = PilotUploadUnconfigured
 
 instance Exception PilotUploadUnconfigured
 
-{- | Run a single OSV compilation, optionally upload the artifact, and return its path.
-
-A source that cannot be fetched or parsed propagates as an exception, so the process
-exits non-zero and the command stays safe to script.
+{- | Run a single OSV compilation, optionally upload the artifact, and return its path. An
+unfetchable or unparseable source propagates, so the command exits non-zero and stays scriptable.
 -}
 runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry ambient appCfg opts = do

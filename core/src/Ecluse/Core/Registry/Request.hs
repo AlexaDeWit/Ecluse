@@ -157,8 +157,8 @@ artifactRequestByUrl mapping token url = do
     base <- parseRequestEither url
     pure . attachCredential mapping token $ base{decompress = const False}
 
-{- Join a base URL and an already-encoded path, tolerating one trailing slash on the base so the
-join never doubles it.
+{- Join a base URL and an already-encoded path with exactly one slash, whatever trailing
+slashes the configured base writes.
 -}
 joinPath :: Text -> Text -> Either UrlFormationError Text
 joinPath baseUrl path
