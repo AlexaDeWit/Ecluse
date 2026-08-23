@@ -159,8 +159,8 @@ open breaker) surfaces: retryable, carrying the rule's configured 'RetryAfter'. 
 transientCause :: EffectfulConfig -> Transience
 transientCause cfg = WillResolve (ecRetryAfter cfg)
 
-{- The 'Transience' an infrastructural failure surfaces: a timeout, an exception, or an open
-breaker is retryable and carries the rule's configured 'RetryAfter'. -}
+{- The breaker admission gate. 'Ecluse.Core.Breaker.admit' owns the admission policy, and
+this commits its decision so the move out of 'Open' takes effect. -}
 admitProbe :: Resilience -> UTCTime -> IO Bool
 admitProbe res now = do
     (permitted, old, new) <- atomically $ do
@@ -171,7 +171,8 @@ admitProbe res now = do
     reportBreakerChange (resBreakerReporter res) old new
     pure permitted
 
-{- The breaker admission gate. 'Ecluse.Core.Breaker.admit' owns the admission policy. -}
+{- Commit a breaker fold and report the transition it made. It reads the breaker before and
+after in one transaction, so the report reflects exactly the committed transition. -}
 commitBreaker :: Resilience -> (Breaker -> Breaker) -> IO ()
 commitBreaker res step = do
     (old, new) <- atomically $ do
@@ -196,7 +197,9 @@ data EffectfulConfig = EffectfulConfig
     does not return within it as a failure, a transient and retryable cause.
     -}
     , ecBackoff :: [Int]
-    -- ^ The per-attempt timeout in microseconds. An overrunning attempt faults and can retry.
+    {- ^ The delay in microseconds before each retry, one entry per retry. Its length is
+    the retry budget, so @[]@ admits no retry at all.
+    -}
     , ecBreakerThreshold :: Int
     -- ^ Consecutive exhausted-rule failures that trip the breaker.
     , ecBreakerCooldown :: NominalDiffTime
@@ -204,7 +207,9 @@ data EffectfulConfig = EffectfulConfig
     single half-open probe to test recovery.
     -}
     , ecRetryAfter :: Maybe RetryAfter
-    -- ^ How long the breaker stays open before it admits a single half-open recovery probe.
+    {- ^ The @Retry-After@ hint a faulted evaluation carries back to the client.
+    'Nothing' sends no hint.
+    -}
     }
 
 {- | The default resilience knobs are a 2-second per-attempt timeout and two retries, at

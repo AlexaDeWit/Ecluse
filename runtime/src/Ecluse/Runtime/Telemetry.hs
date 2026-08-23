@@ -167,9 +167,7 @@ and emits nothing. This is what an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ resol
 telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
-{- | Build an enabled telemetry handle from the SDK signals. This is the only way to obtain
-one, so an enabled handle's providers always come from the bracketed SDK lifecycle.
--}
+-- | Build an enabled telemetry handle from the SDK signals 'withTelemetry' brackets.
 telemetryEnabled :: OTelSignals -> Telemetry
 telemetryEnabled signals =
     TelemetryEnabled
