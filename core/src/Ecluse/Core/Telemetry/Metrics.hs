@@ -282,7 +282,7 @@ instance Universe Tier where universe = universeGeneric
 (@ecluse.serve.perimeter.faults@). The unbounded detail rides the perimeter's log line,
 never a label.
 -}
-data RequestFaultCause = GateFault | RenderFault | UnclassifiedFault
+data RequestFaultCause = RenderFault | UnclassifiedFault
     deriving stock (Eq, Generic, Show)
 
 instance Universe RequestFaultCause where universe = universeGeneric
@@ -515,7 +515,6 @@ labelValue = \case
         Structural -> "structural"
         Effectful -> "effectful"
     LPerimeterCause c -> case c of
-        GateFault -> "gate"
         RenderFault -> "render"
         UnclassifiedFault -> "unclassified"
     LRelayAnomaly a -> case a of

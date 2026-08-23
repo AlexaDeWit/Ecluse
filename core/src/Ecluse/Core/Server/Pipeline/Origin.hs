@@ -162,14 +162,8 @@ fetchPublicOrigin deps rt name = do
                 fetchFullManifest client name
     pure (originResultOf resolved)
 
-{- Construct a per-request read handle for one origin and run an action over it. The handle's
-operations run the fetch in plain 'IO', so 'withRunInIO' captures the request's
-trace-correlated @katip@ context into the handle's failure logs.
-
-The fetch enforces every response bound (security.md invariant 4) against the mount's
-'Limits' budget. A body-size, nesting-depth, or version-count breach becomes a
-'MetadataBoundExceeded', logged once at 'WarningS' before the contribution degrades
-fail-closed. -}
+{- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the
+request's @katip@ context into the failure logs, and the fetch holds the mount's 'Limits'. -}
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->

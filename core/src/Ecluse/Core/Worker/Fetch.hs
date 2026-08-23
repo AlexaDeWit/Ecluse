@@ -15,7 +15,7 @@ module Ecluse.Core.Worker.Fetch (
 import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse (RegistryResponse), UrlFormationError)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse (responseBody), UrlFormationError)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -36,8 +36,6 @@ fetchArtifactBytes limits buildRequest url = do
     liftIO
         ( formThen
             FetchUrlUnformable
-            (fmap (fmap artifactBytes) . boundedFetch manager limits)
+            (fmap (fmap responseBody) . boundedFetch manager limits)
             (buildRequest limits manager "" Nothing (registryUrlText url))
         )
-  where
-    artifactBytes (RegistryResponse bytes) = bytes

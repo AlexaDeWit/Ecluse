@@ -2,17 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Ack within the visibility budget during job processing.
-
-A received message is hidden only for the queue's visibility window. The worker acks
-on success. Before a publish that may run long it calls
-'Ecluse.Core.Queue.extendVisibility' to hold the message before the window lapses. On a
-transient failure it does __not__ ack, so the message redelivers. The worker processes a
-batch __sequentially__, so each job has the full visibility budget rather than competing
-with its batch-mates for it.
-
-The worker retires a delivery that already spent the queue's redelivery budget (see
-"Ecluse.Core.Queue"). The check runs before the job, so a message nothing else captures
+{- | Ack within the visibility budget during job processing. A received message is hidden only
+for the queue's visibility window, so before a publish that may run long the worker calls
+'Ecluse.Core.Queue.extendVisibility' to hold it. On a transient failure it does __not__ ack, so
+the message redelivers. A batch is processed __sequentially__, so each job has the full
+visibility budget rather than competing with its batch-mates. A delivery that already spent the
+queue's redelivery budget is retired before the job runs, so a message nothing else captures
 stops cycling instead of re-fetching its artifact on every redelivery.
 -}
 module Ecluse.Core.Worker.Job (
@@ -297,15 +292,16 @@ readmittedDescriptor artifact digests =
 {- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
 The artifact fetch and the mirror write read this one table, so no fault splits between them.
 -}
-outcomeOfFetchFault :: Text -> FetchFault -> JobOutcome
-outcomeOfFetchFault reason = \case
-    FetchUrlUnformable _ -> Dropped reason
-    FetchBoundExceeded _ -> DeadLettered reason
-    FetchTransport _ -> Retried reason
+outcomeOfFetchFault :: (FetchFault -> Text) -> FetchFault -> JobOutcome
+outcomeOfFetchFault render fault = verdict (render fault)
+  where
+    verdict = case fault of
+        FetchUrlUnformable _ -> Dropped
+        FetchBoundExceeded _ -> DeadLettered
+        FetchTransport _ -> Retried
 
--- Verify the fetched bytes against the re-admitted digests, since the queue payload carries none.
--- A tampered or corrupt artifact must never reach the private upstream, which later serves it
--- without the rules, so a mismatch fails the job with no publish.
+-- A tampered artifact must never reach the private upstream, which later serves it without the
+-- rules, so the bytes are verified against the re-admitted digests before any publish.
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
@@ -313,7 +309,7 @@ mirrorArtifact policy receipt job admitted = do
     case fetched of
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and
         -- 'processMessage' logs the reason at the queue-realisation site.
-        Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job fault) fault)
+        Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job) fault)
         Right bytes ->
             case verifyIntegrity (maHashes admitted) bytes of
                 IntegrityMismatch detail -> do
@@ -354,7 +350,7 @@ publishVerified policy receipt job admitted bytes = do
         Left (PublishRejected err) -> do
             releaseForRetry receipt
             pure (Retried ("registry rejected publish: " <> show err))
-        Left (PublishFetch fault) -> case outcomeOfFetchFault (publishFaultReason fault) fault of
+        Left (PublishFetch fault) -> case outcomeOfFetchFault publishFaultReason fault of
             -- Reset the hold only when a redelivery is actually coming. A terminal outcome is
             -- acked or dead-lettered, so there is nothing to hasten and the hold can stand.
             Retried reason -> do

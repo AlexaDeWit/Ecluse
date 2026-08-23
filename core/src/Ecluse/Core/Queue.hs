@@ -2,68 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-queue handle: the durable hand-off from the request path to the
-mirror worker.
-
-Mirroring is demand-driven. When a client fetches an artifact whose version passes
-the rules, the proxy 'enqueue's a 'MirrorJob'. It then serves the artifact at once,
-never blocking on the mirror. A separate worker 'receive's jobs, fetches and verifies
-the artifact, publishes it to the mirror target, and 'ack's the job (see
-@docs\/architecture\/cloud-backends.md@ → "Mirror Queue").
-
-The queue is the one cloud surface whose API differs materially per provider. It is
-therefore its own handle: a record of functions (the Handle pattern). AWS SQS speaks
-@SendMessage@\/@ReceiveMessage@+visibility-timeout\/@DeleteMessage@, and GCP Pub\/Sub
-speaks @Publish@\/@Pull@+ack-deadline\/@Acknowledge@. Both providers fit the same
-receive → process → ack shape. Their differences (visibility timeout vs ack deadline,
-batch limits, dead-letter wiring) stay behind the handle, and 'ReceiptHandle' is opaque
-so neither leaks.
-
-Like the other handles, the effectful fields return 'IO' rather than @App@. An
-adapter therefore stays decoupled from the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions").
-
-== Conventions
-
-The two cloud backends both give at-least-once delivery, which is safe here because
-publishing is idempotent (a registry treats versions as immutable). The handle's
-contract reflects that:
-
-* __'enqueue' is best-effort__. It runs on the request hot path (enqueue, then serve
-  immediately), so the caller logs and meters a failure and never fails the client
-  response. The artifact is already served, and a later pull re-enqueues.
-* __Retry is "don't 'ack'"__. A job that fails processing transiently (a flaky fetch,
-  a registry blip) is simply not acked. The visibility timeout \/ ack deadline
-  redelivers it, and it may succeed next time. There is deliberately no @nack@ for
-  the transient case.
-* __'deadLetter' is the terminal terminus__. A job that can never succeed (an artifact
-  past the plan-sized byte cap) is a terminal verdict, and each backend realises it
-  its own way. The in-memory backend drops the delivery, its only terminus. The SQS
-  backend returns the message with a backoff visibility timeout without deleting it.
-  It then rides the operator's redrive policy to the dead-letter queue for forensic
-  retention rather than being silently discarded. This is not a @nack@ (a retry) and
-  not an 'ack' (a clean retire). It is the third, terminal outcome.
-* __The 'deliveryBudget' is the backstop terminus__. Returning a message only has a
-  terminus if something captures it. A queue with no dead-letter terminus would
-  otherwise cycle a poison message until the retention window discarded it unseen,
-  re-fetching on every delivery. So every delivery carries its 'msgReceiveCount'. The
-  worker retires a delivery that spends the budget ('deliveryBudgetSpent'), killing
-  the job with an alarm rather than letting it churn. 'effectiveDeliveryBudget' raises
-  the budget past an attached terminus's own capture count. A dead-letter queue
-  therefore always captures first.
-* __'extendVisibility'__ lets the worker hold a long publish (a large artifact) past
-  the visibility window. It is an /optimisation/, not correctness-critical, since
-  idempotency already makes redelivery harmless.
-
-This module provides the handle, its payload types, and the building blocks a backend
-implementation reaches for. "Ecluse.Core.Queue.Memory" holds the STM-backed bounded,
-best-effort production backend that mirroring rolls over to when no
-@ECLUSE_QUEUE__URL@ is set.
-
-It also provides 'newEnqueueBuffer', a bounded producer-side hand-off buffer that
-wraps any backend. The serve path's 'enqueue' then completes in microseconds, while a
-composition-root drain loop delivers to the (possibly slow) backend off the request
-path.
+{- | The mirror-queue handle: the durable hand-off from the request path to the mirror worker.
+Mirroring is demand-driven, so the serve path 'enqueue's a 'MirrorJob' and answers at once while
+a worker 'receive's it, verifies the artifact, publishes it, and 'ack's. The queue is the one
+cloud surface whose API differs materially per provider, so it is a record of functions (the
+Handle pattern) and 'ReceiptHandle' is opaque. At-least-once delivery is safe because publishing
+is idempotent, which is why retry is "do not 'ack'" and there is no @nack@. 'deadLetter' is the
+third, terminal outcome, and 'deliveryBudget' is the backstop when nothing else captures a poison
+message. See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue".
 -}
 module Ecluse.Core.Queue (
     -- * Queue handle

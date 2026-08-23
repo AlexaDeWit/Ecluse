@@ -51,18 +51,18 @@ spec = do
         -- One table serves the artifact fetch and the mirror write, so no exchange fault can
         -- drop on one leg and retry on the other.
         it "drops an unformable URL (a redelivery re-forms the same URL from the same inputs)" $
-            outcomeOfFetchFault "unformable artifact URL: EmptyBaseUrl" (FetchUrlUnformable EmptyBaseUrl)
-                `shouldBe` Dropped "unformable artifact URL: EmptyBaseUrl"
+            outcomeOfFetchFault renderFault (FetchUrlUnformable EmptyBaseUrl)
+                `shouldBe` Dropped "unformable"
 
         -- An over-bound response is terminal, so the backend dead-letters it. Treating every
         -- fetch Left as a retry would redeliver a deterministically over-cap tarball forever.
         it "dead-letters an over-bound response (it can never succeed, so it rides the terminus)" $
-            outcomeOfFetchFault "artifact exceeded the response bound" (FetchBoundExceeded (BodyTooLarge 1024))
-                `shouldBe` DeadLettered "artifact exceeded the response bound"
+            outcomeOfFetchFault renderFault (FetchBoundExceeded (BodyTooLarge 1024))
+                `shouldBe` DeadLettered "over the bound"
 
         it "retries a transport fault (a redelivery may succeed)" $
-            outcomeOfFetchFault "artifact fetch failed: connection reset" (FetchTransport (transportFault TransportUnreachable "connection reset"))
-                `shouldBe` Retried "artifact fetch failed: connection reset"
+            outcomeOfFetchFault renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
+                `shouldBe` Retried "transport failed"
 
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
@@ -570,3 +570,11 @@ spec = do
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])
+
+-- A stand-in reason renderer. The unit pins the verdict and that the reason is rendered from
+-- the very fault being judged, never the wording each worker leg chooses.
+renderFault :: FetchFault -> Text
+renderFault = \case
+    FetchUrlUnformable _ -> "unformable"
+    FetchBoundExceeded _ -> "over the bound"
+    FetchTransport _ -> "transport failed"
