@@ -6,8 +6,9 @@ module Ecluse.CveSpec (spec) where
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), UpperBound (..), insideAffectedRange)
+import Ecluse.Core.Cve (AdvisoryRange (..), insideAffectedRange)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Types (UpperBound (..))
 
 -- A builder for an advisory segment, exposing only its bounds.
 range :: Maybe Text -> UpperBound -> AdvisoryRange

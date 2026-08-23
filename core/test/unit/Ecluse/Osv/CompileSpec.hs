@@ -21,10 +21,11 @@ import System.FilePath (takeFileName)
 import System.IO.Error (catchIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
-import Ecluse.Core.Osv.Advisory (ExtractedOsv (..), UpperBound (..))
+import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
+import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),

@@ -22,7 +22,7 @@ import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO)
 
-import Ecluse.Core.Osv.Advisory (ExtractedOsv (..), UpperBound (FixedBefore, LastAffected, Unbounded))
+import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
 import Ecluse.Core.Osv.Stream (
@@ -35,6 +35,7 @@ import Ecluse.Core.Osv.Stream (
     streamOsvUrl,
     systemicDrop,
  )
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),

@@ -11,7 +11,6 @@ module Ecluse.Core.Osv.Advisory (
     OsvEvent (..),
     OsvDatabaseSpecific (..),
     OsvSeverityEntry (..),
-    UpperBound (..),
     ExtractedOsv (..),
     advisorySeverity,
     extractFromAdvisory,
@@ -21,6 +20,8 @@ module Ecluse.Core.Osv.Advisory (
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
 import Data.Text qualified as T
 import Security.CVSS (cvssScore, parseCVSS)
+
+import Ecluse.Core.Osv.Types (UpperBound (..))
 
 {- | An ecosystem's advisory export under an OSV-layout base URL
 (@\<base\>\/\<ecosystem\>\/all.zip@). The base comes from configuration
@@ -136,18 +137,6 @@ instance FromJSON OsvEvent where
             <$> v .:? "introduced"
             <*> v .:? "fixed"
             <*> v .:? "last_affected"
-
-{- | Where an affected interval closes. An advisory states one upper bound or none, so
-no segment can carry two.
--}
-data UpperBound
-    = -- | Exclusive: affected below this version, which is itself the fix.
-      FixedBefore Text
-    | -- | Inclusive: affected up to and including this version.
-      LastAffected Text
-    | -- | The interval never closes.
-      Unbounded
-    deriving stock (Show, Eq)
 
 {- | One affected segment of one package, one row of the artifact's ranges table.
 'extIntroduced' is the inclusive lower bound and 'Nothing' means from the beginning.

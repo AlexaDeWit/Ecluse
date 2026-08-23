@@ -15,8 +15,9 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), UpperBound (FixedBefore, Unbounded))
+import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails)

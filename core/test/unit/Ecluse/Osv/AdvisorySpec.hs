@@ -26,6 +26,7 @@ import Ecluse.Core.Osv.Stream (
     streamOsvUrl,
     systemicDrop,
  )
+import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
