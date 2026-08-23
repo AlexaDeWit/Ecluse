@@ -49,6 +49,7 @@ import Ecluse.Runtime.Log (
     severityFloor,
     severityStatus,
  )
+import Ecluse.Test.WireVocab (wireRoundTrips)
 
 -- | A fixed instant, so a rendered line is deterministic across runs.
 fixedTime :: UTCTime
@@ -149,6 +150,9 @@ emitAt level severity message =
 
 spec :: Spec
 spec = do
+    wireRoundTrips @LogFormat
+    wireRoundTrips @LogLevel
+
     describe "parseLogFormat" $ do
         it "parses the two accepted wire names" $ do
             parseLogFormat "json" `shouldBe` Right JsonLog

@@ -2,19 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The integrity-digest vocabulary: hash algorithms and their authority order,
-the validated 'Hash' value, digest computation, and the Subresource-Integrity
-wire forms.
-
-This is the single home for the algorithm vocabulary. It holds the wire name an
-algorithm renders to and parses from, and how a Subresource-Integrity string is split
-and resolved. It lives in the package layer's lowest module because 'mkHash' needs it,
-and because the vocabulary's consumers must never disagree on it. Everything that
-names an algorithm or reads an SRI defers here: the worker's tamper gate, the
-serve-admission floor, and the queue wire. They therefore share one notion of what
-@"sha512"@ means and what an SRI asserts, rather than each re-encoding it.
-"Ecluse.Core.Package" re-exports this whole surface for its callers. Import this
-module directly only where the package vocabulary itself is not needed.
+{- | The integrity-digest vocabulary: hash algorithms and their authority order, the
+validated 'Hash' value, digest computation, and the Subresource-Integrity wire forms.
+This is the single home for that vocabulary, so the worker's tamper gate, the
+serve-admission floor, and the queue wire share one notion of what @"sha512"@ means and
+what an SRI asserts. It sits in the package layer's lowest module because 'mkHash' needs
+it. "Ecluse.Core.Package" re-exports the whole surface, so import this module directly
+only where the package vocabulary itself is not needed.
 -}
 module Ecluse.Core.Package.Hash (
     -- * Hashes
@@ -132,16 +126,16 @@ wellFormed = \case
     SRI -> wellFormedSri
     alg -> wellFormedHex alg
 
--- 'digestFromByteString' is the length check: it accepts only an input of exactly the
--- algorithm's digest size.
 wellFormedHex :: HashAlg -> Text -> Bool
 wellFormedHex alg t =
     case convertFromBase Base16 (encodeUtf8 (T.toLower t) :: ByteString) :: Either String ByteString of
         Left _ -> False
-        Right bytes -> hexDigestOk alg bytes
+        Right bytes -> digestLengthOk alg bytes
 
-hexDigestOk :: HashAlg -> ByteString -> Bool
-hexDigestOk alg bytes = case alg of
+-- 'digestFromByteString' is the length check: it accepts only an input of exactly the
+-- algorithm's digest size.
+digestLengthOk :: HashAlg -> ByteString -> Bool
+digestLengthOk alg bytes = case alg of
     SHA1 -> isJust (digestFromByteString @SHA1 bytes)
     SHA256 -> isJust (digestFromByteString @SHA256 bytes)
     SHA384 -> isJust (digestFromByteString @SHA384 bytes)
@@ -191,19 +185,16 @@ wellFormedSriComponent :: Text -> Bool
 wellFormedSriComponent comp
     -- An empty body means no @\<alg\>-\<base64\>@ shape (no separator, or nothing after it).
     | T.null (sriBody comp) = False
-    | otherwise = sriBodyOk (sriPrefix comp) (sriBody comp)
+    | otherwise = sriBodyOk (sriAlgorithm comp) (sriBody comp)
 
--- Each recognised name is a modelled 'HashAlg', so a well-formed component always resolves to
--- an algorithm the strength tier ranks ('assertedAlg').
-sriBodyOk :: Text -> Text -> Bool
-sriBodyOk algName body =
+-- 'sriAlgorithm' resolves the name, so a well-formed component always names an algorithm
+-- the strength tier ranks ('assertedAlg').
+sriBodyOk :: Maybe HashAlg -> Text -> Bool
+sriBodyOk Nothing _ = False
+sriBodyOk (Just alg) body =
     case convertFromBase Base64 (encodeUtf8 body :: ByteString) :: Either String ByteString of
         Left _ -> False
-        Right bytes -> case algName of
-            "sha256" -> isJust (digestFromByteString @SHA256 bytes)
-            "sha384" -> isJust (digestFromByteString @SHA384 bytes)
-            "sha512" -> isJust (digestFromByteString @SHA512 bytes)
-            _ -> False
+        Right bytes -> digestLengthOk alg bytes
 
 {- | The lower-case wire name of an algorithm: the canonical spelling 'parseHashAlg'
 reads back. Total and injective, so it doubles as config rendering and error text.

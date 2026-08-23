@@ -29,9 +29,12 @@ module Ecluse.Core.Breaker (
     BreakerReporter (..),
     noBreakerReporter,
     reportBreakerChange,
+    breakerState,
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
+
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 -- | The breaker's state, gating whether the guarded operation may be attempted.
 data Breaker
@@ -73,8 +76,8 @@ recordFailure threshold cooldown now = \case
   where
     tripped = Open (addUTCTime cooldown now)
 
-{- | An observer of breaker state changes. A bare @'Breaker' -> IO ()@ callback keeps the core
-free of any metric dependency, and the composition root installs the live observer.
+{- | An observer of breaker state changes. The callback takes the breaker itself, so no
+instrument handle reaches here, and the composition root installs the live observer.
 -}
 newtype BreakerReporter = BreakerReporter (Breaker -> IO ())
 
@@ -87,13 +90,14 @@ The failure tally inside 'Closed' is not observable, so advancing it alone fires
 -}
 reportBreakerChange :: BreakerReporter -> Breaker -> Breaker -> IO ()
 reportBreakerChange (BreakerReporter report) old new
-    | observable old == observable new = pass
+    | breakerState old == breakerState new = pass
     | otherwise = report new
-  where
-    -- The coarse observable state: it drops the failure tally inside 'Closed', so two
-    -- 'Closed' states compare equal however many failures each counted.
-    observable :: Breaker -> Int
-    observable = \case
-        Closed{} -> 0
-        HalfOpen -> 1
-        Open{} -> 2
+
+{- | The breaker's coarse observable state, the bounded value the @ecluse.rule.breaker.state@
+gauge records. It drops the failure tally, so two 'Closed' breakers project alike.
+-}
+breakerState :: Breaker -> Metric.BreakerState
+breakerState = \case
+    Closed{} -> Metric.Closed
+    HalfOpen -> Metric.HalfOpen
+    Open{} -> Metric.Open

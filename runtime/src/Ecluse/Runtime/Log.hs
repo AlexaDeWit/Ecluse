@@ -89,6 +89,8 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString qualified as BS
 import Data.Text.Lazy.Builder qualified as TB
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 import Katip (
     ColorStrategy (ColorLog),
     Environment,
@@ -120,7 +122,9 @@ data LogFormat
       JsonLog
     | -- | The human-readable bracketed form, for local development.
       ConsoleLog
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe LogFormat where universe = universeGeneric
 
 -- The wire vocabulary of a 'LogFormat': the single source both 'parseWire' and
 -- the accepted-set message derive from for this type.
@@ -153,7 +157,9 @@ data LogLevel
       WarnLevel
     | -- | Errors alone.
       ErrorLevel
-    deriving stock (Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Universe LogLevel where universe = universeGeneric
 
 -- The wire vocabulary of a 'LogLevel', listed from most to least verbose so the
 -- accepted-set message reads as a ladder.

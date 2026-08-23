@@ -24,11 +24,10 @@ module Ecluse.Core.Version.Gem (
     isGemStable,
 ) where
 
-import Data.Char (isDigit)
 import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0)
+import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, isAsciiAlphaNum, withinVersionLength)
 
 {- | A parsed @Gem::Version@: a flat token list compared with zero-padding, with
 numeric tokens outranking textual ones (see 'VToken').
@@ -51,10 +50,7 @@ segment.
 -}
 parseGem :: Text -> Maybe GemKey
 parseGem raw = do
-    -- Bound the input length before any numeric parsing. 'readMaybe' reads a digit
-    -- run into an 'Integer', which is quadratic in the digit count. An unbounded run
-    -- in hostile metadata would therefore be an algorithmic-complexity DoS.
-    guard (T.compareLength raw maxVersionLength /= GT)
+    guard (withinVersionLength raw)
     let stripped = T.strip raw
         -- Gem::Version canonicalises hyphens via a global gsub("-", ".pre.") before segmenting,
         -- so "1.0.0-1" is the prerelease "1.0.0.pre.1" and orders below "1.0.0".
@@ -66,8 +62,7 @@ parseGem raw = do
     pure (GemKey (canonicalSegments toks))
   where
     validSeg s = not (T.null s) && T.all isAsciiAlphaNum s
-    segTokens = map classify . T.groupBy (\c1 c2 -> isDigit c1 == isDigit c2)
-    classify g = if T.all isDigit g then VNum (numOr0 g) else VStr g
+    segTokens = map classifyRun . digitRuns
 
 {- Mirror @Gem::Version#canonical_segments@: drop trailing zeros from the numeric release
 and from the prerelease tail separately. So @2.0.a@ keys as @[2, "a"]@, which is why

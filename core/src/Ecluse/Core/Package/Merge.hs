@@ -84,6 +84,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Package (
     Artifact (..),
@@ -98,6 +100,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Version (Version, selectLatest, unVersion)
+import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | Which upstream a document came from. The caller decides this and applies it before merging.
 'Ord' is the trust order: 'TrustedSource' sorts before 'GatedSource', so the smallest wins.
@@ -177,19 +180,22 @@ data DivergencePolicy
       version then fails to resolve it rather than receive a contested copy.
       -}
       FailClosed
-    deriving stock (Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
 
-{- | Parse the @ECLUSE_INTEGRITY__DIVERGENCE_POLICY@ value. Any unrecognised spelling is a 'Left'
-naming the offending input.
+instance Universe DivergencePolicy where universe = universeGeneric
+
+instance WireVocab DivergencePolicy where
+    wireKind = "divergence policy"
+    wireTable =
+        (Warn, "warn")
+            :| [(FailClosed, "fail-closed")]
+    wireAliases = [(FailClosed, "fail_closed"), (FailClosed, "failclosed")]
+
+{- | Parse the @ECLUSE_INTEGRITY__DIVERGENCE_POLICY@ value, tolerating surrounding
+whitespace, case, and the underscored and run-together spellings of @fail-closed@.
 -}
 parseDivergencePolicy :: Text -> Either Text DivergencePolicy
-parseDivergencePolicy raw =
-    case T.toLower (T.strip raw) of
-        "warn" -> Right Warn
-        "fail-closed" -> Right FailClosed
-        "fail_closed" -> Right FailClosed
-        "failclosed" -> Right FailClosed
-        other -> Left ("unknown divergence policy '" <> other <> "' (expected 'warn' or 'fail-closed')")
+parseDivergencePolicy = parseWire . T.toLower . T.strip
 
 {- | Apply a 'DivergencePolicy' to a finished plan, after the serve layer has logged and metered
 its divergences. 'FailClosed' can empty 'mpSurvivors', which the caller treats as no survivors.

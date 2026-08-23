@@ -36,7 +36,7 @@ import Data.Char (isDigit)
 import Data.List (dropWhileEnd, unsnoc)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0, parseNumSeg)
+import Ecluse.Core.Version.Token (VToken, classifyRun, isAsciiAlphaNum, numOr0, parseNumSeg, withinVersionLength)
 
 {- | A parsed PEP 440 version as its canonical ordering key. The release has trailing
 zeros stripped (@1.0 == 1.0.0@), and the rank tuples encode PEP 440's None-handling for
@@ -65,10 +65,7 @@ PEP 440 version (e.g. no release, or unrecognised trailing text).
 -}
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
-    -- Bound the input length before any numeric parsing. 'readMaybe' reads a segment
-    -- into an 'Integer', which is quadratic in the digit count. An unbounded run in
-    -- hostile metadata would therefore be an algorithmic-complexity DoS.
-    guard (T.compareLength raw maxVersionLength /= GT)
+    guard (withinVersionLength raw)
     let lowered = T.toLower (T.strip raw)
         noV = fromMaybe lowered (T.stripPrefix "v" lowered)
         (mainPart, localRaw) = T.breakOn "+" noV
@@ -119,10 +116,8 @@ parseLocal lr
     | otherwise =
         let segs = T.split (`elem` ['.', '-', '_']) (T.drop 1 lr)
          in if all (\s -> not (T.null s) && T.all isAsciiAlphaNum s) segs
-                then Just (map localTok segs)
+                then Just (map classifyRun segs)
                 else Nothing
-  where
-    localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s
 
 -- Assemble the canonical key: strip the release's trailing zeros and band the
 -- suffix parts into the rank tuples documented on 'Pep440Key'.
