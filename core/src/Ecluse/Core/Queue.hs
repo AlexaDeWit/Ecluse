@@ -202,7 +202,7 @@ capture. Every operation reports failure as an 'Ecluse.Core.Fault.TransportFault
 data MirrorQueue = MirrorQueue
     { enqueue :: MirrorJob -> IO (Either TransportFault ())
     {- ^ Producer. Best-effort: the caller counts and logs a 'Left' and never fails the client
-    response, since a later pull re-enqueues (see the header).
+    response, since a later pull re-enqueues.
     -}
     , receive :: IO (Either TransportFault [QueueMessage])
     {- ^ Consumer. One long-poll for a batch, with @Right []@ on timeout: an empty, healthy poll
