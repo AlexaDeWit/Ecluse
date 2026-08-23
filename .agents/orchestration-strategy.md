@@ -131,7 +131,10 @@ deciding to. The implementer then guesses past the gap, the failure _escalate, d
 to prevent. Or it surfaces the gap late and costs a round-trip. So after the architect does the
 alignment work, over-specify. The design-checkpoint is a backstop for a genuine fork, not licence
 for a thin brief. In it the implementer proposes its design and the team lead confirms before deep
-work.
+work. Every brief also carries the comment budget as a numbered acceptance criterion: a function
+comment is one or two lines, a new module header is at most eight, and the implementer reports
+each comment block the diff adds with its line count ([`../docs/haddock.md`](../docs/haddock.md)
+§3 and §5).
 
 **Pin the model**. There is no effort dial. Left unset, the Agent tool's `model` argument takes the
 general-purpose agent's default. That default may be lighter than the team lead's own model. The
@@ -176,7 +179,9 @@ does. A green CI gate does not stand in for this pass.
   example. The assertions are not tautological, and the tests cover the foreseeable branches by
   intent. `codecov/patch` ≥ 85% is a CI backstop, not a number to chase. Comment appropriateness:
   Haddock documents the timeless contract and the _why_, never project, roadmap, or slice narration,
-  per [`../docs/haddock.md`](../docs/haddock.md) §11.
+  per [`../docs/haddock.md`](../docs/haddock.md) §11. Comment length is counted, not eyeballed:
+  the reviewer lists every comment block the diff adds, and a function comment over two lines or a
+  new header over eight (§3, §5) is a finding that blocks.
 
 A critical finding blocks. Route the fix per **Fix routing** above, then re-verify it.
 
@@ -314,7 +319,9 @@ A PR reaches the architect only when **all** hold:
 - [ ] Foreseeable branches tested by intent. `codecov/project` is a context the ruleset requires,
       so it must be green. `codecov/patch` (≥ 85% on changed lines) prompts a unit or integration
       test. It is not a gate.
-- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11).
+- [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11),
+      and within the length caps: a function comment one or two lines, a new header at most eight
+      (§3, §5).
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
 - [ ] CI `gate` (and every job it needs) green on the PR.

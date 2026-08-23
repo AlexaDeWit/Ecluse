@@ -33,9 +33,9 @@ carry, in one-line summaries, never a wall of prose.
 
 ## 2. The one rule: document the why, not the what
 
-Say what a declaration is *for*, and what a caller must know that the types cannot express. That
-means invariants, ordering/precedence, totality, failure behaviour, and, for Écluse especially, the
-security rationale (§10). Never restate a signature. Haddock already prints it.
+Say what a declaration is *for*, and the one thing a caller must know that the types cannot
+express: an invariant, a precedence, a failure behaviour, or the security rationale (§10). Never
+restate a signature. Haddock already prints it.
 
 Document the exported surface, not internals. On a helper, use a plain `--` comment where the *why*
 is unclear, never Haddock. One crisp summary line per export keeps a module scannable.
@@ -46,14 +46,14 @@ changeable internals.
 
 ## 3. How much to document, and what to skip
 
-A summary sentence on everything exported, one or two lines at most. An example or caveat where it
-earns its place. Nothing on internals. Never restate the type or narrate the body. Only the module
-header may run longer (§5).
+A summary sentence on everything exported, one or two lines at most. That is a cap, not a target.
+An example or caveat where it earns its place. Nothing on internals. Never restate the type or
+narrate the body. Only the module header may run longer, within its own cap (§5).
 
 | Entity | Document? | What to say |
 |---|---|---|
 | **Module** | Always | Header: what it is for and how it fits the system (§5). |
-| **Exported function** | Always (≥ 1 line) | Purpose, preconditions, totality, failure modes. An example if non-obvious. |
+| **Exported function** | Always, one or two lines | The purpose, plus the one precondition, failure mode, or invariant the signature hides. A `>>>` example only where the shape is not obvious. |
 | **Exported type / `newtype`** | Always | What it represents and any invariant it protects. |
 | **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident. For `Rule`/`RuleOutcome`-style domain types, *always*: the domain knowledge lives here. |
 | **Record fields** | Usually | `-- ^` per field: units, ranges, invariants. |
@@ -69,6 +69,8 @@ header may run longer (§5).
 - Narrate the implementation ("first we fold, then we map…").
 - Write a paragraph where a sentence or a `>>>` example works.
 - Add ceremony like `-- | The constructor.`
+- Match the length of a long block beside yours. The cap applies to the line you write, whatever
+  the file around it does.
 
 A **signpost** is not narration. One line naming a complex function's phases, or stating an
 observable guarantee, orients a reader in a way the types cannot, so it stays. The **drift test**
@@ -117,8 +119,9 @@ module Ecluse.Core.Rules ( ... ) where
 
 **Do not use the `Module:/Copyright:/License:/Maintainer:` header fields**. They are ceremony for
 libraries published standalone to Hackage. As one application, Écluse keeps its licence (`MIT`) in
-the cabal file and `LICENSE`, so a plain prose header is the convention. Structure a long header
-with `==` / `===` subsection headings. Keep a short one to a single lead paragraph.
+the cabal file and `LICENSE`, so a plain prose header is the convention. A new or rewritten header
+is one lead paragraph of at most eight lines. Add `==` / `===` subsections only for a contract that
+several modules depend on, and keep each one within the same cap.
 
 ---
 

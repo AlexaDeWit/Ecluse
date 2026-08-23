@@ -24,14 +24,16 @@ Run this for each DAG node once its dependencies merge
 
 1. **Pick** a slice once every dependency has merged.
 2. **Build**. Brief an implementer subagent in its own worktree. Carry the architect's acceptance
-   criteria into the brief verbatim. Pin the `model` for design-bearing or security-sensitive work.
+   criteria into the brief verbatim, plus the comment budget as a numbered criterion (a function
+   comment is one or two lines, a new header at most eight). Pin the `model` for design-bearing or
+   security-sensitive work.
    Pick the verification mode for the host
    ([Verification](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test)):
    an idle host runs `task check` before pushing, a shared host runs `task format` only and lets
    the PR's CI verify. Disjoint file sets, one owner per file across every open PR.
 3. **Evaluate (mandatory)**. Dispatch a fresh-context reviewer with no exposure to the implementer's
-   reasoning. It runs Stage A (requirements, gating-test evidence, scope) and Stage B (quality and
-   security) ([Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes)).
+   reasoning. It runs Stage A (requirements, gating-test evidence, scope) and Stage B (quality,
+   security, and the comment count) ([Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes)).
    Critical findings block. Route the fix as a distinct commit: resume the implementer, apply a
    small reviewer-specified fix directly, or brief a fresh agent. Then re-evaluate.
 4. **Gate**. Open the draft PR and watch the CI `gate` to green. Before every push, run
