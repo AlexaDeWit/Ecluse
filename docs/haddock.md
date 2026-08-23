@@ -37,6 +37,11 @@ Say what a declaration is *for*, and the one thing a caller must know that the t
 express: an invariant, a precedence, a failure behaviour, or the security rationale (§10). Never
 restate a signature. Haddock already prints it.
 
+The test for every sentence: could a reader of the implementation infer it? If yes, cut it. A
+comment never says what the code does. One constraint often carries the whole why. A function that
+sizes a cookie and holds the arithmetic needs one line, "The resulting cookie must stay under
+4 kB", and that line explains every number in it, the intent, and the rationale at once.
+
 Document the exported surface, not internals. On a helper, use a plain `--` comment where the *why*
 is unclear, never Haddock. One crisp summary line per export keeps a module scannable.
 Cross-reference *upward*, to a sibling module or an architecture document, rather than narrating
@@ -59,18 +64,20 @@ narrate the body. Only the module header may run longer, within its own cap (§5
 | **Record fields** | Usually | `-- ^` per field: units, ranges, invariants. |
 | **Type class + methods** | Always | The abstraction, any laws, and the default behaviour. |
 | **Instances** | Rarely | Only when behaviour is surprising. |
-| **Non-exported helper** | **No Haddock** | Plain `--` only where the *why* is unclear. |
+| **Non-exported helper** | **No Haddock**, usually nothing | A plain `--` only for a constraint, a gotcha, or why the obvious alternative fails. |
 | **Trivial, self-evident export** | One line, no more | Don't pad it to look thorough. |
 
 **Don't:**
 
 - Restate the signature in words.
 - Haddock a `where` helper or any unexported binding.
-- Narrate the implementation ("first we fold, then we map…").
+- Restate the implementation in any form: a narration ("first we fold, then we map…") or a
+  paraphrase of a branch. The code already says it.
 - Write a paragraph where a sentence or a `>>>` example works.
 - Add ceremony like `-- | The constructor.`
 - Match the length of a long block beside yours. The cap applies to the line you write, whatever
   the file around it does.
+- Sell the code. No quality adjectives, no reassurance, no praise of the design or its trade-offs.
 
 A **signpost** is not narration. One line naming a complex function's phases, or stating an
 observable guarantee, orients a reader in a way the types cannot, so it stays. The **drift test**
@@ -127,9 +134,9 @@ several modules depend on, and keep each one within the same cap.
 
 ## 6. Documenting declarations
 
-**Functions, with per-argument docs.** Annotate the contract the signature can't state. Here that is
-a load-bearing totality: a crash would take down the gate. Never add a reflexive "pure and total"
-tag (docs/style.md §9.2):
+**Functions.** Annotate the contract the signature cannot state. Here that is a load-bearing
+totality: a crash would take down the gate. A `-- ^` on an argument only where the type does not
+say its role or unit. Never add a reflexive "pure and total" tag (docs/style.md §9.2):
 
 ```haskell
 {- | Evaluate a single rule against a single package version. Total: a
@@ -138,8 +145,8 @@ metadata cannot crash the gate.
 -}
 evalRule
     :: EvalContext     -- ^ Ambient inputs (the current time, …)
-    -> Rule            -- ^ The rule to apply
-    -> PackageDetails  -- ^ The version under evaluation
+    -> Rule
+    -> PackageDetails
     -> RuleOutcome
 ```
 
@@ -157,8 +164,9 @@ data Rule
     deriving stock (Eq, Show)
 ```
 
-**Records** get a `-- ^` per field carrying units and invariants (e.g.
+**Records** get a `-- ^` on a field that carries a unit or an invariant (e.g.
 `pkgPublishedAt :: Maybe UTCTime  -- ^ When this version was published, if the registry reports it.`).
+A field whose name and type say it all gets none.
 
 ---
 
@@ -267,7 +275,8 @@ lands, it is project narration. Cut it.
 ## 12. Checklist (before you open a PR)
 
 - [ ] Every new module has a prose `{- | … -}` header.
-- [ ] Every exported type and function has a Haddock comment (≥ 1 line), with sum constructors and
+- [ ] Every exported type and function has a Haddock comment of one or two lines that
+      states only what the implementation cannot, with sum constructors and
       record fields documented where they carry meaning.
 - [ ] The comment carries the *why*, especially the security rationale (§10).
 - [ ] No restated signatures, no Haddock on non-exported helpers, no project/PR/status narration
