@@ -25,7 +25,11 @@ Run this for each DAG node once its dependencies merge
 1. **Pick** a slice once every dependency has merged.
 2. **Build**. Brief an implementer subagent in its own worktree. Carry the architect's acceptance
    criteria into the brief verbatim, plus the comment budget as a numbered criterion (a function
-   comment is one or two lines, a new header at most eight). Pin the `model` for design-bearing or
+   comment is one or two lines, a new header at most eight). The brief also restates the owner's
+   boy-scout rule for every file the slice edits: decide whether the file earns a rewrite, trim each
+   comment block over the cap and each comment that restates the implementation, scoped to those
+   files and behaviour-preserving, and name what was trimmed in the PR body. A minimal diff is not a
+   virtue in a file that is a comment wall. Pin the `model` for design-bearing or
    security-sensitive work.
    Pick the verification mode for the host
    ([Verification](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test)):

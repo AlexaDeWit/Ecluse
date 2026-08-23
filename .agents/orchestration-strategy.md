@@ -144,7 +144,11 @@ for a thin brief. In it the implementer proposes its design and the team lead co
 work. Every brief also carries the comment budget as a numbered acceptance criterion: a function
 comment is one or two lines, a new module header is at most eight, and the implementer reports
 each comment block the diff adds with its line count ([`../docs/haddock.md`](../docs/haddock.md)
-§3 and §5).
+§3 and §5). The brief also restates the owner's boy-scout rule, which every agent loads from
+`CLAUDE.md`: a file the slice edits leaves with its existing comments at the cap, trimmed in the
+same change, scoped to that file and behaviour-preserving, and the PR body names what was trimmed.
+Without that sentence an implementer reads "stay in scope" as "touch nothing beside your hunk" and
+leaves the comment wall standing.
 
 **Pin the model**. There is no effort dial. Left unset, the Agent tool's `model` argument takes the
 general-purpose agent's default. That default may be lighter than the team lead's own model. The
@@ -180,7 +184,8 @@ does. A green CI gate does not stand in for this pass.
   stands in for a criterion (see [Testing strategy: what gates, and what
   doesn't](../docs/testing.md#what-gates-and-what-doesnt)). The slice drops nothing from its
   architecture scope. Changes stay within the slice's file scope, and touching another file needs
-  strong justification. The _same_ PR updates the documentation (per
+  strong justification. A comment trim inside a file the slice already edits is within scope. The
+  _same_ PR updates the documentation (per
   [`../AGENTS.md`](../AGENTS.md)).
 - **Stage B, quality and security**. Idiomatic Haskell per [`../docs/style.md`](../docs/style.md):
   total, `-Werror`-clean, and free of unsafe or partial functions. A security review appropriate to
@@ -191,7 +196,9 @@ does. A green CI gate does not stand in for this pass.
   Haddock documents the timeless contract and the _why_, never project, roadmap, or slice narration,
   per [`../docs/haddock.md`](../docs/haddock.md) §11. Comment length is counted, not eyeballed:
   the reviewer lists every comment block the diff adds, and a function comment over two lines or a
-  new header over eight (§3, §5) is a finding that blocks.
+  new header over eight (§3, §5) is a finding that blocks. The reviewer also lists every
+  pre-existing block over the cap in each file the PR edits, and an untrimmed one is a finding
+  unless the PR body says why it stayed.
 
 A critical finding blocks. Route the fix per **Fix routing** above, then re-verify it.
 
@@ -333,7 +340,8 @@ A PR reaches the architect only when **all** hold:
       test. It is not a gate.
 - [ ] Comments are contract-and-why only, no roadmap/slice/PR references (docs/haddock.md §11),
       and within the length caps: a function comment one or two lines, a new header at most eight
-      (§3, §5).
+      (§3, §5). Every file the PR edits leaves with its existing comments at the cap, or the PR
+      body says why not.
 - [ ] Semgrep clean (no new ignores).
 - [ ] Any workflow change stays injection-free with SHA-pinned actions.
 - [ ] CI `gate` (and every job it needs) green on the PR.
