@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Page not found | Écluse{% endblock title %}
+{% block description %}This address matches no page on the Écluse site.{% endblock description %}
+
+{% block content %}
+<main class="page" id="content">
+  <h1>Page not found</h1>
+  <p>This address matches no page on the Écluse site.</p>
+  <ul class="index">
+    <li><a href="{{ get_url(path='@/_index.md') }}">Home</a></li>
+    <li><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a></li>
+    <li><a href="{{ get_url(path='@/api/_index.md') }}">API reference</a></li>
+  </ul>
+</main>
+{% endblock content %}

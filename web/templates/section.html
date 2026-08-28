@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}{{ section.title }} | Écluse{% endblock title %}
+{% block description %}{{ section.description }}{% endblock description %}
+
+{% block content %}
+<main class="page" id="content">
+  <h1>{{ section.title }}</h1>
+  {{ section.content | safe }}
+</main>
+{% endblock content %}

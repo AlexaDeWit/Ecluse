@@ -1,0 +1,33 @@
+// Zola emits syntect scopes as z-prefixed classes. Colouring the coarse scopes
+// from the page tokens keeps one stylesheet for both colour schemes.
+.z-code {
+  color: var(--fg);
+}
+
+.z-comment {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.z-string {
+  color: var(--code-string);
+}
+
+.z-keyword,
+.z-storage {
+  color: var(--code-keyword);
+}
+
+.z-constant {
+  color: var(--code-number);
+}
+
+.z-entity,
+.z-support {
+  color: var(--code-name);
+}
+
+.z-punctuation,
+.z-meta.z-separator {
+  color: var(--code-punctuation);
+}

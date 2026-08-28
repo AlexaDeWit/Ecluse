@@ -5,6 +5,12 @@ dist-coverage/
 .hpc/
 .direnv/
 _site/
+# The Markdown fragments site-gen writes for the Zola pages, and Zola's own output.
+/web/generated/
+/web/public/
+# Zola's highlighter drops its theme stylesheet here on every build. The site
+# colours code from sass/_syntax.scss and never links this file.
+/web/static/giallo.css
 # The OpenAPI spec is derived build-artifact data: a pure function of the Route enum
 # and the owned schemas, regenerated on demand by `cabal run openapi-gen`
 # (and at docs-publish time), so it is not committed.

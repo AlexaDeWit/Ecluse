@@ -1,0 +1,112 @@
+// The artwork carries its own pale ground, so the border clips it into a plate
+// rather than letting it float on the page.
+.hero-art {
+  display: block;
+  width: 100%;
+  margin: 0 0 2rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+// The landing is one measure-wide column, so its art, prose, and index share one
+// left edge.
+.landing {
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+
+  h1 {
+    margin: 0 0 0.4rem;
+    font-size: 2.6rem;
+  }
+
+  .tagline {
+    margin: 0 0 2rem;
+    color: var(--muted);
+    font-size: 1.2rem;
+  }
+
+  .lead {
+    font-size: 1.05rem;
+
+    p {
+      margin: 0 0 1.1rem;
+    }
+  }
+}
+
+.index {
+  margin: 2.5rem 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+
+  li {
+    margin: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  a {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0.25rem;
+    text-decoration: none;
+  }
+
+  a::after {
+    content: "\2192";
+    color: var(--muted);
+  }
+
+  a:hover {
+    background: var(--surface);
+  }
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1rem;
+  margin: 2.5rem 0 1rem;
+}
+
+.card {
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+
+  &:hover {
+    border-color: var(--accent);
+    box-shadow: var(--shadow);
+  }
+
+  h2 {
+    margin: 0 0 0.4rem;
+    padding-top: 0;
+    border-top: 0;
+    color: var(--accent-strong);
+    font-size: 1.05rem;
+  }
+
+  p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .landing h1 {
+    font-size: 2.05rem;
+  }
+
+  .landing .tagline {
+    font-size: 1.1rem;
+  }
+
+  .cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+    <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}" />
+    <link rel="canonical" href="{% block canonical %}{{ current_url | default(value=config.base_url ~ '/') | safe }}{% endblock canonical %}" />
+    <link rel="icon" href="{{ get_url(path='favicon-32.png') }}" sizes="32x32" />
+    <link rel="stylesheet" href="{{ get_url(path='style.css') }}" />
+    <link rel="stylesheet" href="{{ get_url(path='pagefind/pagefind-ui.css') }}" />
+    {% block head %}{% endblock head %}
+  </head>
+  <body>
+    <a class="skip-link" href="#content" data-pagefind-ignore>Skip to content</a>
+    <header class="site-header" data-pagefind-ignore>
+      <div class="header-shell">
+        <a class="brand" href="{{ get_url(path='@/_index.md') }}">
+          <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28" />
+          <span>Écluse</span>
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="{{ get_url(path='@/_index.md') }}">Home</a>
+          <a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a>
+          <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a>
+          <a href="{{ get_url(path='@/api/_index.md') }}">API</a>
+          <a href="{{ config.extra.source_url | safe }}">GitHub</a>
+        </nav>
+        <div class="site-search" id="search" hidden></div>
+      </div>
+    </header>
+    {% block content %}{% endblock content %}
+    <footer class="site-footer" data-pagefind-ignore>
+      <div class="footer-shell">
+        <p>
+          <a href="{{ config.extra.source_url | safe }}">Source repository</a> &middot;
+          <a href="{{ get_url(path='@/api/_index.md') }}">API reference</a> &middot;
+          <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a>
+        </p>
+        <p>Écluse is free and open source &middot; pre-launch, under active development.</p>
+        <p class="made-in">Proudly built in Québec&nbsp;⚜</p>
+      </div>
+    </footer>
+    <script src="{{ get_url(path='pagefind/pagefind-ui.js') }}"></script>
+    <script src="{{ get_url(path='site.js') }}"></script>
+  </body>
+</html>

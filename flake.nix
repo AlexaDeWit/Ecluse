@@ -464,6 +464,10 @@
           # site pages (`task site`). Both the Pages publish and the PR-tier
           # `site-stub` gate run it, so it is part of the CI closure.
           pkgs.pandoc
+          # Zola builds the static site under web/, and pagefind indexes the built
+          # output into the search bundle. Both the publish and the site gate run them.
+          pkgs.zola
+          pkgs.pagefind
         ];
 
         # Vendored Redoc bundle for the OpenAPI spec page: the self-contained

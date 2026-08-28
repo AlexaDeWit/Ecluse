@@ -1,0 +1,29 @@
+base_url = "https://ecluse-proxy.com"
+title = "Écluse"
+description = "A supply-chain policy proxy for package registries. It applies a deny-by-default policy before a package reaches a build."
+default_language = "en"
+
+compile_sass = true
+generate_sitemap = true
+# The repository authors static/robots.txt, which names the sitemap.
+generate_robots_txt = false
+# Search is Pagefind, which indexes the assembled output, Haddock trees included.
+build_search_index = false
+
+[markdown]
+insert_anchor_links = "right"
+
+# Class-based highlighting, coloured by sass/_syntax.scss from the page's own
+# tokens. Zola demands a theme name, and the stylesheet it writes goes unused.
+[markdown.highlighting]
+style = "class"
+theme = "catppuccin-latte"
+
+[link_checker]
+# A broken internal link or anchor fails the build. External links are checked
+# only by `zola check`, where a warning keeps a flaky host out of the gate.
+internal_level = "error"
+external_level = "warn"
+
+[extra]
+source_url = "https://github.com/AlexaDeWit/Ecluse"
