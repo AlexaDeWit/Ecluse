@@ -471,6 +471,43 @@ executable openapi-gen
     , ecluse:ecluse-manifest
     , filepath           ^>=1.5
 
+-- The site page renderers: the PURE Markdown rendering behind the site-gen
+-- executable. It turns the OWASP Threat Dragon model into the threat register, and an
+-- OpenAPI document into the static API reference. An INTERNAL sublibrary, following
+-- the ecluse-manifest pattern, so the gating unit suite exercises the rendering
+-- deterministically. It reads no file and holds no OpenAPI assembly, so it links
+-- neither the app library nor ecluse-manifest, and it stays out of the shipped
+-- library closure.
+library ecluse-site
+  import:          shared
+  hs-source-dirs:  site/src
+  exposed-modules:
+    Ecluse.Site.Markdown
+    Ecluse.Site.OpenApi
+    Ecluse.Site.ThreatRegister
+
+  build-depends:
+    , aeson                      >=2.2 && <2.4
+    , http-media                 ^>=0.8
+    , insert-ordered-containers  ^>=0.2
+    , openapi3                   ^>=3.2
+    , text                       ^>=2.1
+
+-- The site fragment generator: the thin file-reading shell over ecluse-site. The site
+-- build runs it for the threat register and the OpenAPI reference, and Zola embeds
+-- both fragments. It takes the OpenAPI document from ecluse-manifest, the same value
+-- openapi-gen serialises, so the page and the published JSON come from one source. Run
+-- with `cabal run site-gen`.
+executable site-gen
+  import:         shared
+  main-is:        Main.hs
+  hs-source-dirs: site/app
+  build-depends:
+    , directory  ^>=1.3
+    , ecluse:ecluse-manifest
+    , ecluse:ecluse-site
+    , filepath   ^>=1.5
+
 -- Internal test-support library shared by every suite below. The common home for
 -- cross-suite helpers, fixtures, and specs. It links against the library under test,
 -- so shared fixtures can build domain values directly.
@@ -732,6 +769,9 @@ test-suite ecluse-unit
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
+    Ecluse.Site.MarkdownSpec
+    Ecluse.Site.OpenApiSpec
+    Ecluse.Site.ThreatRegisterSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 
@@ -746,6 +786,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-manifest
+    , ecluse:ecluse-site
     , ecluse:ecluse-test-support
     , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
@@ -764,6 +805,7 @@ test-suite ecluse-unit
     , http-client       ^>=0.7
     , insert-ordered-containers  ^>=0.2
     , openapi3          ^>=3.2
+    , http-media        ^>=0.8
     , http-types        ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
