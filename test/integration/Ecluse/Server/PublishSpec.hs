@@ -5,7 +5,7 @@
 module Ecluse.Server.PublishSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
-import Network.HTTP.Types (Header, hAuthorization, hContentType, methodPut, mkStatus, statusCode)
+import Network.HTTP.Types (hAuthorization, hContentType, methodPut, mkStatus)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestHeaders, requestMethod),
@@ -16,7 +16,7 @@ import Network.Wai (
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
     SRequest (SRequest),
-    SResponse (simpleBody, simpleStatus),
+    SResponse (simpleBody),
     defaultRequest,
     runSession,
     setPath,
@@ -26,53 +26,33 @@ import Test.Hspec
 import UnliftIO (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
-import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Stub (Captured (capBody), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
+import Ecluse.Test.Wai (status)
 
-{- | An in-process publication-target double. It records the @Authorization@ header and
-the body of every @PUT@ it receives, and answers with a fixed status and body.
+{- | Host a publication-target stub answering every publish with @code@ and @body@. The
+continuation gets the port to point the proxy at, and the stub to inspect what it saw.
 -}
-data Target = Target
-    { tgApp :: Application
-    , tgSeen :: IORef [(Maybe ByteString, ByteString)]
-    }
+withTarget :: Int -> LByteString -> (Int -> Stub -> IO a) -> IO a
+withTarget code body k =
+    withStubHeaders (mkStatus code "OK") [(hContentType, "application/json")] body $ \stub ->
+        k (stubPort stub) stub
 
--- | A publication-target double answering every publish with @code@ and @body@.
-newTarget :: Int -> LByteString -> IO Target
-newTarget code body = do
-    seen <- newIORef []
-    let app req respond = do
-            received <- consumeRequestBodyStrict req
-            modifyIORef' seen ((authHeader (requestHeaders req), LBS.toStrict received) :)
-            respond (responseLBS (mkStatus code "OK") [(hContentType, "application/json")] body)
-    pure (Target app seen)
-
-{- | Host a publication-target double on an ephemeral port. The continuation gets the
-port to point the proxy at, and the 'Target' to inspect what it saw.
--}
-withTarget :: Int -> LByteString -> (Int -> Target -> IO a) -> IO a
-withTarget code body k = do
-    target <- newTarget code body
-    testWithApplication (pure (tgApp target)) (`k` target)
-
--- The @Authorization@ header a request carried, if any.
-authHeader :: [Header] -> Maybe ByteString
-authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
-
--- The (auth, body) pairs the target saw, in arrival order.
-targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
-targetSaw target = reverse <$> readIORef (tgSeen target)
+-- The (Authorization, body) pairs the publication target saw, in arrival order.
+targetSaw :: Stub -> IO [(Maybe ByteString, ByteString)]
+targetSaw stub = map (\cap -> (headerValue "Authorization" cap, capBody cap)) <$> allCaptured stub
 
 {- | Publish dependencies pointing at the loopback target, allowing the @\@acme@ scope.
 The relay forwards 'pubStaticToken' only when the client sends no token of its own.
@@ -96,41 +76,23 @@ publishDepsAt targetPort staticToken bodyBudget =
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps.
 'Nothing' leaves the publish path off, so the route answers @405@.
 -}
-proxyWith :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
-proxyWith mkPublishDeps = do
+proxyOver :: Maybe PublishDeps -> IO Application
+proxyOver publishDeps = do
     env <- newTestEnv
-    publishDeps <- forM mkPublishDeps (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024))
-    let cfg =
-            mkServerConfig
-                [ MountBinding
-                    { bindingPrefix = "npm" :| []
-                    , bindingRouter = npmRouter
-                    , bindingCredential = npmCredential
-                    , bindingPackumentDeps = inertPackumentDeps
-                    , bindingPublishDeps = publishDeps
-                    }
-                ]
+    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps publishDeps))
     pure (application cfg env)
+
+-- | 'proxyOver' for deps that still need the standard aggregate body budget.
+proxyWith :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
+proxyWith mkPublishDeps =
+    forM mkPublishDeps (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024)) >>= proxyOver
 
 {- | A proxy whose publish path caps the request body at @cap@ bytes ('pubMaxRequestBytes').
 The cap fires before the relay, so the target port is an unconnectable placeholder.
 -}
 cappedProxyWith :: Int -> IO Application
-cappedProxyWith cap = do
-    env <- newTestEnv
-    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-    let deps = (publishDepsAt 1 Nothing bodyBudget){pubMaxRequestBytes = cap}
-        cfg =
-            mkServerConfig
-                [ MountBinding
-                    { bindingPrefix = "npm" :| []
-                    , bindingRouter = npmRouter
-                    , bindingCredential = npmCredential
-                    , bindingPackumentDeps = inertPackumentDeps
-                    , bindingPublishDeps = Just deps
-                    }
-                ]
-    pure (application cfg env)
+cappedProxyWith cap =
+    proxyWith (Just (\bodyBudget -> (publishDepsAt 1 Nothing bodyBudget){pubMaxRequestBytes = cap}))
 
 -- | A @PUT \/npm\/{path}@ chunked publish carrying the given bearer (if any) and body.
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
@@ -154,9 +116,6 @@ putPublishAs bodyLen path bearer body =
             }
     auth = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer
 
-status :: SResponse -> Int
-status = statusCode . simpleStatus
-
 -- A representative npm publish document body whose declared identity (@_id@,
 -- top-level @name@) agrees with the @\@acme\/widget@ URL the tests publish to.
 publishBody :: LByteString
@@ -168,9 +127,8 @@ matchingVersionBody :: LByteString
 matchingVersionBody =
     "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
 
--- Publish documents whose declared body identity disagrees with the in-scope URL name
--- @\@acme\/widget@ on exactly one field. This is the anti-shadowing bypass: a crafted
--- body names a package the scope guard never authorised.
+-- Publish documents whose declared identity disagrees with the in-scope URL name
+-- @\@acme\/widget@ on one field: the anti-shadowing bypass a crafted body attempts.
 mismatchedIdBody :: LByteString
 mismatchedIdBody =
     "{\"_id\":\"@victim/target\",\"name\":\"@acme/widget\",\"versions\":{}}"
@@ -186,10 +144,8 @@ mismatchedVersionNameBody =
 spec :: Spec
 spec = describe "first-party publish path → publication target (S52)" $ do
     it "503s a publish shed at the aggregate body-byte budget while the capacity is held" $ do
-        -- A target that parks the first publish mid-relay while it holds the whole
-        -- budget. With zero waiter room the second publish sheds at the door, in the
-        -- read path's vocabulary of server capacity. The first completes normally once
-        -- the test releases it.
+        -- A target that parks the first publish while it holds the whole budget. With zero
+        -- waiter room the second sheds at the door, and the first completes once released.
         gate <- newEmptyMVar
         arrived <- newIORef (0 :: Int)
         let blockingApp req respond = do
@@ -198,19 +154,8 @@ spec = describe "first-party publish path → publication target (S52)" $ do
                 takeMVar gate
                 respond (responseLBS (mkStatus 201 "OK") [(hContentType, "application/json")] "{}")
         testWithApplication (pure blockingApp) $ \targetPort -> do
-            env <- newTestEnv
             tightBudget <- newByteAdmissionTuned 1 0 50_000
-            let cfg =
-                    mkServerConfig
-                        [ MountBinding
-                            { bindingPrefix = "npm" :| []
-                            , bindingRouter = npmRouter
-                            , bindingCredential = npmCredential
-                            , bindingPackumentDeps = inertPackumentDeps
-                            , bindingPublishDeps = Just (publishDepsAt targetPort Nothing tightBudget)
-                            }
-                        ]
-                app = application cfg env
+            app <- proxyOver (Just (publishDepsAt targetPort Nothing tightBudget))
             firstPublish <- async (putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app)
             -- Wait until the first publish holds the budget (its body reached the
             -- parked target), so the second genuinely contends.
@@ -224,9 +169,8 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
 
     it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
-        -- A chunked body declares no length, so the route's counted bounded read enforces the cap
-        -- as a value: a fail-closed 413, never a throw. The 413 excludes the perimeter's neutral
-        -- 500 fault path, which proves the perimeter never saw an over-cap signal.
+        -- A chunked body declares no length, so the counted bounded read enforces the cap as a
+        -- value: a fail-closed 413, never a throw through the perimeter's neutral 500.
         app <- cappedProxyWith 8
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
@@ -320,9 +264,8 @@ spec = describe "first-party publish path → publication target (S52)" $ do
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 502
 
-    -- The body-name agreement leg of the anti-shadowing guard. An in-scope URL whose body
-    -- declares a different package would publish a name the scope guard never authorised, so
-    -- the guard checks @_id@, top-level @name@, and @versions[].name@, and 403s before any relay.
+    -- An in-scope URL whose body declares a different package would publish a name the scope
+    -- guard never authorised, so the guard checks @_id@, @name@, and @versions[].name@ first.
     it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))

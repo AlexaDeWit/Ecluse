@@ -5,8 +5,6 @@
 module Ecluse.WorkerSpec (spec) where
 
 import Network.HTTP.Types (status200, status201, status409, status503)
-import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -35,6 +33,7 @@ import Ecluse.Integration.WorkerLoop (
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeHash)
+import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 {- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI
 stubs. It covers the queue semantics the in-memory double cannot reproduce: visibility
@@ -172,8 +171,4 @@ job upstreamUrl =
 
 -- A WAI upstream serving the artifact bytes at any path, yielding its base URL.
 withUpstream :: (Text -> IO a) -> IO a
-withUpstream body =
-    testWithApplication (pure app) $ \port -> body ("http://127.0.0.1:" <> show port)
-  where
-    app :: Application
-    app _ respond = respond (responseLBS status200 [] tarballBytes)
+withUpstream body = withStub status200 tarballBytes (body . stubBaseUrl)

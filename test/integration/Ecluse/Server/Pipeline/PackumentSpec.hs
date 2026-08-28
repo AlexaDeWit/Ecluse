@@ -13,6 +13,7 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
+import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (throwString)

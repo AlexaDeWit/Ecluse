@@ -6,7 +6,9 @@ module Ecluse.Test.Stub (
     Captured (..),
     Stub (..),
     stubBaseUrl,
+    stubLocalhostUrl,
     lastCaptured,
+    allCaptured,
     withStub,
     withStubHeaders,
     stubConfig,
@@ -16,6 +18,7 @@ module Ecluse.Test.Stub (
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
+import Data.List (lookup)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status)
 import Network.Wai (
@@ -30,9 +33,10 @@ import Network.Wai.Handler.Warp (Port, testWithApplication)
 
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Wai (localhost)
 
-{- | What the stub captured from the request it last served: enough to assert the
-method, path, and headers Écluse sent.
+{- | What the stub captured from one request it served: enough to assert the method,
+path, and headers Écluse sent.
 -}
 data Captured = Captured
     { capMethod :: ByteString
@@ -42,23 +46,33 @@ data Captured = Captured
     }
     deriving stock (Eq, Show)
 
-{- | A running stub: the ephemeral 'Port' it listens on and the slot holding the
-most recent 'Captured' request (the handle talks to @127.0.0.1:port@).
+{- | A running stub: the ephemeral 'Port' it listens on and every 'Captured' request it
+has served, most recent first.
 -}
 data Stub = Stub
     { stubPort :: Port
-    , stubCaptured :: IORef (Maybe Captured)
+    , stubCaptured :: IORef [Captured]
     }
 
--- | The base URL of a running stub.
+-- | The base URL of a running stub, by IP literal.
 stubBaseUrl :: Stub -> Text
 stubBaseUrl stub = "http://127.0.0.1:" <> show (stubPort stub)
+
+{- | The base URL of a running stub by the @localhost@ DNS name. The serve path's
+internal-range block matches an IP literal, so a gated fetch must address the stub by name.
+-}
+stubLocalhostUrl :: Stub -> Text
+stubLocalhostUrl stub = localhost (stubPort stub)
 
 -- | The request the stub last captured (or fail loudly if it served none).
 lastCaptured :: Stub -> IO Captured
 lastCaptured stub =
     readIORef (stubCaptured stub)
-        >>= maybe (fail "stub served no request") pure
+        >>= maybe (fail "stub served no request") pure . listToMaybe
+
+-- | Every request the stub captured, in arrival order.
+allCaptured :: Stub -> IO [Captured]
+allCaptured stub = reverse <$> readIORef (stubCaptured stub)
 
 {- | Run an action against a stub that records each request and answers every one with a fixed
 status and body. It binds a free port for the action's duration, so tests never collide on a port.
@@ -66,13 +80,12 @@ status and body. It binds a free port for the action's duration, so tests never 
 withStub :: Status -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []
 
-{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@, for example,
-and the @http-client@ body reader decompresses the served bytes. A test can then assert
-that the bounded read bounds /decompressed/ size, not wire size.
+{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@ and the @http-client@ body
+reader decompresses, so a test can assert the bounded read bounds /decompressed/ size, not wire size.
 -}
 withStubHeaders :: Status -> [Header] -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStubHeaders status extraHeaders body action = do
-    captured <- newIORef Nothing
+    captured <- newIORef []
     let app :: Application
         app waiReq respond = do
             bodyBytes <- strictRequestBody waiReq
@@ -83,7 +96,7 @@ withStubHeaders status extraHeaders body action = do
                         , capHeaders = requestHeaders waiReq
                         , capBody = LBS.toStrict bodyBytes
                         }
-            atomicModifyIORef' captured (const (Just cap, ()))
+            atomicModifyIORef' captured (\seen -> (cap : seen, ()))
             respond (responseLBS status extraHeaders body)
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
@@ -102,4 +115,4 @@ stubConfig stub = do
 
 -- | Look up a header (case-insensitively) in a captured request.
 headerValue :: ByteString -> Captured -> Maybe ByteString
-headerValue name cap = snd <$> find ((== CI.mk name) . fst) (capHeaders cap)
+headerValue name cap = lookup (CI.mk name) (capHeaders cap)

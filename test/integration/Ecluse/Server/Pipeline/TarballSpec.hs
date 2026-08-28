@@ -15,6 +15,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (overPrivateBaseUrl, withMirrorPlan, withPrivateBaseUrl)
+import Ecluse.Test.Wai
 import Network.HTTP.Types (methodGet, methodHead, status200, status404)
 import Network.HTTP.Types.Header (hIfNoneMatch)
 import Network.Wai (responseLBS)

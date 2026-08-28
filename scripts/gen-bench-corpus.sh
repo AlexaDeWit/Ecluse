@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Capture the real-world packument corpus that drives both benchmark layers
-# (docs/architecture/performance.md) from pinned npm registry packuments.
+# Capture the real-world packument corpus that drives both benchmark layers, from
+# pinned npm registry packuments.
 #
 # The corpus packages and their capture pins live in bench/corpus/pins.json, a
 # plain data file: NOT an npm project, NOT Renovate-managed. That file is the

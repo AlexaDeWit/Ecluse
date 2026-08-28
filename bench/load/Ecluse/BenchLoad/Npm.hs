@@ -29,8 +29,7 @@ many-version packages rather than one synthetic payload, because a trivial few-v
 package stresses nothing. The public upstream serves each package's real captured
 packument by the requested name: the full work-per-request corpus, scoped packages
 included. 'requestedPackage' recovers @\@scope\/name@ from the request path, and the
-captures live under @bench\/corpus\/npm\/@ (see "Ecluse.Test.Corpus" and
-@docs\/architecture\/performance.md@).
+captures live under @bench\/corpus\/npm\/@ (see "Ecluse.Test.Corpus").
 
 The @merge-cold@ and @cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix')
 with the heavy many-version packuments as the __primary drivers__. That is a deliberate
@@ -98,8 +97,8 @@ import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
-import Network.HTTP.Types.Header (hETag, hHost)
-import Network.Wai (Application, Request, pathInfo, requestHeaders, responseLBS)
+import Network.HTTP.Types.Header (hETag)
+import Network.Wai (Application, Request, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse (mountBindingFor)
@@ -157,6 +156,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Rules (inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps)
+import Ecluse.Test.Wai (localhost, selfBaseUrl)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.
@@ -603,15 +603,9 @@ onboardingPublicStub latency bytes request respond = do
             | "/-/" `T.isInfixOf` pkg ->
                 respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
         Just pkg ->
-            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (onboardingPackument (selfAuthority request) pkg)))
+            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (onboardingPackument (selfBaseUrl request) pkg)))
         Nothing ->
             respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
-
--- The stub's own base URL from the request's @Host@ header, so the packument's
--- @dist.tarball@ carries the fetched authority. The port is unknowable before warp binds.
-selfAuthority :: Request -> Text
-selfAuthority request =
-    "http://" <> maybe "localhost" decodeUtf8 (List.lookup hHost (requestHeaders request))
 
 -- One old version with a self-hosted conventional tarball and floor-meeting digests, just
 -- enough for the single-version gate to admit and the public stream to fetch.
@@ -692,9 +686,6 @@ packageText = "bench-pkg"
 
 packageName :: PackageName
 packageName = mkPackageName Npm Nothing packageText
-
-localhost :: Int -> Text
-localhost port = "http://localhost:" <> show port
 
 -- A fixed wall clock, so the age-based admission is deterministic across runs.
 benchNow :: UTCTime

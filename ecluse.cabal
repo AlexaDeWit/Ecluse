@@ -25,12 +25,11 @@ build-type:    Simple
 --
 -- `bench/corpus/npm/*.json` is the curated real-world packument corpus the benchmarks
 -- read at run time. The corpus stays frozen, pinned by `bench/corpus/pins.json` and
--- re-captured deliberately with `task gen-bench-corpus`. See
--- docs/architecture/performance.md. `bench/corpus/pins.json` is the shared registry
--- catalogue, holding the capture pins and the smoke curated names, read by the Node
--- capture script and Ecluse.Test.RegistryCapture. `acceptance/criteria.json` is the
--- version-controlled acceptance budget for the live performance-acceptance harness
--- (Ecluse.Acceptance and the perf-acceptance executable).
+-- re-captured deliberately with `task gen-bench-corpus`. `bench/corpus/pins.json` is
+-- the shared registry catalogue, holding the capture pins and the smoke curated names,
+-- read by the Node capture script and Ecluse.Test.RegistryCapture.
+-- `acceptance/criteria.json` is the version-controlled acceptance budget for the live
+-- performance-acceptance harness (Ecluse.Acceptance and the perf-acceptance executable).
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json
@@ -504,6 +503,7 @@ library ecluse-test-support
     Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version
+    Ecluse.Test.Wai
     Ecluse.Test.WireVocab
     Ecluse.Test.Worker
 
@@ -534,6 +534,7 @@ library ecluse-test-support
     , universe-base     ^>=1.1
     , vector            ^>=0.13
     , wai               ^>=3.2
+    , wai-extra         ^>=3.1
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
 
@@ -927,8 +928,7 @@ test-suite ecluse-integration
 -- directory instead of duplicating it.
 test-suite ecluse-residency
   import:             shared
-  -- TestSupport (shared with ecluse-integration) has no export list.
-  ghc-options:        -Wno-missing-export-lists -threaded -rtsopts "-with-rtsopts=-T"
+  ghc-options:        -threaded -rtsopts "-with-rtsopts=-T"
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
@@ -1048,7 +1048,7 @@ test-suite ecluse-e2e
 -- rather than criterion, because it reports time AND allocations. Allocations are the
 -- machine-independent signal, captured from GC stats under +RTS -T, baked in below.
 -- It links ecluse:ecluse-core and ecluse:ecluse-test-support, and stays OUT of the
--- library's own dependency closure. See docs/architecture/performance.md.
+-- library's own dependency closure.
 benchmark ecluse-bench
   import:          shared
   type:            exitcode-stdio-1.0
@@ -1094,8 +1094,7 @@ benchmark ecluse-bench
 -- RTS stats (peak residency, GC pauses, allocations per request). So it needs the
 -- threaded RTS (-threaded, for real warp and concurrency), -N for every core, and -T
 -- baked in (GHC.Stats). It links the `ecluse` app library for the composed Application,
--- and stays out of the library closure. INFORM-ONLY and not part of the gate. See
--- docs/architecture/performance.md.
+-- and stays out of the library closure. INFORM-ONLY and not part of the gate.
 executable bench-load
   import:          shared
   main-is:         Main.hs
@@ -1144,8 +1143,7 @@ executable bench-load
 -- upstream against overhead, and the load-saturation queuing-delay flag. An INTERNAL
 -- sublibrary, following the ecluse-acceptance pattern, so the gating unit suite tests
 -- the maths deterministically. The live RTT probe and the two-pass orchestration stay
--- in the bench-load executable. Carries no socket or load-generator dependency. See
--- docs/architecture/performance.md.
+-- in the bench-load executable. Carries no socket or load-generator dependency.
 library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
@@ -1182,7 +1180,7 @@ executable bench-report
 -- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern,
 -- so the gating unit suite can test the acceptance decision deterministically. The live
 -- fetch and timing stay in the perf-acceptance executable. Links ecluse-core only, and
--- stays out of the shipped library closure. See docs/architecture/performance.md.
+-- stays out of the shipped library closure.
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src
@@ -1200,7 +1198,7 @@ library ecluse-acceptance
 -- version-controlled budget (ecluse-acceptance). It runs on demand, on a schedule, and
 -- per PR, and it NEVER gates a PR. A budget breach reds the non-required check to
 -- inform a human decision, and never blocks the merge. Kept out of the shipped library
--- closure. See docs/architecture/performance.md.
+-- closure.
 executable perf-acceptance
   import:         shared
   main-is:        Main.hs

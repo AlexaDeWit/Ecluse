@@ -14,7 +14,7 @@ a scenario might target.
 
 The driver tolerates a degraded run on purpose: it reports a low success rate or a non-2xx
 response and never throws on one. The load benchmarks tier is inform-only and characterises
-behaviour rather than asserting a pass\/fail (see @docs\/architecture\/performance.md@).
+behaviour rather than asserting a pass\/fail.
 A genuinely broken run does throw: the subprocess cannot start, or its output does not
 parse. That is a literal harness failure, the one red state the layer recognises.
 -}
