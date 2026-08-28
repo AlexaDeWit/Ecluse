@@ -367,9 +367,8 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
-{- Gate the single requested version against the rules and select its artifact. The
-single-version read resolves the full packument through the shared metadata cache, so a
-packument @GET@ and the tarball gate that follows collapse to one upstream call. -}
+{- Gate the requested version and select its artifact. The single-version read resolves the full
+packument through the shared metadata cache, so a packument @GET@ and this gate are one call. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Maybe DbEtag -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file advisoryEtag = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
@@ -395,9 +394,8 @@ gateVerdict = \case
     Admitted _ -> Admit
     Refused decision -> decision
 
-{- Gate one requested artifact through the shared admission oracle, which the worker's ingest
-re-evaluation also runs. The trusted private leg applies no serve-time integrity floor and
-never reaches this gate. -}
+{- Gate one requested artifact through the shared admission oracle the worker's ingest
+re-evaluation also runs. The trusted private leg never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details =
     publicArtifactGate details <$> admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details

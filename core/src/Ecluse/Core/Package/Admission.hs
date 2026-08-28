@@ -115,9 +115,8 @@ admitArtifact ctx rules minIntegrity file details = do
         BlockedByDefault{} -> AdmissionDenied decision
         Undecidable{} -> AdmissionUndecidable decision
 
-{- | The transience of a verdict no rule could decide, and 'Nothing' for a settled one (an
-admit, a refusal, an absence). The serve gate renders it as a @503@ or a @500@, and the
-mirror worker redelivers or drops on it.
+{- | The transience of a verdict no rule could decide, and 'Nothing' for a settled one. The
+serve gate renders it as a @503@ or a @500@, and the mirror worker redelivers or drops on it.
 -}
 admissionTransience :: ArtifactAdmission -> Maybe Transience
 admissionTransience = \case

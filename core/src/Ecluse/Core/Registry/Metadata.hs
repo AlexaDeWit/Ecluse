@@ -132,9 +132,8 @@ fetchVersionDetails client name version =
         Right Nothing -> VersionMissing
         Right (Just details) -> VersionPresent details
 
-{- | The transience of a lookup that yielded no details, and 'Nothing' for a resolved one.
-The serve gate renders it as a @503@ or a forwarded miss, and the mirror worker redelivers
-or drops on it, so the two cannot classify the same lookup differently.
+{- | The transience of a lookup that yielded no details, and 'Nothing' for a resolved one. The
+serve gate and the mirror worker both read it, so neither classifies a lookup on its own.
 -}
 versionTransience :: VersionEvaluation -> Maybe Transience
 versionTransience = \case

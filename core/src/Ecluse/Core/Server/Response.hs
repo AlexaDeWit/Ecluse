@@ -168,9 +168,8 @@ serveDecisionOf pd decision = case decision of
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason (renderDecision pd decision)
 
-{- | Refuse a request that could not be decided. The 'Transience' carried here is what
-'artifactStatus' renders as a @503@ or a @500@, so every caller states it rather than
-choosing a status.
+{- | Refuse a request that could not be decided. The 'Transience' it carries is what
+'artifactStatus' renders as a @503@ or a @500@, so a caller states that rather than a status.
 -}
 rejectUnavailable :: Transience -> Text -> ServeDecision
 rejectUnavailable transience message = Reject (Rejection (Unavailable transience) message)

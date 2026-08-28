@@ -76,8 +76,7 @@ spec = do
 
         it "drops an inability no retry can clear, rather than redelivering until the budget retires it" $
             -- WontResolve is the rule engine's own statement that no redelivery changes the
-            -- verdict. A repaired advisory source is picked up by the next client request's
-            -- enqueue, not by this job coming back.
+            -- verdict. A repaired advisory source rides the next request's enqueue instead.
             case outcomeOfAdmission (jobWith unreachableUrl) (undecided WontResolve "the advisory index is corrupt") of
                 ReevalDrop reason -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)

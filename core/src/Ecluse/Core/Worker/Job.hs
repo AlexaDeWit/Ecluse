@@ -263,8 +263,7 @@ reevaluatePolicy policy job
                 pure (outcomeOfAdmission job admission)
 
 {- | Render the shared 'ArtifactAdmission' as the worker's outcome. This fold writes the audit
-reason only. 'admissionTransience' decides retry versus drop, so the serve gate cannot render an
-inability a @503@ while the worker redelivers it forever, or the reverse.
+reason only: 'admissionTransience' decides retry versus drop, so the two paths cannot diverge.
 -}
 outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
 outcomeOfAdmission job admission = case admission of
@@ -286,9 +285,8 @@ outcomeOfAdmission job admission = case admission of
   where
     refused = retryOrDrop (admissionTransience admission)
 
-{- The worker's one retry-versus-drop rule, over the shared transience. A redelivery is worth
-making only while the evaluator expects the inability to clear. Anything else drops through the
-terminal path, because the verdict has said no retry can change it. -}
+{- The worker's one retry-versus-drop rule, over the shared transience. Only an inability the
+evaluator expects to clear redelivers: the rest drop through the terminal path. -}
 retryOrDrop :: Maybe Transience -> Text -> ReevalOutcome
 retryOrDrop transience reason = case transience of
     Just (WillResolve _) -> ReevalRetry reason
