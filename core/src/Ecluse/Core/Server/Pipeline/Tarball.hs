@@ -113,6 +113,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionIntegrityMissing,
         AdmissionUndecidable
     ),
+    admissionTransience,
     admitArtifact,
  )
 import Ecluse.Core.Queue (
@@ -122,7 +123,9 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
+    versionTransience,
  )
+import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
@@ -170,14 +173,14 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    RejectReason (Unavailable),
-    Rejection (Rejection, rejectionMessage),
+    Rejection (rejectionMessage),
     RetryAfter (..),
     ServeDecision (Admit, Reject),
-    Transience (WillResolve, WontResolve),
+    Transience (WontResolve),
     appendHelp,
     artifactStatus,
     artifactStatusCode,
+    rejectUnavailable,
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
@@ -366,9 +369,7 @@ data PublicArtifactGate
 
 {- Gate the single requested version against the rules and select its artifact. The
 single-version read resolves the full packument through the shared metadata cache, so a
-packument @GET@ and the tarball gate that follows collapse to one upstream call. An absent
-version or filename is a forwarded @404@ miss, an unobtainable metadata fetch a transient
-@503@, and a rule that cannot be consulted fail-closes to @503@\/@500@. -}
+packument @GET@ and the tarball gate that follows collapse to one upstream call. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Maybe DbEtag -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file advisoryEtag = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
@@ -394,34 +395,44 @@ gateVerdict = \case
     Admitted _ -> Admit
     Refused decision -> decision
 
-{- Gate one requested artifact of one public version through the shared admission gate
-('Ecluse.Core.Package.Admission.admitArtifact'), which the worker's ingest re-evaluation
-also runs. An artifact with no digest, or one below the integrity floor ('pdMinIntegrity'),
-is refused @403@ and never fetched. The trusted private leg applies no serve-time integrity
-floor and never reaches this gate. -}
+{- Gate one requested artifact through the shared admission oracle, which the worker's ingest
+re-evaluation also runs. The trusted private leg applies no serve-time integrity floor and
+never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
-gateVersion ctx deps file details = do
-    admission <- admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
-    pure $ case admission of
-        -- The carried floor-checked digest set is the worker's ingest concern. The serve path
-        -- streams without rehashing, so it has no consumer for the set.
-        AdmissionAdmit artifact _ -> Admitted artifact
-        AdmissionDenied decision -> Refused (serveDecisionOf details decision)
-        AdmissionUndecidable decision -> Refused (serveDecisionOf details decision)
-        AdmissionFileAbsent -> Refused versionAbsent
-        AdmissionBelowFloor -> Refused integrityBelowFloor
-        AdmissionIntegrityMissing -> Refused integrityMissing
+gateVersion ctx deps file details =
+    publicArtifactGate details <$> admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
 
--- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
+-- Render the shared admission verdict on the serve surface. Pure and total.
+publicArtifactGate :: PackageDetails -> ArtifactAdmission -> PublicArtifactGate
+publicArtifactGate details admission = case admission of
+    -- The carried floor-checked digest set is the worker's ingest concern. The serve path
+    -- streams without rehashing, so it has no consumer for the set.
+    AdmissionAdmit artifact _ -> Admitted artifact
+    AdmissionDenied decision -> Refused (serveDecisionOf details decision)
+    AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision details decision))
+    AdmissionFileAbsent -> Refused versionAbsent
+    AdmissionBelowFloor -> Refused integrityBelowFloor
+    AdmissionIntegrityMissing -> Refused integrityMissing
+  where
+    -- The @503@-versus-@500@ transience is the shared projection's, the one the worker's
+    -- retry-versus-drop reads. A settled verdict cannot be waited out.
+    transience = fromMaybe WontResolve (admissionTransience admission)
+
+-- A transient public-upstream outage (→ @503@).
 upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
-    Reject (Rejection (Unavailable (WillResolve Nothing)) "the upstream registry was unavailable")
+    versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
 
-{- A version absent from the public metadata. It carries a 'WontResolve' cause, whose status
-'artifactError' overrides to a @404@ forwarded miss. -}
+{- A version absent from the public metadata. Its cause is terminal, and 'artifactError'
+overrides that status to a @404@ forwarded miss. -}
 versionAbsent :: ServeDecision
 versionAbsent =
-    Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
+    versionUnresolved VersionMissing "the requested version was not found upstream"
+
+{- The refusal a version the single-version read could not resolve renders as. Its transience
+is the shared projection's, the one the worker's retry-versus-drop reads. -}
+versionUnresolved :: VersionEvaluation -> Text -> ServeDecision
+versionUnresolved eval = rejectUnavailable (fromMaybe WontResolve (versionTransience eval))
 
 {- Stream the artifact from the public upstream at the 'Artifact''s own 'artUrl', and
 anonymously, so the client credential never reaches the public upstream. A host the
@@ -551,15 +562,10 @@ artifactError replies deps status decision =
     retryHeaders = case actualStatus of
         Unavailable' (Just (RetryAfter secs)) -> [(hRetryAfter, show secs)]
         _ -> []
-    -- The version-absent miss travels as a 'WontResolve' rejection but renders as a
-    -- forwarded @404@, not the @500@ a generic 'WontResolve' maps to.
+    -- The version-absent miss renders as a forwarded @404@. That one refusal only: every
+    -- other inability keeps the @503@ or @500@ its transience earns.
     actualStatus :: ArtifactStatus
-    actualStatus = if isVersionAbsent then NotFound else status
-
-    isVersionAbsent :: Bool
-    isVersionAbsent = case decision of
-        Reject (Rejection (Unavailable WontResolve) _) -> True
-        _ -> False
+    actualStatus = if decision == versionAbsent then NotFound else status
 
     toStatus :: ArtifactStatus -> Status
     toStatus s = mkStatus (artifactStatusCode s) (statusReason s)

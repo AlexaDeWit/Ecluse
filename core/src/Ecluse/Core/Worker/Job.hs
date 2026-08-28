@@ -12,6 +12,8 @@ stops cycling instead of re-fetching its artifact on every redelivery.
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
+    ReevalOutcome (..),
+    outcomeOfAdmission,
     outcomeOfFetchFault,
     processJob,
     processBatch,
@@ -34,6 +36,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionIntegrityMissing,
         AdmissionUndecidable
     ),
+    admissionTransience,
     admitArtifact,
  )
 import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, retiringDelivery)
@@ -43,9 +46,9 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch, PublishRejected),
     renderUrlFormationError,
  )
-import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
+import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent), versionTransience)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
-import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), mkEvalContext)
+import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -186,12 +189,14 @@ processJob receipt job = katipAddNamespace "job" $ do
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
         Retried reason -> JobSpanOutcome "retried" (Just reason)
 
--- The policy re-evaluation's verdict, decided before any artifact fetch. 'ReevalAdmit' carries the
--- floor-checked digest set the tamper gate verifies the fetched bytes against.
+{- | The policy re-evaluation's verdict, decided before any artifact fetch. 'ReevalAdmit' carries
+the floor-checked digest set the tamper gate verifies the fetched bytes against.
+-}
 data ReevalOutcome
     = ReevalAdmit MirrorArtifact
     | ReevalDrop Text
     | ReevalRetry Text
+    deriving stock (Eq, Show)
 
 -- Order the steps cheapest first: a duplicate retires for one metadata round trip and a now-denied
 -- job drops before its bytes are downloaded. Every step past the lookup rides the ecosystem's own
@@ -239,9 +244,9 @@ reevaluatePolicy policy job
         evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
         case evaluation of
             VersionMetadataUnavailable ->
-                pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
+                pure (retryOrDrop (versionTransience evaluation) ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
             VersionMissing ->
-                pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
+                pure (retryOrDrop (versionTransience evaluation) ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
             VersionPresent details -> do
                 -- The back-fill path emits no per-decision audit line, so the
                 -- audit-only advisory ETag is not resolved for its context.
@@ -257,26 +262,38 @@ reevaluatePolicy policy job
                         )
                 pure (outcomeOfAdmission job admission)
 
--- Project the shared 'ArtifactAdmission' onto the worker's outcome. A deliberate refusal drops,
--- never frozen into the rule-exempt mirror store. An undecidable verdict retries, so an advisory
--- source outage neither drops a serviceable job nor publishes it unvetted.
+{- | Render the shared 'ArtifactAdmission' as the worker's outcome. This fold writes the audit
+reason only. 'admissionTransience' decides retry versus drop, so the serve gate cannot render an
+inability a @503@ while the worker redelivers it forever, or the reverse.
+-}
 outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
-outcomeOfAdmission job = \case
+outcomeOfAdmission job admission = case admission of
     AdmissionAdmit artifact digests -> ReevalAdmit (readmittedDescriptor artifact digests)
     AdmissionDenied (Blocked ruleName reason) ->
-        ReevalDrop ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
+        refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
-        ReevalDrop ("current policy denies " <> renderJob job <> ": no rule admits it")
+        refused ("current policy denies " <> renderJob job <> ": no rule admits it")
     AdmissionUndecidable (Undecidable _ reason) ->
-        ReevalRetry ("current policy could not be evaluated for " <> renderJob job <> ": " <> reason)
+        refused ("current policy could not be evaluated for " <> renderJob job <> ": " <> reason)
     AdmissionUndecidable _ ->
-        ReevalRetry ("current policy could not be evaluated for " <> renderJob job)
+        refused ("current policy could not be evaluated for " <> renderJob job)
     AdmissionFileAbsent ->
-        ReevalDrop ("the public upstream no longer offers the admitted artifact file of " <> renderJob job <> "; refusing to mirror a withdrawn artifact")
+        refused ("the public upstream no longer offers the admitted artifact file of " <> renderJob job <> "; refusing to mirror a withdrawn artifact")
     AdmissionBelowFloor ->
-        ReevalDrop ("current admission policy refuses " <> renderJob job <> ": its strongest integrity digest is below the configured public floor")
+        refused ("current admission policy refuses " <> renderJob job <> ": its strongest integrity digest is below the configured public floor")
     AdmissionIntegrityMissing ->
-        ReevalDrop ("current admission policy refuses " <> renderJob job <> ": it no longer carries any integrity digest")
+        refused ("current admission policy refuses " <> renderJob job <> ": it no longer carries any integrity digest")
+  where
+    refused = retryOrDrop (admissionTransience admission)
+
+{- The worker's one retry-versus-drop rule, over the shared transience. A redelivery is worth
+making only while the evaluator expects the inability to clear. Anything else drops through the
+terminal path, because the verdict has said no retry can change it. -}
+retryOrDrop :: Maybe Transience -> Text -> ReevalOutcome
+retryOrDrop transience reason = case transience of
+    Just (WillResolve _) -> ReevalRetry reason
+    Just WontResolve -> ReevalDrop reason
+    Nothing -> ReevalDrop reason
 
 -- Derive the publish descriptor from current metadata alone: the floor-checked digests the
 -- tamper gate verifies against, plus the filename and declared size. The payload's filename only

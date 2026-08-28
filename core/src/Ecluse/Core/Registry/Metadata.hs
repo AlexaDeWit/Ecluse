@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Metadata (
     -- * Single-version resolution
     VersionEvaluation (..),
     fetchVersionDetails,
+    versionTransience,
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -35,6 +36,7 @@ import Data.ByteArray qualified as BA
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
@@ -129,3 +131,14 @@ fetchVersionDetails client name version =
         Left _ -> VersionMetadataUnavailable
         Right Nothing -> VersionMissing
         Right (Just details) -> VersionPresent details
+
+{- | The transience of a lookup that yielded no details, and 'Nothing' for a resolved one.
+The serve gate renders it as a @503@ or a forwarded miss, and the mirror worker redelivers
+or drops on it, so the two cannot classify the same lookup differently.
+-}
+versionTransience :: VersionEvaluation -> Maybe Transience
+versionTransience = \case
+    VersionMetadataUnavailable -> Just (WillResolve Nothing)
+    -- A withdrawn version is gone for good, so no consumer waits for it to come back.
+    VersionMissing -> Just WontResolve
+    VersionPresent{} -> Nothing
