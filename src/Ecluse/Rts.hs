@@ -357,7 +357,10 @@ capabilityAdvice p = case effectiveCapabilities p of
         [advice ("no cgroup CPU quota binds this process, so capabilities are bounded at " <> show n <> " by what the cgroup memory limit can feed")]
     (n, FromCoresCeiling) ->
         [advice ("no cgroup CPU or memory limit binds this process, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")]
-    _ -> []
+    -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
+    (_, FromConfig) -> []
+    (_, FromCgroup) -> []
+    (_, FromRts) -> []
   where
     advice reason =
         "runtime: "
