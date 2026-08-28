@@ -90,9 +90,10 @@ zero if needed, then serves uncached. Each step is a loud warning, and it always
 explicit override that breaks the plan refuses (exit `2`). The model is in
 [Runtime sizing](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling).
 
-Cores and the heap ceiling resolve at boot from config, else the cgroup, else the runtime's own
-posture. The boot log records each decision with its provenance. The whole-cores guidance and
-the per-pod memory arithmetic are in the [appendix](@/docs/operations.md#appendix-runtime-sizing-arithmetic).
+Cores and the heap ceiling resolve at boot from config, else the cgroup, else a capped fallback.
+The boot log records each decision with its provenance. The whole-cores guidance, what to set on a
+pod with no CPU limit, and the per-pod memory arithmetic are in the
+[appendix](@/docs/operations.md#appendix-runtime-sizing-arithmetic).
 
 A cold install against an empty cache hits the proxy with dozens of heavy requests at once, which
 causes latency spikes or `503` backpressure. Run one install after starting Écluse and before
@@ -135,9 +136,33 @@ fails the same way until you fix the cause.
 capabilities overruns the CFS quota during stop-the-world GC and freezes the process mid-pause.
 Flooring to 3 strands the fraction. So pair an integer limit with `requests = limits` (and
 exclusive cores where offered) to remove throttling structurally, since Écluse floors the derived
-count. A CPU **limit** does not shrink the processor count the runtime sees. Without
-`ECLUSE_RUNTIME__CORES` a 2-CPU pod on a 32-core node would claim 32 capabilities and 32
-nurseries.
+count.
+
+**A pod with no CPU limit is the case to configure.** A CPU **limit** is a cgroup quota Écluse
+reads, and it does not shrink the processor count the runtime sees. A CPU **request** is not a
+quota. It reaches the container only as a scheduler weight, and the same weight has meant requests
+up to 3.4x apart across runc versions, so Écluse will not guess a core count from it. With no limit
+set, Écluse falls back to the count the memory limit can feed, and with no memory limit either it
+caps at `ECLUSE_RUNTIME__CORES_CEILING` (8). Neither number is your request, and the boot log warns
+and says so. On a 32-core node a 2-CPU-request pod with no memory limit therefore claims 8
+capabilities, not 2. Tell it the number with the Downward API:
+
+```yaml
+env:
+  - name: ECLUSE_RUNTIME__CORES
+    valueFrom:
+      resourceFieldRef:
+        resource: requests.cpu
+        divisor: "1"
+```
+
+Read `requests.cpu`, never `limits.cpu`: with no limit set, the kubelet substitutes the node's
+allocatable CPU, which is the whole-node claim you are trying to avoid. `divisor: "1"` rounds up
+to whole cores, so a `500m` request becomes 1.
+
+**Bare metal and dev hosts** have no cgroup limits either, so they take the same ceiling of 8, or
+the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
+`ECLUSE_RUNTIME__CORES`, to use a bigger box fully.
 
 **Memory arithmetic (proxy pod).** The binary ships `-A64m -n4m`, a 64 MiB per-core allocation area
 in 4 MiB chunks. That trades bounded extra memory for far fewer GCs under load. Budget roughly

@@ -129,6 +129,7 @@ runtimeDecoder :: GroupDecoder RuntimeSettings
 runtimeDecoder =
     RuntimeSettings
         <$> optionalKey "cores" parsePositiveInt
+        <*> optionalKey "coresCeiling" parsePositiveInt
         <*> optionalKey "maxHeapBytes" parsePositiveInt
         <*> optionalKey "serveMaxInFlight" parsePositiveInt
         <*> optionalKey "publicConnectionsPerHost" parsePositiveInt

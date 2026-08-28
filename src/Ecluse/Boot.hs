@@ -50,7 +50,7 @@ import Ecluse.Config (
     AppConfig (cfgObservability, cfgRuntime, cfgServer),
     Config (configApp),
     ObservabilitySettings (obsLogFormat, obsLogLevel, obsTelemetry),
-    RuntimeSettings (rtCores, rtMaxHeapBytes),
+    RuntimeSettings (rtCores, rtCoresCeiling, rtMaxHeapBytes),
     ServerSettings (srvPort),
     loadConfig,
     renderConfigError,
@@ -63,7 +63,7 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
-import Ecluse.Rts (applyRuntimePosture)
+import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
@@ -183,6 +183,12 @@ withBootEnv action = do
     let env = configApp config
         observability = cfgObservability env
         runtimeSettings = cfgRuntime env
+        runtimeOverrides =
+            RuntimeOverrides
+                { roCores = rtCores runtimeSettings
+                , roCoresCeiling = rtCoresCeiling runtimeSettings
+                , roMaxHeapBytes = rtMaxHeapBytes runtimeSettings
+                }
     -- Resolve the log identity from the table the SDK reads, before any OTEL_* projection
     -- applies, so a boot line carries the same identity as a served request.
     ddIdentity <- ddIdentityFromEnvironment
@@ -190,7 +196,7 @@ withBootEnv action = do
     -- Apply the runtime posture before anything else spins up. It may exec the binary in
     -- place to enforce a heap ceiling (same PID, see Ecluse.Rts).
     runtimePlan <-
-        applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings)
+        applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) runtimeOverrides
     fdLimit <- openFileSoftLimit
     let (preamble, planE) = resolveBootPlan envVars docBlob config runtimePlan fdLimit
     -- The provenance block logs ahead of every refusable phase, so a refusal that names a
