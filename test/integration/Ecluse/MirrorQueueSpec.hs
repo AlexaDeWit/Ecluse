@@ -28,9 +28,9 @@ import Ecluse.Integration.Ministack (
     unwrapQ,
     withMinistack,
  )
+import Ecluse.Runtime.Aws.Env (AwsEndpoint (AwsEndpoint, endpointHost, endpointPort, endpointSecure))
 import Ecluse.Runtime.Queue.Sqs (
     SqsConfig (sqsEndpoint, sqsWaitSeconds),
-    SqsEndpoint (SqsEndpoint, endpointHost, endpointPort, endpointSecure),
     defaultSqsConfig,
     newSqsQueue,
  )
@@ -132,7 +132,7 @@ deadEndpointQueue = do
         (Right . loopbackRegistryUrl)
         (defaultSqsConfig "http://127.0.0.1:1/000000000000/dead" "us-east-1")
             { sqsEndpoint =
-                Just SqsEndpoint{endpointSecure = False, endpointHost = "127.0.0.1", endpointPort = 1}
+                Just AwsEndpoint{endpointSecure = False, endpointHost = "127.0.0.1", endpointPort = 1}
             , sqsWaitSeconds = 1
             }
 

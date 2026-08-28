@@ -8,7 +8,8 @@ and the mirror-enqueue buffer tunables. A separate partition of the heap ceiling
 covers the byte-valued bounds ("Ecluse.Composition.MemoryPlan").
 
 Each resolution is a pure function of the validated configuration, plus, for the
-pools, the process file-descriptor limit 'openFileSoftLimit' reads once. An explicit
+pools, the process file-descriptor limit 'openFileSoftLimit' reads once. That read is
+the module's only effect: nothing here opens a socket or reads a clock. An explicit
 config value always wins, and 'resolveSized' pairs the result with the boot-log line
 naming its provenance. The composition root applies the results when it builds the
 managers and the admission gate.

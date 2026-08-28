@@ -26,7 +26,8 @@ import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
  )
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure), defaultSqsConfig)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort, endpointSecure))
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount, sqsQueueUrl, sqsRegion), defaultSqsConfig)
 
 spec :: Spec
 spec = do

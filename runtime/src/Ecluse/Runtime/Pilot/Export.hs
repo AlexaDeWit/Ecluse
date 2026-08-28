@@ -8,10 +8,9 @@
 
 The amazonka-facing half of Pilot's export: @PutObject@ a compiled @osv.db@ into the
 configured bucket over an S3 env built for an optional custom endpoint
-('Ecluse.Runtime.Aws.S3.buildS3Env'). It takes a __pre-parsed__ endpoint tuple rather
-than the application config, so it is an ecosystem-agnostic cloud adapter with no
-dependency on the composition shell. The Pilot export loop resolves the endpoint from
-config and passes it down.
+('Ecluse.Runtime.Aws.S3.buildS3Env'). It takes a __resolved__ 'AwsEndpoint' rather than
+the application config, so it is an ecosystem-agnostic cloud adapter with no dependency on
+the composition shell. The boot resolves the endpoint and passes it down.
 -}
 module Ecluse.Runtime.Pilot.Export (
     exportToS3,
@@ -28,15 +27,15 @@ import UnliftIO.Exception (bracket, withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
 
-{- | Upload an OSV artifact to @bucketName@, using the optional @(secure, host, port)@ endpoint. A
-failed upload logs and marks its span errored, so the export loop's supervisor sees more than a
-restart.
+{- | Upload an OSV artifact to @bucketName@, over the optional endpoint override. A failed upload
+logs and marks its span errored, so the export loop's supervisor sees more than a restart.
 -}
-exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe (Bool, Text, Int) -> Text -> FilePath -> m ()
+exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe AwsEndpoint -> Text -> FilePath -> m ()
 exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
     let keyText = toText (takeFileName dbPath)
         mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider

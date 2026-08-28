@@ -39,7 +39,6 @@ import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
 import Ecluse (mountBindingFor)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), ambientAwsFromEnv, parseEndpointUrl)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -66,7 +65,7 @@ import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
-import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
+import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
 
 spec :: Spec
 spec =
@@ -84,10 +83,9 @@ spec =
                             appCfg <-
                                 either (fail . ("CveSyncSpec fixture env: " <>) . show) (pure . configApp) $
                                     loadConfig (s3EnvVars endpointUrl bucket) Nothing
-                            let ambient = ambientAwsFromEnv (s3EnvVars endpointUrl bucket)
-                            awsEnv <- buildS3Env (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
+                            awsEnv <- buildS3Env (Just endpoint)
                             createBucketWithRetry awsEnv bucket 30
-                            cveSource <- newS3CveSource (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
+                            cveSource <- newS3CveSource (Just endpoint)
 
                             -- One proxy wiring: the slot, the fast-lane policy over it,
                             -- and the sync task polling the (empty) bucket.
@@ -119,7 +117,7 @@ spec =
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
-                                publishViaPilot ambient appCfg CorpusV1
+                                publishViaPilot (Just endpoint) appCfg CorpusV1
 
                                 -- Phase 2: the proxy admits the identical request, and
                                 -- the served document carries the fixed version.
@@ -161,8 +159,8 @@ createBucketWithRetry awsEnv bucket attempts =
 
 -- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject. The
 -- compile output lands in its own temp dir, apart from the proxy's sync data dir.
-publishViaPilot :: AmbientAws -> AppConfig -> CorpusVersion -> IO ()
-publishViaPilot ambient appCfg v = do
+publishViaPilot :: Maybe AwsEndpoint -> AppConfig -> CorpusVersion -> IO ()
+publishViaPilot s3Endpoint appCfg v = do
     zipBytes <- osvCorpusZip v
     logEnv <- quietLogEnv
     withStub status200 zipBytes $ \stub ->
@@ -171,7 +169,7 @@ publishViaPilot ambient appCfg v = do
                 runPilotCompile
                     logEnv
                     telemetryDisabled
-                    ambient
+                    s3Endpoint
                     appCfg
                     PilotCompileOptions
                         { pcoEcosystem = "npm"

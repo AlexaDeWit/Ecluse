@@ -31,7 +31,6 @@ module Ecluse.Integration.Ministack (
 ) where
 
 import Amazonka qualified as AWS
-import Amazonka.Auth qualified as AWS.Auth
 import Amazonka.SQS.CreateQueue qualified as SQS
 import Amazonka.SQS.GetQueueAttributes qualified as SQS
 import Amazonka.SQS.SetQueueAttributes qualified as SQS
@@ -50,7 +49,8 @@ import System.Environment (setEnv)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint (..), newAwsEnv)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), defaultSqsConfig, newSqsQueue)
 import Ecluse.Test.Container.Image (PinnedImageRef, ministackImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Poll (pollUntil)
@@ -97,10 +97,10 @@ ministackDockerfile image =
            \LABEL com.ecluse.test=integration\n"
 
 -- | The SQS endpoint override pointing @amazonka@ at the running @ministack@ container.
-endpointFor :: Container -> SqsEndpoint
+endpointFor :: Container -> AwsEndpoint
 endpointFor container =
     let (host, mappedPort) = containerAddress container ministackPort
-     in SqsEndpoint
+     in AwsEndpoint
             { endpointSecure = False
             , endpointHost = host
             , endpointPort = mappedPort
@@ -200,20 +200,10 @@ freshQueueUrl container queueName = do
     env <- envFor (endpointFor container)
     createQueueWithRetry env queueName 30
 
--- A region-scoped, endpoint-overridden amazonka Env with the throwaway keys.
-envFor :: SqsEndpoint -> IO AWS.Env
-envFor endpoint = do
-    base <- AWS.Auth.fromKeys "test" "test" <$> AWS.newEnvNoAuth
-    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
-    pure $
-        AWS.configureService
-            ( AWS.setEndpoint
-                (endpointSecure endpoint)
-                (encodeUtf8 (endpointHost endpoint))
-                (endpointPort endpoint)
-                SQS.defaultService
-            )
-            regioned
+-- The same env the SQS backend builds, so a fixture request and a production one reach
+-- ministack identically. 'withMinistack' put the throwaway keys where discovery finds them.
+envFor :: AwsEndpoint -> IO AWS.Env
+envFor endpoint = newAwsEnv (Just "us-east-1") (Just endpoint) SQS.defaultService
 
 -- Create the queue, retrying while ministack's SQS service warms up. The last attempt's
 -- diagnostic is the one that reaches the test.

@@ -6,9 +6,10 @@
 ceiling ("Ecluse.Rts") between named tenants whose sum stays within it. In allocation
 order the tenants are the runtime reserve, the fixed enqueue buffer, the cache aggregate,
 the material aggregate, the publish aggregate, the memory-queue depth, and the
-mirror-artifact envelope, one 'MemoryPlan' field each. An explicit config value wins its
-own bound, every bound falls back to a shipped default with no ceiling datapoint, and
-every decision returns a boot-log line.
+mirror-artifact envelope, one 'MemoryPlan' field each. The non-byte runtime sizings live
+in "Ecluse.Composition.Sizing". An explicit config value wins its own bound, every bound
+falls back to a shipped default with no ceiling datapoint, and every decision returns a
+boot-log line.
 
 == Graceful degradation, never a refusal
 
@@ -29,21 +30,26 @@ combination overshoots. A pod too small even without the pins boots with the lou
 like any other.
 -}
 module Ecluse.Composition.MemoryPlan (
+    -- * The plan and its tenants
     MemoryPlan (..),
     PublishTenant (..),
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
+
+    -- * Resolution
     resolveMemoryPlan,
     TenantDemands (..),
+    planCacheConfig,
+    mirrorArtifactEnvelopeMultiplier,
+    mirrorArtifactBytesCap,
+
+    -- * The override arithmetic
     OverridePins (..),
     noOverridePins,
     overrideMinShedSum,
     overrideSubstitutions,
     attributeOverrideViolations,
-    planCacheConfig,
-    mirrorArtifactEnvelopeMultiplier,
-    mirrorArtifactBytesCap,
 ) where
 
 import Data.Text qualified as T
@@ -276,8 +282,9 @@ fallbackOr :: Text -> Maybe Int -> Int -> (Int, Text)
 fallbackOr name explicit fallback =
     resolveSized ("memory plan: " <> name) explicit fallback "built-in default; no heap-ceiling datapoint"
 
-{- | The byte charges the shed ladder walks, resolved from the ceiling before any shedding.
-A pinned ('Just') bound never sheds and answers for its own overshoot.
+{- | Every tenant's demand before the shed ladder walks it, resolved from the ceiling: byte
+charges, plus the counts, pins, and flags the ladder's steps read. A pinned ('Just') bound
+never sheds and answers for its own overshoot.
 -}
 data TenantDemands = TenantDemands
     { tdCeiling :: Int
@@ -286,14 +293,17 @@ data TenantDemands = TenantDemands
     , tdPins :: OverridePins
     , tdCacheDesired :: Int
     , tdCacheEntriesExplicit :: Maybe Int
+    -- ^ Cache entries, not bytes.
     , tdMaterialDesired :: Int
     , tdMaterialMinimum :: Int
     , tdAdmissionDesired :: Int
+    -- ^ Concurrent serve operations, not bytes.
     , tdPublishConfigured :: Bool
     , tdPublishDesired :: Int
     , tdRequestFinal :: Int
     , tdRequestComputed :: Int
     , tdDepthDesired :: Int
+    -- ^ Queued jobs, not bytes.
     , tdMemoryBacked :: Bool
     , tdMirrors :: Bool
     , tdArtifactCapDesired :: Int

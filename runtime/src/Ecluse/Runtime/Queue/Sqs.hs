@@ -58,7 +58,6 @@ package downloads, never a destination the operator configured.
 module Ecluse.Runtime.Queue.Sqs (
     -- * Configuration
     SqsConfig (..),
-    SqsEndpoint (..),
     defaultSqsConfig,
 
     -- * The backend
@@ -95,8 +94,7 @@ import Data.Aeson (
  )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
-import Katip (LogEnv, Severity (DebugS), logFM, ls, sl)
-import Katip.Monadic (runKatipContextT)
+import Katip (LogEnv, Severity (DebugS), sl)
 import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
@@ -128,21 +126,9 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
-import Ecluse.Runtime.Log (moduleField)
-
-{- | Where an SQS-compatible endpoint lives, for pointing the backend at a
-non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
--}
-data SqsEndpoint = SqsEndpoint
-    { endpointSecure :: Bool
-    -- ^ Whether to connect over HTTPS (an emulator is usually plain HTTP).
-    , endpointHost :: Text
-    -- ^ The host to connect to (e.g. @"localhost"@).
-    , endpointPort :: Int
-    -- ^ The port to connect to (e.g. @4566@ for ministack).
-    }
-    deriving stock (Eq, Show)
+import Ecluse.Runtime.Log (logLine, moduleField)
 
 {- | What the SQS backend needs. The provider knobs take their defaults from
 'defaultSqsConfig' (see "Ecluse.Core.Queue").
@@ -152,7 +138,7 @@ data SqsConfig = SqsConfig
     -- ^ The fully-qualified SQS queue URL mirror jobs are sent to and received from.
     , sqsRegion :: Text
     -- ^ The AWS region the queue lives in (e.g. @"us-east-1"@).
-    , sqsEndpoint :: Maybe SqsEndpoint
+    , sqsEndpoint :: Maybe AwsEndpoint
     {- ^ An endpoint override for an emulator or VPC endpoint. 'Nothing' uses
     @amazonka@'s default resolution and the ambient credential chain.
     -}
@@ -233,24 +219,7 @@ newSqsQueue logEnv egressUrl cfg = do
 
 -- Build the region-scoped, optionally endpoint-overridden amazonka environment.
 mkEnv :: SqsConfig -> IO AWS.Env
-mkEnv cfg = case sqsEndpoint cfg of
-    Just ep -> do
-        base <- regioned <$> AWS.newEnv AWS.discover
-        pure (configured ep base)
-    Nothing -> regioned <$> AWS.newEnv AWS.discover
-  where
-    regioned :: AWS.Env -> AWS.Env
-    regioned env = env{AWS.region = AWS.Region' (sqsRegion cfg)}
-
-    configured :: SqsEndpoint -> AWS.Env -> AWS.Env
-    configured ep =
-        AWS.configureService
-            ( AWS.setEndpoint
-                (endpointSecure ep)
-                (encodeUtf8 (endpointHost ep))
-                (endpointPort ep)
-                SQS.defaultService
-            )
+mkEnv cfg = newAwsEnv (Just (sqsRegion cfg)) (sqsEndpoint cfg) SQS.defaultService
 
 -- SQS caps the long poll at 20s and clamps a larger configured wait. That stays inside
 -- @amazonka@'s default request timeout, so the client needs no response-timeout override.
@@ -286,10 +255,8 @@ terminusOfResponse response =
 soleValue :: (Foldable t) => t Text -> Maybe Text
 soleValue = listToMaybe . toList
 
-{- | Classify a queue's raw @RedrivePolicy@ attribute into its dead-letter terminus. No
-policy or a blank attribute gives 'TerminusAbsent'. Any other policy is __attached__,
-with @maxReceiveCount@ when that is readable. An unreadable count still counts as
-attached, so the boot warning stays silent and the configured floor stands alone.
+{- | Classify a queue's raw @RedrivePolicy@ into its dead-letter terminus. No policy or a
+blank one is absent, and any other is attached, with @maxReceiveCount@ only when it reads.
 -}
 deadLetterTerminusOf :: Maybe Text -> DeadLetterTerminus
 deadLetterTerminusOf raw =
@@ -366,9 +333,8 @@ toQueueMessage egressUrl received = do
 receiveCountOf :: Maybe Text -> Int
 receiveCountOf raw = max 1 (fromMaybe 1 (readMaybe . toString =<< raw))
 
-{- | Lift a received batch into deliverable 'QueueMessage's, logging each drop at 'DebugS'
-so a poison message is visible instead of cycling silently. A dropped message is omitted
-and left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.
+{- | Lift a received batch into deliverable 'QueueMessage's. A drop is logged, omitted, and
+left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.
 -}
 liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> [ReceivedMessage] -> IO [QueueMessage]
 liftReceivedMessages logEnv egressUrl =
@@ -385,7 +351,7 @@ liftReceivedMessage logEnv egressUrl received =
 -- when present. The message body is untrusted payload and is never logged.
 logSqsDrop :: LogEnv -> SqsDropReason -> Maybe Text -> IO ()
 logSqsDrop logEnv reason messageId =
-    runKatipContextT logEnv payload mempty (logFM DebugS (ls message))
+    logLine logEnv payload DebugS message
   where
     payload =
         moduleField "Ecluse.Runtime.Queue.Sqs"

@@ -32,7 +32,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (throwIO, tryIO)
 
-import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed), renderBootError)
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     deadLetterTerminusWarning,
@@ -55,14 +55,16 @@ import Ecluse.Config (
     loadConfig,
     renderConfigError,
  )
-import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv)
+import Ecluse.Config.Ambient (ambientAwsFromEnv, ambientS3Endpoint)
 import Ecluse.Config.Resolve (secretEnvSpellings)
+import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Rts (applyRuntimePosture)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (
@@ -80,9 +82,10 @@ heavier serve- and worker-side handles later (see "Ecluse.Proxy").
 data BootEnv = BootEnv
     { beConfig :: AppConfig
     -- ^ The application-level configuration slice the subcommands read.
-    , beAmbient :: AmbientAws
-    {- ^ The ambient AWS SDK environment (region, endpoint overrides), read from
-    the process environment beside the config, never through the config AST.
+    , beS3Endpoint :: Maybe AwsEndpoint
+    {- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials, read from the
+    process environment beside the config and resolved once here. 'Nothing' is no
+    override, since a malformed one refused the boot.
     -}
     , beLogEnv :: LogEnv
     -- ^ The process structured-logging environment.
@@ -193,7 +196,8 @@ withBootEnv action = do
     -- The provenance block logs ahead of every refusable phase, so a refusal that names a
     -- config key stays traceable to the layer that set it.
     traverse_ (logBootInfo logEnv) preamble
-    bootPlan <- orExit (T.unlines . map renderBootError) planE
+    (bootPlan, s3Endpoint) <-
+        orExit (T.unlines . map renderBootError) (bootRefusals planE (ambientS3Endpoint ambient))
     -- @ecluse check-config@ prints the same two lists in this order, so a transcript and a
     -- boot log agree line for line.
     traverse_ (logBootInfo logEnv) (bpLines bootPlan)
@@ -203,12 +207,24 @@ withBootEnv action = do
         action
             BootEnv
                 { beConfig = env
-                , beAmbient = ambient
+                , beS3Endpoint = s3Endpoint
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
                 , beConfigFull = config
                 , beBootPlan = bootPlan
                 }
+
+{- The plan and the ambient S3 endpoint together, or every refusal from both sides, so one
+launch names each problem an operator must fix. -}
+bootRefusals ::
+    Either [BootError] BootPlan ->
+    Either Secret (Maybe AwsEndpoint) ->
+    Either [BootError] (BootPlan, Maybe AwsEndpoint)
+bootRefusals planE rawEndpointE = case (planE, endpointE) of
+    (Right plan, Right endpoint) -> Right (plan, endpoint)
+    (p, e) -> Left (concat (lefts [void p, void e]))
+  where
+    endpointE = first (pure . AwsEndpointMalformed) rawEndpointE
 
 {- Build the config-selected mirror queue. Only the memory arm spends @memoryDepth@, and
 'deadLetterTerminusWarning' is decided here because it needs the built handle. -}

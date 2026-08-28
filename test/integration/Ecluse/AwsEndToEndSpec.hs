@@ -42,8 +42,9 @@ import Ecluse.Integration.WorkerLoop (
     runLoopUntil,
     withMirrorTarget,
  )
+import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
 import Ecluse.Runtime.Env (Env)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)

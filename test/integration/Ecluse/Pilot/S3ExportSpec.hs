@@ -22,6 +22,7 @@ import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
+import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Test.Poll (retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
@@ -33,18 +34,14 @@ spec = do
             it "uploads OSV databases to S3" $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     let (host, port) = containerAddress container 4566
-                        endpoint = "http://" <> host <> ":" <> T.pack (show port)
+                        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
                         bucket = "test-osv-bucket"
 
-                    env <- AWS.newEnv AWS.discover
-                    let base =
-                            AWS.configureService
-                                ( (AWS.setEndpoint False (encodeUtf8 host) port S3.defaultService)
-                                    { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
-                                    }
-                                )
-                                env
-                        regioned = base{AWS.region = AWS.Region' "us-east-1"}
+                    -- The override is the ambient AWS_ENDPOINT_URL a released image carries,
+                    -- resolved through the same parser the boot uses.
+                    endpoint <- either (const (fail ("S3ExportSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
+                    base <- buildS3Env (Just endpoint)
+                    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
 
                     -- The readiness wait only proves the port accepts connections, so the S3
                     -- gateway may still be warming when the first CreateBucket lands.
@@ -53,10 +50,8 @@ spec = do
                     let dummyDb = tmpDir <> "/dummy.sqlite"
                     liftIO $ writeFile dummyDb "dummy sqlite data"
 
-                    -- The endpoint override is the ambient AWS_ENDPOINT_URL a released
-                    -- image carries, passed straight through as the composition root does.
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (parseEndpointUrl endpoint) bucket dummyDb)
+                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket dummyDb)
 
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
                     let objects = fromMaybe [] (S3.contents resp)
