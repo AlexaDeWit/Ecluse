@@ -49,24 +49,16 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Ag
 
 ## 2. The PR body
 
-Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · AI assistance). Keep it
-short, and write it so a reader who has not opened the diff understands it on its own.
+Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · AI assistance).
 
-The Summary is the part worth effort. Two to five sentences: what changed and why, in words a
-sharp colleague on another team follows without the diff. For a security or behaviour change, say
-who could do what before and what holds now. Name a deliberate trade-off in one sentence if there
-was one. End with `Closes #NNN` where a slice completes.
+**Read [CONTRIBUTING.md, *Pull requests*](../../../CONTRIBUTING.md#pull-requests) before you write
+the Summary.** It owns the rules and carries the same change written twice, verbose and concise,
+which is faster to work from than the rules alone. The short version: lead with what a reviewer or
+operator gains or is protected from, two to five sentences, no play-by-play of files, Canadian
+spelling, no em-dashes.
 
-Rules for the Summary:
-
-- Lead with the point: what a reviewer or operator gains or is protected from. The mechanism comes
-  second, and only as far as the diff does not already show it. No play-by-play of files.
-- Prefer the plain word. Define an unavoidable term in a clause.
-- Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
-  the Summary.
-- Include evidence only where review depends on it (a verification table, a sweep result), and keep
-  it compact. Tick a checklist item only when it is true. Otherwise say "not applicable" and why.
-- Canadian spelling. No em-dashes or en-dashes. No filler adjectives.
+That guidance lives in `CONTRIBUTING.md` and not here so that a human contributor and an agent read
+the same text. This skill sits under `.agents/`, where a drive-by contributor never looks.
 
 ## 3. Draft until hand-off
 

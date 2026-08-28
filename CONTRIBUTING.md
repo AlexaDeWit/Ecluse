@@ -75,6 +75,59 @@ Signed-off-by: Your Name <you@example.com>
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit.
   `git rebase --signoff main` signs off a whole branch.
 
+## Pull requests
+
+Open as a draft while work or review is moving, and mark it ready when it is not. The template is
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): Summary, Checklist,
+Sign-off, AI assistance.
+
+The Summary is the part worth effort. A reviewer reads it before the diff, so write it so someone
+who has not opened the diff understands the change on its own. Two to five sentences: what changed
+and why, in words a sharp colleague on another team follows. For a security or behaviour change,
+say who could do what before and what holds now. Name a deliberate trade-off in one sentence if
+there was one. End with `Closes #NNN` where a slice completes.
+
+Rules for the Summary:
+
+- Lead with the point: what a reviewer or operator gains or is protected from. The mechanism comes
+  second, and only as far as the diff does not already show it. No play-by-play of files.
+- Prefer the plain word. Define an unavoidable term in a clause.
+- Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
+  the Summary.
+- Include evidence only where review depends on it (a verification table, a sweep result), and keep
+  it compact. Tick a checklist item only when it is true. Otherwise say "not applicable" and why.
+- Canadian spelling. No em-dashes or en-dashes. No filler adjectives.
+
+### The same change, written twice
+
+The rules above are easier to apply against an example than against a list. Both bodies below
+describe one change: the serve path stopped forwarding upstream credential headers to clients.
+
+Verbose. It narrates the diff, so a reviewer learns the file layout before they learn the risk:
+
+> This pull request introduces a comprehensive fix to the serving layer. First, in
+> `Ecluse.Server.Serve` we add a new `scrubUpstreamHeaders` helper, which iterates over the
+> response header list and carefully removes any header whose name appears in the
+> `credentialHeaders` set. We then thread this helper through both `respondPackument` and
+> `respondTarball`, each of which previously passed the upstream response headers directly through
+> to the client without any filtering. We also add a robust new test module,
+> `Ecluse.Server.ServeSpec`, with four test cases that thoroughly verify each of the affected code
+> paths behaves correctly under a variety of conditions.
+
+Concise. It leads with the exposure, states what holds now, and trusts the diff for the rest:
+
+> An upstream registry that set `Authorization` or `Set-Cookie` on a response had those headers
+> forwarded verbatim to the client, so a client could receive the mirror's own upstream credential.
+>
+> The serve path now drops credential headers before it responds. The packument and tarball routes
+> share one list, so a route added later cannot miss it by accident.
+>
+> Closes #123
+
+The second is shorter, but that is a side effect. It is better because a reviewer finishes the
+first sentence knowing what was wrong, and finishes the second knowing what to check in the diff.
+The first tells them which functions changed, which the diff already shows.
+
 ## Repository requirements
 
 - **Use [Conventional Commits](https://www.conventionalcommits.org/)**. Subjects are
