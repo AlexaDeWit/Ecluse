@@ -7,9 +7,9 @@
 The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ convention.
 The suites and the performance harnesses share these fixtures to evaluate a rule policy
 without the boot-bound capabilities the live composition injects. 'inertRuleDeps' stands
-in for the advisory-database and breaker-observer capabilities. 'atDefaultPrecedence'
-stands in for the precedence a configured policy assigns explicitly. 'filterPlan'
-composes the engine's staged evaluation into the one call a spec or bench drives.
+in for the advisory-database and breaker-observer capabilities. 'constRule' builds a
+prepared rule of a fixed verdict, bypassing config preparation. The decision predicates
+read back what the engine credited.
 -}
 module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
@@ -19,17 +19,46 @@ module Ecluse.Test.Rules (
     -- * Precedence pairing
     atDefaultPrecedence,
 
+    -- * Fixed-verdict prepared rules
+    constRule,
+    admitRule,
+    denyRule,
+    cannotVetRule,
+
+    -- * Reading back a decision
+    admittedBy,
+    blockedBy,
+    isApproved,
+    isUndecidable,
+
+    -- * Shaping a version under test
+    withInstallScripts,
+
     -- * One-call packument evaluation
     filterPlan,
 ) where
 
-import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Package (
+    CodeExecSignal (RunsCodeOnInstall),
+    PackageDetails (pkgInstallCode),
+    PackageInfo (infoVersions),
+ )
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
-import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..), evalRules, noBreakerReporter, prepare)
+import Ecluse.Core.Rules (
+    FaultReporter (..),
+    PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience),
+    RuleDeps (..),
+    evalRules,
+    noBreakerReporter,
+    prepare,
+ )
 import Ecluse.Core.Rules.Types (
+    Decision (Admitted, Blocked, Undecidable),
     EvalContext,
+    FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
     Rule,
+    RuleVerdict (Allow, CannotVet, Deny),
     defaultPrecedence,
  )
 
@@ -56,6 +85,47 @@ configured precedence ("Ecluse.Config.Rule").
 -}
 atDefaultPrecedence :: Rule -> PrecededRule
 atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
+
+{- | A prepared rule returning a fixed verdict, so an evaluation reaches a chosen decision
+independent of the version under test.
+-}
+constRule :: Text -> RuleVerdict -> PreparedRule
+constRule ruleName verdict =
+    PreparedRule
+        { prepName = ruleName
+        , prepPrecedence = 0
+        , prepResilience = Nothing
+        , prepEval = \_ _ -> pure verdict
+        }
+
+{- | The three fixed-verdict rules the admission and worker suites reuse. 'cannotVetRule' models
+an absent advisory database, so a fail-closed evaluation reaches an undecidable decision.
+-}
+admitRule, denyRule, cannotVetRule :: PreparedRule
+admitRule = constRule "test-admit" (Allow "admitted for test")
+denyRule = constRule "test-deny" (Deny "denied by current policy")
+cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
+
+-- | The rule name credited for an admission or a block, if any (the engine credits by name).
+admittedBy, blockedBy :: Decision -> Maybe Text
+admittedBy = \case
+    Admitted ruleName _ -> Just ruleName
+    _ -> Nothing
+blockedBy = \case
+    Blocked ruleName _ -> Just ruleName
+    _ -> Nothing
+
+isApproved, isUndecidable :: Decision -> Bool
+isApproved = \case
+    Admitted{} -> True
+    _ -> False
+isUndecidable = \case
+    Undecidable{} -> True
+    _ -> False
+
+-- | Mark the version as running code on install, so the install-script deny fires.
+withInstallScripts :: PackageDetails -> PackageDetails
+withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
 
 {- | Decide a single public packument against a rule set in one call. A spec or bench exercises the
 real engine and the real survivor resolution without wiring the staged serve path itself.

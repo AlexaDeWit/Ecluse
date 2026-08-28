@@ -32,7 +32,6 @@ import Ecluse.Core.Registry.Npm.Filter (
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Rules.Types (
-    Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan),
@@ -40,7 +39,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
-import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 import Ecluse.Test.Support (decodeJsonOrFail)
 
 spec :: Spec
@@ -726,11 +725,6 @@ timeKeysOf = objKeys "time" . rawObject
 
 distTag :: Text -> FilteredPackument -> Maybe Text
 distTag tag = lookupTag tag . rawObject
-
-isApproved :: Decision -> Bool
-isApproved = \case
-    Admitted{} -> True
-    _ -> False
 
 decodeOrFail :: ByteString -> H.PropertyT IO Value
 decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStrict bs)

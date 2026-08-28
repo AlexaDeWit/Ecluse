@@ -16,17 +16,11 @@ import Test.Hspec
 import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
-    CodeExecSignal (NoCodeOnInstall),
     Hash,
     HashAlg (SHA1, SHA256),
-    PackageDetails (..),
+    PackageDetails,
     PackageInfo (..),
     PackageName,
-    Trust (Untrusted),
-    mkPackageName,
  )
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
@@ -69,7 +63,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv)
-import Ecluse.Test.Package (defaultMinIntegrity, unsafeHash, validSha1, validSha256)
+import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, unsafeHash, unscopedNpm, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
 
@@ -79,7 +73,7 @@ spec = do
         it "logs a WARNING tagged with this module and the package, naming the decode failure" $ do
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDecodeFailure (mkPackageName Npm Nothing "is-odd"))
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDecodeFailure (unscopedNpm "is-odd"))
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
@@ -92,7 +86,7 @@ spec = do
             -- correlation and is otherwise identical.
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logNameMismatch (mkPackageName Npm Nothing "thing") "http://upstream.test" "other")
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logNameMismatch (unscopedNpm "thing") "http://upstream.test" "other")
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
@@ -105,7 +99,7 @@ spec = do
         it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "http://upstream.test" EmptyBaseUrl)
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (unscopedNpm "is-odd") "http://upstream.test" EmptyBaseUrl)
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
@@ -122,7 +116,7 @@ spec = do
             let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (mkPackageName Npm Nothing "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (unscopedNpm "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
             -- The origin field takes the same reduction on the same line, so it holds
@@ -208,7 +202,7 @@ spec = do
     describe "denialAuditPayload" $ do
         let audit etag extra =
                 DenialAudit
-                    { daPackage = mkPackageName Npm Nothing "left-pad"
+                    { daPackage = unscopedNpm "left-pad"
                     , daVersion = "1.2.3"
                     , daRule = Just "DenyIfCve"
                     , daReasonClass = Metric.ReasonPolicy
@@ -253,11 +247,11 @@ mixedIntegrityInfo =
         { infoName = mixedPkg
         , infoVersions =
             Map.fromList
-                [ ("0.9.0", detailsWith "0.9.0" []) -- missing integrity
-                , ("1.0.0", detailsWith "1.0.0" [unsafeHash SHA1 validSha1]) -- below floor
-                , ("1.5.0", detailsWith "1.5.0" [unsafeHash SHA256 validSha256]) -- admissible
-                , ("2.0.0", detailsWith "2.0.0" [unsafeHash SHA1 validSha1]) -- below floor
-                , ("2.5.0", detailsWith "2.5.0" []) -- missing integrity
+                [ ("0.9.0", versionWith "0.9.0" []) -- missing integrity
+                , ("1.0.0", versionWith "1.0.0" [unsafeHash SHA1 validSha1]) -- below floor
+                , ("1.5.0", versionWith "1.5.0" [unsafeHash SHA256 validSha256]) -- admissible
+                , ("2.0.0", versionWith "2.0.0" [unsafeHash SHA1 validSha1]) -- below floor
+                , ("2.5.0", versionWith "2.5.0" []) -- missing integrity
                 ]
         , infoDistTags = Map.empty
         , infoInvalidEntries = []
@@ -265,7 +259,7 @@ mixedIntegrityInfo =
 
 -- | The package the admission fixture is built around. Its identity is inert to the gate.
 mixedPkg :: PackageName
-mixedPkg = mkPackageName Npm Nothing "leftpad"
+mixedPkg = unscopedNpm "leftpad"
 
 {- | The two context-worded refusals admitByIntegrity projects the dropped versions to.
 They stay distinct, so the bucket order is observable in the refusal list.
@@ -274,33 +268,8 @@ belowFloorMarker, missingMarker :: ServeDecision
 belowFloorMarker = Reject (Rejection BelowIntegrityFloor "below the integrity floor")
 missingMarker = Reject (Rejection MissingIntegrity "no integrity digest")
 
-{- | A per-version snapshot carrying exactly the given integrity digests. Every other
-field is an inert default, since admitByIntegrity reads only the version's artifacts.
+{- | A snapshot of 'mixedPkg' at the given version carrying exactly the given digests.
+Everything else is an inert default, since admitByIntegrity reads only the artifacts.
 -}
-detailsWith :: Text -> [Hash] -> PackageDetails
-detailsWith raw hashes =
-    PackageDetails
-        { pkgName = mixedPkg
-        , pkgVersion = mkVersion Npm raw
-        , pkgPublishedAt = Nothing
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = artifactWith hashes :| []
-        , pkgLicenses = []
-        , pkgPublisher = Nothing
-        }
-
--- | A single inert tarball carrying the given integrity digests and nothing else.
-artifactWith :: [Hash] -> Artifact
-artifactWith hashes =
-    Artifact
-        { artFilename = "leftpad.tgz"
-        , artUrl = "https://example.test/leftpad.tgz"
-        , artKind = Tarball
-        , artHashes = hashes
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
+versionWith :: Text -> [Hash] -> PackageDetails
+versionWith raw = detailsWith mixedPkg (mkVersion Npm raw)

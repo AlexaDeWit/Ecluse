@@ -9,13 +9,10 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
-import Data.List.NonEmpty qualified as NE
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
-import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
-    MirrorArtifact (..),
+    MirrorArtifact (maSize),
     PublishError (publishErrorMessage),
     PublishFault (PublishFetch, PublishRejected),
  )
@@ -26,8 +23,8 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unsafeHash, validSha1)
+import Ecluse.Test.Package (v1_0_0, validSha1)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
 
 import Ecluse.Test.Stub (
     Stub,
@@ -51,7 +48,7 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
     it "PUTs the publish document to the package path" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            _ <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
+            _ <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
@@ -63,31 +60,31 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
     it "treats a 2xx as success" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes `shouldReturn` Right ()
+            mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "treats a 409 Conflict as idempotent success (the immutable version is already present)" $
         withStub status409 "{\"error\":\"version already exists\"}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes `shouldReturn` Right ()
+            mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "reports a 404 as a publish error naming the status (so the mirror job is retried)" $
         withStub status404 "{\"error\":\"Not found\"}" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
+            outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
             -- Force the error message so the failure carries the status it saw.
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "404")
 
     it "reports a 500 as a publish error" $
         withStub status500 "boom" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
+            outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
             outcome `shouldSatisfy` isLeft
 
     it "reports a transport failure as a PublishFetch value, never thrown" $ do
         -- No server listens on this port, so the write throws a connection failure. The transport
         -- must fold it into a retryable PublishFetch value, never throw.
         publish <- publishAt "http://127.0.0.1:1"
-        outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact dummyTarballBytes
+        outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
 
 -- The production marriage against a stub's endpoint: anonymous mint, a no-TLS
@@ -101,26 +98,16 @@ publishAt targetUrl = do
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
     pure (newMirrorPublish transport targetUrl npmPublishCodec)
 
-isOdd :: PackageName
-isOdd = mkPackageName Npm Nothing "is-odd"
-
-v1 :: Version
-v1 = mkVersion Npm "1.0.0"
-
-dummyArtifact :: MirrorArtifact
-dummyArtifact =
-    MirrorArtifact
-        { maFilename = "is-odd-1.0.0.tgz"
-        , maHashes = NE.singleton (unsafeHash SHA1 validSha1)
-        , maSize = Just 1234
-        }
+-- | The shared descriptor, sized: the npm codec reports the attachment length it declares.
+sizedArtifact :: MirrorArtifact
+sizedArtifact = dummyArtifact{maSize = Just 1234}
 
 dummyTarballBytes :: ByteString
 dummyTarballBytes = "tarball-bytes"
 
 -- | The expected publish document assembled by the codec.
 publishDoc :: ByteString
-publishDoc = npmPublishDocument isOdd v1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
+publishDoc = npmPublishDocument isOdd v1_0_0 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
 
 {- | The (forced) error message of a publish 'Left', or 'Nothing' on a 'Right'.
 Forcing the message exercises the error-construction path.

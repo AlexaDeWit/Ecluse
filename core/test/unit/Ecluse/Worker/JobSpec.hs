@@ -45,6 +45,7 @@ import Ecluse.Core.Worker.Job (ReevalOutcome (ReevalDrop, ReevalRetry), outcomeO
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
 import Ecluse.Worker.Support
 
 spec :: Spec

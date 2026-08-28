@@ -1,68 +1,26 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# OPTIONS_GHC -Wno-unused-imports -Wno-orphans #-}
 
 module Ecluse.Worker.LivenessSpec (spec) where
 
-import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString qualified as BS
-import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, secondsToDiffTime)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Data.Time (addUTCTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
-    CodeExecSignal (NoCodeOnInstall),
-    Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SRI),
-    PackageDetails (..),
-    PackageName,
-    Trust (Untrusted),
-    mkPackageName,
- )
-import Ecluse.Core.Package qualified as Pkg
-import Ecluse.Core.Queue (
-    MirrorJob (..),
-    MirrorQueue (receive),
-    QueueMessage (msgReceipt),
-    ReceiptHandle,
-    Seconds (Seconds),
-    enqueue,
- )
+import Ecluse.Core.Queue (Seconds (Seconds))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpPublishArtifact))
-import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleVerdict (Allow, Deny))
-import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
-import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
-import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
-    IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (Dropped, Retried, Succeeded),
-    WorkerM,
-    WorkerPolicies,
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,
     processBatch,
-    runWorkerM,
     workerHeartbeatStaleAfter,
     workerLoop,
     workerPublishVisibilityBudget,
+    wrHeartbeat,
  )
-import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort, recordingWorkerMetricsPort)
+import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Worker.Support
 

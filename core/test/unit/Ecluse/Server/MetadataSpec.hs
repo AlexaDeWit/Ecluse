@@ -22,7 +22,6 @@ import Ecluse.Core.Package (
     PackageInfo (..),
     PackageName,
     Trust (TrustUnknown),
-    mkPackageName,
  )
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
@@ -37,6 +36,7 @@ import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetad
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 
@@ -177,10 +177,7 @@ spec = do
             readIORef failureLogs `shouldReturn` 1
 
 name :: PackageName
-name = unscoped "is-odd"
-
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
+name = unscopedNpm "is-odd"
 
 ver :: Text -> Version
 ver = mkVersion Npm

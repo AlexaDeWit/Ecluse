@@ -26,6 +26,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate
 import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
@@ -67,10 +68,6 @@ classify = routed methodGet
 publish :: [Text] -> Routed
 publish = routed methodPut
 
--- | An unscoped npm package identity, for building expected 'Route's.
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
-
 -- | A scoped npm package identity (scope, base name), for expected 'Route's.
 scoped :: Text -> Text -> PackageName
 scoped scope = mkPackageName Npm (Just (mkScope scope))
@@ -102,7 +99,7 @@ spec = do
 
     describe "classify -- packuments" $ do
         it "routes an unscoped package to its packument" $
-            classify ["is-odd"] `shouldBe` ToPackument (unscoped "is-odd")
+            classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
         it "routes a scoped package (two segments) to its packument" $
             classify ["@babel", "code-frame"]
                 `shouldBe` ToPackument (scoped "babel" "code-frame")
@@ -115,7 +112,7 @@ spec = do
     describe "classify -- tarballs (the parsed artifact coordinate)" $ do
         it "routes an unscoped tarball to its artifact, parsing the version" $
             classify ["is-odd", "-", "is-odd-3.0.1.tgz"]
-                `shouldBe` ToTarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
+                `shouldBe` ToTarball (unscopedNpm "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
         it "routes a scoped tarball (two segments) to its artifact" $
             -- The basename drops the scope: @\@babel\/code-frame@ → @code-frame-7.0.0.tgz@.
             classify ["@babel", "code-frame", "-", "code-frame-7.0.0.tgz"]
@@ -127,7 +124,7 @@ spec = do
             -- The version itself carries hyphens (@1.0.0-rc.1@). The parse must split on
             -- the FIRST @{name}-@ boundary, taking everything after it as the version.
             classify ["pkg", "-", "pkg-1.0.0-rc.1.tgz"]
-                `shouldBe` ToTarball (unscoped "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
+                `shouldBe` ToTarball (unscopedNpm "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
         it "preserves the filename verbatim, not one rebuilt from (name, version)" $
             -- The file's parsed version round-trips and the Filename is byte-identical
             -- to what arrived. That Filename, not a reconstruction, fetches the bytes.
@@ -155,7 +152,7 @@ spec = do
 
     describe "classify -- publish (PUT /{pkg}, the method-aware write route)" $ do
         it "routes a PUT of an unscoped package to Publish" $
-            publish ["is-odd"] `shouldBe` ToPublish (unscoped "is-odd")
+            publish ["is-odd"] `shouldBe` ToPublish (unscopedNpm "is-odd")
         it "routes a PUT of a scoped package (two segments) to Publish" $
             publish ["@acme", "widget"] `shouldBe` ToPublish (scoped "acme" "widget")
         it "routes a PUT of a scoped package (one decoded segment) to Publish" $
@@ -179,7 +176,7 @@ spec = do
         it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
             -- The method decides as much as the path: the same /{pkg} reads under GET
             -- and publishes under PUT.
-            classify ["is-odd"] `shouldBe` ToPackument (unscoped "is-odd")
+            classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
 
     describe "classify -- unrecognised paths deny by default" $ do
         it "routes the empty path to Unsupported" $
@@ -244,11 +241,11 @@ spec = do
         -- Interior dots, hyphens, and uppercase are all fine: this is a security
         -- boundary, not an npm-policy validator.
         it "accepts an unscoped name with interior dots" $
-            classify ["lodash.merge"] `shouldBe` ToPackument (unscoped "lodash.merge")
+            classify ["lodash.merge"] `shouldBe` ToPackument (unscopedNpm "lodash.merge")
         it "accepts another dotted unscoped name" $
-            classify ["is.odd"] `shouldBe` ToPackument (unscoped "is.odd")
+            classify ["is.odd"] `shouldBe` ToPackument (unscopedNpm "is.odd")
         it "accepts a hyphenated unscoped name" $
-            classify ["is-odd"] `shouldBe` ToPackument (unscoped "is-odd")
+            classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
         it "accepts a scoped name in two segments" $
             classify ["@babel", "code-frame"]
                 `shouldBe` ToPackument (scoped "babel" "code-frame")

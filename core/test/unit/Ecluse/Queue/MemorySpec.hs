@@ -18,7 +18,8 @@ import Ecluse.Core.Queue.Memory (
     memoryQueueDropReportInterval,
     newBoundedInMemoryQueue,
  )
-import Ecluse.Queue.Support (otherJob, sampleJob, thirdJob, unwrap)
+import Ecluse.Queue.Support (otherJob, thirdJob, unwrap)
+import Ecluse.Test.Queue (sampleJob)
 
 spec :: Spec
 spec = do

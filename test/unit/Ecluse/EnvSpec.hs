@@ -11,17 +11,14 @@ import UnliftIO.Exception (StringException, throwString)
 
 import Ecluse (mountBindingFor, runServer, runWorker)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Queue (MirrorJob (..), enqueue, msgJob, receive)
+import Ecluse.Core.Queue (enqueue, msgJob, receive)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Env (Env (..), newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (unsafeRegistryUrl)
-import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Queue (newTestMemoryQueue, sampleJob)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (testServeAdmission)
@@ -31,24 +28,6 @@ resolved the way the composition root resolves it.
 -}
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
-
--- | A sample job for round-tripping the queue handle held in an 'Env'.
-sampleJob :: MirrorJob
-sampleJob =
-    MirrorJob
-        { jobPackage = pkg
-        , jobVersion = ver
-        , jobArtifactUrl = unsafeRegistryUrl "https://registry.example.test/thing/-/thing-1.0.0.tgz"
-        , jobArtifactFilename = "thing-1.0.0.tgz"
-        , jobTraceContext = Nothing
-        }
-
--- | A sample package name and version, for the registry-handle assertions.
-pkg :: PackageName
-pkg = mkPackageName Npm Nothing "thing"
-
-ver :: Version
-ver = mkVersion Npm "1.0.0"
 
 spec :: Spec
 spec = do

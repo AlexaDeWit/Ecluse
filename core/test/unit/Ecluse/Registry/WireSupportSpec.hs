@@ -51,10 +51,10 @@ partitionLenientSpec = describe "partitionLenient" $ do
 checkNameAgreementSpec :: Spec
 checkNameAgreementSpec = describe "checkNameAgreement" $ do
     it "agrees when the reported name matches the request" $
-        checkNameAgreement (npmName "left-pad") (npmName "left-pad") `shouldBe` NameAgrees
+        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "left-pad") `shouldBe` NameAgrees
 
     it "disagrees when the reported bare name differs, carrying the reported name" $
-        checkNameAgreement (npmName "left-pad") (npmName "evil-pad")
+        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "evil-pad")
             `shouldBe` NameDisagrees "evil-pad"
 
     it "disagrees on a differing scope even when the bare name matches" $
@@ -84,10 +84,6 @@ manyBad =
         , ("alpha", String "y")
         , ("bravo", Number 2)
         ]
-
--- | An unscoped npm 'PackageName'.
-npmName :: Text -> PackageName
-npmName = mkPackageName Npm Nothing
 
 -- | A scoped npm 'PackageName' @\@scope\/base@.
 scoped :: Text -> Text -> PackageName

@@ -20,12 +20,19 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Package (sampleDetails)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
+import Ecluse.Test.Package (sampleDetails, v1_0_0)
+import Ecluse.Test.Rules (
+    admittedBy,
+    atDefaultPrecedence,
+    blockedBy,
+    inertRuleDeps,
+    isUndecidable,
+    noFaultReporter,
+    withInstallScripts,
+ )
 
 import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so age-based tests are deterministic.
 now :: UTCTime
@@ -39,12 +46,10 @@ The rules under test read only the scope, the publish age, and the install-code 
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
-    let name = mkPackageName Npm (mkScope <$> mScope) "thing"
-        version = mkVersion Npm "1.0.0"
-     in (sampleDetails name version)
-            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-            , pkgLicenses = ["MIT"]
-            }
+    (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
+        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+        , pkgLicenses = ["MIT"]
+        }
 
 isAllow :: RuleVerdict -> Bool
 isAllow (Allow _) = True
@@ -58,27 +63,9 @@ isDeny :: RuleVerdict -> Bool
 isDeny (Deny _) = True
 isDeny _ = False
 
--- | The name credited for an admission, if any (the engine credits by name).
-admittedBy :: Decision -> Maybe Text
-admittedBy (Admitted name _) = Just name
-admittedBy _ = Nothing
-
--- | The name credited for a block, if any.
-blockedBy :: Decision -> Maybe Text
-blockedBy (Blocked name _) = Just name
-blockedBy _ = Nothing
-
-isUndecidable :: Decision -> Bool
-isUndecidable (Undecidable _ _) = True
-isUndecidable _ = False
-
 isBlockedByDefault :: Decision -> Bool
 isBlockedByDefault (BlockedByDefault _) = True
 isBlockedByDefault _ = False
-
--- | Mark the version as running code on install, for the deny-rule tests.
-withInstallScripts :: PackageDetails -> PackageDetails
-withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
 
 -- | Put a rule at an explicit precedence (the operator-override form).
 at :: Int -> Rule -> PrecededRule

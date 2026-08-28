@@ -16,7 +16,6 @@ import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoName, infoVersions),
     PackageName,
-    mkPackageName,
     renderPackageName,
  )
 import Ecluse.Core.Registry.Metadata (
@@ -29,7 +28,7 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (validSha1, validSha512Sri)
+import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 
 {- | Pure-projection tests for the npm full-manifest read, pinning the 'MetadataError' each
 failure maps to. 'Ecluse.Core.Registry.Npm.Metadata.fetchNpmManifest' enforces the body-size
@@ -43,7 +42,7 @@ spec = do
 projectNpmManifestSpec :: Spec
 projectNpmManifestSpec = describe "projectNpmManifest" $ do
     it "projects a well-formed packument into the manifest paired with its raw document" $
-        case projectNpmManifest defaultLimits (unscoped "is-odd") (manifestBytes "is-odd" ["3.0.1"]) of
+        case projectNpmManifest defaultLimits (unscopedNpm "is-odd") (manifestBytes "is-odd" ["3.0.1"]) of
             Right (info, raw) -> do
                 renderPackageName (infoName info) `shouldBe` "is-odd"
                 Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
@@ -53,23 +52,23 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
     it "reports an undecodable body" $
-        projectNpmManifest defaultLimits (unscoped "is-odd") "{not json"
+        projectNpmManifest defaultLimits (unscopedNpm "is-odd") "{not json"
             `shouldBe` Left MetadataUndecodable
 
     it "reports an absent top-level name as undecodable" $
-        projectNpmManifest defaultLimits (unscoped "is-odd") (BL.toStrict (encode (object ["versions" .= object []])))
+        projectNpmManifest defaultLimits (unscopedNpm "is-odd") (BL.toStrict (encode (object ["versions" .= object []])))
             `shouldBe` Left MetadataUndecodable
 
     it "reports a self-reported different name as a name mismatch (the anti-shadowing distinction)" $
-        projectNpmManifest defaultLimits (unscoped "is-odd") (manifestBytes "is-even" ["1.0.0"])
+        projectNpmManifest defaultLimits (unscopedNpm "is-odd") (manifestBytes "is-even" ["1.0.0"])
             `shouldBe` Left (MetadataNameMismatch "is-even")
 
     it "reports a version-count breach as a bound breach" $
-        projectNpmManifest (defaultLimits{maxVersionCount = 1}) (unscoped "is-odd") (manifestBytes "is-odd" ["1.0.0", "2.0.0"])
+        projectNpmManifest (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0", "2.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
     it "reports a nesting-depth breach as a bound breach" $
-        projectNpmManifest (defaultLimits{maxNestingDepth = 2}) (unscoped "is-odd") (manifestBytes "is-odd" ["1.0.0"])
+        projectNpmManifest (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
 {- | Parity tests for the selective single-version decode. 'projectNpmVersion' must yield the
@@ -80,7 +79,7 @@ projectNpmVersionSpec :: Spec
 projectNpmVersionSpec = describe "projectNpmVersion" $ do
     it "matches the full projection over a real multi-version packument (express, 288 versions)" $ do
         body <- readFileBS "core/test/unit/fixtures/npm/express.full.json"
-        case projectNpmManifest defaultLimits (unscoped "express") body of
+        case projectNpmManifest defaultLimits (unscopedNpm "express") body of
             Right (info, _raw) -> do
                 let keys = Map.keys (infoVersions info)
                     n = length keys
@@ -88,53 +87,53 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
                     sample = mapMaybe (keys !!?) (ordNub [0, n `div` 4, n `div` 2, (3 * n) `div` 4, n - 1])
                 length sample `shouldSatisfy` (> 0)
                 forM_ sample $ \v ->
-                    projectNpmVersion defaultLimits (unscoped "express") (mkVersion Npm v) body
+                    projectNpmVersion defaultLimits (unscopedNpm "express") (mkVersion Npm v) body
                         `shouldBe` Right (Map.lookup v (infoVersions info))
             Left err -> expectationFailure ("the express fixture did not project: " <> show err)
 
     it "yields the PackageDetails identical to a full projection + lookup, for every version" $ do
         let versions = ["1.0.0", "2.1.3", "10.0.0-beta.1"]
             body = richPackumentBytes "is-odd" versions
-        case projectNpmManifest defaultLimits (unscoped "is-odd") body of
+        case projectNpmManifest defaultLimits (unscopedNpm "is-odd") body of
             Right (info, _raw) ->
                 forM_ versions $ \v ->
-                    projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm v) body
+                    projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm v) body
                         `shouldBe` Right (Map.lookup v (infoVersions info))
             Left err -> expectationFailure ("the rich fixture did not project: " <> show err)
 
     it "reports a version absent from a sound packument as a forwarded miss (Right Nothing)" $
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "9.9.9") (richPackumentBytes "is-odd" ["1.0.0"])
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "9.9.9") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Right Nothing
 
     it "drops a malformed requested-version object as a forwarded miss (Right Nothing), as the full path would" $ do
         let body = BL.toStrict . encode $ object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= object ["name" .= ("is-odd" :: Text)]]]
         -- The 1.0.0 manifest has no @dist@, so the projection drops it. That is a
         -- genuine absence both the full and the selective path reach.
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
             `shouldBe` Right Nothing
 
     it "reports an undecodable body" $
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") "{not json"
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") "{not json"
             `shouldBe` Left MetadataUndecodable
 
     it "reports trailing non-whitespace after the document as undecodable (the end-of-input check)" $
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"] <> " trailing")
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"] <> " trailing")
             `shouldBe` Left MetadataUndecodable
 
     it "reports an absent top-level name as undecodable" $
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") (BL.toStrict (encode (object ["versions" .= object []])))
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (BL.toStrict (encode (object ["versions" .= object []])))
             `shouldBe` Left MetadataUndecodable
 
     it "reports a self-reported different name as a name mismatch (the anti-shadowing distinction)" $
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-even" ["1.0.0"])
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-even" ["1.0.0"])
             `shouldBe` Left (MetadataNameMismatch "is-even")
 
     it "reports a version-count breach as a bound breach" $
-        projectNpmVersion (defaultLimits{maxVersionCount = 1}) (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0", "2.0.0"])
+        projectNpmVersion (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0", "2.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
     it "reports a nesting-depth breach as a bound breach" $
-        projectNpmVersion (defaultLimits{maxNestingDepth = 2}) (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
+        projectNpmVersion (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
     duplicateKeyParity
@@ -153,8 +152,8 @@ duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence
                     , ("versions", object ["2.0.0" .= versionObject "is-odd" "2.0.0", "3.0.0" .= versionObject "is-odd" "3.0.0"])
                     ]
             limits = defaultLimits{maxVersionCount = 1}
-        projectNpmVersion limits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
-            `shouldBe` fullVersionOutcome limits (unscoped "is-odd") "1.0.0" body
+        projectNpmVersion limits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome limits (unscopedNpm "is-odd") "1.0.0" body
 
     it "serves the first versions object's manifest, not a later duplicate's" $ do
         let firstManifest = distTarballObject "is-odd" "1.0.0" "https://example.test/is-odd-1.0.0-first.tgz"
@@ -165,8 +164,8 @@ duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence
                     , ("versions", object ["1.0.0" .= firstManifest])
                     , ("versions", object ["1.0.0" .= secondManifest])
                     ]
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
-            `shouldBe` fullVersionOutcome defaultLimits (unscoped "is-odd") "1.0.0" body
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscopedNpm "is-odd") "1.0.0" body
 
     it "treats a version absent from the first versions object as absent, ignoring a later duplicate" $ do
         let body =
@@ -175,8 +174,8 @@ duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence
                     , ("versions", object [])
                     , ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
                     ]
-        projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
-            `shouldBe` fullVersionOutcome defaultLimits (unscoped "is-odd") "1.0.0" body
+        projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscopedNpm "is-odd") "1.0.0" body
 
     it "validates the first top-level name, not a later duplicate (anti-shadowing)" $ do
         let body =
@@ -185,12 +184,8 @@ duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence
                     , ("name", String "evil")
                     , ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
                     ]
-        projectNpmVersion defaultLimits (unscoped "evil") (mkVersion Npm "1.0.0") body
-            `shouldBe` fullVersionOutcome defaultLimits (unscoped "evil") "1.0.0" body
-
--- | An unscoped npm 'PackageName'.
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
+        projectNpmVersion defaultLimits (unscopedNpm "evil") (mkVersion Npm "1.0.0") body
+            `shouldBe` fullVersionOutcome defaultLimits (unscopedNpm "evil") "1.0.0" body
 
 {- | A minimal packument body self-reporting @name@ and carrying each given version
 with a @dist.tarball@ (the field a version must have to project).

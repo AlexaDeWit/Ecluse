@@ -14,7 +14,7 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageInfo (..), PackageName)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), digestOf)
 import Ecluse.Core.Server.Cache (
@@ -30,6 +30,7 @@ import Ecluse.Core.Server.Cache (
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Resolve through the cache with an inert metrics port, over a fetch that cannot fail. A 'Left'
@@ -63,10 +64,6 @@ countingRender renders bytes = do
 -- | A filler body of the given size, for driving the assembled store's byte budget.
 mkBytes :: Int -> Char -> ByteString
 mkBytes n c = BS.replicate n (fromIntegral (ord c))
-
--- | A package name fixture. The metadata cache keys on package identity.
-pkg :: Text -> PackageName
-pkg = mkPackageName Npm Nothing
 
 -- | The two upstream sources of a packument, keyed by base URL.
 privateSource, publicSource :: Source
@@ -121,7 +118,7 @@ configBytes ttl size bytes =
 budget reads as a count of these entries.
 -}
 entryWeight :: Int
-entryWeight = weighCacheEntry (entry (pkg "weight-probe") "raw")
+entryWeight = weighCacheEntry (entry (unscopedNpm "weight-probe") "raw")
 
 {- | A metrics port that captures the most recent full-packument residency-gauge value, with a
 reader for it. Every other field is inert.
@@ -158,51 +155,51 @@ spec = do
     describe "resolveMetadata -- hit/miss" $ do
         it "fetches on a miss and returns the parsed metadata with its raw bytes" $ do
             c <- freshCache
-            result <- resolveMetadata c publicSource (pkg "is-odd") (pure (entry (pkg "is-odd") "raw"))
-            infoName (entryInfo result) `shouldBe` pkg "is-odd"
+            result <- resolveMetadata c publicSource (unscopedNpm "is-odd") (pure (entry (unscopedNpm "is-odd") "raw"))
+            infoName (entryInfo result) `shouldBe` unscopedNpm "is-odd"
             entryRaw result `shouldBe` cachedRaw "raw"
 
         it "serves a second resolution from cache without re-fetching" $ do
             c <- freshCache
             calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (pkg "left-pad") (countingFetch calls (pkg "left-pad") "raw")
-            _ <- resolveMetadata c publicSource (pkg "left-pad") (countingFetch calls (pkg "left-pad") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "left-pad") (countingFetch calls (unscopedNpm "left-pad") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "left-pad") (countingFetch calls (unscopedNpm "left-pad") "raw")
             readIORef calls `shouldReturn` 1
 
         it "returns the coherent pair the entry was cached with on a hit" $ do
             -- A hit serves the cached typed view and the exact bytes it was parsed from, never the
             -- caller's later fetch, so the second marker must not appear.
             c <- freshCache
-            _ <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "first"))
-            hit <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "second"))
+            _ <- resolveMetadata c publicSource (unscopedNpm "coherent") (pure (entry (unscopedNpm "coherent") "first"))
+            hit <- resolveMetadata c publicSource (unscopedNpm "coherent") (pure (entry (unscopedNpm "coherent") "second"))
             entryRaw hit `shouldBe` cachedRaw "first"
-            infoName (entryInfo hit) `shouldBe` pkg "coherent"
+            infoName (entryInfo hit) `shouldBe` unscopedNpm "coherent"
 
         it "caches per package, not globally (distinct keys both fetch)" $ do
             c <- freshCache
             calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (pkg "a") (countingFetch calls (pkg "a") "raw")
-            _ <- resolveMetadata c publicSource (pkg "b") (countingFetch calls (pkg "b") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "a") (countingFetch calls (unscopedNpm "a") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "b") (countingFetch calls (unscopedNpm "b") "raw")
             readIORef calls `shouldReturn` 2
 
         it "exposes a cached entry through cachedMetadata after a resolution" $ do
             c <- freshCache
-            _ <- resolveMetadata c publicSource (pkg "react") (pure (entry (pkg "react") "raw"))
-            cached <- cachedMetadata c publicSource (pkg "react")
-            (infoName . entryInfo <$> cached) `shouldBe` Just (pkg "react")
+            _ <- resolveMetadata c publicSource (unscopedNpm "react") (pure (entry (unscopedNpm "react") "raw"))
+            cached <- cachedMetadata c publicSource (unscopedNpm "react")
+            (infoName . entryInfo <$> cached) `shouldBe` Just (unscopedNpm "react")
 
         it "reports a miss through cachedMetadata before any resolution" $ do
             c <- freshCache
-            cachedMetadata c publicSource (pkg "never-fetched") `shouldReturn` Nothing
+            cachedMetadata c publicSource (unscopedNpm "never-fetched") `shouldReturn` Nothing
 
         it "re-fetches after a failed fetch rather than caching the failure" $ do
             c <- freshCache
             calls <- newIORef 0
             let failing = atomicModifyIORef' calls (\n -> (n + 1, ())) $> Left MetadataUndecodable
-            failed <- Cache.resolveMetadata noopMetricsPort c publicSource (pkg "flaky") failing
+            failed <- Cache.resolveMetadata noopMetricsPort c publicSource (unscopedNpm "flaky") failing
             failed `shouldBe` Left MetadataUndecodable
             -- The failed fetch left nothing cached, so the next resolution fetches again.
-            _ <- resolveMetadata c publicSource (pkg "flaky") (countingFetch calls (pkg "flaky") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "flaky") (countingFetch calls (unscopedNpm "flaky") "raw")
             readIORef calls `shouldReturn` 2
 
     describe "resolveMetadata -- per-source isolation" $ do
@@ -210,18 +207,18 @@ spec = do
             -- Two distinct sources serve the same package. Each source has its own
             -- entry, so neither origin sees the other's bytes.
             c <- freshCache
-            _ <- resolveMetadata c privateSource (pkg "shared") (pure (entry (pkg "shared") "private-doc"))
-            _ <- resolveMetadata c publicSource (pkg "shared") (pure (entry (pkg "shared") "public-doc"))
-            priv <- cachedMetadata c privateSource (pkg "shared")
-            pub <- cachedMetadata c publicSource (pkg "shared")
+            _ <- resolveMetadata c privateSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "private-doc"))
+            _ <- resolveMetadata c publicSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "public-doc"))
+            priv <- cachedMetadata c privateSource (unscopedNpm "shared")
+            pub <- cachedMetadata c publicSource (unscopedNpm "shared")
             (entryRaw <$> priv) `shouldBe` Just (cachedRaw "private-doc")
             (entryRaw <$> pub) `shouldBe` Just (cachedRaw "public-doc")
 
         it "fetches once per source even for the same package" $ do
             c <- freshCache
             calls <- newIORef 0
-            _ <- resolveMetadata c privateSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "priv")
-            _ <- resolveMetadata c publicSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "pub")
+            _ <- resolveMetadata c privateSource (unscopedNpm "two-origins") (countingFetch calls (unscopedNpm "two-origins") "priv")
+            _ <- resolveMetadata c publicSource (unscopedNpm "two-origins") (countingFetch calls (unscopedNpm "two-origins") "pub")
             -- Two distinct (source, package) keys mean two fetches, and neither reuses
             -- the other's entry.
             readIORef calls `shouldReturn` 2
@@ -229,10 +226,10 @@ spec = do
         it "a hit for one source never satisfies a miss for the other" $ do
             c <- freshCache
             calls <- newIORef 0
-            _ <- resolveMetadata c privateSource (pkg "iso") (countingFetch calls (pkg "iso") "priv")
+            _ <- resolveMetadata c privateSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "priv")
             -- The private entry is warm, but a public resolution still fetches its own.
-            _ <- resolveMetadata c publicSource (pkg "iso") (countingFetch calls (pkg "iso") "pub")
-            cachedMetadata c publicSource (pkg "iso") >>= \pub ->
+            _ <- resolveMetadata c publicSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "pub")
+            cachedMetadata c publicSource (unscopedNpm "iso") >>= \pub ->
                 (entryRaw <$> pub) `shouldBe` Just (cachedRaw "pub")
             readIORef calls `shouldReturn` 2
 
@@ -240,9 +237,9 @@ spec = do
         it "re-fetches once the short TTL has elapsed" $ do
             c <- newMetadataCache (config 0.05 100) -- 50 ms TTL
             calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (pkg "stale") (countingFetch calls (pkg "stale") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "stale") (countingFetch calls (unscopedNpm "stale") "raw")
             threadDelay 120000 -- 120 ms > TTL
-            _ <- resolveMetadata c publicSource (pkg "stale") (countingFetch calls (pkg "stale") "raw")
+            _ <- resolveMetadata c publicSource (unscopedNpm "stale") (countingFetch calls (unscopedNpm "stale") "raw")
             readIORef calls `shouldReturn` 2
 
     describe "size bound" $
@@ -252,8 +249,8 @@ spec = do
             (port, readEntries) <- recordingEntriesPort
             c <- newMetadataCache (config 60 4)
             for_ [1 .. 10 :: Int] $ \i -> do
-                _ <- Cache.resolveMetadata port c privateSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "priv")))
-                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "pub")))
+                _ <- Cache.resolveMetadata port c privateSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "priv")))
+                Cache.resolveMetadata port c publicSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "pub")))
             n <- readEntries
             n `shouldSatisfy` maybe False (<= 4)
 
@@ -264,7 +261,7 @@ spec = do
             (port, readResidency) <- recordingResidencyPort
             c <- newMetadataCache (config 60 100)
             for_ [1 .. 4 :: Int] $ \i ->
-                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (Right (entry (pkg (show i)) "raw")))
+                Cache.resolveMetadata port c publicSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "raw")))
             residency <- readResidency
             residency `shouldBe` Just (4 * entryWeight)
 
@@ -318,7 +315,7 @@ spec = do
                         , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
                         , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
                         }
-            let name = pkg "hot-head"
+            let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
             for_ ([1 .. 5] :: [Int]) $ \i ->
                 Cache.resolveVersion noopMetricsPort c publicSource name (mkVersion Npm (show i <> ".0.0")) (pure (Right Nothing))
@@ -353,7 +350,7 @@ spec = do
                         , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = assembledBytes}
                         }
             for_ ([1 .. 10] :: [Int]) $ \i -> do
-                let name = pkg ("filler-" <> show i)
+                let name = unscopedNpm ("filler-" <> show i)
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
                 _ <- Cache.resolveVersion port c publicSource name (mkVersion Npm "1.0.0") (pure (Right Nothing))
                 _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
@@ -374,7 +371,7 @@ spec = do
                         , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
                         , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
                         }
-            let name = pkg "recency"
+            let name = unscopedNpm "recency"
                 v n = mkVersion Npm (show (n :: Int) <> ".0.0")
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right Nothing))
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right Nothing))

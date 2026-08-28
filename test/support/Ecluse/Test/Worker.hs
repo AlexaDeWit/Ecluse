@@ -2,28 +2,29 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Worker-test fixtures: a ready-made ingest re-evaluation policy.
+{- | Worker-test fixtures: the shared npm re-evaluation bundle, and a ready-made
+admit-everything policy over it.
 
 The mirror worker re-runs current policy against a job's version before mirroring it (see
-"Ecluse.Core.Worker"). Any end-to-end worker test must therefore supply per-ecosystem
-policies. This module carries the admit-everything policy those tests reuse. Every version
-resolves present through an injected resolver, with no real fetch, and an always-allow
-rule clears it. The worker's ingest gate then admits, and the test exercises the
-fetch → verify → publish path.
+"Ecluse.Core.Worker"), so any end-to-end worker test must supply per-ecosystem policies.
+'npmPolicyWith' is the one 'WorkerPolicy' wiring those tests share: npm's real by-URL
+request formation, the SHA-256 admission floor, and an open tarball-host gate, with the
+clock, byte cap, publish capability, resolver, and rules left to the caller.
 -}
 module Ecluse.Test.Worker (
+    npmPolicyWith,
     admitAllPolicies,
     admitAllPoliciesCapped,
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
-import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
+import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -32,13 +33,34 @@ import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
+import Ecluse.Test.Rules (constRule)
 
-{- | An admit-everything npm worker policy: an injected resolver reports every version present and
-an always-allow rule clears it. The ingest gate is the shared admission oracle
-'Ecluse.Core.Package.Admission.admitArtifact', so the resolver synthesises the conventional
-@{name}-{version}.tgz@ artifact carrying the caller's digest set. The tamper gate verifies the
-fetched bytes against that set, so pass the true digests of the stub upstream's bytes, or a
-mismatching set to drive the tamper refusal.
+{- | One npm re-evaluation bundle at the caller's clock, artifact byte cap, publish capability,
+version resolver, and rules.
+-}
+npmPolicyWith ::
+    IO UTCTime ->
+    Int ->
+    MirrorPublish ->
+    (PackageName -> Version -> IO VersionEvaluation) ->
+    [PreparedRule] ->
+    WorkerPolicy
+npmPolicyWith clock artifactMaxBytes publish resolve rules =
+    WorkerPolicy
+        { wpResolveVersion = resolve
+        , wpRules = rules
+        , wpMinIntegrity = defaultMinIntegrity
+        , wpArtifactHostHonoured = const True
+        , -- npm's real by-URL request formation, as the composition root
+          -- projects it, so the fetch path forms requests as production does.
+          wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
+        , wpPublish = publish
+        , wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
+        , wpNow = clock
+        }
+
+{- | An admit-everything npm worker policy. Pass the true digests of the stub upstream's bytes,
+or a mismatching set to drive the tamper refusal.
 -}
 admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
 admitAllPolicies = admitAllPoliciesCapped (512 * 1024 * 1024)
@@ -50,27 +72,12 @@ admitAllPoliciesCapped :: Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicie
 admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
     Map.singleton
         Npm
-        WorkerPolicy
-            { wpResolveVersion = \name version -> pure (VersionPresent (mirrorableDetails name version))
-            , wpRules = [allowAll]
-            , wpMinIntegrity = defaultMinIntegrity
-            , wpArtifactHostHonoured = const True
-            , -- npm's real by-URL request formation, as the composition root
-              -- projects it, so the fetch path forms requests as production does.
-              wpBuildArtifactRequest = \_ _ baseUrl token -> artifactRequestByUrl baseUrl token
-            , wpPublish = publish
-            , wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
-            , wpNow = getCurrentTime
-            }
+        (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve [allowAll])
   where
+    resolve name version = pure (VersionPresent (mirrorableDetails name version))
+
     allowAll :: PreparedRule
-    allowAll =
-        PreparedRule
-            { prepName = "test-allow-all"
-            , prepPrecedence = 0
-            , prepResilience = Nothing
-            , prepEval = \_ _ -> pure (Allow "admitted for test")
-            }
+    allowAll = constRule "test-allow-all" (Allow "admitted for test")
 
     -- The sample snapshot renamed to the conventional @{name}-{version}.tgz@ and given the caller's
     -- digest set, so file selection passes and the tamper gate verifies against exactly this set.

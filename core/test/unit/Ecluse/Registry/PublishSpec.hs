@@ -9,13 +9,9 @@ import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Data.List.NonEmpty qualified as NE
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA1), PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishFault (PublishFetch),
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
@@ -26,8 +22,8 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unsafeHash, validSha1)
+import Ecluse.Test.Package (v1_0_0)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
 import Ecluse.Test.Stub (Stub, headerValue, lastCaptured, stubBaseUrl, withStub)
 
 spec :: Spec
@@ -48,7 +44,7 @@ spec = do
         it "mints the bearer per publish and attaches it to the wire" $
             withStub status200 "{}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
-                _ <- mpPublishArtifact publish isOdd v1 dummyArtifact "bytes"
+                _ <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
                 captured <- lastCaptured stub
                 headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
                 minted <- readIORef mints
@@ -61,7 +57,7 @@ spec = do
 
         it "reports an unformable publish URL as a PublishFault value, never thrown" $ do
             publish <- publishAt ""
-            outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact "bytes"
+            outcome <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
             outcome `shouldSatisfy` isUrlUnformablePublish
 
         it "reports a probe transport failure as a FetchTransport value, never thrown" $ do
@@ -96,7 +92,7 @@ spec = do
                             , ptLimits = defaultLimits{maxBodyBytes = 16}
                             }
                     publish = newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec
-                outcome <- mpPublishArtifact publish isOdd v1 dummyArtifact "bytes"
+                outcome <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
                 outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
@@ -110,7 +106,7 @@ spec = do
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
         it "the publish request attaches the bearer at the single attach point with redirects disabled" $
-            case pcPublishRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd v1 dummyArtifact "bytes" of
+            case pcPublishRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd v1_0_0 dummyArtifact "bytes" of
                 Left err -> fail ("expected a formed publish request, got " <> show err)
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
@@ -134,20 +130,6 @@ publishAt targetUrl = do
     manager <- Client.newManager Client.defaultManagerSettings
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
     pure (newMirrorPublish transport targetUrl npmPublishCodec)
-
-isOdd :: PackageName
-isOdd = mkPackageName Npm Nothing "is-odd"
-
-v1 :: Version
-v1 = mkVersion Npm "1.0.0"
-
-dummyArtifact :: MirrorArtifact
-dummyArtifact =
-    MirrorArtifact
-        { maFilename = "is-odd-1.0.0.tgz"
-        , maHashes = NE.singleton (unsafeHash SHA1 validSha1)
-        , maSize = Nothing
-        }
 
 isUrlUnformableFetch :: Either FetchFault a -> Bool
 isUrlUnformableFetch = \case
