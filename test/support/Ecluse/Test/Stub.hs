@@ -18,6 +18,7 @@ module Ecluse.Test.Stub (
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
+import Data.List (lookup)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status)
 import Network.Wai (

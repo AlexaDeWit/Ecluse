@@ -30,6 +30,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
+import Data.List (lookup)
 import Network.HTTP.Types (Header, hAuthorization, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
 import Network.Wai (Request (requestHeaders))

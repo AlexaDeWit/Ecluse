@@ -101,6 +101,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (LogEnv)
