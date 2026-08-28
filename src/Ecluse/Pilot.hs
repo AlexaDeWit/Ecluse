@@ -14,7 +14,6 @@ module Ecluse.Pilot (
 import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadMask)
 import Katip (KatipContext, LogEnv, Severity (InfoS), logFM, ls)
-import Katip.Monadic (runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
@@ -26,7 +25,6 @@ import Ecluse.Config (
     Config (configApp),
     unUrl,
  )
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
@@ -36,7 +34,8 @@ import Ecluse.Core.Supervision (
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     superviseLoop,
  )
-import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
+import Ecluse.Runtime.Log (moduleContext)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, raceServerAgainstLoop, runWarp)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
@@ -48,17 +47,17 @@ server's graceful return on shutdown must cancel it, resuming from the remote ar
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
     let cfg = probeServerConfig (beConfig bootEnv)
-    runKatipContextT (beLogEnv bootEnv) (moduleField "Ecluse.Pilot") mempty $ do
+    moduleContext (beLogEnv bootEnv) "Ecluse.Pilot" $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show (scPort cfg) :: String))
         raceServerAgainstLoop
             (liftIO $ runWarp cfg probeOnlyApplication)
-            (runExportLoop (beTelemetry bootEnv) (beAmbient bootEnv) (beConfigFull bootEnv))
+            (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfigFull bootEnv))
 
 {- | Compile and upload one OSV artifact per sync interval, or idle with no bucket configured.
 Every fault is transient, because a cycle has no wiring fault to fail up on.
 -}
-runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AmbientAws -> Config -> m ()
-runExportLoop telemetry ambient config = do
+runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> Config -> m ()
+runExportLoop telemetry s3Endpoint config = do
     let appCfg = configApp config
         intervalMicros = (round (advCompileInterval (cfgAdvisories appCfg)) :: Int) * 1000000
     case advBucket (cfgAdvisories appCfg) of
@@ -78,14 +77,14 @@ runExportLoop telemetry ambient config = do
                         , spBackoff = BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros}
                         }
                 $ do
-                    runResourceT (exportEcosystem metrics Npm telemetry ambient appCfg bucketName)
+                    runResourceT (exportEcosystem metrics Npm telemetry s3Endpoint appCfg bucketName)
                     threadDelay intervalMicros
 
 {- | One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
 @npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
 -}
-exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> AmbientAws -> AppConfig -> Text -> m ()
-exportEcosystem metrics eco telemetry ambient appCfg bucketName = do
+exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> Maybe AwsEndpoint -> AppConfig -> Text -> m ()
+exportEcosystem metrics eco telemetry s3Endpoint appCfg bucketName = do
     logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
     dbPath <-
         compileOsvToSqlite
@@ -94,7 +93,7 @@ exportEcosystem metrics eco telemetry ambient appCfg bucketName = do
             (advDataDir (cfgAdvisories appCfg))
             (ecosystemName eco)
             (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (ecosystemName eco))
-    exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucketName dbPath
+    exportToS3 (telemetryTracerProvider telemetry) s3Endpoint bucketName dbPath
 
 -- | Options for the one-shot 'runPilotCompile' mode.
 data PilotCompileOptions = PilotCompileOptions
@@ -122,18 +121,18 @@ instance Exception PilotUploadUnconfigured
 {- | Run a single OSV compilation, optionally upload the artifact, and return its path. An
 unfetchable or unparseable source propagates, so the command exits non-zero and stays scriptable.
 -}
-runPilotCompile :: LogEnv -> Telemetry -> AmbientAws -> AppConfig -> PilotCompileOptions -> IO FilePath
-runPilotCompile logEnv telemetry ambient appCfg opts = do
+runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> AppConfig -> PilotCompileOptions -> IO FilePath
+runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
     let url = fromMaybe (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (pcoEcosystem opts)) (pcoSource opts)
     metrics <- newMetrics telemetry
     -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
     -- outside it still writes its artifact, and records no series.
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
-    runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
+    moduleContext logEnv "Ecluse.Pilot" $
         runResourceT $ do
             dbFile <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
             when (pcoUpload opts) $
                 case advBucket (cfgAdvisories appCfg) of
                     Nothing -> throwIO PilotUploadUnconfigured
-                    Just bucket -> exportToS3 (telemetryTracerProvider telemetry) (ambientAwsEndpointUrl ambient >>= parseEndpointUrl) bucket dbFile
+                    Just bucket -> exportToS3 (telemetryTracerProvider telemetry) s3Endpoint bucket dbFile
             pure dbFile

@@ -74,7 +74,8 @@ module Ecluse.Runtime.Log (
     -- * Structured context
     moduleField,
 
-    -- * Plain-IO log lines
+    -- * Log lines outside a handler
+    moduleContext,
     logLine,
     moduleLog,
 
@@ -116,7 +117,7 @@ import Katip (
     sl,
     unLogStr,
  )
-import Katip.Monadic (runKatipContextT)
+import Katip.Monadic (KatipContextT, runKatipContextT)
 import Katip.Scribes.Handle (ItemFormatter, bracketFormat, mkHandleScribeWithFormatter)
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
@@ -311,16 +312,22 @@ log site's payload so a reader filters the stream by emitter without the @katip@
 moduleField :: Text -> SimpleLogPayload
 moduleField = sl "module"
 
-{- | Log one line through a composition-root 'LogEnv' under @payload@. The boot and worker
-phases hold no @Handler@ reader, so they raise a line this way.
+{- | Run @action@ in a context naming its emitting module. A phase that holds no @Handler@
+reader, such as boot or a worker loop, enters the log stream this way.
+-}
+moduleContext :: LogEnv -> Text -> KatipContextT m a -> m a
+moduleContext logEnv name = runKatipContextT logEnv (moduleField name) mempty
+
+{- | Log one line through a composition-root 'LogEnv' under @payload@, for a caller whose
+context is a payload rather than a module name.
 -}
 logLine :: LogEnv -> SimpleLogPayload -> Severity -> Text -> IO ()
 logLine logEnv payload severity message =
     runKatipContextT logEnv payload mempty (logFM severity (ls message))
 
--- | 'logLine' under a 'moduleField' naming the emitting module and nothing else.
+-- | One line under a 'moduleField' naming the emitting module and nothing else.
 moduleLog :: LogEnv -> Text -> Severity -> Text -> IO ()
-moduleLog logEnv name = logLine logEnv (moduleField name)
+moduleLog logEnv name severity message = moduleContext logEnv name (logFM severity (ls message))
 
 {- | The unified-service identity stamped onto every log line, resolved by
 "Ecluse.Runtime.Telemetry.Resolve" so logs and traces share one identity.

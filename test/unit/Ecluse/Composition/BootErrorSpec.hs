@@ -26,11 +26,17 @@ spec = describe "renderBootError" $
         renderBootError (QueueUrlUnrecognised "https://queue.example.test/q")
             `shouldSatisfy` infixed "https://queue.example.test/q"
         renderBootError (QueueUrlUnrecognised "x") `shouldSatisfy` infixed "projects/{project}/topics/{topic}"
-        -- The endpoint-override render names the variable, never the value it refused.
+        -- Each endpoint-override render names its variable, never the value it refused.
         renderBootError (QueueEndpointMalformed (mkSecret "http://u:tok@h"))
-            `shouldSatisfy` infixed "endpoint"
+            `shouldSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         renderBootError (QueueEndpointMalformed (mkSecret "http://u:tok@h"))
             `shouldNotSatisfy` infixed "tok"
+        renderBootError (AwsEndpointMalformed (mkSecret "http://u:tok@h"))
+            `shouldSatisfy` infixed "AWS_ENDPOINT_URL"
+        renderBootError (AwsEndpointMalformed (mkSecret "http://u:tok@h"))
+            `shouldNotSatisfy` infixed "tok"
+        renderBootError (AwsEndpointMalformed (mkSecret "http://u:tok@h"))
+            `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"

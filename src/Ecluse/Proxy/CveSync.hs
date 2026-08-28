@@ -29,12 +29,12 @@ import Ecluse.Config (
     AdvisoriesSettings (advBucket, advDataDir, advMaxDatabaseBytes, advPollInterval),
     AppConfig (cfgAdvisories, cfgMounts),
  )
-import Ecluse.Config.Ambient (AmbientAws (ambientAwsEndpointUrl), parseEndpointUrl)
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, s3CveFetchFor)
 import Ecluse.Runtime.Log (logLine, moduleField)
 
@@ -93,14 +93,14 @@ data CveSyncHandle = CveSyncHandle
 when no vulnerability-database bucket is configured. An operator who mounts an ecosystem the build
 does not ship declares an artifact that never arrives, so the pod never reports ready.
 -}
-planCveSync :: LogEnv -> AmbientAws -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv ambient appCfg = case advBucket (cfgAdvisories appCfg) of
+planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv s3Endpoint appCfg = case advBucket (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just bucket -> do
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
-        cveSource <- newS3CveSource (ambientAwsEndpointUrl ambient >>= parseEndpointUrl)
+        cveSource <- newS3CveSource s3Endpoint
         Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource bucket) (Map.keys (cfgMounts appCfg))
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one

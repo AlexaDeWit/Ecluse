@@ -14,7 +14,6 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Ecluse.Composition.Support (expectAppConfig)
-import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -32,7 +31,7 @@ spec = do
                     runPilotCompile
                         le
                         telemetryDisabled
-                        (ambientAwsFromEnv [])
+                        Nothing
                         appCfg
                         (compileOptions (stubBaseUrl stub) outDir)
                 takeDirectory dbFile `shouldBe` outDir
@@ -52,7 +51,7 @@ spec = do
                         runPilotCompile
                             le
                             telemetryDisabled
-                            (ambientAwsFromEnv [])
+                            Nothing
                             appCfg
                             (compileOptions (stubBaseUrl stub) outDir){pcoUpload = True}
                 action `shouldThrow` (== PilotUploadUnconfigured)

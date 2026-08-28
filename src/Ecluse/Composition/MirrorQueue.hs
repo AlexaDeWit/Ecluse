@@ -25,8 +25,6 @@ module Ecluse.Composition.MirrorQueue (
     deadLetterTerminusWarning,
 ) where
 
-import Data.Text qualified as T
-
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Config (
     AppConfig (..),
@@ -38,7 +36,6 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
 import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
-import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
@@ -46,7 +43,8 @@ import Ecluse.Core.Queue (
     retiringDelivery,
  )
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
+import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsEndpoint, sqsMaxReceiveCount), defaultSqsConfig)
 
 {- | Whether this deployment runs a mirror runtime at all. A serve-only deployment never
 consults the queue configuration, so it boots with no queue variables set.
@@ -116,15 +114,10 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
     -- AWS_REGION, required only under the endpoint override, because a real SQS URL
     -- carries its region in its host. A blank value counts as absent.
     regionE :: Either BootError Text
-    regionE = case T.strip <$> ambientAwsRegion ambient of
-        Just region | not (T.null region) -> Right region
-        _ -> Left QueueRegionMissing
+    regionE = maybeToRight QueueRegionMissing (nonBlank =<< ambientAwsRegion ambient)
 
-    endpointE :: Text -> Either BootError SqsEndpoint
-    endpointE override = case parseEndpointUrl override of
-        Nothing -> Left (QueueEndpointMalformed (mkSecret override))
-        Just (secure, host, port) ->
-            Right SqsEndpoint{endpointSecure = secure, endpointHost = host, endpointPort = port}
+    endpointE :: Text -> Either BootError AwsEndpoint
+    endpointE = first QueueEndpointMalformed . parseEndpointUrl
 
 {- | The loud boot warning a 'MirrorQueuePlan' warrants, or 'Nothing' for a durable
 backend. The composition root logs the 'Just' at @WarningS@ when it selects the plan.

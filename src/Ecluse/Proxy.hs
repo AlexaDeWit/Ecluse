@@ -123,7 +123,7 @@ runProxy bootEnv = do
     providers <- initCredentialProviders credentialReporters config >>= orExit (T.unlines . map renderBootError)
     -- Each mount ecosystem syncs independently, so one missing artifact never holds back
     -- another. Without a bucket the map is empty, rules abstain, and readiness is ungated.
-    cveSyncPlan <- planCveSync logEnv (beAmbient bootEnv) env
+    cveSyncPlan <- planCveSync logEnv (beS3Endpoint bootEnv) env
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     -- Where the plan shed the capability count (the nursery was the pressure),
     -- apply it in-process before the parallel machinery spins up.

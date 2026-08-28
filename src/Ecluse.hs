@@ -133,7 +133,7 @@ runCommand = \case
     RunPilot -> withBootEnv runPilot
     RunPilotCompile opts ->
         withBootEnv $ \bootEnv ->
-            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beAmbient bootEnv) (beConfig bootEnv) opts)
+            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfig bootEnv) opts)
     RunDredger -> withBootEnv runDredger
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so

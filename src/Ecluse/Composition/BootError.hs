@@ -55,6 +55,10 @@ data BootError
       endpoint URL. It can carry a credential, so the value stays redacted behind the secret.
       -}
       QueueEndpointMalformed Secret
+    | {- | The S3 advisory client's endpoint override (@AWS_ENDPOINT_URL@) is not a parseable
+      endpoint URL. Refused rather than dropped, so a typo never silently dials real AWS.
+      -}
+      AwsEndpointMalformed Secret
     | {- | The eager boot-time CodeArtifact mint threw. Carries the rendered exception, which
       tells a transient AWS error from a permanent one to fix.
       -}
@@ -93,9 +97,12 @@ renderBootError = \case
         "ECLUSE_QUEUE__URL names no queue backend this build knows: "
             <> url
             <> " (expected an SQS queue URL, https://sqs.{region}.amazonaws.com/{account}/{queue}, or a Pub/Sub topic resource, projects/{project}/topics/{topic}; unset it to run the bounded in-memory queue)"
+    -- Both endpoint values can carry a credential, so each reason names its variable,
+    -- never the URL.
     QueueEndpointMalformed{} ->
-        -- The value can carry a credential, so the reason names the variable, never the URL.
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL"
+    AwsEndpointMalformed{} ->
+        "the AWS endpoint override (AWS_ENDPOINT_URL) is not a valid endpoint URL"
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail

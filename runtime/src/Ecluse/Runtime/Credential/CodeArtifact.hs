@@ -32,6 +32,7 @@ module Ecluse.Runtime.Credential.CodeArtifact (
 
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact.GetAuthorizationToken qualified as CA
+import Amazonka.CodeArtifact.Types qualified as CAT
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Time (getCurrentTime)
 import Lens.Micro (Lens', (?~), (^.))
@@ -44,6 +45,7 @@ import Ecluse.Core.Credential.Refresh (
     defaultRefreshConfig,
     refreshingProvider,
  )
+import Ecluse.Runtime.Aws.Env (newAwsEnv)
 
 {- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token. The refresh
 breaker catches 'SomeException' to count failures, so this unexported leaf throws (STYLE.md 11.4).
@@ -81,7 +83,9 @@ at construction rather than on the first mirror write.
 -}
 newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider reporters cfg =
-    AWS.newEnv AWS.discover >>= \env -> providerForEnv reporters env cfg
+    -- No region here: 'providerForEnv' scopes the env it is handed, so a test can supply
+    -- its own env and get the same scoping.
+    newAwsEnv Nothing Nothing CAT.defaultService >>= \env -> providerForEnv reporters env cfg
 
 {- | Build the provider over a caller-supplied @amazonka@ 'Env', minting through the policy of
 "Ecluse.Core.Credential.Refresh". Exposed so a test can drive the mint against a stub endpoint.

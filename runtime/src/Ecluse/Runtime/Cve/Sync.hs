@@ -76,6 +76,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, asmpSyncDuration), timedSeconds)
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
@@ -310,8 +311,8 @@ newtype S3CveSource = S3CveSource
     -- ^ A 'CveFetch' against one bucket, object key, and byte cap, over the captured env.
     }
 
--- | Build an 'S3CveSource' over one S3 @amazonka@ env, honouring the pre-parsed endpoint override.
-newS3CveSource :: Maybe (Bool, Text, Int) -> IO S3CveSource
+-- | Build an 'S3CveSource' over one S3 @amazonka@ env, honouring the resolved endpoint override.
+newS3CveSource :: Maybe AwsEndpoint -> IO S3CveSource
 newS3CveSource mEndpoint = do
     awsEnv <- buildS3Env mEndpoint
     pure (S3CveSource (s3CveFetch awsEnv))
