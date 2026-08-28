@@ -26,8 +26,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai (Application)
 import Network.Wai.Test (SResponse (simpleBody))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -55,7 +54,7 @@ import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDb
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
-import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, status)
+import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
 import Ecluse.Test.Poll (pollUntil)
@@ -64,7 +63,8 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
 import Ecluse.Test.Server.Mount (npmServeDeps)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (stubBaseUrl, stubLocalhostUrl, withStub)
+import Ecluse.Test.Wai (status)
 
 import Ecluse.Runtime.Queue.Sqs (SqsEndpoint (endpointHost, endpointPort))
 
@@ -199,24 +199,16 @@ proxyApp ruleDeps privateUrl publicUrl = do
 Its publish time is one day before the fixed clock, so only the fast lane can admit it.
 -}
 withPublicUpstream :: (Text -> IO a) -> IO a
-withPublicUpstream k = testWithApplication (pure app) (k . localhost)
-  where
-    app :: Application
-    app _req respond = respond (responseLBS status200 [] (encode packument))
+withPublicUpstream k = withStub status200 (encode packument) (k . stubLocalhostUrl)
 
 {- The private upstream resolves with no versions, so the public leg and the rules decide.
 A 404 would turn a total public denial into a retryable 503, hiding the 403 this test pins. -}
 withPrivateUpstream :: (Text -> IO a) -> IO a
-withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
-  where
-    app :: Application
-    app _req respond =
-        respond
-            ( responseLBS
-                status200
-                []
-                (encode (object ["name" .= ("corpus-vuln" :: Text), "dist-tags" .= object [], "versions" .= object []]))
-            )
+withPrivateUpstream k = withStub status200 (encode emptyPackument) (k . stubLocalhostUrl)
+
+-- A well-formed packument naming no versions at all.
+emptyPackument :: Value
+emptyPackument = object ["name" .= ("corpus-vuln" :: Text), "dist-tags" .= object [], "versions" .= object []]
 
 packument :: Value
 packument =

@@ -7,8 +7,8 @@ module Ecluse.Security.EgressOriginSpec (spec) where
 import Data.Aeson (Value, encode, object, (.=))
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200, status302)
-import Network.Wai (responseLBS)
-import Network.Wai.Handler.Warp (Port, testWithApplication)
+import Network.HTTP.Types.Header (hLocation)
+import Network.Wai.Handler.Warp (Port)
 import Test.Hspec
 
 import Ecluse.Core.Credential (mkSecret)
@@ -26,6 +26,7 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 
 {- | The data-plane egress posture, driven through the real npm fetch path against an
 in-process upstream on loopback.
@@ -84,16 +85,12 @@ clientConfig manager port token =
 
 -- Run an action against an in-process upstream serving the packument on loopback.
 withUpstream :: (Port -> IO a) -> IO a
-withUpstream = testWithApplication (pure app)
-  where
-    app _request respond = respond (responseLBS status200 [] (encode packument))
+withUpstream k = withStub status200 (encode packument) (k . stubPort)
 
 -- Run an action against an in-process upstream that answers 302 to an off-allowlist host.
 withRedirector :: (Port -> IO a) -> IO a
-withRedirector = testWithApplication (pure app)
-  where
-    app _request respond =
-        respond (responseLBS status302 [("Location", "https://evil.example.test/elsewhere")] "")
+withRedirector k =
+    withStubHeaders status302 [(hLocation, "https://evil.example.test/elsewhere")] "" (k . stubPort)
 
 -- A minimal packument body the upstream serves. The test asserts on the bytes, not
 -- their structure, so an opaque object is enough.

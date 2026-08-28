@@ -11,8 +11,10 @@ pure core 'ecluse-test-support'.
 module Ecluse.Runtime.Test.Support (
     newTestEnv,
     newTestEnvWith,
+    newTestEnvLogging,
 ) where
 
+import Katip (LogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
 import Ecluse.Core.Queue (MirrorQueue)
@@ -37,9 +39,16 @@ newTestEnv = do
 else takes its default.
 -}
 newTestEnvWith :: MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-newTestEnvWith queue (manager, privateManager) telemetry = do
-    metadataCache <- newMetadataCache defaultCacheConfig
+newTestEnvWith queue managers telemetry = do
     logEnv <- newTestLogEnv
+    newTestEnvLogging logEnv queue managers telemetry
+
+{- | 'newTestEnvWith' over a caller-supplied log environment, so a test can capture what the
+serve path logged.
+-}
+newTestEnvLogging :: LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
+newTestEnvLogging logEnv queue (manager, privateManager) telemetry = do
+    metadataCache <- newMetadataCache defaultCacheConfig
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
     newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat

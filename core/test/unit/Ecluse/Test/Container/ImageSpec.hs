@@ -25,6 +25,9 @@ spec =
         it "rejects a bare repository name with no digest at all" $
             mkPinnedImageRef "nginx" `shouldSatisfy` isLeft
 
+        it "rejects a well-formed digest with no repository name before it" $
+            mkPinnedImageRef ("@sha256:" <> hex) `shouldSatisfy` isLeft
+
         it "rejects a short digest" $
             mkPinnedImageRef ("nginx@sha256:" <> T.take 40 hex) `shouldSatisfy` isLeft
 

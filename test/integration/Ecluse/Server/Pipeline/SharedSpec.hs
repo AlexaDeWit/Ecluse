@@ -10,30 +10,21 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Ecluse.Server.Pipeline.TestSupport
-import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (impureThrow, throwString)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Runtime.Env (newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (noFaultReporter)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
 import Katip (Environment (Environment), closeScribes)
-import Network.Wai.Handler.Warp (testWithApplication)
 
 spec :: Spec
 spec = do
@@ -229,34 +220,19 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0", "3.0.0"]
 
+-- The serve path's JSON log lines for one request, over an upstream whose document breaches a
+-- bound. The proxy runs on a capturing log environment, so the assertions read real output.
 captureBreachLog :: LByteString -> IO Text
 captureBreachLog privateBody = do
     privateUp <- servingUpstream privateBody
     publicUp <- failingUpstream
     queue <- newTestMemoryQueue
-    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
-        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
-            manager <- newManager defaultManagerSettings
-            metadataCache <- newMetadataCache defaultCacheConfig
-            logEnv <- newLogEnv JsonLog InfoLevel (DdContext "ecluse" Nothing Nothing Nothing) (Environment "test")
-            heartbeat <- newWorkerHeartbeat
-            admission <- testServeAdmission
-            env <- newEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat
-            baseDeps <- deps privatePort publicPort Nothing
-            let cfg =
-                    mkServerConfig
-                        [ MountBinding
-                            { bindingPrefix = "npm" :| []
-                            , bindingRouter = npmRouter
-                            , bindingCredential = npmCredential
-                            , bindingPackumentDeps = withLimits tightLimits baseDeps
-                            , bindingPublishDeps = Nothing
-                            }
-                        ]
-            captureStdout $ do
-                _ <- getThing Nothing (application cfg env)
-                _ <- closeScribes logEnv
-                pure ()
+    logEnv <- newLogEnv JsonLog InfoLevel (DdContext "ecluse" Nothing Nothing Nothing) (Environment "test")
+    withProxyOver logEnv queue privateUp publicUp Nothing (const []) (withLimits tightLimits) $ \app _env _port ->
+        captureStdout $ do
+            _ <- getThing Nothing app
+            _ <- closeScribes logEnv
+            pure ()
 
 boundsLogSpec :: Spec
 boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do

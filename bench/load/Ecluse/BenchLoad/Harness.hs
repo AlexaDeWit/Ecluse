@@ -38,8 +38,7 @@ than the running maximum of every scenario before it.
 The load benchmarks tier never asserts a throughput pass\/fail. A human reads and trends
 the figures, and nothing compares them to a threshold. The one red state is a __literal
 failure__: the harness cannot boot, @oha@ cannot run, or a scenario served nothing. The
-harness surfaces that as a thrown exception (a non-zero exit). See
-@docs\/architecture\/performance.md@.
+harness surfaces that as a thrown exception (a non-zero exit).
 -}
 module Ecluse.BenchLoad.Harness (
     -- * Load knobs

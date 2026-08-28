@@ -37,8 +37,9 @@ import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits,
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
-import Ecluse.Server.Pipeline.TestSupport (localhost, newTestEnvWithQueue)
+import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Wai (localhost)
 import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped)
 
 {- | Run the supervised worker against the queue until @done@ holds, then cancel it with

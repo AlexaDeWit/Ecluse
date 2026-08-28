@@ -10,8 +10,7 @@ real 'Ecluse.Server.application' on @warp@ over stub upstreams and drives it wit
 It therefore measures system behaviour (saturation, latency tails, GC pauses) rather than
 a pure function's cost. It is __inform-only__ and __never gates__. A human reads and
 trends the figures. The only red state is a literal failure: the harness cannot boot,
-@oha@ cannot run, or a scenario served nothing. See
-@docs\/architecture\/performance.md@.
+@oha@ cannot run, or a scenario served nothing.
 
 == Two passes, one baseline
 

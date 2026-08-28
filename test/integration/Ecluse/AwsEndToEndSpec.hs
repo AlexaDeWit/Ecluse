@@ -45,11 +45,13 @@ import Ecluse.Integration.WorkerLoop (
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
-import Ecluse.Server.Pipeline.TestSupport (getPath, localhost, selfBaseUrl, servedVersions, status)
+import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
+import Ecluse.Test.Stub (stubLocalhostUrl, withStub)
+import Ecluse.Test.Wai (localhost, selfBaseUrl, servedVersions, status)
 
 {- | The AWS-backed path end to end through the real composition root: the serve
 'Ecluse.Server.application' and the mirror worker 'Ecluse.runWorker' over a real SQS queue in a
@@ -163,10 +165,7 @@ withPublicUpstream k = testWithApplication (pure app) (k . localhost)
 -- The private upstream: a clean 404 miss for everything, so every request falls
 -- through to the public origin.
 withPrivateUpstream :: (Text -> IO a) -> IO a
-withPrivateUpstream k = testWithApplication (pure app) (k . localhost)
-  where
-    app :: Application
-    app _req respond = respond (responseLBS status404 [] "{}")
+withPrivateUpstream k = withStub status404 "{}" (k . stubLocalhostUrl)
 
 -- The artifact bytes the public upstream serves and the worker verifies + publishes.
 tarballBytes :: LByteString

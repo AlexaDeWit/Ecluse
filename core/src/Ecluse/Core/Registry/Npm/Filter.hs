@@ -56,8 +56,8 @@ Presence in the packument /is/ availability.
 
 The fused single pass is deliberate. Restricting, assembling, and rewriting as
 separate whole-document edits would rebuild a many-version packument several times
-per request. This transform sits on the serve path's hot loop (see
-@docs\/architecture\/performance.md@). The rewrite gates the interpolated name.
+per request. This transform sits on the serve path's hot loop. The rewrite gates the
+interpolated name.
 'safeName' reads the base document's own @name@ through the npm name grammar before anything
 interpolates it, and a document with no usable name has no URLs rewritten.
 -}
