@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.WireSupport (
     checkNameAgreement,
     partitionLenient,
  )
+import Ecluse.Test.Package (unscopedNpm)
 
 {- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection builds on.
 "Ecluse.Registry.Npm.ProjectSpec" covers the npm projection end to end.
