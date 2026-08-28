@@ -34,8 +34,8 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Wai (localhost)
 
-{- | What the stub captured from the request it last served: enough to assert the
-method, path, and headers Écluse sent.
+{- | What the stub captured from one request it served: enough to assert the method,
+path, and headers Écluse sent.
 -}
 data Captured = Captured
     { capMethod :: ByteString
@@ -79,9 +79,8 @@ status and body. It binds a free port for the action's duration, so tests never 
 withStub :: Status -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []
 
-{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@, for example,
-and the @http-client@ body reader decompresses the served bytes. A test can then assert
-that the bounded read bounds /decompressed/ size, not wire size.
+{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@ and the @http-client@ body
+reader decompresses, so a test can assert the bounded read bounds /decompressed/ size, not wire size.
 -}
 withStubHeaders :: Status -> [Header] -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStubHeaders status extraHeaders body action = do

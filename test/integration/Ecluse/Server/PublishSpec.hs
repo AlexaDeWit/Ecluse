@@ -127,9 +127,8 @@ matchingVersionBody :: LByteString
 matchingVersionBody =
     "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
 
--- Publish documents whose declared body identity disagrees with the in-scope URL name
--- @\@acme\/widget@ on exactly one field. This is the anti-shadowing bypass: a crafted
--- body names a package the scope guard never authorised.
+-- Publish documents whose declared identity disagrees with the in-scope URL name
+-- @\@acme\/widget@ on one field: the anti-shadowing bypass a crafted body attempts.
 mismatchedIdBody :: LByteString
 mismatchedIdBody =
     "{\"_id\":\"@victim/target\",\"name\":\"@acme/widget\",\"versions\":{}}"
@@ -145,10 +144,8 @@ mismatchedVersionNameBody =
 spec :: Spec
 spec = describe "first-party publish path → publication target (S52)" $ do
     it "503s a publish shed at the aggregate body-byte budget while the capacity is held" $ do
-        -- A target that parks the first publish mid-relay while it holds the whole
-        -- budget. With zero waiter room the second publish sheds at the door, in the
-        -- read path's vocabulary of server capacity. The first completes normally once
-        -- the test releases it.
+        -- A target that parks the first publish while it holds the whole budget. With zero
+        -- waiter room the second sheds at the door, and the first completes once released.
         gate <- newEmptyMVar
         arrived <- newIORef (0 :: Int)
         let blockingApp req respond = do
@@ -172,9 +169,8 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
 
     it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
-        -- A chunked body declares no length, so the route's counted bounded read enforces the cap
-        -- as a value: a fail-closed 413, never a throw. The 413 excludes the perimeter's neutral
-        -- 500 fault path, which proves the perimeter never saw an over-cap signal.
+        -- A chunked body declares no length, so the counted bounded read enforces the cap as a
+        -- value: a fail-closed 413, never a throw through the perimeter's neutral 500.
         app <- cappedProxyWith 8
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
@@ -268,9 +264,8 @@ spec = describe "first-party publish path → publication target (S52)" $ do
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 502
 
-    -- The body-name agreement leg of the anti-shadowing guard. An in-scope URL whose body
-    -- declares a different package would publish a name the scope guard never authorised, so
-    -- the guard checks @_id@, top-level @name@, and @versions[].name@, and 403s before any relay.
+    -- An in-scope URL whose body declares a different package would publish a name the scope
+    -- guard never authorised, so the guard checks @_id@, @name@, and @versions[].name@ first.
     it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))

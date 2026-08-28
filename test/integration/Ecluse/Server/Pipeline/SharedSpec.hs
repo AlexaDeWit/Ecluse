@@ -265,8 +265,7 @@ perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
     it "answers a bottoming assembly with the route's declared neutral 500, never a torn session" $ do
         -- The assembly hook bottoms when the render forces it, an invariant break escaping the
-        -- handler pre-commit. The perimeter answers with the neutral 500 carrying no fault detail,
-        -- and the session survives.
+        -- handler pre-commit. The perimeter answers a neutral 500 and the session survives.
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue

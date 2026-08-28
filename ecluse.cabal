@@ -26,11 +26,10 @@ build-type:    Simple
 -- `bench/corpus/npm/*.json` is the curated real-world packument corpus the benchmarks
 -- read at run time. The corpus stays frozen, pinned by `bench/corpus/pins.json` and
 -- re-captured deliberately with `task gen-bench-corpus`. `bench/corpus/pins.json` is
--- the shared registry
--- catalogue, holding the capture pins and the smoke curated names, read by the Node
--- capture script and Ecluse.Test.RegistryCapture. `acceptance/criteria.json` is the
--- version-controlled acceptance budget for the live performance-acceptance harness
--- (Ecluse.Acceptance and the perf-acceptance executable).
+-- the shared registry catalogue, holding the capture pins and the smoke curated names,
+-- read by the Node capture script and Ecluse.Test.RegistryCapture.
+-- `acceptance/criteria.json` is the version-controlled acceptance budget for the live
+-- performance-acceptance harness (Ecluse.Acceptance and the perf-acceptance executable).
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json

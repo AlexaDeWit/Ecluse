@@ -6,8 +6,8 @@
 {- | The canonical proxy fixture for the pipeline suites: upstream doubles, npm document
 fixtures, the proxy harness, and the request drivers.
 
-Every double routes through 'recordingUpstream', so the credential and artifact-slot
-recording is uniform and a double states only how it answers.
+Every double routes through one recording constructor, so the credential and
+artifact-slot recording is uniform and a double states only how it answers.
 -}
 module Ecluse.Server.Pipeline.TestSupport (
     -- * The fixed clock
@@ -381,9 +381,8 @@ privateArtifactMidStreamFailure =
         send "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n"
         send (BS.replicate 1024 0x7a)
 
-{- | A path-aware public double whose packument names its @dist.tarball@ on a different host than
-the one that served the packument, while it still serves the tarball bytes itself. Pass a
-@*.localhost@ alias, which RFC 6761 reserves for loopback, so it resolves with no hosts entry.
+{- | A path-aware public double whose packument names its @dist.tarball@ on a host other than the
+one that served it. Pass a @*.localhost@ alias: RFC 6761 reserves it for loopback, so it resolves.
 -}
 crossHostPublicUpstream :: Text -> Text -> LByteString -> IO Upstream
 crossHostPublicUpstream crossHost version tarballBody =
@@ -395,9 +394,8 @@ crossHostPublicUpstream crossHost version tarballBody =
             tarballBase = "http://" <> crossHost <> ":" <> port
          in responseLBS status200 [] (encodePackument (selfHostedAdmitting tarballBase version))
 
-{- | A double whose @dist.tarball@ sits at an off-convention @\/files\/{filename}@ path.
-It serves the bytes at any @.tgz@ path, so a test proves the serve path honours that URL rather than
-rebuilding @{base}\/{pkg}\/-\/{file}@.
+{- | A double whose @dist.tarball@ sits at an off-convention @\/files\/{filename}@ path, serving the
+bytes at any @.tgz@ path, so the serve path must honour that URL rather than rebuild it.
 -}
 honouredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
 honouredPathUpstream version filename tarballBody = recordingUpstream answer
@@ -415,9 +413,8 @@ honouredPathUpstream version filename tarballBody = recordingUpstream answer
                     )
          in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
 
-{- | A private double whose tarball lives only at @\/files\/{filename}@ and @404@s every other path,
-including the conventional @\/-\/@ slot. The private leg reads the conventional URL, so it
-misses and the request falls through to the public origin.
+{- | A private double whose tarball lives only at @\/files\/{filename}@ and @404@s every other path.
+The private leg reads the conventional @\/-\/@ slot, so it misses and the request falls to public.
 -}
 offConventionPrivateUpstream :: Text -> LByteString -> IO Upstream
 offConventionPrivateUpstream filename tarballBody = recordingUpstream answer
@@ -426,9 +423,8 @@ offConventionPrivateUpstream filename tarballBody = recordingUpstream answer
         | rawPathInfo req == encodeUtf8 ("/files/" <> filename) = responseLBS status200 [] tarballBody
         | otherwise = responseLBS status404 [] "not found"
 
-{- | A path-aware double that honours a conditional artifact request. A tarball path answers a
-bodiless @304@ with an @ETag@ when the request carries @If-None-Match@, and @200@ with the bytes
-otherwise, so a test drives the pass-through conditional-GET relay end to end.
+{- | A path-aware double that honours a conditional artifact request: a bodiless @304@ with an
+@ETag@ when the request carries @If-None-Match@, and @200@ with the bytes otherwise.
 -}
 conditionalArtifactUpstream :: Text -> LByteString -> IO Upstream
 conditionalArtifactUpstream version tarballBody =
@@ -533,9 +529,8 @@ selfHostedHashless :: Text -> Text -> Value
 selfHostedHashless baseUrl version =
     versionValue (versionFixture version (baseUrl <> "/thing/-/thing-" <> version <> ".tgz"))
 
-{- | A self-hosting version object carrying __only a legacy SHA-1 shasum__ (no SRI
-@integrity@), so its strongest digest is below the default floor. The artifact-gate
-refusal (@BelowIntegrityFloor@) must fire before anything fetches its @dist.tarball@.
+{- | A self-hosting version object carrying __only a legacy SHA-1 shasum__, so its strongest digest
+sits below the default floor. The @BelowIntegrityFloor@ refusal fires before any @dist.tarball@ fetch.
 -}
 selfHostedShasumOnly :: Text -> Text -> Value
 selfHostedShasumOnly baseUrl version =
@@ -545,9 +540,8 @@ selfHostedShasumOnly baseUrl version =
             }
         )
 
-{- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and
-@shasum@, so it projects to no digest at all. The artifact-gate refusal ('MissingIntegrity')
-must fire before anything fetches its @dist.tarball@.
+{- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@,
+so it projects to no digest. The 'MissingIntegrity' refusal fires before any @dist.tarball@ fetch.
 -}
 selfHostedEmptyDigest :: Text -> Text -> Value
 selfHostedEmptyDigest baseUrl version =
@@ -562,10 +556,8 @@ selfHostedEmptyDigest baseUrl version =
 newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue queue manager = newTestEnvWith queue (manager, manager) telemetryDisabled
 
-{- | The packument-serve dependencies over two in-process upstream ports, with the given inbound
-edge token. The doubles bind loopback as @localhost@, never the @127.0.0.1@ literal, because
-the internal-range block matches only an IP literal, so a hostname-addressed double never trips
-it.
+{- | The packument-serve dependencies over two in-process upstream ports and the given inbound edge
+token. The doubles bind loopback as @localhost@: the internal-range block matches an IP literal.
 -}
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
