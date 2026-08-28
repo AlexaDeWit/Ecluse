@@ -90,6 +90,11 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     -- * The tarball handler
     serveTarball,
     headTarball,
+
+    -- * The public artifact gate (exposed for direct testing)
+    PublicArtifactGate (..),
+    publicArtifactGate,
+    artifactOutcomeStatus,
 ) where
 
 import Network.HTTP.Client qualified as HTTP
@@ -353,14 +358,14 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
             liftIO (mpServeDecision metrics (serveDecisionClass decision))
             logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
             liftIO (recordDenials metrics [decision])
-            liftIO (respond (artifactError replies deps (artifactStatus decision) decision))
+            liftIO (respond (artifactError replies deps decision))
         Nothing -> liftIO $ do
             mpServeDecision metrics Metric.Unavailable
             respond (tarballError replies shedStatus [shedRetryAfter] "server is busy; retry later")
 
-{- The outcome of gating a single requested artifact on the public path. The admit carries
-the artifact, so the stream step honours its 'artUrl' rather than reconstructing the
-location. -}
+{- | The outcome of gating a single requested artifact on the public path. The admit carries the
+artifact, so the stream step honours its 'artUrl' rather than reconstructing the location.
+-}
 data PublicArtifactGate
     = -- | The gate admitted the version. Carries the artifact selected by filename.
       Admitted Artifact
@@ -400,7 +405,7 @@ gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO Publ
 gateVersion ctx deps file details =
     publicArtifactGate details <$> admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
 
--- Render the shared admission verdict on the serve surface. Pure and total.
+-- | Render the shared admission verdict on the serve surface. Pure and total.
 publicArtifactGate :: PackageDetails -> ArtifactAdmission -> PublicArtifactGate
 publicArtifactGate details admission = case admission of
     -- The carried floor-checked digest set is the worker's ingest concern. The serve path
@@ -421,8 +426,8 @@ upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
     versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
 
-{- A version absent from the public metadata. Its cause is terminal, and 'artifactError'
-overrides that status to a @404@ forwarded miss. -}
+{- A version absent from the public metadata. Its cause is terminal, and
+'artifactOutcomeStatus' overrides that status to a @404@ forwarded miss. -}
 versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
@@ -478,7 +483,7 @@ streamPublicArtifact mode replies rt deps validators name version artifact obser
                         (RelayedOddShape _, _) -> pass
                         (RelayedNonSuccess _, _) -> pass
                     pure received
-                Nothing -> respond (artifactError replies deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
+                Nothing -> respond (artifactError replies deps upstreamUnavailable)
   where
     hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
@@ -548,22 +553,27 @@ crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies (mkStatus 403 "Forbidden") [] "the upstream artifact host is not permitted by the tarball-host policy"
 
-{- Render a non-admit artifact outcome as the serve error model: @403@ for a policy denial,
-@503@ for a transient upstream unavailability, @404@ for a forwarded version-absent miss,
-and @500@ otherwise. A transient status carries no suggested delay, because the
-single-artifact path has none to offer. -}
-artifactError :: TarballReplies response -> PackumentDeps -> ArtifactStatus -> ServeDecision -> response
-artifactError replies deps status decision =
-    tarballError replies (toStatus actualStatus) retryHeaders (appendHelp (pdHelp deps) message)
+{- | The status a refused artifact request renders. The version-absent miss is the forwarded
+@404@: every other inability keeps the @503@ or @500@ its transience earns.
+-}
+artifactOutcomeStatus :: ServeDecision -> ArtifactStatus
+artifactOutcomeStatus decision
+    | decision == versionAbsent = NotFound
+    | otherwise = artifactStatus decision
+
+{- Render a non-admit artifact outcome as the serve error model. A transient status carries no
+suggested delay, because the single-artifact path has none to offer. -}
+artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
+artifactError replies deps decision =
+    tarballError replies (toStatus status) retryHeaders (appendHelp (pdHelp deps) message)
   where
+    status :: ArtifactStatus
+    status = artifactOutcomeStatus decision
+
     retryHeaders :: ResponseHeaders
-    retryHeaders = case actualStatus of
+    retryHeaders = case status of
         Unavailable' (Just (RetryAfter secs)) -> [(hRetryAfter, show secs)]
         _ -> []
-    -- The version-absent miss renders as a forwarded @404@. That one refusal only: every
-    -- other inability keeps the @503@ or @500@ its transience earns.
-    actualStatus :: ArtifactStatus
-    actualStatus = if decision == versionAbsent then NotFound else status
 
     toStatus :: ArtifactStatus -> Status
     toStatus s = mkStatus (artifactStatusCode s) (statusReason s)

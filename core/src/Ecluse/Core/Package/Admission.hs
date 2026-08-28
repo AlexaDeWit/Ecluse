@@ -86,10 +86,8 @@ data ArtifactAdmission
       AdmissionBelowFloor
     deriving stock (Show)
 
-{- | Decide one requested artifact of one public version under current policy: the rules
-decide the version, the requested filename selects the artifact, then the integrity floor
-judges that artifact. Serve and worker pass the same rules, clock, and floor, so the
-enqueue-to-process window can only ever /narrow/ what the worker mirrors.
+{- | Decide one requested artifact under current policy: the rules, then the filename, then the
+integrity floor. Serve and worker pass the same inputs, so re-evaluation can only /narrow/.
 -}
 admitArtifact ::
     EvalContext ->
