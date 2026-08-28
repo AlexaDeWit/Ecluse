@@ -58,8 +58,7 @@ ambientAwsFromEnv env =
     look name = T.pack <$> lookup name env
 
 {- | Parse an endpoint override, reading the authority the way the egress gate reads one. Userinfo,
-a query, a fragment, or a port outside its grammar refuses, and the refusal keeps the value in a
-'Secret' because an override can carry a credential.
+a query, a fragment, or a port outside its grammar refuses.
 -}
 parseEndpointUrl :: Text -> Either Secret AwsEndpoint
 parseEndpointUrl raw = maybeToRight (mkSecret raw) $ do

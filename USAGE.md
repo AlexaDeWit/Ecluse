@@ -354,8 +354,9 @@ Three ambient AWS-SDK variables are read from the process environment and are no
 own region) and the S3 advisory client, never CodeArtifact. `AWS_ENDPOINT_URL_SQS` overrides the
 SQS endpoint and forces the SQS interpretation of `queue.url`. `AWS_ENDPOINT_URL` overrides the S3
 advisory client only, never SQS. Neither endpoint value may carry userinfo, a query, or a fragment,
-and neither may write a malformed port. Écluse refuses such a value, and either variable then fails
-the boot. The refusal names the variable and never the value, which can carry a credential.
+and neither may write a malformed port. Surrounding whitespace is trimmed before parsing. Écluse
+refuses such a value, and either variable then fails the boot. The refusal names the variable and
+never the value, which can carry a credential.
 
 ### The configuration reference
 
