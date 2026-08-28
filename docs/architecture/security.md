@@ -17,7 +17,7 @@ records the two floors that fail closed: the integrity digest and a static publi
 <!--
   Do not re-grow this into a full threat enumeration. The authoritative register is
   the Threat Dragon model (threat-modelling/ecluse.json), rendered to the Pages site
-  from web/threat-model.md. Add or revise threats in the model, not in prose here.
+  from web/content/docs/threat-model.md. Add or revise threats in the model, not here.
 -->
 
 ## Trust assumptions & credential posture

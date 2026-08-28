@@ -188,11 +188,12 @@ its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating
 A PR that edits documentation only skips the Haskell jobs. The `changes` job classifies it
 against an allow-list of documentation paths in
 [`scripts/ci-classify-change.sh`](../scripts/ci-classify-change.sh), which fails closed: an
-unlisted path runs everything. The static checks run on every PR either way, because the site,
-link, and metadata gates read the very files such a PR edits. The `gate` job accepts a skipped
-job from that filter and from nothing else, so a job that silently never ran still fails the gate.
-Such a PR uploads no coverage, so the required `codecov/project` status stays pending by
-design, and the repo owner merges it by administrator bypass.
+unlisted path runs everything. The static checks run on every PR either way, because the site
+build reads the very files such a PR edits, and it fails on a broken internal link or anchor.
+The `gate` job accepts a skipped job from that filter and from nothing else, so a job that
+silently never ran still fails the gate. Such a PR uploads no coverage, so the required
+`codecov/project` status stays pending by design, and the repo owner merges it by
+administrator bypass.
 
 ## Coverage: Codecov (gating)
 

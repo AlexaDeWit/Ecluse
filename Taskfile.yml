@@ -5,7 +5,6 @@ vars:
   SUITE: ecluse-unit
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
-  PANDOC_FLAGS: --standalone --from gfm --template web/template.html --highlight-style web/highlight.theme
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
 tasks:
   default:
@@ -294,8 +293,8 @@ tasks:
       # The repo owner excluded missing-integrity. SRI applies to fetched
       # subresources, and this site hosts none externally. The only absolute-URL
       # <link> tags are rel="canonical", which is pure metadata and fetches nothing.
-      # The flake vendors every runtime asset (Mermaid, Redoc, CSS) same-origin and
-      # hash-pinned. Excluding the rule here, rather than through per-tag
+      # The site templates load no external script or stylesheet.
+      # Excluding the rule here, rather than through per-tag
       # nosemgrep comments, also keeps the findings out of the SARIF upload, so code
       # scanning stays quiet too.
       - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
@@ -356,7 +355,6 @@ tasks:
       - 'scripts/**/*.sh'
       - 'flake.lock'
     cmds:
-      - bash scripts/rewrite-haddock-dep-links.test.sh
       - bash scripts/ci-gate-verdict.test.sh
   analysis-build:
     desc: Build exe:ecluse with .hie output for weeder and stan
@@ -467,91 +465,68 @@ tasks:
     desc: Build Haddock for the CI gate
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --haddock-quickjump --disable-documentation
-  docs-site:
-    desc: Build Haddock + the OpenAPI spec and stage under ./_site/api
-    cmds:
-      - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}}
-      - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
-      - |
-        appidx=$(find {{.DOCS_BUILDDIR}} -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
-        coreidx=$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
-        runtimeidx=$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-runtime/doc/html/*/index.html' | head -n1); \
-        for pair in "ecluse:$appidx" "ecluse-core:$coreidx" "ecluse-runtime:$runtimeidx"; do \
-          name=${pair%%:*}; idx=${pair#*:}; \
-          if [ -z "$idx" ] || [ ! -f "$idx" ]; then \
-            echo "docs-site: no Haddock index for '$name'" >&2; exit 1; \
-          fi; \
-          mkdir -p "_site/api/$name" && cp -R "$(dirname "$idx")"/. "_site/api/$name/"; \
-          echo "Staged $name -> _site/api/$name"; \
-        done
-      - echo "Rewriting dependency cross-links to canonical Hackage URLs"
-      - bash scripts/rewrite-haddock-dep-links.sh _site/api
-      - |
-        if grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-|/nix/store/' _site/api >/dev/null 2>&1; then \
-          echo "docs-site: unresolved/leaky dependency links survived" >&2; \
-          grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-|/nix/store/' _site/api >&2; exit 1; \
-        fi
-      - cp web/api-index.html _site/api/index.html
-      - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} openapi-gen -- _site/api/openapi.json
-      - mkdir -p _site/api/openapi && cp web/redoc.html _site/api/openapi/index.html
   site:
-    desc: Assemble the Pages site
-    deps:
-      - docs-site
+    desc: Assemble the Pages site into ./_site
     cmds:
+      - task: site:api
+      - task: site:generated
+      - task: site:zola
       - task: site:assemble
-      - task: site:check
-  # The pandoc-and-static half of `site`, shared with `site-stub` so the PR gate
-  # assembles exactly what the Pages deploy assembles.
+      - pagefind --site _site
+      - task: site:leak-check
+  # The PR-gate path. Placeholder fragments render every page, so the gate checks
+  # the content and the links without a Haskell build.
+  site-stub:
+    desc: Build the site over placeholder fragments, with no Haskell build
+    cmds:
+      - task: site:generated-stub
+      - task: site:zola
+  # `--haddock-html-location` sends every dependency identifier to Hackage as
+  # Haddock writes it, so no build-host path reaches the published tree.
+  site:api:
+    internal: true
+    cmds:
+      - rm -rf {{.DOCS_BUILDDIR}}/haddock-site
+      - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}} --haddock-html-location='https://hackage.haskell.org/package/$pkg-$version/docs' --haddock-output-dir={{.DOCS_BUILDDIR}}/haddock-site
+      - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} openapi-gen -- {{.DOCS_BUILDDIR}}/haddock-site/openapi.json
+  # The fragments the Zola shortcodes load.
+  site:generated:
+    internal: true
+    cmds:
+      - mkdir -p web/generated
+      - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} site-gen -- threat-register --model threat-modelling/ecluse.json --out web/generated/threat-register.md
+      - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} site-gen -- openapi --out web/generated/openapi.md
+      - cp config/default.yaml web/generated/default.yaml
+  # The configuration reference stays real, because the gate reads the live file.
+  site:generated-stub:
+    internal: true
+    cmds:
+      - mkdir -p web/generated
+      - printf 'The threat register is generated by `task site`.\n' > web/generated/threat-register.md
+      - printf 'The OpenAPI reference is generated by `task site`.\n' > web/generated/openapi.md
+      - cp config/default.yaml web/generated/default.yaml
+  # Zola refuses a non-empty output directory and never prunes a stale file.
+  site:zola:
+    internal: true
+    cmds:
+      - rm -rf web/public
+      - zola --root web build
+  # The three Haddock trees and the spec sit under /api. The Zola pages, the API
+  # hub page among them, land over the top.
   site:assemble:
     internal: true
     cmds:
-      - cp -R web/static/. _site/
+      - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
+      - cp -R {{.DOCS_BUILDDIR}}/haddock-site/. _site/api/
+      - cp -R web/public/. _site/
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
-      - sh -c 'mkdir -p _site/vendor && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
-      - task: site:pandoc
-  # PR-tier site gate. Everything the link and metadata checks cover lives in web/,
-  # the Markdown sources, and the sitemap. None of that needs Haddock or the OpenAPI
-  # generator. So stub the two generated API artefacts and run the same site:check
-  # the Pages deploy runs on main. The hub pages stay real, and the checkers exempt
-  # the Haddock tree interiors, which docs-site gates itself.
-  site-stub:
-    desc: Assemble the pandoc site over stubbed API artefacts and run the site checks
-    cmds:
-      - rm -rf _site && mkdir -p _site/api/openapi && touch _site/.nojekyll
-      - cp web/api-index.html _site/api/index.html
-      - cp web/redoc.html _site/api/openapi/index.html
-      - printf '{}' > _site/api/openapi.json
-      - task: site:assemble
-      - task: site:check
-  site:pandoc:
-    internal: true
-    deps:
-      - task: site:pandoc-page
-        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", DESCRIPTION: "Deploy, configure, and operate Écluse as a package-registry policy proxy.", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
-      - task: site:pandoc-page
-        vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", DESCRIPTION: "The generated STRIDE threat register and deployment assumptions for Écluse.", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
-  site:pandoc-page:
-    internal: true
-    sources:
-      - '{{.SRC}}'
-      - web/template.html
-      - web/static/style.css
-      - web/highlight.theme
-      - web/links.lua
-      - web/embed-config.lua
-      - config/default.yaml
-    generates:
-      - '_site/{{.OUT}}'
-    cmds:
-      # links.lua runs last. A filter that matches a link by its in-repo target (embed-config.lua)
-      # must see the target before the rewrite to GitHub.
-      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} --lua-filter web/links.lua -M title="{{.TITLE}}" -M description="{{.DESCRIPTION}}" -M canonical-url="https://ecluse-proxy.com/{{.OUT}}"
-  site:check:
+  site:leak-check:
     internal: true
     cmds:
-      - bash scripts/check-site-metadata.sh _site
-      - bash scripts/check-site-links.sh _site
+      - |
+        if grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-|/nix/store/' _site >&2; then \
+          echo "site: a build-host path reached the published tree (files above)" >&2; exit 1; \
+        fi
   nix-build:
     desc: Build the release artifact via Nix (hermetic)
     cmds:
