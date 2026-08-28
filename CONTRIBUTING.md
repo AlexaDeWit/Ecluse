@@ -79,7 +79,8 @@ Signed-off-by: Your Name <you@example.com>
 
 Open as a draft while work or review is moving, and mark it ready when it is not. The template is
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): Summary, Checklist,
-Sign-off, AI assistance.
+Sign-off, AI assistance. Fill every section, and tick a checklist item only when it is true.
+Otherwise say "not applicable" and why. An untrue tick costs a reviewer more than an honest gap.
 
 The Summary is the part worth effort. A reviewer reads it before the diff, so write it so someone
 who has not opened the diff understands the change on its own. Two to five sentences: what changed
@@ -95,7 +96,7 @@ Rules for the Summary:
 - Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
   the Summary.
 - Include evidence only where review depends on it (a verification table, a sweep result), and keep
-  it compact. Tick a checklist item only when it is true. Otherwise say "not applicable" and why.
+  it compact.
 - Canadian spelling. No em-dashes or en-dashes. No filler adjectives.
 
 ### The same change, written twice

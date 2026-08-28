@@ -5,47 +5,53 @@ description: >-
   requirements: GPG-signed, DCO-signed-off as the author (never the AI),
   Conventional-Commit, AI-disclosed, and opened as a draft. The body is short, and
   a reader outside the subsystem understands it on its own. Invoke it before you
-  commit and before you open or finalise a PR. It carries the rules agents miss
-  most often. A red DCO check, a missing trailer, and a verbose or unclear body
-  then do not happen.
+  commit and before you open or finalise a PR. It carries the procedure only:
+  CONTRIBUTING.md owns the standards and wins on any conflict. A red DCO check, a
+  missing trailer, and a verbose or unclear body then do not happen.
 ---
 
 # Open a pull request
 
-The checklist that gets a PR through this repo's gates on the first try. The value is in the literal
-commands and trailers. Full rationale lives in `CONTRIBUTING.md` (*Developer Certificate of Origin*,
-*Conventional Commits*, *AI-assisted contributions*) and `.github/PULL_REQUEST_TEMPLATE.md`.
+The literal commands and trailers that get a PR through this repo's gates on the first try.
 
-Two rules bite most often, so lead with them:
+**[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) owns the standards. This skill owns the procedure.**
+It says what a good contribution is; this says how to produce one here and what to do when a check
+goes red. Where the two appear to disagree, `CONTRIBUTING.md` wins, and the disagreement is a bug in
+this file. Do not restate its rules here: link to them, so a human contributor and an agent read one
+source.
 
-1. **The `Signed-off-by:` trailer names the author, `Alexandra DeWit <alexa.dewit@gmail.com>`, never
-   the AI**. The DCO probot gates on a `Signed-off-by` that matches the commit author's email. A bot
-   address red-fails it. Disclose AI help separately, with `Assisted-by:`. The two trailers never
-   substitute.
-2. **The PR body is short and understandable on its own**. The architect reads the body before the
-   diff. A body that narrates the diff, or that needs a second explanation, costs a round-trip.
-   Lead with what changed and why, in plain words. There is no separate plain-language section.
-   The whole body is plain.
+The two failures this file exists to prevent:
+
+1. **A `Signed-off-by:` that names the AI.** It names the author, `Alexandra DeWit
+   <alexa.dewit@gmail.com>`. The DCO probot gates on a trailer matching the commit author's email,
+   so a bot address red-fails it. AI help is disclosed separately with `Assisted-by:`
+   ([CONTRIBUTING.md, *AI-assisted contributions*](../../../CONTRIBUTING.md#ai-assisted-contributions)).
+
+2. **A PR body that narrates the diff.** The architect reads it before the diff, so a body that
+   needs a second explanation costs a round-trip. The rules are in
+   [CONTRIBUTING.md, *Pull requests*](../../../CONTRIBUTING.md#pull-requests).
 
 ## 1. Commits
 
-Commit with both signing flags, every time:
+Commit with both signing flags, every time. Sign off as you go, on every commit, and never trim one:
 
 ```
 git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Agent Name> (<Vendor>)"
 ```
 
-- `-S` GPG-signs, and records who committed. `-s` appends the DCO `Signed-off-by` from your git
-  identity. Git here carries the identity Alexandra DeWit, so `-s` produces the correct sign-off.
-  **Do not hand-write a `Signed-off-by:` line**. That is how the wrong name slips in.
-- **Conventional Commits** subject: `type(scope): summary`, imperative, lower-case, no trailing
-  period. The type list is in [CONTRIBUTING.md](../../../CONTRIBUTING.md#repository-requirements).
-- **`Assisted-by: <Agent Name> (<Vendor>)`** discloses AI help. It is not `Co-Authored-By`. Do not
-  use that trailer.
-- **This machine's git has no `--trailer` flag**. Put trailers in literal `-m` lines, or in a `-F`
+Why both flags and why every commit:
+[CONTRIBUTING.md, *DCO*](../../../CONTRIBUTING.md#developer-certificate-of-origin-dco). The subject
+format and the type list: [*Repository
+requirements*](../../../CONTRIBUTING.md#repository-requirements).
+
+What this file adds, which those do not say:
+
+- **Do not hand-write a `Signed-off-by:` line.** `-s` derives it from the git identity, which here
+  is already Alexandra DeWit. Hand-writing it is how the wrong name slips in.
+- **This machine's git has no `--trailer` flag.** Put trailers in literal `-m` lines, or in a `-F`
   message file. `--trailer` errors here.
-- **Squash-merge assembles the final message from the branch commits, so every commit needs the
-  sign-off**. Sign off as you go. Never trim a sign-off.
+- **`Assisted-by:`, never `Co-Authored-By:`.** Git tooling and editor snippets reach for the latter
+  by default, and it asserts joint authorship this project does not accept.
 
 ## 2. The PR body
 
@@ -53,12 +59,15 @@ Follow `.github/PULL_REQUEST_TEMPLATE.md` (Summary · Checklist · Sign-off · A
 
 **Read [CONTRIBUTING.md, *Pull requests*](../../../CONTRIBUTING.md#pull-requests) before you write
 the Summary.** It owns the rules and carries the same change written twice, verbose and concise,
-which is faster to work from than the rules alone. The short version: lead with what a reviewer or
-operator gains or is protected from, two to five sentences, no play-by-play of files, Canadian
-spelling, no em-dashes.
+which is faster to work from than the rules alone.
 
-That guidance lives in `CONTRIBUTING.md` and not here so that a human contributor and an agent read
-the same text. This skill sits under `.agents/`, where a drive-by contributor never looks.
+A compressed reminder, not a second copy: lead with what a reviewer or operator gains or is
+protected from, two to five sentences, no play-by-play of files, Canadian spelling, no em-dashes.
+It exists because a bare link is skippable, and an instruction an agent skips is decoration. When it
+drifts from `CONTRIBUTING.md`, `CONTRIBUTING.md` is right.
+
+That guidance lives in `CONTRIBUTING.md` because this skill sits under `.agents/`, where a drive-by
+contributor never looks.
 
 ## 3. Draft until hand-off
 
