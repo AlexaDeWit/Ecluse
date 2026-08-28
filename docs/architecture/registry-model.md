@@ -53,7 +53,7 @@ The private upstream is the per-client authority for who may read what. The prox
 metadata per request and **never enters it into the shared cache**. A credential-blind key would
 let one client warm an entry that a differently-authorised client then gets as a hit. That is the
 cross-client disclosure hazard in the
-[threat model](https://ecluse-proxy.com/threat-model.html). The cache holds only the anonymous
+[threat model](https://ecluse-proxy.com/docs/threat-model/). The cache holds only the anonymous
 public origin (see the [metadata cache](web-layer.md#metadata-cache)).
 The [security invariants](security.md) bound outbound requests further: the host allowlist,
 internal-range blocking, canonicalisation, and response bounds.
@@ -132,7 +132,7 @@ declares such hosts and the same-host gate admits them, with no operator knob to
 surface. The proxy never trusts that location. The allowlist and the same-host gate bound where
 it may fetch the bytes, and https-only egress with certificate validation authenticates the host.
 The proxy upgrades a legacy `http` tarball on the same host, or drops it (see
-[Securing network egress](../../USAGE.md#network-egress)).
+[Securing network egress](https://ecluse-proxy.com/docs/deployment/#network-egress)).
 
 On a private miss the proxy gates that one version, streams from public, and enqueues a
 demand-driven mirror job. The enqueue does not block, so the proxy serves the client immediately.
@@ -314,7 +314,7 @@ packages reach clients behind the gate rather than through it, and silently null
 protection. The proxy cannot detect this from the outside, because it trusts the private upstream
 by construction. Keeping the internal registry disconnected from public is therefore an
 operator-architecture invariant, catalogued in the
-[threat model](https://ecluse-proxy.com/threat-model.html).
+[threat model](https://ecluse-proxy.com/docs/threat-model/).
 
 ## The internal domain model
 

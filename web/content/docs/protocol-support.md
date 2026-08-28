@@ -1,7 +1,7 @@
 +++
 title = "Protocol support"
 description = "Which registry protocols an Écluse server speaks, and what each endpoint answers, per ecosystem."
-weight = 90
+weight = 6
 +++
 
 Écluse renders this page from the OpenAPI document it publishes as JSON, so the page and

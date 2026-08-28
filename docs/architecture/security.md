@@ -5,13 +5,13 @@
 Écluse builds outbound HTTP requests (private upstream, public upstream, mirror target) from
 client-supplied package identifiers and upstream-supplied artifact locations. The operator
 manual states what a deployment must fence around that
-([Securing network egress](../../USAGE.md#network-egress)). This document
+([Securing network egress](https://ecluse-proxy.com/docs/deployment/#network-egress)). This document
 records the deployment assumptions the threat model rests on and the credential posture. It also
 records the two floors that fail closed: the integrity digest and a static publish credential.
 
 > The full STRIDE threat register lives in the OWASP Threat Dragon model
 > ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)), published readably
-> at [Threat model](https://ecluse-proxy.com/threat-model.html). The threat statements and
+> at [Threat model](https://ecluse-proxy.com/docs/threat-model/). The threat statements and
 > dispositions live there, not here.
 
 <!--
@@ -23,7 +23,7 @@ records the two floors that fail closed: the integrity digest and a static publi
 ## Trust assumptions & credential posture
 
 This section records the deployment
-assumptions the [threat model](https://ecluse-proxy.com/threat-model.html) rests on. It also
+assumptions the [threat model](https://ecluse-proxy.com/docs/threat-model/) rests on. It also
 records the consequences of the canonical posture: per-caller passthrough credentials, the
 three-registry topology, and CodeArtifact over VPC endpoints.
 

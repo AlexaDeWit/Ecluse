@@ -26,9 +26,9 @@ Build and CI automation is **Bash**: one language to read and review. Scripts li
 in a multiline YAML block, so it stays reviewable and runs outside CI. Scripts must pass
 `shellcheck` (`task lint-scripts`). Reach for `awk` or `sort` before a heavier runtime.
 
-Use another language only when the tool forces it, and say why in review. The pandoc filters in
-[`web/`](web/) are Lua, because pandoc's filter API is Lua. A new build-time dependency on
-Python, Node, or similar needs a strong, stated reason. "It reads a little cleaner" is not one.
+Use another language only when the tool forces it, and say why in review. A new build-time
+dependency on Python, Node, or similar needs a strong, stated reason. "It reads a little
+cleaner" is not one.
 
 ## Releases
 

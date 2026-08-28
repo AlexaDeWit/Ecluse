@@ -428,7 +428,8 @@ executable ecluse
   -- benchmarks. A 64 MB per-capability allocation area, divided into 4 MB chunks, cuts
   -- the collection count by an order of magnitude. The chunks let capabilities share
   -- the area instead of stranding idle nurseries. An operator can override it at run
-  -- time, `ecluse +RTS -A16m -RTS` for example, because -rtsopts is set. See USAGE.md.
+  -- time, `ecluse +RTS -A16m -RTS` for example, because -rtsopts is set. See
+  -- https://ecluse-proxy.com/docs/operations/.
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
   main-is:        Main.hs
   hs-source-dirs: app

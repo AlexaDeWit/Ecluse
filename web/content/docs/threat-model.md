@@ -1,7 +1,7 @@
 +++
 title = "Threat model"
 description = "The generated STRIDE threat register and deployment assumptions for Écluse."
-weight = 80
+weight = 7
 +++
 
 Écluse's threat model is an [OWASP Threat

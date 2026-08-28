@@ -42,7 +42,7 @@ builds no queue. The worker runs inside the `ecluse proxy` process as a supervis
 thread, not a separate service. Its consume-loop heartbeat backs the process's liveness surface,
 distinct from HTTP readiness. The configured queue URL picks the backend: SQS for
 durability, or a bounded in-memory queue with a boot warning when unset. The keys are in
-[USAGE](../../USAGE.md).
+[the operator manual](https://ecluse-proxy.com/docs/).
 
 ```mermaid
 sequenceDiagram

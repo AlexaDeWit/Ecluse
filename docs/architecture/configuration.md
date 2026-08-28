@@ -8,7 +8,7 @@ fail closed, and client authentication at the edge.
 ## Configuration
 
 > **Operators:** [`config/default.yaml`](../../config/default.yaml) documents every key and its
-> default, and [`USAGE.md`](../../USAGE.md#configuring-écluse) covers the environment-variable mapping,
+> default, and [the operator manual](https://ecluse-proxy.com/docs/) covers the environment-variable mapping,
 > client setup, and the network-egress checklist. This document holds the design rationale.
 
 Configuration has two layers. Environment variables carry process-level and secret values. A
@@ -72,12 +72,13 @@ domain, so mounts whose resolved identities coincide share one
 internal-range block on the `dist.tarball` host, and certificate validation that authenticates the
 dialled host. Network egress is still a shared responsibility: the deployment must also fence
 egress at the platform layer, with security groups, `NetworkPolicy`, or Istio egress policy. See
-[Securing network egress](../../USAGE.md#network-egress).
+[Securing network egress](https://ecluse-proxy.com/docs/deployment/#network-egress).
 
 Two application-level knobs adjust threat tolerance. One relaxes *which allowlisted host* may serve
 a tarball, never whether the allowlist or the internal-range block applies. The other widens the
-fixed internal-range set with operator-supplied CIDRs. See
-[USAGE](../../USAGE.md#the-configuration-reference) for the names and values.
+fixed internal-range set with operator-supplied CIDRs. See the
+[configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference)
+for the names and values.
 
 ### Runtime sizing: cores and heap ceiling
 
@@ -106,7 +107,7 @@ hot path. The cache goes next, also to zero, and each step logs a loud warning. 
 The structural hostile-input counts (`maxVersionCount`, `maxNestingDepth`) stay pinned policy. They
 bound document shape, not bytes, and do not scale with RAM. The resolution is role-agnostic and
 binds proxy, Pilot, and Dredger alike. The Operator Manual carries the [per-pod
-arithmetic](../../USAGE.md#appendix-runtime-sizing-arithmetic).
+arithmetic](https://ecluse-proxy.com/docs/operations/#appendix-runtime-sizing-arithmetic).
 
 ### Rule policy
 
@@ -146,15 +147,16 @@ and dependency confusion. `remediation-fast-track` (`AllowIfRemediatesCve`) rank
 
 Every other built-in rule is off and opts in by name. `DenyIfCve` in particular can deny historical
 versions an existing build depends on, if an operator enables it before the mirror is warm. Read
-its [onboarding steps](../../USAGE.md#onboarding-denyifcve) first.
+its [onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve) first.
 
 ### Advisory database sync
 
 The remediation fast lane and `DenyIfCve` read a synced local advisory database, not an API per
 request. The compilation, ETag polling, and atomic shadow-swap are under [Rules engine → CVE
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (bucket, poll interval, OSV export
-source, download size cap) are in [USAGE](../../USAGE.md#the-configuration-reference). With no bucket
-configured, the fast lane abstains and the age quarantine governs alone.
+source, download size cap) are in the
+[configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).
+With no bucket configured, the fast lane abstains and the age quarantine governs alone.
 
 ### Validation: fail fast, reject the unknown
 
