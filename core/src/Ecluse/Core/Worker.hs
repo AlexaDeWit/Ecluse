@@ -29,7 +29,8 @@ whose ecosystem carries no bundle is fail-closed. Through that bundle the loop:
 See individual modules for detailed behaviour:
 * "Ecluse.Core.Worker.Integrity" for the security gate on artifact digests.
 * "Ecluse.Core.Worker.Loop" for supervision and graceful shutdown.
-* "Ecluse.Core.Worker.Job" for ack semantics within the visibility budget.
+* "Ecluse.Core.Worker.Job" for the per-job decision within the visibility budget.
+* "Ecluse.Core.Worker.Realise" for realising each verdict at the queue handle.
 
 See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue" and "Process model".
 -}
@@ -70,4 +71,5 @@ import Ecluse.Core.Worker.Integrity
 import Ecluse.Core.Worker.Job
 import Ecluse.Core.Worker.Liveness
 import Ecluse.Core.Worker.Loop
+import Ecluse.Core.Worker.Realise
 import Ecluse.Core.Worker.Types

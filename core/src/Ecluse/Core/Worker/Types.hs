@@ -9,6 +9,10 @@ module Ecluse.Core.Worker.Types (
     WorkerM,
     runWorkerM,
     recordWorkerProgress,
+
+    -- * Shared job vocabulary
+    queueOp,
+    renderJob,
 ) where
 
 import Data.Time (UTCTime, getCurrentTime)
@@ -18,9 +22,10 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
-import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
@@ -28,7 +33,7 @@ import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker.Liveness (WorkerHeartbeat, recordPoll)
 
 {- | The effectful backends the mirror worker closes over: a record of concrete handles
@@ -160,7 +165,7 @@ runWorkerM logEnv initialContext runtime action =
 
 {- | Advance the worker heartbeat to the current instant, recording a unit of demonstrated
 progress. The consume loop beats on every successful poll, an empty long-poll included,
-and 'Ecluse.Core.Worker.Job.processBatch' beats after every completed job, so the
+and 'Ecluse.Core.Worker.Realise.processBatch' beats after every completed job, so the
 staleness bound covers one job's worst case rather than a whole batch.
 -}
 recordWorkerProgress :: WorkerM ()
@@ -168,3 +173,16 @@ recordWorkerProgress = do
     heartbeat <- asks wrHeartbeat
     now <- liftIO getCurrentTime
     liftIO (recordPoll heartbeat now)
+
+{- | Run one operation on the worker's queue handle, handing its typed failure to @onFault@. A
+fault costs at most a redelivery, which idempotent publishing makes harmless, so it never fails.
+-}
+queueOp :: (MirrorQueue -> IO (Either TransportFault a)) -> (TransportFault -> WorkerM ()) -> WorkerM ()
+queueOp op onFault = do
+    queue <- asks wrQueue
+    outcome <- liftIO (op queue)
+    whenLeft_ outcome onFault
+
+-- | A one-line identifier for a job, for log lines and audit reasons.
+renderJob :: MirrorJob -> Text
+renderJob job = renderPackageName (jobPackage job) <> "@" <> renderVersion (jobVersion job)

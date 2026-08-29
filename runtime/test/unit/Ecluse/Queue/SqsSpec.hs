@@ -17,7 +17,9 @@ import Ecluse.Core.Queue (
     QueueMessage (..),
     RemoteSpanContext (..),
     Seconds (..),
+    decodeJob,
     defaultDeliveryBudget,
+    encodeJob,
  )
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
@@ -25,13 +27,12 @@ import Ecluse.Runtime.Queue.Sqs (
     ReceivedMessage (..),
     SqsConfig (..),
     deadLetterTerminusOf,
-    decodeJob,
     defaultSqsConfig,
-    encodeJob,
     liftReceivedMessages,
+    mirrorJobPackage,
  )
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
-import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 -- | An unscoped npm job fixture.
@@ -41,7 +42,7 @@ npmJob =
         { jobPackage = mkPackageName Npm Nothing "lodash"
         , jobVersion = mkVersion Npm "4.17.21"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
-        , jobArtifactFilename = "lodash-4.17.21.tgz"
+        , jobArtifactFilename = unsafeFilename "lodash-4.17.21.tgz"
         , -- A populated trace-context carrier, so the round-trip proves the W3C
           -- traceparent/tracestate survive the wire mapping.
           jobTraceContext =
@@ -52,14 +53,14 @@ npmJob =
                     }
         }
 
--- | A scoped npm job fixture, to exercise the scope arm of the wire mapping.
+-- | A scoped npm job fixture, to exercise the namespace arm of the wire mapping.
 scopedJob :: MirrorJob
 scopedJob =
     MirrorJob
         { jobPackage = mkPackageName Npm (Just (mkScope "babel")) "core"
         , jobVersion = mkVersion Npm "7.24.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
-        , jobArtifactFilename = "core-7.24.0.tgz"
+        , jobArtifactFilename = unsafeFilename "core-7.24.0.tgz"
         , -- The absent-carrier case (tracing off at enqueue), so both arms round-trip.
           jobTraceContext = Nothing
         }
@@ -71,16 +72,23 @@ pypiJob =
         { jobPackage = mkPackageName PyPI Nothing "Flask"
         , jobVersion = mkVersion PyPI "3.0.2"
         , jobArtifactUrl = unsafeRegistryUrl "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
-        , jobArtifactFilename = "flask-3.0.2.tar.gz"
+        , jobArtifactFilename = unsafeFilename "flask-3.0.2.tar.gz"
         , jobTraceContext = Nothing
         }
+
+{- | A namespaced non-npm job fixture. No ecosystem ships namespaced names beside npm today, but
+the wire mapping is the one every backend inherits, so the namespace must survive the hop.
+-}
+namespacedPypiJob :: MirrorJob
+namespacedPypiJob =
+    pypiJob{jobPackage = mkPackageName PyPI (Just (mkScope "acme")) "Flask"}
 
 {- | A job body with every required field and no @traceContext@ key at all, as a job
 enqueued with tracing off carries. The decode must accept it as a 'Nothing' carrier.
 -}
 noTraceContextBody :: Text
 noTraceContextBody =
-    "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"left-pad\",\
+    "{\"ecosystem\":\"npm\",\"name\":\"left-pad\",\
     \\"version\":\"1.3.0\",\"artifactUrl\":\"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\",\
     \\"filename\":\"left-pad-1.3.0.tgz\"}"
 
@@ -88,18 +96,23 @@ spec :: Spec
 spec = do
     describe "encodeJob / decodeJob round-trip" $ do
         it "round-trips an unscoped npm job" $
-            decodeJob mkRegistryUrl (encodeJob npmJob) `shouldBe` Right npmJob
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob npmJob) `shouldBe` Right npmJob
 
-        it "round-trips a scoped npm job (scope and bare name both recovered)" $
-            decodeJob mkRegistryUrl (encodeJob scopedJob) `shouldBe` Right scopedJob
+        it "round-trips a scoped npm job (namespace and bare name both recovered)" $
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob scopedJob) `shouldBe` Right scopedJob
 
         it "round-trips a PyPI job (ecosystem carried through)" $
-            decodeJob mkRegistryUrl (encodeJob pypiJob) `shouldBe` Right pypiJob
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob pypiJob) `shouldBe` Right pypiJob
+
+        it "round-trips a namespaced non-npm job, so the namespace is not npm's alone" $
+            -- The identity rides as two fields rather than one rendered name, so an ecosystem
+            -- that grows namespaced names inherits a codec that already carries them.
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob namespacedPypiJob) `shouldBe` Right namespacedPypiJob
 
         it "carries every field through unchanged" $ do
             -- Field-by-field so a single mangled field is pinpointed, not lost in
             -- a whole-record comparison.
-            case decodeJob mkRegistryUrl (encodeJob npmJob) of
+            case decodeJob mirrorJobPackage mkRegistryUrl (encodeJob npmJob) of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
                     jobPackage job `shouldBe` jobPackage npmJob
@@ -111,7 +124,7 @@ spec = do
         it "decodes a job body with no traceContext key to a Nothing carrier" $
             -- A job enqueued with tracing off carries no "traceContext" key, not even a null. It
             -- must decode to a job with no carrier through the '.:?'-absent path, rather than fail.
-            case decodeJob mkRegistryUrl noTraceContextBody of
+            case decodeJob mirrorJobPackage mkRegistryUrl noTraceContextBody of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
                     jobTraceContext job `shouldBe` Nothing
@@ -119,48 +132,50 @@ spec = do
                     jobVersion job `shouldBe` mkVersion Npm "1.3.0"
 
     describe "decodeJob -- the one npm name grammar at the queue trust boundary" $ do
-        -- The payload is untrusted, so its scope and name are re-joined and read through the
-        -- same splitter the front door uses. The verdicts are the shared table's.
+        -- The payload is untrusted, so its namespace and name are re-joined and read through the
+        -- same splitter the front door uses ('mirrorJobPackage'). The verdicts are the shared table's.
         for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
             it (NpmFixture.nameVerdictLabel raw valid) $
-                isRight (decodeJob mkRegistryUrl (jobBodyFor "npm" raw)) `shouldBe` valid
+                isRight (decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "npm" raw)) `shouldBe` valid
 
-        it "rebuilds a scoped name from the payload's separate scope and name fields" $
-            case decodeJob mkRegistryUrl (jobBodyFor "npm" "@babel/core") of
+        it "rebuilds a scoped name from the payload's separate namespace and name fields" $
+            case decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "npm" "@babel/core") of
                 Left err -> expectationFailure (toString err)
                 Right job -> jobPackage job `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "core"
 
         it "names the unusable component when it refuses an npm name" $
-            case decodeJob mkRegistryUrl (jobBodyFor "npm" "@scope/p@g") of
+            case decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "npm" "@scope/p@g") of
                 Left err -> err `shouldSatisfy` ("unusable npm name component" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
 
         it "takes a PyPI name as given: PyPI has no scope grammar to read it through" $
             -- The same spelling npm refuses, kept because no PyPI grammar rejects it.
-            decodeJob mkRegistryUrl (jobBodyFor "pypi" "a b") `shouldSatisfy` isRight
+            decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "pypi" "a b") `shouldSatisfy` isRight
 
         it "takes a RubyGems name as given: RubyGems has no scope grammar either" $
-            decodeJob mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
+            decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
-            decodeJob mkRegistryUrl "not json at all" `shouldSatisfy` isLeft
+            decodeJob mirrorJobPackage mkRegistryUrl "not json at all" `shouldSatisfy` isLeft
 
         it "rejects a JSON value that is not an object" $
-            decodeJob mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
+            decodeJob mirrorJobPackage mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
 
         it "rejects an object missing a required field" $
             -- No "artifactUrl".
             decodeJob
+                mirrorJobPackage
                 mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"filename\":\"x-1.0.0.tgz\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects an unknown ecosystem, naming it in the error" $
             case decodeJob
+                mirrorJobPackage
                 mkRegistryUrl
-                "{\"ecosystem\":\"cargo\",\"scope\":null,\"name\":\"x\",\
+                "{\"ecosystem\":\"cargo\",\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"filename\":\"x-1.0.0.tgz\"}" of
                 Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
@@ -169,15 +184,29 @@ spec = do
             -- The selection key is mandatory: without it the worker's ingest
             -- re-evaluation has no artifact to gate.
             decodeJob
+                mirrorJobPackage
                 mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
+                `shouldSatisfy` isLeft
+
+        it "rejects an artifact filename that is not a safe path component" $
+            -- The filename is interpolated into an upstream path, so a traversal in the
+            -- payload is refused at the boundary rather than carried into a fetch.
+            decodeJob
+                mirrorJobPackage
+                mkRegistryUrl
+                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\
+                \\"artifactUrl\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\",\
+                \\"filename\":\"../../etc/passwd\"}"
                 `shouldSatisfy` isLeft
 
         it "rejects a job with a malformed traceContext (missing traceparent)" $
             decodeJob
+                mirrorJobPackage
                 mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
                 \\"filename\":\"x-1.0.0.tgz\",\
                 \\"traceContext\":{\"tracestate\":\"ecluse=1\"}}"
@@ -185,8 +214,9 @@ spec = do
 
         it "rejects a job with traceContext present but not an object" $
             decodeJob
+                mirrorJobPackage
                 mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
                 \\"filename\":\"x-1.0.0.tgz\",\
                 \\"traceContext\":\"just-a-string\"}"
@@ -273,25 +303,25 @@ spec = do
             delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
-{- | A job body for @ecosystem@ naming @wireName@, split into the payload's separate @scope@ and
-@name@ fields the way 'encodeJob' writes them. Every other field is well-formed.
+{- | A job body for @ecosystem@ naming @wireName@, split into the separate @namespace@ and @name@
+fields 'encodeJob' writes. Every other field is well-formed.
 -}
 jobBodyFor :: Text -> Text -> Text
 jobBodyFor ecosystem wireName =
     "{\"ecosystem\":"
         <> quoted ecosystem
-        <> ",\"scope\":"
-        <> scopeField
+        <> ",\"namespace\":"
+        <> namespaceField
         <> ",\"name\":"
         <> quoted bare
         <> ",\"version\":\"1.0.0\""
         <> ",\"artifactUrl\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\""
         <> ",\"filename\":\"x-1.0.0.tgz\"}"
   where
-    (scopeField, bare) = case T.breakOn "/" wireName of
-        (scopePart, rest)
+    (namespaceField, bare) = case T.breakOn "/" wireName of
+        (namespacePart, rest)
             | Just basePart <- T.stripPrefix "/" rest ->
-                (quoted (fromMaybe scopePart (T.stripPrefix "@" scopePart)), basePart)
+                (quoted (fromMaybe namespacePart (T.stripPrefix "@" namespacePart)), basePart)
         _ -> ("null", wireName)
     quoted t = "\"" <> t <> "\""
 

@@ -42,7 +42,8 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
     fetchMetadataFormBounded,
  )
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), noValidators)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
+import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 

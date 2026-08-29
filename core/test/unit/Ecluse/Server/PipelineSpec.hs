@@ -51,7 +51,6 @@ import Ecluse.Core.Server.Context (
     runHandler,
  )
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
-import Ecluse.Core.Server.Path (Filename (Filename))
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
@@ -60,7 +59,7 @@ import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (sriSha512Of)
+import Ecluse.Test.Package (sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
@@ -136,7 +135,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -174,7 +173,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -192,7 +191,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         npmTarballContract
                         rt
                         (mountWith privateDeps)
-                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
 {- | Run a serve handler over a request runtime and mount, capturing the 'Response' it hands its

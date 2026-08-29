@@ -60,11 +60,8 @@ import Ecluse.Core.Registry (
 
 import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
-import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm,
-    Validators,
-    metadataRequest,
- )
+import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
+import Ecluse.Core.Registry.Request (Validators)
 import Ecluse.Core.Security (Limits)
 
 {- | Everything this data plane needs to reach one npm-speaking registry. The composition

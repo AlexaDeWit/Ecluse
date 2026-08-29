@@ -13,6 +13,7 @@ tests keep a separate oracle.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
+    unsafeFilename,
     unsafeHash,
     unsafeRegistryUrl,
     unsafeSriHashes,
@@ -80,6 +81,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
+import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Version (Version, mkVersion)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
@@ -105,6 +107,14 @@ errors, so a typo fails loudly.
 -}
 unsafeRegistryUrl :: Text -> RegistryUrl
 unsafeRegistryUrl = either error id . mkRegistryUrl
+
+{- HLINT ignore unsafeFilename "Avoid restricted function" -}
+
+{- | Refine a known-safe fixture string into an artifact 'Filename'. An unsafe path component
+errors, so a fixture typo fails loudly.
+-}
+unsafeFilename :: Text -> Filename
+unsafeFilename raw = fromMaybe (error ("unsafe fixture filename: " <> raw)) (mkFilename raw)
 
 {- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
 

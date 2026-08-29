@@ -24,11 +24,6 @@ a dev release. Post-releases stay stable.
 module Ecluse.Core.Version.Pep440 (
     Pep440Key (..),
     parsePep440,
-    parsePep440Suffix,
-    consumePre,
-    consumePost,
-    consumeDev,
-    dropSep,
     isPep440Stable,
 ) where
 
@@ -146,7 +141,7 @@ assembleKey epoch release (mPre, mPost, mDev) localToks =
         Just n -> (0, n)
     stripTrailingZeros = dropWhileEnd (== 0)
 
-{- | Consume a PEP 440 suffix into its prerelease, post and dev parts. Fails if any text
+{- Consume a PEP 440 suffix into its prerelease, post and dev parts. Fails if any text
 is left unconsumed, so trailing garbage never parses.
 -}
 parsePep440Suffix ::
@@ -157,13 +152,13 @@ parsePep440Suffix s0 =
         (dev, s3) = consumeDev s2
      in if T.null s3 then Just (pre, post, dev) else Nothing
 
--- | Drop one optional separator (@.@\/@-@\/@_@) from the front.
+-- Drop one optional separator (@.@\/@-@\/@_@) from the front.
 dropSep :: Text -> Text
 dropSep s = case T.uncons s of
     Just (c, rest) | c == '.' || c == '-' || c == '_' -> rest
     _ -> s
 
-{- | Consume an optional prerelease label into @Just (stage, n)@, with stage
+{- Consume an optional prerelease label into @Just (stage, n)@, with stage
 0\/1\/2 for a\/b\/rc. 'Nothing' if absent.
 -}
 consumePre :: Text -> (Maybe (Int, Integer), Text)
@@ -185,7 +180,7 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- | Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into @Just n@.
+{- Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into @Just n@.
 PEP 440 normalises all three labels to @post@. It tries @post@ and @rev@ before the
 single-letter @r@, so it never mis-splits @revN@ as @r@ + @evN@.
 -}
@@ -201,7 +196,7 @@ consumePost s =
                  in if T.null digits then (Nothing, s) else (Just (numOr0 digits), rest)
             Nothing -> (Nothing, s)
 
--- | Consume an optional dev-release (@.devN@) into @Just n@, or 'Nothing' if absent.
+-- Consume an optional dev-release (@.devN@) into @Just n@, or 'Nothing' if absent.
 consumeDev :: Text -> (Maybe Integer, Text)
 consumeDev s =
     case T.stripPrefix "dev" (dropSep s) of

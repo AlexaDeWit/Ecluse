@@ -15,7 +15,6 @@ module Ecluse.Core.Queue.Memory (
     MemoryQueueConfig (..),
     defaultMemoryQueueConfig,
     newBoundedInMemoryQueue,
-    memoryQueueBatchSize,
     memoryQueueDropReportInterval,
 ) where
 
@@ -60,7 +59,7 @@ defaultMemoryQueueConfig maxDepth =
         , memQueuePollWaitMicros = 20_000_000
         }
 
-{- | The most jobs one 'receive' delivers from the bounded in-memory backend. Held at the SQS
+{- The most jobs one 'receive' delivers from the bounded in-memory backend. Held at the SQS
 batch cap, so the worker sees one bounded batch shape whatever the backend, and per-poll work
 and memory stay bounded.
 -}

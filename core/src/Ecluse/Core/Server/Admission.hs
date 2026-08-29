@@ -19,7 +19,6 @@ module Ecluse.Core.Server.Admission (
     ServeAdmission,
     newServeAdmission,
     withServeAdmission,
-    serveAdmissionWaitMicros,
 
     -- * Internals exported for testing
     newServeAdmissionTuned,
@@ -41,7 +40,7 @@ checked acquire\/wait\/release operations can mutate its capacity and waiting ro
 -}
 newtype ServeAdmission = ServeAdmission WeightedAdmission
 
-{- | How long a serve operation waits for a slot when it finds the cap busy, before the request
+{- How long a serve operation waits for a slot when it finds the cap busy, before the request
 is refused. See 'admissionWaitMicros' for why the budget matches the @Retry-After: 1@ hint.
 -}
 serveAdmissionWaitMicros :: Int

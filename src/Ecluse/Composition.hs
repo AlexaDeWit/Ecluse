@@ -87,6 +87,7 @@ import Ecluse.Core.Registry.Adapter (
     publishDeclaredNames,
     publishRelay,
  )
+import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
@@ -265,7 +266,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     pure
         PublishDeps
             { pubTargetUrl = registryUrlText url
-            , pubScopes = mntPublishAllow mcfg
+            , pubAllowed = npmPublishAllowed (mntPublishAllow mcfg)
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
             , pubLimits = limits

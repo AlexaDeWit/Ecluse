@@ -19,6 +19,7 @@ module Ecluse.Core.Registry.Npm.Publish (
     publishRequest,
     npmPublishDocument,
     declaredNames,
+    npmPublishAllowed,
 ) where
 
 import Data.Aeson (Value (String), object, (.=))
@@ -34,7 +35,7 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, renderPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, pkgNamespace, renderPackageName)
 import Ecluse.Core.Registry (
     MirrorArtifact (maFilename),
     PublishError (PublishError),
@@ -43,8 +44,10 @@ import Ecluse.Core.Registry (
     firstHashValue,
  )
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, noValidators, packageUrl, parseRequestEither, withToken)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
+import Ecluse.Core.Registry.Request (noValidators)
+import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | npm's mirror-write protocol codec. The probe reads the abbreviated packument, and the
@@ -60,7 +63,7 @@ npmPublishCodec =
                 targetUrl
                 token
                 name
-                (npmPublishDocument name version (maFilename artifact) (sriOf artifact) (sha1Of artifact) bytes)
+                (npmPublishDocument name version (unFilename (maFilename artifact)) (sriOf artifact) (sha1Of artifact) bytes)
         , pcPublishOutcome = classifyPublish
         }
 
@@ -190,3 +193,11 @@ declaredNames body =
                ]
     , Just (String declared) <- [slot]
     ]
+
+{- | Whether npm's publish allow-list covers a name: its scope must equal a configured entry
+exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused.
+-}
+npmPublishAllowed :: [Scope] -> PackageName -> Bool
+npmPublishAllowed scopes name = case pkgNamespace name of
+    Just scope -> scope `elem` scopes
+    Nothing -> False

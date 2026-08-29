@@ -98,14 +98,14 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 ) where
 
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus, status401)
 import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Package (
-    Artifact (artFilename, artUrl),
+    Artifact (artUrl),
     PackageDetails,
     PackageName,
  )
@@ -138,7 +138,6 @@ import Ecluse.Core.Security (
     thgPrivateHostPort,
     thgPublicHostPort,
  )
-import Ecluse.Core.Server.Admission (withServeAdmission)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Server.Conditional (forwardValidators)
@@ -155,7 +154,7 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.Path (Filename (Filename))
+import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     evalTier,
@@ -170,16 +169,15 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape),
     acceptArtifact,
     observeRelayAnomaly,
-    relayArtifact,
+    relayJudged,
+    relayUnjudged,
     relayUpstreamWhen,
-    relayVerdict,
     withMethod,
     withValidators,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     Rejection (rejectionMessage),
-    RetryAfter (..),
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
     appendHelp,
@@ -265,9 +263,9 @@ serveTarballWithDeps ::
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveTarballWithDeps mode replies deps clientToken name version (Filename file) request respond
+serveTarballWithDeps mode replies deps clientToken name version file request respond
     | not (edgeTokenMatches (pdInboundToken deps) clientToken) =
-        liftIO (respond (tarballError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
+        liftIO (respond (tarballError replies status401 [] unauthorisedMessage))
     | otherwise = do
         rt <- asks ctxRuntime
         -- The client's conditional validators, relayed onto both legs' upstream requests so
@@ -297,21 +295,15 @@ streamPrivateArtifact ::
     Maybe Secret ->
     RequestHeaders ->
     PackageName ->
-    Text ->
+    Filename ->
     (response -> IO ResponseReceived) ->
     Handler (Maybe ResponseReceived)
 streamPrivateArtifact mode replies rt deps token validators name file respond =
     case privateRequest of
         Just req ->
-            liftIO
-                ( relayUpstreamWhen
-                    mode
-                    (srPrivateManager rt)
-                    req
-                    acceptArtifact
-                    (\status headers -> pure (relayArtifact status headers))
-                    (relayResponder replies respond)
-                )
+            liftIO $
+                fmap snd
+                    <$> relayUpstreamWhen mode (srPrivateManager rt) req acceptArtifact relayUnjudged (relayResponder replies respond)
         Nothing -> pure Nothing
   where
     -- The private tarball request {base}/{pkg}/-/{file}. 'Nothing' when the mount has no
@@ -323,7 +315,7 @@ streamPrivateArtifact mode replies rt deps token validators name file respond =
         Nothing -> Nothing
         Just privateBase
             | tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort ->
-                withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) privateBase token name file)
+                withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) privateBase token name (unFilename file))
             | otherwise -> Nothing
       where
         -- The precomputed private authority. The constructed URL is on the private base, so the
@@ -341,7 +333,7 @@ servePublicArtifact ::
     RequestHeaders ->
     PackageName ->
     Version ->
-    Text ->
+    Filename ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 servePublicArtifact mode replies rt deps validators name version file respond = do
@@ -349,19 +341,21 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag deps)
-    withServeAdmission metrics (srAdmission rt) (gatePublicVersion rt deps name version file advisoryEtag) >>= \case
-        Just (Admitted artifact) -> do
-            liftIO (mpServeDecision metrics Metric.Admit)
-            withRunInIO $ \runInIO ->
-                streamPublicArtifact mode replies rt deps validators name version artifact (runInIO . observeRelayAnomaly metrics name version) respond
-        Just (Refused decision) -> do
-            liftIO (mpServeDecision metrics (serveDecisionClass decision))
-            logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
-            liftIO (recordDenials metrics [decision])
-            liftIO (respond (artifactError replies deps decision))
-        Nothing -> liftIO $ do
-            mpServeDecision metrics Metric.Unavailable
-            respond (tarballError replies shedStatus [shedRetryAfter] "server is busy; retry later")
+    withAdmissionOrShed
+        metrics
+        (srAdmission rt)
+        (liftIO (respond (tarballError replies shedStatus [shedRetryAfter] shedMessage)))
+        (gatePublicVersion rt deps name version file advisoryEtag)
+        $ \case
+            Admitted artifact -> do
+                liftIO (mpServeDecision metrics Metric.Admit)
+                withRunInIO $ \runInIO ->
+                    streamPublicArtifact mode replies rt deps validators name version file artifact (runInIO . observeRelayAnomaly metrics name version) respond
+            Refused decision -> do
+                liftIO (mpServeDecision metrics (serveDecisionClass decision))
+                logDenials name advisoryEtag [VersionVerdict (renderVersion version) decision]
+                liftIO (recordDenials metrics [decision])
+                liftIO (respond (artifactError replies deps decision))
 
 {- | The outcome of gating a single requested artifact on the public path. The admit carries the
 artifact, so the stream step honours its 'artUrl' rather than reconstructing the location.
@@ -374,7 +368,7 @@ data PublicArtifactGate
 
 {- Gate the requested version and select its artifact. The single-version read resolves the full
 packument through the shared metadata cache, so a packument @GET@ and this gate are one call. -}
-gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Maybe DbEtag -> Handler PublicArtifactGate
+gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Filename -> Maybe DbEtag -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file advisoryEtag = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
     eval <-
@@ -401,7 +395,7 @@ gateVerdict = \case
 
 {- Gate one requested artifact through the shared admission oracle the worker's ingest
 re-evaluation also runs. The trusted private leg never reaches this gate. -}
-gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
+gateVersion :: EvalContext -> PackumentDeps -> Filename -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details =
     publicArtifactGate details <$> admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
 
@@ -410,7 +404,7 @@ publicArtifactGate :: PackageDetails -> ArtifactAdmission -> PublicArtifactGate
 publicArtifactGate details admission = case admission of
     -- The carried floor-checked digest set is the worker's ingest concern. The serve path
     -- streams without rehashing, so it has no consumer for the set.
-    AdmissionAdmit artifact _ -> Admitted artifact
+    AdmissionAdmit _ artifact _ -> Admitted artifact
     AdmissionDenied decision -> Refused (serveDecisionOf details decision)
     AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision details decision))
     AdmissionFileAbsent -> Refused versionAbsent
@@ -452,33 +446,25 @@ streamPublicArtifact ::
     RequestHeaders ->
     PackageName ->
     Version ->
+    Filename ->
     Artifact ->
     -- | Observe the relay verdict (the anomaly log line and metric).
     (RelayVerdict -> IO ()) ->
     (response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode replies rt deps validators name version artifact observeVerdict respond
+streamPublicArtifact mode replies rt deps validators name version file artifact observeVerdict respond
     | not hostHonoured = respond (crossHostRefused replies)
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
-        Right req -> do
-            -- The verdict slot. The relay writes it from the status and headers before any
-            -- body moves, and the read after the commit gates the mirror enqueue.
-            verdictRef <- newIORef Nothing
-            let verdictingRelay status headers = do
-                    atomicWriteIORef verdictRef (Just (relayVerdict status headers))
-                    pure (relayArtifact status headers)
-            relayUpstreamWhen mode (srPublicManager rt) req (const True) verdictingRelay (relayResponder replies respond) >>= \case
-                Just received -> do
-                    -- The committed relay always ran the verdicting relay exactly once. An
-                    -- unwritten slot is an invariant break, folded fail-closed into the odd shape.
-                    verdict <- fromMaybe (RelayedOddShape "the relay committed without classifying (invariant)") <$> readIORef verdictRef
+        Right req ->
+            relayUpstreamWhen mode (srPublicManager rt) req (const True) relayJudged (relayResponder replies respond) >>= \case
+                Just (verdict, received) -> do
                     observeVerdict verdict
                     -- Only a clean artifact relay back-fills: a relayed miss would enqueue a
                     -- doomed job, an oddly-shaped 2xx a misleading one. A serve-only mount
                     -- ('NoMirrorWrite') enqueues nothing, so no span or metric fires either.
                     case (verdict, pdMirror deps) of
-                        (RelayedArtifact, MirrorOnAdmit _) -> enqueueOnFull mode (enqueueMirror rt deps name version artifact)
+                        (RelayedArtifact, MirrorOnAdmit _) -> enqueueOnFull mode (enqueueMirror rt deps name version file artifact)
                         (RelayedArtifact, NoMirrorWrite) -> pass
                         (RelayedOddShape _, _) -> pass
                         (RelayedNonSuccess _, _) -> pass
@@ -510,8 +496,8 @@ delays the serve. The job carries the artifact's authoritative URL and the serve
 admitted filename, and nothing else: no credential, no mirror target, no digest and no
 size. The queue payload is a trust boundary the worker grants no authority, so the worker
 mints its own token and derives its own descriptor from the artifact it re-admits. -}
-enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
-enqueueMirror rt deps name version artifact =
+enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Filename -> Artifact -> IO ()
+enqueueMirror rt deps name version file artifact =
     case pdEgressUrl deps (artUrl artifact) of
         Left _ -> mpMirrorEnqueueFailure (srMetrics rt)
         Right egressUrl ->
@@ -532,7 +518,7 @@ enqueueMirror rt deps name version artifact =
             { jobPackage = name
             , jobVersion = version
             , jobArtifactUrl = egressUrl
-            , jobArtifactFilename = artFilename artifact
+            , jobArtifactFilename = file
             , -- The enqueueing span's trace context, captured by the span bracket, so
               -- the worker's per-job span links back across the hop.
               jobTraceContext = traceContext
@@ -572,7 +558,7 @@ artifactError replies deps decision =
 
     retryHeaders :: ResponseHeaders
     retryHeaders = case status of
-        Unavailable' (Just (RetryAfter secs)) -> [(hRetryAfter, show secs)]
+        Unavailable' retry -> retryAfterHeaders retry
         _ -> []
 
     toStatus :: ArtifactStatus -> Status

@@ -69,7 +69,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
-import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
+import Ecluse.Core.Package (InvalidEntry, PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy, MergePlan, SourceId)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -312,13 +312,9 @@ data PublishDeps = PublishDeps
     {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
     @npm publish@ is relayed to. The package path is appended to it.
     -}
-    , pubScopes :: [Scope]
-    {- ^ The configured publish allow-list
-    (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@, for npm a list of scopes): the
-    anti-shadowing guard. A publish whose package name is not within one of these
-    scopes is refused __before any upstream write__. A client therefore cannot publish
-    a name that shadows an existing public package, a dependency-confusion vector.
-    Never empty when a publication target is configured (config validation rejects that).
+    , pubAllowed :: PackageName -> Bool
+    {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
+    derives it at the composition root, npm's from exact scope equality, deny by default.
     -}
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the
@@ -380,9 +376,9 @@ data RouteAction = forall response. RouteAction (ResponseContract response) (Res
 {- | An ecosystem's whole routing decision: what to do with a mount-relative request.
 
 The adapter supplies one ('Ecluse.Core.Registry.Adapter.Types.serveRouter'). A path it does not
-recognise yields the deny-by-default @404@ ('Ecluse.Core.Server.Pipeline.Shared.notFoundInMount').
-The 'Method' is part of the mapping, and a @HEAD@ resolves to the head-mode handler of its @GET@.
-Segments arrive mount-stripped and percent-decoded.
+recognise yields the deny-by-default @404@. The 'Method' is part of the mapping, and a @HEAD@
+resolves to the head-mode handler of its @GET@. Segments arrive mount-stripped and
+percent-decoded.
 -}
 type MountRouter = Method -> [Text] -> RouteAction
 

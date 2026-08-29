@@ -19,7 +19,6 @@ the documented body by construction.
 module Ecluse.Core.Registry.Npm.Serve (
     NpmError (..),
     npmErrorCodec,
-    npmErrorKey,
     npmError,
 ) where
 
@@ -34,7 +33,7 @@ documented schema, so the served body and its documentation cannot diverge.
 newtype NpmError = NpmError {npmErrorReason :: Text}
     deriving stock (Eq, Show)
 
--- | The JSON key an npm denial body carries its reason under.
+-- The JSON key an npm denial body carries its reason under.
 npmErrorKey :: Text
 npmErrorKey = "error"
 

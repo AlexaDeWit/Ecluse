@@ -53,8 +53,6 @@ module Ecluse.Core.Registry.Npm.Route (
     npmPackumentReplies,
     npmTarballContract,
     npmTarballReplies,
-    npmPublishContract,
-    npmPublishReplies,
 
     -- * The table, as data
     npmRoutes,
@@ -114,7 +112,7 @@ import Ecluse.Core.Server.Contract (
     variableOpaqueContract,
     variableResponse,
  )
-import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
+import Ecluse.Core.Server.Path (Filename, isSafeComponent, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
@@ -455,7 +453,7 @@ tarballCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
 tarballCoordinate name file =
     case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
         Just version
-            | not (T.null version) -> Just (mkVersion Npm version, Filename file)
+            | not (T.null version) -> (mkVersion Npm version,) <$> mkFilename file
         _ -> Nothing
 
 {- | npm's routes as data for the __OpenAPI spec__: the 'specsOf' projection of the

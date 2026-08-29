@@ -45,8 +45,7 @@ module Ecluse.Core.Osv.Stream (
     IngestLimits (..),
     defaultIngestLimits,
     IngestStats (..),
-    IngestCounter,
-    OsvIngest (..),
+    OsvIngest,
     newOsvIngest,
     readIngestStats,
     resetIngestStats,
@@ -110,7 +109,7 @@ data IngestStats = IngestStats
 emptyIngestStats :: IngestStats
 emptyIngestStats = IngestStats 0 0 0
 
--- | The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
+-- The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
 newtype IngestCounter = IngestCounter (IORef IngestStats)
 
 -- | The context one ingest pass threads through the stream.

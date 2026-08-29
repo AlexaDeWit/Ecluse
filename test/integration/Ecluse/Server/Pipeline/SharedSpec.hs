@@ -15,8 +15,10 @@ import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (impureThrow, throwString)
 
+import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
+import Ecluse.Core.Rules (PreparedRule (..), Resilience (..))
+import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))

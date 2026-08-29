@@ -104,6 +104,7 @@ import Ecluse.Core.Worker (
     WorkerPolicy (wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpPublish),
  )
 import Ecluse.Test.Package (
+    unsafeFilename,
     unsafeHash,
     validBlake2b,
     validMd5,
@@ -217,7 +218,7 @@ jobWith url =
         , -- The flag-gated loopback former: these suites point jobs at in-process
           -- http stubs, which the production https-only former would refuse.
           jobArtifactUrl = loopbackRegistryUrl url
-        , jobArtifactFilename = "thing-1.0.0.tgz"
+        , jobArtifactFilename = unsafeFilename "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
 

@@ -6,7 +6,7 @@
 
 Maps the handle's receive → process → ack shape onto SQS:
 
-* 'enqueue' → @SendMessage@ (the 'MirrorJob' encoded as the message body).
+* 'enqueue' → @SendMessage@ (the job encoded as the message body).
 * 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll).
 * 'ack' → @DeleteMessage@ (the message is gone, never redelivered).
 * 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish).
@@ -38,15 +38,14 @@ discards it unseen. Every operation reports its AWS failure as the handle's type
 this edge ("Ecluse.Runtime.Aws.Fault"). A queue outage never rides the exception channel
 through a caller.
 
-'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture
-it. The backend's state therefore never reaches the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The 'MirrorJob' wire
-mapping is a plain JSON object, decoded on 'receive'. A body that fails to parse is
-dropped rather than yielded as a partial. Like any message left unprocessed, it is not
-'ack'ed, so SQS redelivers it and it eventually reaches the dead-letter queue. Each
-drop is logged at 'DebugS' with its reason and the SQS message id when present: a
-missing body or receipt, or an undecodable body. A poison message is then visible
-rather than cycling silently. The untrusted body is never logged.
+'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture it, so
+the backend's state never reaches the proxy's @Env@\/@App@ (see
+@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The job's wire mapping belongs to
+the payload ('Ecluse.Core.Queue.decodeJob'), and this module supplies only the ecosystem name
+gate that decode reads through ('mirrorJobPackage'). An undecodable body is dropped rather than
+yielded as a partial, and like any unprocessed message it is not 'ack'ed, so it redelivers and
+reaches the dead-letter queue. Each drop is logged at 'DebugS' with its reason and message id, so
+a poison message is visible rather than cycling silently. The untrusted body is never logged.
 
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
 URL, or an endpoint override). Like the OTLP telemetry endpoint (see
@@ -70,9 +69,8 @@ module Ecluse.Runtime.Queue.Sqs (
     -- * Dead-letter probe
     deadLetterTerminusOf,
 
-    -- * Job wire mapping
-    encodeJob,
-    decodeJob,
+    -- * The queue payload's wire-name gate
+    mirrorJobPackage,
 ) where
 
 import Amazonka qualified as AWS
@@ -84,48 +82,32 @@ import Amazonka.SQS.ReceiveMessage qualified as SQS
 import Amazonka.SQS.SendMessage qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
-import Data.Aeson (
-    eitherDecodeStrict',
-    object,
-    withObject,
-    (.:),
-    (.:?),
-    (.=),
- )
+import Data.Aeson (eitherDecodeStrict', withObject, (.:))
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import Data.Aeson.Types (parseMaybe)
 import Katip (LogEnv, Severity (DebugS), sl)
 import Lens.Micro ((?~), (^.))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (
-    PackageName,
-    mkPackageName,
-    mkScope,
-    pkgEcosystem,
-    pkgNamespace,
-    unScope,
-    unscopedName,
- )
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
-    MirrorJob (..),
     MirrorQueue (..),
     QueueMessage (..),
-    RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate),
     Seconds (..),
+    decodeJob,
     defaultDeliveryBudget,
     effectiveDeliveryBudget,
+    encodeJob,
     mkReceiptHandle,
     unReceiptHandle,
  )
 import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Log (logLine, moduleField)
@@ -282,7 +264,7 @@ countOf = \case
 -}
 data ReceivedMessage = ReceivedMessage
     { rmBody :: Maybe Text
-    -- ^ The message body carrying the encoded 'MirrorJob' (SQS always supplies one).
+    -- ^ The message body carrying the encoded job (SQS always supplies one).
     , rmReceipt :: Maybe Text
     -- ^ The receipt handle a later 'ack' deletes the message by (SQS always supplies one).
     , rmMessageId :: Maybe Text
@@ -320,7 +302,7 @@ toQueueMessage :: (Text -> Either Text RegistryUrl) -> ReceivedMessage -> Either
 toQueueMessage egressUrl received = do
     body <- maybeToRight MissingBody (rmBody received)
     receipt <- maybeToRight MissingReceipt (rmReceipt received)
-    job <- first (const UndecodableBody) (decodeJob egressUrl body)
+    job <- first (const UndecodableBody) (decodeJob mirrorJobPackage egressUrl body)
     pure
         QueueMessage
             { msgJob = job
@@ -366,86 +348,14 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
-{- | Encode a 'MirrorJob' as the JSON text of an SQS message body, the inverse of
-'decodeJob'. The filename is the only part of the artifact the wire carries. The worker
-takes the digests and size it verifies from current metadata, never from the payload.
+{- | Read a queue payload's package identity through its ecosystem's own grammar, the gate
+'Ecluse.Core.Queue.decodeJob' applies at the trust boundary. Only npm has one to read it through.
 -}
-encodeJob :: MirrorJob -> Text
-encodeJob job =
-    decodeUtf8 . Aeson.encode $
-        object
-            [ "ecosystem" .= ecosystemName (pkgEcosystem name)
-            , "scope" .= (unScope <$> pkgNamespace name)
-            , "name" .= unscopedName name
-            , "version" .= renderVersion (jobVersion job)
-            , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
-            , "filename" .= jobArtifactFilename job
-            , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
-            ]
-  where
-    name = jobPackage job
-
--- The W3C traceparent and tracestate verbatim, so the worker can re-establish the
--- cross-async span link. A 'Nothing' carrier round-trips through a JSON null.
-encodeTraceContext :: RemoteSpanContext -> Aeson.Value
-encodeTraceContext rsc =
-    object
-        [ "traceparent" .= rscTraceparent rsc
-        , "tracestate" .= rscTracestate rsc
-        ]
-
-{- | Decode an SQS message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
-the decode re-forms the artifact URL's egress witness and re-reads the package name.
--}
-decodeJob :: (Text -> Either Text RegistryUrl) -> Text -> Either Text MirrorJob
-decodeJob egressUrl body =
-    first toText (eitherDecodeStrict' (encodeUtf8 body))
-        >>= first toText . parseEither (parseMirrorJob egressUrl)
-
--- Parse the top-level job object 'encodeJob' writes, delegating the nested
--- trace-context carrier to 'parseTraceContext'.
-parseMirrorJob :: (Text -> Either Text RegistryUrl) -> Aeson.Value -> Parser MirrorJob
-parseMirrorJob egressUrl = withObject "MirrorJob" $ \o -> do
-    ecoName <- o .: "ecosystem"
-    eco <- maybe (fail (unknownEcosystem ecoName)) pure (parseEcosystem ecoName)
-    scope <- o .:? "scope"
-    rawName <- o .: "name"
-    -- The payload states the scope and the bare name separately, so re-join them and read the
-    -- result through the ecosystem's own grammar rather than trusting the two fields.
-    package <- either (fail . toString) pure (mirrorJobPackage eco scope rawName)
-    rawVersion <- o .: "version"
-    rawArtifactUrl <- o .: "artifactUrl"
-    -- Re-form the egress witness at the wire boundary: the type the worker's fetch
-    -- requires cannot be fabricated from an unvalidated payload string.
-    artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
-    filename <- o .: "filename"
-    -- A job from an older producer, or one enqueued with tracing off, carries no
-    -- "traceContext". It yields no span link rather than a decode failure.
-    traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
-    pure
-        MirrorJob
-            { jobPackage = package
-            , jobVersion = mkVersion eco rawVersion
-            , jobArtifactUrl = artifactUrl
-            , jobArtifactFilename = filename
-            , jobTraceContext = traceContext
-            }
-  where
-    unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
-
-{- Rebuild the payload's package identity. npm has a name grammar, so its wire name goes through
-'projectName'. PyPI and RubyGems have none, so both take the two fields as given. -}
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
-mirrorJobPackage eco scope rawName = case eco of
+mirrorJobPackage eco namespace rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)
     PyPI -> Right asGiven
     RubyGems -> Right asGiven
   where
-    asGiven = mkPackageName eco (mkScope <$> scope) rawName
-    npmWireName = maybe rawName (\s -> "@" <> s <> "/" <> rawName) scope
-
--- The carrier is untrusted opaque transport, so both fields are taken as-is. An
--- unparseable W3C value yields no link in the tracing port rather than failing the decode.
-parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
-parseTraceContext = withObject "RemoteSpanContext" $ \t ->
-    RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
+    asGiven = mkPackageName eco (mkScope <$> namespace) rawName
+    npmWireName = maybe rawName (\ns -> "@" <> ns <> "/" <> rawName) namespace

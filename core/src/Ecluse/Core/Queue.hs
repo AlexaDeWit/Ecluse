@@ -21,6 +21,10 @@ module Ecluse.Core.Queue (
     RemoteSpanContext (..),
     QueueMessage (..),
 
+    -- * The payload's wire mapping
+    encodeJob,
+    decodeJob,
+
     -- * Opaque receipt
     ReceiptHandle,
     mkReceiptHandle,
@@ -46,14 +50,19 @@ module Ecluse.Core.Queue (
 ) where
 
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
+import Data.Aeson (eitherDecodeStrict', object, withObject, (.:), (.:?), (.=))
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Types (Parser, parseEither)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfDetail, transportFault)
-import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, unScope, unscopedName)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the mirror
 target.
@@ -73,7 +82,7 @@ data MirrorJob = MirrorJob
     decode re-forms the validated https egress witness, since the queue payload is a trust
     boundary.
     -}
-    , jobArtifactFilename :: Text
+    , jobArtifactFilename :: Filename
     {- ^ The serve-time-admitted artifact's filename: a selection key, not authority. The shared
     admission gate cross-checks it against current metadata rather than trusting it.
     -}
@@ -99,6 +108,88 @@ data RemoteSpanContext = RemoteSpanContext
     -}
     }
     deriving stock (Eq, Show)
+
+{- | Encode a 'MirrorJob' as the JSON text of a queue message body, the inverse of 'decodeJob'. The
+identity rides as a namespace and a base name, so a namespaced name round-trips on any ecosystem.
+-}
+encodeJob :: MirrorJob -> Text
+encodeJob job =
+    decodeUtf8 . Aeson.encode $
+        object
+            [ "ecosystem" .= ecosystemName (pkgEcosystem (jobPackage job))
+            , "namespace" .= (unScope <$> pkgNamespace (jobPackage job))
+            , "name" .= unscopedName (jobPackage job)
+            , "version" .= renderVersion (jobVersion job)
+            , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
+            , "filename" .= unFilename (jobArtifactFilename job)
+            , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
+            ]
+
+-- The W3C traceparent and tracestate verbatim, so the worker can re-establish the
+-- cross-async span link. A 'Nothing' carrier round-trips through a JSON null.
+encodeTraceContext :: RemoteSpanContext -> Aeson.Value
+encodeTraceContext rsc =
+    object
+        [ "traceparent" .= rscTraceparent rsc
+        , "tracestate" .= rscTracestate rsc
+        ]
+
+{- | Decode a queue message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
+the name, the filename, and the artifact URL each go back through their own gate.
+-}
+decodeJob ::
+    -- | Read a wire namespace and base name through the ecosystem's own grammar.
+    (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
+    -- | Re-form the artifact URL's validated https egress witness.
+    (Text -> Either Text RegistryUrl) ->
+    Text ->
+    Either Text MirrorJob
+decodeJob packageName egressUrl body =
+    first toText (eitherDecodeStrict' (encodeUtf8 body))
+        >>= first toText . parseEither (parseMirrorJob packageName egressUrl)
+
+-- Parse the top-level job object 'encodeJob' writes, delegating the nested trace-context
+-- carrier to 'parseTraceContext'.
+parseMirrorJob ::
+    (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
+    (Text -> Either Text RegistryUrl) ->
+    Aeson.Value ->
+    Parser MirrorJob
+parseMirrorJob packageName egressUrl = withObject "MirrorJob" $ \o -> do
+    ecoName <- o .: "ecosystem"
+    eco <- maybe (fail (unusable "ecosystem" ecoName)) pure (parseEcosystem ecoName)
+    rawNamespace <- o .:? "namespace"
+    rawName <- o .: "name"
+    -- The payload states the namespace and the base name separately, so the ecosystem re-joins
+    -- and re-reads them rather than either field being trusted as given.
+    package <- either (fail . toString) pure (packageName eco rawNamespace rawName)
+    rawVersion <- o .: "version"
+    rawArtifactUrl <- o .: "artifactUrl"
+    -- The type the worker's fetch requires cannot be fabricated from an unvalidated string.
+    artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
+    rawFilename <- o .: "filename"
+    -- The filename is interpolated into an upstream path, so it is refused here unless it is a
+    -- safe path component.
+    filename <- maybe (fail (unusable "artifact filename" rawFilename)) pure (mkFilename rawFilename)
+    -- A job enqueued with tracing off carries no "traceContext". It yields no span link
+    -- rather than a decode failure.
+    traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
+    pure
+        MirrorJob
+            { jobPackage = package
+            , jobVersion = mkVersion eco rawVersion
+            , jobArtifactUrl = artifactUrl
+            , jobArtifactFilename = filename
+            , jobTraceContext = traceContext
+            }
+  where
+    unusable field value = "unusable " <> field <> " " <> show (value :: Text)
+
+-- The carrier is untrusted opaque transport, so both fields are taken as-is. An unparseable
+-- W3C value yields no link in the tracing port rather than failing the decode.
+parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
+parseTraceContext = withObject "RemoteSpanContext" $ \t ->
+    RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
 
 {- | An opaque handle identifying a received message for 'ack' \/ 'extendVisibility': the
 backend's own delivery token (an SQS receipt handle, a Pub\/Sub @ackId@) as text. The

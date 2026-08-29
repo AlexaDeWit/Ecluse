@@ -50,7 +50,7 @@ import Ecluse.Core.Package (HashAlg (SHA1), PackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Test.Package (unsafeHash, unscopedNpm, validSha1)
+import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
 @\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
@@ -102,7 +102,7 @@ digests reach the publish document, so the size stays absent unless a case sets 
 dummyArtifact :: MirrorArtifact
 dummyArtifact =
     MirrorArtifact
-        { maFilename = "is-odd-1.0.0.tgz"
+        { maFilename = unsafeFilename "is-odd-1.0.0.tgz"
         , maHashes = NE.singleton (unsafeHash SHA1 validSha1)
         , maSize = Nothing
         }

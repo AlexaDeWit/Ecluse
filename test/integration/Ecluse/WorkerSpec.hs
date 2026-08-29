@@ -32,7 +32,7 @@ import Ecluse.Integration.WorkerLoop (
     withMirrorTarget,
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
-import Ecluse.Test.Package (sriSha512Of, unsafeHash)
+import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 {- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI
@@ -165,7 +165,7 @@ job upstreamUrl =
         , jobVersion = mkVersion Npm "1.3.0"
         , -- The flag-gated loopback former: the job points at an in-process http stub.
           jobArtifactUrl = loopbackRegistryUrl (upstreamUrl <> artifactPath)
-        , jobArtifactFilename = "left-pad-1.3.0.tgz"
+        , jobArtifactFilename = unsafeFilename "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }
 

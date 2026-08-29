@@ -32,7 +32,6 @@ module Ecluse.Core.Package (
     pkgEcosystem,
     pkgNamespace,
     pkgCanonical,
-    pkgDisplay,
     pkgBaseName,
     renderPackageName,
     unscopedName,

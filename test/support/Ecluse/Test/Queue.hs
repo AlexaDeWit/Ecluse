@@ -20,7 +20,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue)
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig (..), newBoundedInMemoryQueue)
-import Ecluse.Test.Package (thingName, unsafeRegistryUrl, v1_0_0)
+import Ecluse.Test.Package (thingName, unsafeFilename, unsafeRegistryUrl, v1_0_0)
 
 {- | A cap-overflow drop from the test queue, carrying the backend's running drop total. It is a
 broken test premise, so the typed value fails the test loudly instead of silently losing a job.
@@ -46,6 +46,6 @@ sampleJob =
         { jobPackage = thingName
         , jobVersion = v1_0_0
         , jobArtifactUrl = unsafeRegistryUrl "https://public.test/thing/-/thing-1.0.0.tgz"
-        , jobArtifactFilename = "thing-1.0.0.tgz"
+        , jobArtifactFilename = unsafeFilename "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }

@@ -2,31 +2,29 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Ack within the visibility budget during job processing. A received message is hidden only
-for the queue's visibility window, so before a publish that may run long the worker calls
-'Ecluse.Core.Queue.extendVisibility' to hold it. On a transient failure it does __not__ ack, so
-the message redelivers. A batch is processed __sequentially__, so each job has the full
-visibility budget rather than competing with its batch-mates. A delivery that already spent the
-queue's redelivery budget is retired before the job runs, so a message nothing else captures
-stops cycling instead of re-fetching its artifact on every redelivery.
+{- | Deciding one mirror job: probe the mirror target, re-run current policy, fetch, verify, and
+publish. Every step reports its verdict as a 'JobOutcome' value, which
+"Ecluse.Core.Worker.Realise" realises at the queue handle.
+
+A received message is hidden only for the queue's visibility window, so before a publish that
+may run long the worker holds it ('Ecluse.Core.Queue.extendVisibility'). Nothing here acks: a
+transient failure simply reports 'Retried', and the un-acked message redelivers.
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
-    ReevalOutcome (..),
     outcomeOfAdmission,
     outcomeOfFetchFault,
     processJob,
-    processBatch,
     workerPublishVisibilityBudget,
 ) where
 
 import Data.Map.Strict qualified as Map
-import Katip (Severity (DebugS, ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
+import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
-import Ecluse.Core.Fault (tfCause, tfDetail)
-import Ecluse.Core.Package (Artifact (artFilename, artSize), Hash, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Fault (tfCause)
+import Ecluse.Core.Package (Artifact (artSize), Hash, pkgEcosystem)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
         AdmissionAdmit,
@@ -39,7 +37,7 @@ import Ecluse.Core.Package.Admission (
     admissionTransience,
     admitArtifact,
  )
-import Ecluse.Core.Queue (DeliveryBudget, MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility), QueueMessage (msgJob, msgReceipt, msgReceiveCount), ReceiptHandle, Seconds (Seconds), deliveryBudgetSpent, retiringDelivery)
+import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (extendVisibility), ReceiptHandle, Seconds (Seconds))
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -51,96 +49,12 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeM
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
-import Ecluse.Core.Version (renderVersion)
 import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Types
-
-{- | Process one batch sequentially, so each job gets the full visibility budget. The heartbeat
-advances per job, so 'Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter' covers one job.
--}
-processBatch :: [QueueMessage] -> WorkerM ()
-processBatch = traverse_ $ \message -> do
-    processMessage message
-    recordWorkerProgress
-
-{- Check the queue's delivery budget before running the job, so a poison message retires without
-re-fetching its artifact, even on a queue with no dead-letter terminus. -}
-processMessage :: QueueMessage -> WorkerM ()
-processMessage message = do
-    budget <- asks (deliveryBudget . wrQueue)
-    if deliveryBudgetSpent budget message
-        then do
-            metrics <- asks wrMetrics
-            liftIO (wmpMirrorJobProcessed metrics Metric.Discarded)
-            retireTerminally (budgetSpentReason budget message) (msgReceipt message)
-        else processDelivery message
-
--- Run the job and realise its outcome for a delivery still within the queue's budget.
-processDelivery :: QueueMessage -> WorkerM ()
-processDelivery message = do
-    metrics <- asks wrMetrics
-    outcome <- processJob (msgReceipt message) (msgJob message)
-    liftIO (wmpMirrorJobProcessed metrics (jobResultMetric outcome))
-    case outcome of
-        Succeeded -> ackMessage (msgReceipt message)
-        Dropped reason ->
-            -- Non-retryable, and not worth a dead-letter forensic trail, so retire it instead.
-            retireTerminally ("dropping unrecoverable mirror job: " <> reason) (msgReceipt message)
-        DeadLettered reason -> do
-            -- Alarm first: on the in-memory backend the log and metric are the only record.
-            logFM ErrorS (ls ("dead-lettering unmirrorable mirror job (rides the backend's dead-letter terminus): " <> reason))
-            deadLetterMessage (msgReceipt message)
-        Retried reason ->
-            logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
-
-{- Retire a message the worker will never mirror: alarm, then ack so it stops cycling. On a
-durable queue that ack is the delete that finally kills the message. -}
-retireTerminally :: Text -> ReceiptHandle -> WorkerM ()
-retireTerminally reason receipt = do
-    logFM ErrorS (ls reason)
-    ackMessage receipt
-
--- On a queue with no dead-letter terminus this line is the only record the message ever leaves.
-budgetSpentReason :: DeliveryBudget -> QueueMessage -> Text
-budgetSpentReason budget message =
-    "discarding a mirror job after "
-        <> show (msgReceiveCount message)
-        <> " deliveries (this queue retires one on delivery "
-        <> show (retiringDelivery budget)
-        <> "): "
-        <> renderJob (msgJob message)
-        <> ". No dead-letter queue captured it, so it is retired here rather than left to"
-        <> " cycle until the queue's retention window drops it unseen. Attach a redrive"
-        <> " policy to retain it for inspection."
-
--- Classify a job outcome for the @ecluse.mirror.jobs.processed@ metric. 'Metric.Discarded' is
--- absent here on purpose: the worker counts a budget-spent delivery at its retirement.
-jobResultMetric :: JobOutcome -> Metric.MirrorResult
-jobResultMetric = \case
-    Succeeded -> Metric.Published
-    Dropped _ -> Metric.Failed
-    DeadLettered _ -> Metric.Failed
-    Retried _ -> Metric.Failed
-
-ackMessage :: ReceiptHandle -> WorkerM ()
-ackMessage receipt = do
-    queue <- asks wrQueue
-    acked <- liftIO (ack queue receipt)
-    whenLeft_ acked $ \fault ->
-        logFM WarningS (ls ("ack failed; the processed message will redeliver (harmless, publishing is idempotent): " <> tfDetail fault))
-
--- Hand the message to the queue's dead-letter terminus, never a plain delete, which would
--- silently discard it on a durable queue.
-deadLetterMessage :: ReceiptHandle -> WorkerM ()
-deadLetterMessage receipt = do
-    queue <- asks wrQueue
-    outcome <- liftIO (deadLetter queue receipt)
-    whenLeft_ outcome $ \fault ->
-        logFM WarningS (ls ("dead-letter realisation failed; the message redelivers and re-fails terminally (harmless): " <> tfDetail fault))
 
 {- | The terminal outcome of processing one mirror job. It decides whether the worker
 acks the message or leaves it to redeliver.
@@ -189,15 +103,6 @@ processJob receipt job = katipAddNamespace "job" $ do
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
         Retried reason -> JobSpanOutcome "retried" (Just reason)
 
-{- | The policy re-evaluation's verdict, decided before any artifact fetch. 'ReevalAdmit' carries
-the floor-checked digest set the tamper gate verifies the fetched bytes against.
--}
-data ReevalOutcome
-    = ReevalAdmit MirrorArtifact
-    | ReevalDrop Text
-    | ReevalRetry Text
-    deriving stock (Eq, Show)
-
 -- Order the steps cheapest first: a duplicate retires for one metadata round trip and a now-denied
 -- job drops before its bytes are downloaded. Every step past the lookup rides the ecosystem's own
 -- bundle, so no job can consult a foreign ecosystem's probe, rules, or publish.
@@ -216,9 +121,8 @@ reevaluateThenMirror receipt job = do
                     pure Succeeded
                 False ->
                     reevaluatePolicy policy job >>= \case
-                        ReevalAdmit admitted -> mirrorArtifact policy receipt job admitted
-                        ReevalDrop reason -> pure (Dropped reason)
-                        ReevalRetry reason -> pure (Retried reason)
+                        Right admitted -> mirrorArtifact policy receipt job admitted
+                        Left outcome -> pure outcome
 
 {- Confirm presence positively only: a fetch fault or an unparseable body answers 'False', so the
 job falls through to the full gated pipeline. The probe never admits an unvetted job. -}
@@ -236,17 +140,17 @@ alreadyMirrored policy job = do
 
 {- Re-check the fetch URL against the mount's tarball-host gate, because the queue payload is a
 trust boundary. Then re-run current policy through 'Ecluse.Core.Package.Admission.admitArtifact'. -}
-reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM ReevalOutcome
+reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome MirrorArtifact)
 reevaluatePolicy policy job
     | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
-        pure (ReevalDrop ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> jobArtifactAuthority job <> "); refusing to fetch or mirror it"))
+        pure (Left (Dropped ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> jobArtifactAuthority job <> "); refusing to fetch or mirror it")))
     | otherwise = do
         evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
         case evaluation of
             VersionMetadataUnavailable ->
-                pure (retryOrDrop (versionTransience evaluation) ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
+                pure (Left (retryOrDrop (versionTransience evaluation) ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
             VersionMissing ->
-                pure (retryOrDrop (versionTransience evaluation) ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
+                pure (Left (retryOrDrop (versionTransience evaluation) ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
             VersionPresent details -> do
                 -- The back-fill path emits no per-decision audit line, so the
                 -- audit-only advisory ETag is not resolved for its context.
@@ -262,12 +166,12 @@ reevaluatePolicy policy job
                         )
                 pure (outcomeOfAdmission job admission)
 
-{- | Render the shared 'ArtifactAdmission' as the worker's outcome. This fold writes the audit
-reason only: 'admissionTransience' decides retry versus drop, so the two paths cannot diverge.
+{- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
+realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
 -}
-outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> ReevalOutcome
+outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> Either JobOutcome MirrorArtifact
 outcomeOfAdmission job admission = case admission of
-    AdmissionAdmit artifact digests -> ReevalAdmit (readmittedDescriptor artifact digests)
+    AdmissionAdmit filename artifact digests -> Right (readmittedDescriptor filename artifact digests)
     AdmissionDenied (Blocked ruleName reason) ->
         refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
@@ -283,23 +187,23 @@ outcomeOfAdmission job admission = case admission of
     AdmissionIntegrityMissing ->
         refused ("current admission policy refuses " <> renderJob job <> ": it no longer carries any integrity digest")
   where
-    refused = retryOrDrop (admissionTransience admission)
+    refused :: Text -> Either JobOutcome MirrorArtifact
+    refused = Left . retryOrDrop (admissionTransience admission)
 
 {- The worker's one retry-versus-drop rule, over the shared transience. Only an inability the
 evaluator expects to clear redelivers: the rest drop through the terminal path. -}
-retryOrDrop :: Maybe Transience -> Text -> ReevalOutcome
+retryOrDrop :: Maybe Transience -> Text -> JobOutcome
 retryOrDrop transience reason = case transience of
-    Just (WillResolve _) -> ReevalRetry reason
-    Just WontResolve -> ReevalDrop reason
-    Nothing -> ReevalDrop reason
+    Just (WillResolve _) -> Retried reason
+    Just WontResolve -> Dropped reason
+    Nothing -> Dropped reason
 
--- Derive the publish descriptor from current metadata alone: the floor-checked digests the
--- tamper gate verifies against, plus the filename and declared size. The payload's filename only
--- selects the artifact, so no queue-payload text reaches the trusted-tier publish document.
-readmittedDescriptor :: Artifact -> NonEmpty Hash -> MirrorArtifact
-readmittedDescriptor artifact digests =
+{- Derive the publish descriptor from what the gate settled, so nothing the queue payload asserted
+reaches the trusted-tier publish document unchecked. The size is current metadata's. -}
+readmittedDescriptor :: Filename -> Artifact -> NonEmpty Hash -> MirrorArtifact
+readmittedDescriptor filename artifact digests =
     MirrorArtifact
-        { maFilename = artFilename artifact
+        { maFilename = filename
         , maHashes = digests
         , maSize = artSize artifact
         }
@@ -376,11 +280,8 @@ publishVerified policy receipt job admitted bytes = do
 -- Hold the message past its visibility window before a publish that may run long. A mid-publish
 -- redelivery only wastes a re-fetch, so a failed extend is swallowed, never failing the job.
 holdForLongPublish :: ReceiptHandle -> WorkerM ()
-holdForLongPublish receipt = do
-    queue <- asks wrQueue
-    -- The fault channel is a value, and a failed extend is the swallowed 'Left'.
-    _ <- liftIO (extendVisibility queue receipt workerPublishVisibilityBudget)
-    pass
+holdForLongPublish receipt =
+    queueOp (\queue -> extendVisibility queue receipt workerPublishVisibilityBudget) (const pass)
 
 {- | The visibility window one publish gets before its message could redeliver mid-write, sized to
 upload the largest artifact the memory plan admits (512 MiB) over a 2 MiB-per-second link.
@@ -392,15 +293,8 @@ workerPublishVisibilityBudget = Seconds 300
 -- Reset the message to visible, so a failed publish redelivers at once instead of waiting out
 -- 'holdForLongPublish'. Best effort: a missed reset only delays the redelivery.
 releaseForRetry :: ReceiptHandle -> WorkerM ()
-releaseForRetry receipt = do
-    queue <- asks wrQueue
-    -- The fault channel is a value, and a failed reset is the swallowed 'Left'.
-    _ <- liftIO (extendVisibility queue receipt (Seconds 0))
-    pass
-
--- A one-line identifier for a job, for log lines.
-renderJob :: MirrorJob -> Text
-renderJob job = renderPackageName (jobPackage job) <> "@" <> renderVersion (jobVersion job)
+releaseForRetry receipt =
+    queueOp (\queue -> extendVisibility queue receipt (Seconds 0)) (const pass)
 
 {- The job's artifact location as a log-safe authority. The queue payload's URL can carry userinfo
 or a pre-signed query, so a log line names only the host and port the worker dials. -}

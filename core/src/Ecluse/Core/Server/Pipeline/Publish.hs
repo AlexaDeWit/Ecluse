@@ -7,7 +7,7 @@
 The publish flow runs in order:
 
 * validate edge authentication
-* apply the anti-shadowing scope guard, so the package name is one this proxy may publish
+* apply the anti-shadowing allow-list guard, so the package name is one this proxy may publish
 * bound the request body at the per-request size cap
 * check body-name agreement between the URL path and the publish document
 * relay the request to the upstream publication target with the publisher's credential
@@ -24,16 +24,11 @@ module Ecluse.Core.Server.Pipeline.Publish (
 
 import Data.ByteString.Lazy qualified as LBS
 
-import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status403, status405, status413, status500, status502)
+import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status401, status403, status405, status413, status500, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (
-    PackageName,
-    Scope,
-    pkgNamespace,
-    renderPackageName,
- )
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
@@ -83,8 +78,8 @@ publishWithDeps ::
     Handler ResponseReceived
 publishWithDeps replies deps clientToken name request respond
     | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
-        liftIO (respond (publishError replies (mkStatus 401 "Unauthorized") [] "authentication required"))
-    | not (inPublishScope (pubScopes deps) name) =
+        liftIO (respond (publishError replies status401 [] unauthorisedMessage))
+    | not (pubAllowed deps name) =
         liftIO (respond (outOfScope replies deps name))
     | overDeclaredCap =
         -- A declared Content-Length over the cap fails closed before a byte is read, with no
@@ -125,14 +120,6 @@ publishWithDeps replies deps clientToken name request respond
     bodyWeight = case requestBodyLength request of
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
-
-{- Whether a package name is inside the configured publish-scope allow-list: the
-anti-shadowing guard. An unscoped name is in no scope, so the guard refuses it. Scope
-equality is exact, so @\@acme-evil@ does not match an @\@acme@ entry. -}
-inPublishScope :: [Scope] -> PackageName -> Bool
-inPublishScope scopes name = case pkgNamespace name of
-    Just scope -> scope `elem` scopes
-    Nothing -> False
 
 {- Render the relay outcome. On success the publisher sees the publication target's own
 status and body, so the registry's own @409@ or @403@ reaches the client unchanged. -}

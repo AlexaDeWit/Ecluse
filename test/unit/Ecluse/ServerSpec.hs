@@ -108,7 +108,7 @@ basePublishDeps :: ByteAdmission -> PublishDeps
 basePublishDeps bodyBudget =
     PublishDeps
         { pubTargetUrl = "http://127.0.0.1:1" -- an unconnectable port
-        , pubScopes = [mkScope "acme"]
+        , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = Nothing
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits

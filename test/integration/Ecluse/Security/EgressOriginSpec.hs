@@ -19,10 +19,8 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     fetchMetadataFormBounded,
  )
-import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Abbreviated),
-    noValidators,
- )
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
+import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)

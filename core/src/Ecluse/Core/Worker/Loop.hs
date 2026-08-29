@@ -21,7 +21,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Fault (tfDetail)
 import Ecluse.Core.Queue (MirrorQueue (receive))
 import Ecluse.Core.Supervision (SupervisionPolicy, superviseLoop)
-import Ecluse.Core.Worker.Job (processBatch)
+import Ecluse.Core.Worker.Realise (processBatch)
 import Ecluse.Core.Worker.Types
 
 {- | The continuous consume loop: long-poll, process, repeat, under the supervision policy. The

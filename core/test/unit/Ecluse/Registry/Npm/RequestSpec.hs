@@ -25,14 +25,13 @@ import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Abbreviated),
-    Validators (..),
+    MetadataForm (Abbreviated, Full),
     artifactFileUrl,
     artifactRequestByFile,
     artifactRequestByUrl,
     metadataRequest,
-    noValidators,
  )
+import Ecluse.Core.Registry.Request (Validators (..), noValidators)
 
 import Ecluse.Test.Registry.Npm (isOdd)
 import Ecluse.Test.Stub (
@@ -43,6 +42,7 @@ import Ecluse.Test.Stub (
 spec :: Spec
 spec = do
     requestShapingSpec
+    contentNegotiationSpec
     pathEncodingSpec
     authSpec
     redirectSpec
@@ -98,6 +98,25 @@ pathEncodingSpec =
             case metadataRequest "https://reg.test" Nothing Abbreviated noValidators onceDecodedTraversal of
                 Right r -> Client.path r `shouldBe` "/foo%252e%252e%252fbar"
                 Left e -> fail (show e)
+
+contentNegotiationSpec :: Spec
+contentNegotiationSpec =
+    describe "metadata content negotiation" $ do
+        -- The two @Accept@ values are npm's wire contract. The abbreviated install view is
+        -- the primary one, and only the full packument carries the @time@ map a publish-age
+        -- rule reads.
+        it "asks for the abbreviated install view" $
+            acceptHeaderOf Abbreviated `shouldBe` Just "application/vnd.npm.install-v1+json"
+
+        it "asks for the full packument" $
+            acceptHeaderOf Full `shouldBe` Just "application/json"
+  where
+    acceptHeaderOf :: MetadataForm -> Maybe ByteString
+    acceptHeaderOf form =
+        case metadataRequest "https://reg.test" Nothing form noValidators isOdd of
+            Right r -> lookup "Accept" (Client.requestHeaders r)
+            -- An unformable URL fails the assertion rather than throwing.
+            Left _ -> Nothing
 
 authSpec :: Spec
 authSpec =

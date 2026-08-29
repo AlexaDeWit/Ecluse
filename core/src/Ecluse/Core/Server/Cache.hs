@@ -138,12 +138,10 @@ module Ecluse.Core.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
-    resolveMetadataWith,
     cachedMetadata,
 
     -- * Single-version resolution
     resolveVersion,
-    resolveVersionWith,
     cachedVersion,
 
     -- * Assembled-representation resolution
@@ -361,10 +359,9 @@ follower counts as a miss like the leader it waits on.
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadata = resolveMetadataWith (pure ())
 
-{- | As 'resolveMetadata', but with a hook run on the leading thread between the in-flight claim's
-STM commit and the leader's exception guard taking the marker. Only a test uses it, to cancel a
-leader inside that window. 'resolveMetadata' passes @pure ()@.
--}
+{- As 'resolveMetadata', but with a hook run on the leading thread between the in-flight claim's
+STM commit and the leader's exception guard taking the marker. 'resolveMetadata' passes @pure ()@,
+which is the only caller. -}
 resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadataWith afterClaim metrics cache source name =
     resolveSingleFlight
@@ -387,7 +384,7 @@ packument into the shared full cache.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))
 resolveVersion = resolveVersionWith (pure ())
 
-{- | As 'resolveVersion', with the claim-to-fetch hook 'resolveMetadataWith' documents.
+{- As 'resolveVersion', with the claim-to-fetch hook 'resolveMetadataWith' documents.
 'resolveVersion' passes @pure ()@.
 -}
 resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))

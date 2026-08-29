@@ -28,7 +28,6 @@ module Ecluse.Core.Rules.Types (
     defaultDenyIfCvePrecedence,
     defaultAllowByIdentityPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
-    defaultDenyByIdentityPrecedence,
 
     -- * Evaluation
     EvalContext (..),
@@ -208,7 +207,7 @@ every allow default, so a matching deny overrides any allow out of the box.
 defaultDenyInstallTimeExecutionPrecedence :: Int
 defaultDenyInstallTimeExecutionPrecedence = 300
 
-{- | Default precedence of 'DenyByIdentity': the top precedence, strictly above
+{- Default precedence of 'DenyByIdentity': the top precedence, strictly above
 every other rule (including explicit allow-lists), to serve as a hard revocation.
 -}
 defaultDenyByIdentityPrecedence :: Int

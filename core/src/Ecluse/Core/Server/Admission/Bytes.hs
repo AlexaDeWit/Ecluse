@@ -26,7 +26,6 @@ module Ecluse.Core.Server.Admission.Bytes (
     ByteAdmission,
     newByteAdmission,
     withByteAdmission,
-    byteAdmissionWaitMicros,
 
     -- * Internals exported for testing
     newByteAdmissionTuned,
@@ -52,7 +51,7 @@ data ByteAdmission = ByteAdmission
     , baCapacity :: Int
     }
 
-{- | How long an acquisition finding the capacity busy waits before it is shed: the shared
+{- How long an acquisition finding the capacity busy waits before it is shed: the shared
 'admissionWaitMicros' budget, which explains why a refusal never beats the retry hint.
 -}
 byteAdmissionWaitMicros :: Int

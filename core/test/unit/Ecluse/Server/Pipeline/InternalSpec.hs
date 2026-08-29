@@ -13,6 +13,7 @@ import Katip (SimpleLogPayload, closeScribes, toObject)
 import Katip.Monadic (runKatipContextT)
 import Test.Hspec
 
+import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -26,11 +27,9 @@ import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
-    defaultEffectfulConfig,
-    newBreaker,
-    noBreakerReporter,
     prepare,
  )
+import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),

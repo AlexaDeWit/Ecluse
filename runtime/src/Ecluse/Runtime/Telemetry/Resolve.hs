@@ -77,14 +77,12 @@ module Ecluse.Runtime.Telemetry.Resolve (
     ThrottleState (..),
     ThrottleEmit (..),
     initialThrottle,
-    throttleInterval,
     throttleStep,
 
     -- * Export-failure routing
     ExportFailureSink,
     newExportFailureSink,
     exportFailureSink,
-    routeExportFailure,
     observeExportResult,
     installExportErrorHandler,
 
@@ -426,7 +424,7 @@ data ThrottleEmit
 initialThrottle :: ThrottleState
 initialThrottle = ThrottleState Nothing 0
 
--- | How long export errors are coalesced between surfaced heartbeats.
+-- How long export errors are coalesced between surfaced heartbeats.
 throttleInterval :: NominalDiffTime
 throttleInterval = 60
 
@@ -482,7 +480,7 @@ exportFailureSink logEnv = newExportFailureSink getCurrentTime (moduleLog logEnv
 resolveModule :: Text
 resolveModule = "Ecluse.Runtime.Telemetry.Resolve"
 
-{- | Route one export-failure diagnostic through the shared throttle into @katip@. The first
+{- Route one export-failure diagnostic through the shared throttle into @katip@. The first
 error surfaces plainly and later ones fold into a heartbeat carrying the suppressed count.
 -}
 routeExportFailure :: ExportFailureSink -> Text -> IO ()

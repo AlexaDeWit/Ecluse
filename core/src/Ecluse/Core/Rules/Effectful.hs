@@ -31,7 +31,6 @@ module Ecluse.Core.Rules.Effectful (
 
     -- * Effectful-fault observation
     FaultReporter (..),
-    reportFault,
 
     -- * Running an evaluation through it
     runResilient,
@@ -88,7 +87,7 @@ It fires once per exhausted evaluation, never on a verdict or a still-cooling br
 -}
 newtype FaultReporter = FaultReporter (Text -> Text -> IO ())
 
--- | Report one exhausted evaluation's fault: the rule name and the rendered detail.
+-- Report one exhausted evaluation's fault: the rule name and the rendered detail.
 reportFault :: FaultReporter -> Text -> Text -> IO ()
 reportFault (FaultReporter report) = report
 
