@@ -13,6 +13,7 @@ import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, sh
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
 import Ecluse.Core.Osv.Advisory
+import Ecluse.Core.Osv.Epss (EpssScores, mkEpssScores)
 import Ecluse.Core.Osv.Stream (
     IngestLimits (..),
     IngestStats (..),
@@ -33,10 +34,15 @@ advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
 advisory entries label =
     OsvAdvisory
         { osvId = "GHSA-test-severity"
+        , osvAliases = Nothing
         , osvAffected = Nothing
         , osvSeverity = if null entries then Nothing else Just entries
         , osvDatabaseSpecific = OsvDatabaseSpecific . Just <$> label
         }
+
+-- An empty feed table: extraction then leaves every segment's EPSS score absent.
+noScores :: EpssScores
+noScores = mkEpssScores []
 
 spec :: Spec
 spec = describe "Osv parsing and streaming" $ do
@@ -56,7 +62,7 @@ spec = describe "Osv parsing and streaming" $ do
             Left err -> fail ("Failed to decode: " <> err)
             Right adv -> do
                 osvId adv `shouldBe` "GHSA-2234-fmw7-43wr"
-                let extracted = extractFromAdvisory adv
+                let extracted = extractFromAdvisory noScores adv
                 extracted
                     `shouldBe` [ ExtractedOsv
                                     { extPackage = "hono"
@@ -67,6 +73,9 @@ spec = describe "Osv parsing and streaming" $ do
                                     , -- The fixture carries both a CVSS 3.1 vector and the
                                       -- "MODERATE" label. The computed base score wins.
                                       extSeverity = Just 5.9
+                                    , -- sample.json aliases CVE-2024-48913, which the empty
+                                      -- fixture table does not score.
+                                      extEpss = Nothing
                                     }
                                ]
 
@@ -101,36 +110,62 @@ spec = describe "Osv parsing and streaming" $ do
         it "yields Nothing for an advisory with no severity evidence at all" $
             advisorySeverity (advisory [] Nothing) `shouldBe` Nothing
 
+    describe "extractFromAdvisory (the EPSS join)" $ do
+        let aliased ids =
+                OsvAdvisory
+                    "GHSA-aliased"
+                    (Just ids)
+                    (Just [OsvAffected (OsvPackage "aliased-pkg" "npm") Nothing (Just ["1.0.0"])])
+                    Nothing
+                    Nothing
+
+        it "scores a GHSA-keyed advisory through its CVE alias" $
+            map extEpss (extractFromAdvisory (mkEpssScores [("CVE-2026-77777", 0.5)]) (aliased ["CVE-2026-77777"]))
+                `shouldBe` [Just 0.5]
+
+        it "takes the highest score when several aliases are scored" $
+            map
+                extEpss
+                ( extractFromAdvisory
+                    (mkEpssScores [("CVE-2026-77777", 0.5), ("CVE-2026-88888", 0.75)])
+                    (aliased ["CVE-2026-77777", "CVE-2026-88888"])
+                )
+                `shouldBe` [Just 0.75]
+
+        it "leaves the score absent when the feed scores none of the identifiers" $
+            map extEpss (extractFromAdvisory (mkEpssScores [("CVE-2026-99999", 0.5)]) (aliased ["CVE-2026-77777"]))
+                `shouldBe` [Nothing]
+
     describe "extractFromAdvisory (affected-set shapes)" $ do
         it "records an exact enumerated version as a point segment (no ranges)" $ do
             -- The npm malware feed names the single bad version in versions[] with
             -- no ranges.
-            let adv = OsvAdvisory "MAL-test" (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing
-            extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") (LastAffected "1.0.0") Nothing]
+            let adv = OsvAdvisory "MAL-test" Nothing (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing
+            extractFromAdvisory noScores adv
+                `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") (LastAffected "1.0.0") Nothing Nothing]
 
         it "carries an inclusive last_affected bound distinct from a fix" $ do
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing Nothing (Just "3.8.8")]
-                adv = OsvAdvisory "GHSA-la" (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
-            extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") (LastAffected "3.8.8") Nothing]
+                adv = OsvAdvisory "GHSA-la" Nothing (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory noScores adv
+                `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" (Just "0") (LastAffected "3.8.8") Nothing Nothing]
 
         it "ignores a GIT range whose commit-SHA bounds are not versions" $ do
             -- Carving a GIT range into segments would store a commit SHA as a version bound, which
             -- the matcher fails closed-to-affected, quarantining every version of a healthy
             -- package.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0") Nothing]
-                adv = OsvAdvisory "GHSA-git" (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing
-            extractFromAdvisory adv `shouldBe` []
+                adv = OsvAdvisory "GHSA-git" Nothing (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory noScores adv `shouldBe` []
 
         it "leaves a segment unbounded above when no event closes it" $ do
             -- A second introduced closes the open segment, and the last one runs to the
             -- end of the event list. Neither carries an upper bound.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent (Just "2.0.0") Nothing Nothing]
-                adv = OsvAdvisory "GHSA-open" (Just [OsvAffected (OsvPackage "open-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
-            extractFromAdvisory adv
-                `shouldBe` [ ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "0") Unbounded Nothing
-                           , ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "2.0.0") Unbounded Nothing
+                adv = OsvAdvisory "GHSA-open" Nothing (Just [OsvAffected (OsvPackage "open-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing
+            extractFromAdvisory noScores adv
+                `shouldBe` [ ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "0") Unbounded Nothing Nothing
+                           , ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "2.0.0") Unbounded Nothing Nothing
                            ]
 
         it "extracts the version range and drops a co-published GIT range" $ do
@@ -141,11 +176,12 @@ spec = describe "Osv parsing and streaming" $ do
                 adv =
                     OsvAdvisory
                         "GHSA-both"
+                        Nothing
                         (Just [OsvAffected (OsvPackage "mixed-pkg" "npm") (Just [OsvRange "GIT" gitEvents, OsvRange "ECOSYSTEM" semverEvents]) Nothing])
                         Nothing
                         Nothing
-            extractFromAdvisory adv
-                `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" (Just "0") (FixedBefore "2.0.0") Nothing]
+            extractFromAdvisory noScores adv
+                `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" (Just "0") (FixedBefore "2.0.0") Nothing Nothing]
 
     it "extracts multiple packages and ranges from a complex OSV advisory" $ do
         fileBytes <- BS.readFile "test/unit/fixtures/osv/complex.json"
@@ -154,7 +190,7 @@ spec = describe "Osv parsing and streaming" $ do
             Left err -> fail ("Failed to decode: " <> err)
             Right adv -> do
                 osvId adv `shouldBe` "GHSA-multi"
-                let extracted = extractFromAdvisory adv
+                let extracted = extractFromAdvisory noScores adv
                 -- The complex fixture has "database_specific": null, so every
                 -- extracted range carries no severity label.
                 extracted
@@ -165,6 +201,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extIntroduced = Just "0"
                                     , extUpperBound = FixedBefore "1.0.0"
                                     , extSeverity = Nothing
+                                    , extEpss = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -173,6 +210,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extIntroduced = Just "1.1.0"
                                     , extUpperBound = FixedBefore "1.2.0"
                                     , extSeverity = Nothing
+                                    , extEpss = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -181,6 +219,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extIntroduced = Just "2.0.0"
                                     , extUpperBound = FixedBefore "2.1.0"
                                     , extSeverity = Nothing
+                                    , extEpss = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "other-pkg"
@@ -189,13 +228,14 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extIntroduced = Just "0"
                                     , extUpperBound = FixedBefore "3.0.0"
                                     , extSeverity = Nothing
+                                    , extEpss = Nothing
                                     }
                                ]
 
     it "streams an OSV zip archive and emits ExtractedOsv elements" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits
+                ingest <- newOsvIngest defaultIngestLimits noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/sample.zip"
                         .| parseOsvStream Nothing ingest
@@ -213,7 +253,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "handles an empty zip archive gracefully without emitting anything" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits
+                ingest <- newOsvIngest defaultIngestLimits noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/empty.zip"
                         .| parseOsvStream Nothing ingest
@@ -223,7 +263,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "skips malformed JSON files inside a zip archive and logs a warning" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits
+                ingest <- newOsvIngest defaultIngestLimits noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/malformed-json.zip"
                         .| parseOsvStream Nothing ingest
@@ -233,7 +273,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception when streaming a non-zip file" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits
+                    ingest <- newOsvIngest defaultIngestLimits noScores
                     runConduit $
                         sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
                             .| parseOsvStream Nothing ingest
@@ -244,7 +284,7 @@ spec = describe "Osv parsing and streaming" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         results <- withStub status200 zipData $ \stub -> do
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits
+                ingest <- newOsvIngest defaultIngestLimits noScores
                 runConduit $
                     streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
                         .| sinkList
@@ -260,7 +300,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception if the URL is invalid" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits
+                    ingest <- newOsvIngest defaultIngestLimits noScores
                     runConduit $
                         streamOsvUrl Nothing ingest "not-a-valid-url"
                             .| sinkList
@@ -279,7 +319,7 @@ spec = describe "Osv parsing and streaming" $ do
             let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000}
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest limits
+                    ingest <- newOsvIngest limits noScores
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
@@ -295,7 +335,7 @@ spec = describe "Osv parsing and streaming" $ do
             let limits = defaultIngestLimits{ilMaxAdvisoryFanOut = 3}
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest limits
+                    ingest <- newOsvIngest limits noScores
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)

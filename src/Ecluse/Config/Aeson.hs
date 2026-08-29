@@ -250,4 +250,5 @@ ruleEntryDecoder =
         <*> optionalPlainKey "scope"
         <*> optionalPlainKey "identity"
         <*> optionalPlainKey "minSeverity"
+        <*> optionalPlainKey "minEpss"
         <*> optionalPlainKey "onUnavailable"

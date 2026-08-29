@@ -13,39 +13,40 @@ import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Osv (CorpusVersion (..), mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
--- (package, cve, introduced, fixed, severity). Severity is the numeric CVSS score
--- the writer stores. These label-only fixtures map to their band ceiling.
-type RangeRow = (Text, Text, Maybe Text, Maybe Text, Maybe Double)
+-- (package, cve, introduced, fixed, severity, epss). Severity is the numeric CVSS score
+-- the writer stores, and epss the score the fixture feed carries for the advisory's alias.
+type RangeRow = (Text, Text, Maybe Text, Maybe Text, Maybe Double, Maybe Double)
 
--- The pins are literal on purpose: editing the corpus means updating them,
--- deliberately, in the same change. LOW->3.9, MODERATE->6.9, HIGH->8.9, CRITICAL->10.0.
+-- The pins are literal on purpose: editing the corpus or the EPSS fixture means updating
+-- them, deliberately, in the same change. LOW->3.9, MODERATE->6.9, HIGH->8.9, CRITICAL->10.0.
+-- A NULL epss is an advisory the fixture feed does not score.
 corpusV1Rows :: [RangeRow]
 corpusV1Rows =
-    [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9)
-    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9)
-    , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing)
-    , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing)
-    , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0)
-    , ("corpus-vuln", "GHSA-corpus-0001", Just "0", Just "1.2.0", Just 8.9)
-    , ("corpus-vuln", "GHSA-corpus-0004", Just "2.0.0", Just "2.5.0", Just 6.9)
+    [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9, Just 0.25)
+    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9, Nothing)
+    , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing, Nothing)
+    , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing, Nothing)
+    , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0, Just 0.5)
+    , ("corpus-vuln", "GHSA-corpus-0001", Just "0", Just "1.2.0", Just 8.9, Just 0.875)
+    , ("corpus-vuln", "GHSA-corpus-0004", Just "2.0.0", Just "2.5.0", Just 6.9, Just 0.0625)
     ]
 
 corpusV2Rows :: [RangeRow]
 corpusV2Rows =
-    [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9)
-    , ("corpus-clean", "GHSA-corpus-1001", Just "0", Nothing, Just 8.9)
-    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9)
-    , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing)
-    , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing)
-    , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0)
-    , ("corpus-vuln", "GHSA-corpus-0001", Just "0", Just "1.2.0", Just 8.9)
-    , ("corpus-vuln", "GHSA-corpus-0004", Just "2.0.0", Just "2.5.0", Just 6.9)
+    [ ("@corpus/scoped", "GHSA-corpus-0005", Just "0", Just "3.0.0", Just 3.9, Just 0.25)
+    , ("corpus-clean", "GHSA-corpus-1001", Just "0", Nothing, Just 8.9, Just 0.375)
+    , ("corpus-mixed", "GHSA-corpus-0006", Just "0", Just "1.0.0", Just 6.9, Nothing)
+    , ("corpus-multi", "GHSA-corpus-0003", Just "0", Just "1.0.0", Nothing, Nothing)
+    , ("corpus-multi", "GHSA-corpus-0003", Just "1.5.0", Just "2.0.0", Nothing, Nothing)
+    , ("corpus-unfixed", "GHSA-corpus-0002", Just "1.0.0", Nothing, Just 10.0, Just 0.5)
+    , ("corpus-vuln", "GHSA-corpus-0001", Just "0", Just "1.2.0", Just 8.9, Just 0.875)
+    , ("corpus-vuln", "GHSA-corpus-0004", Just "2.0.0", Just "2.5.0", Just 6.9, Just 0.0625)
     ]
 
 rangeRows :: FilePath -> IO [RangeRow]
 rangeRows db = do
     conn <- open db
-    rows <- query_ conn "SELECT package_name, cve_id, introduced_version, fixed_version, severity FROM package_vulnerability_ranges ORDER BY package_name, cve_id, introduced_version"
+    rows <- query_ conn "SELECT package_name, cve_id, introduced_version, fixed_version, severity, epss_score FROM package_vulnerability_ranges ORDER BY package_name, cve_id, introduced_version"
     close conn
     pure rows
 

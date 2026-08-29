@@ -2,10 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Backoff for Pilot's periodic osv.dev fetch.
+{- | Backoff for Pilot's periodic advisory-source fetches.
 
-Pilot pulls the npm advisory export from osv.dev on a schedule. That upstream can be
-unreachable, throttle the caller, or return 5xx. A naive retry-immediately loop would
+Pilot pulls the npm advisory export and the EPSS feed on a schedule. Either upstream can
+be unreachable, throttle the caller, or return 5xx. A naive retry-immediately loop would
 then hammer it from a single egress (NAT) address and invite an aggressive rate-limit
 or an outright ban. A transient fetch failure therefore retries under a /truncated
 exponential backoff with full jitter/. Each wait grows exponentially from a base
@@ -55,7 +55,7 @@ import Network.HTTP.Types.Status (statusCode)
 import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
 import Ecluse.Core.Fault.Http (classifyTransport)
 
-{- | The shipped osv.dev fetch backoff: full jitter from a 1s base to a 60s ceiling, over
+{- | The shipped advisory-source backoff: full jitter from a 1s base to a 60s ceiling, over
 five retries (six attempts at most). The loop is finite, and the worst case waits under
 two minutes before the fetch gives up to the outer sync loop.
 -}
@@ -78,7 +78,7 @@ isRetryableHttpException = \case
         isRetryableStatusCode (statusCode (responseStatus response))
     other -> transportRetryable (tfCause (classifyTransport other))
 
-{- | Run an osv.dev fetch under a "Control.Retry" policy. A transient 'HttpException'
+{- | Run an advisory-source fetch under a "Control.Retry" policy. A transient 'HttpException'
 retries until the budget is spent, then the original exception is re-thrown to the
 caller. Any other fault, a corrupt-archive parse error for example, propagates unretried.
 -}
@@ -98,7 +98,7 @@ retryHandler status = Handler $ \e ->
 -}
 transientMessage :: RetryStatus -> HttpException -> String
 transientMessage status err =
-    "osv.dev fetch failed transiently on attempt "
+    "advisory-source fetch failed transiently on attempt "
         <> show (1 + rsIterNumber status)
         <> "; backing off before the next retry. Cause: "
         <> show err

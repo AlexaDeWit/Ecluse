@@ -218,7 +218,7 @@ Each role needs a different slice of that allowance, and only the proxy needs in
 |---|---|---|---|
 | `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The mirror-write credential, plus the advisory-bucket read (`s3:GetObject`) when that bucket is set. Nothing more |
 | `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The same as the proxy: the mirror-write credential and the advisory-bucket read |
-| `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
+| `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), `epss.empiricalsecurity.com` for the FIRST.org EPSS feed, the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
 | `ecluse dredger` | None public | Your private mirror, for delete requests, and the metadata endpoint, for credentials | A standing high-privilege delete on the mirror |
 
 **Do not block the metadata endpoint or internal ranges for the proxy itself.** Écluse reaches

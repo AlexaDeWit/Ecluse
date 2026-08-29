@@ -78,7 +78,7 @@ import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, scoreAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
@@ -175,51 +175,53 @@ evalRule deps _ AllowIfRemediatesCve pd =
         Just cve -> remediationVerdict cve pd
 evalRule deps _ (DenyIfCve params) pd =
     rdWithCveLookup deps $ \case
-        Nothing -> pure (noAdvisoryDbVerdict params)
-        Just cve -> denyVerdict params cve pd
+        Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
+        Just cve -> advisoryDenyVerdict "CVSS" (dicMinSeverity params) arSeverity cve pd
+evalRule deps _ (DenyIfEpss params) pd =
+    rdWithCveLookup deps $ \case
+        Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
+        Just cve -> advisoryDenyVerdict "EPSS" (dieMinEpss params) arEpss cve pd
 
-{- The rule's verdict when no advisory database is loaded. The absence is deterministic
-and in-process, so it is a 'CannotVet' verdict and not a fault: no in-process retry could
-load a database, so the harness never retries it and never trips the breaker on it. -}
-noAdvisoryDbVerdict :: DenyIfCveParams -> RuleVerdict
-noAdvisoryDbVerdict params = CannotVet (dicOnUnavailable params) "DenyIfCve: no advisory database loaded"
+{- The verdict when no advisory database is loaded. It is a 'CannotVet' verdict and not a
+fault, because no in-process retry could load one, so the harness never retries it. -}
+noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
+noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
-{- The rule's verdict against a loaded advisory database. An unscored advisory clears the
-severity threshold, which is fail-closed: npm malware carries no score, and the rule
-denies it. -}
-denyVerdict :: DenyIfCveParams -> CveLookup -> PackageDetails -> IO RuleVerdict
-denyVerdict params cve pd = do
+{- The shape both scored deny rules share: deny when an affecting advisory's score reaches the
+threshold, naming the deciders. An unscored advisory clears every threshold ('scoreAtLeast'). -}
+advisoryDenyVerdict :: Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> PackageDetails -> IO RuleVerdict
+advisoryDenyVerdict metric threshold scoreOf cve pd = do
     ranges <- cveAdvisoriesFor cve name
     let blocking =
             ordNub
                 [ arCveId ar
                 | ar <- ranges
                 , insideAffectedRange eco version ar
-                , severityAtLeast (dicMinSeverity params) (arSeverity ar)
+                , scoreAtLeast threshold (scoreOf ar)
                 ]
     pure $ case blocking of
-        [] -> NoDecision "no advisory at or above the severity threshold affects this version"
-        ids -> Deny ("affected by " <> T.intercalate ", " ids <> " (CVSS >= " <> show (dicMinSeverity params) <> ")")
+        [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
+        ids -> Deny ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
   where
     eco = pkgEcosystem (pkgName pd)
     name = renderPackageName (pkgName pd)
     version = renderVersion (pkgVersion pd)
 
-{- | Recover the advisory ids a 'DenyIfCve' denial named, reading them back out of the
-reason 'denyVerdict' rendered, between @"affected by "@ and @" (CVSS"@. A message with no
-such segment yields @[]@. 'Ecluse.Core.RulesSpec' round-trips this against 'denyVerdict',
-so rewording either one fails the build.
+{- | Recover the advisory ids an advisory-deny reason named, reading them back out of what
+'advisoryDenyVerdict' rendered, between @"affected by "@ and the threshold parenthesis. A
+message with no such segment yields @[]@. 'Ecluse.Core.RulesSpec' round-trips this against
+'advisoryDenyVerdict', so rewording either one fails the build.
 -}
 cveIdsInReason :: Text -> [Text]
 cveIdsInReason message
-    | T.null afterCvss = []
+    | T.null afterThreshold = []
     | otherwise = filter (not . T.null) (map T.strip (T.splitOn ", " ids))
   where
     -- 'stripPrefix' drops the marker without an O(n) 'Data.Text.length' on it (STAN-0208).
     -- An absent marker leaves the body empty, so the guard yields @[]@.
     (_, afterAffected) = T.breakOn "affected by " message
     body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
-    (ids, afterCvss) = T.breakOn " (CVSS" body
+    (ids, afterThreshold) = T.breakOn " (" body
 
 -- The CVE rule's verdict against a loaded advisory database.
 remediationVerdict :: CveLookup -> PackageDetails -> IO RuleVerdict
@@ -307,9 +309,10 @@ prepareRule deps (PrecededRule prec rule) = do
 resilienceFor :: RuleDeps -> Rule -> IO (Maybe Resilience)
 resilienceFor deps = \case
     AllowIfRemediatesCve -> effectful FailNoDecision
-    -- The deny rule aligns per its config. The same alignment governs a lookup that throws or
+    -- A deny rule aligns per its config. The same alignment governs a lookup that throws or
     -- times out (here) and a database that is not loaded ('noAdvisoryDbVerdict').
     DenyIfCve params -> effectful (dicOnUnavailable params)
+    DenyIfEpss params -> effectful (dieOnUnavailable params)
     _ -> pure Nothing
   where
     effectful alignment = do

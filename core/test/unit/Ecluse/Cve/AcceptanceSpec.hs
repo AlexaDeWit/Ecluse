@@ -18,20 +18,21 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch, mkDbWithoutEpssColumn)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows in the fake's vocabulary. Keep them in lockstep with the corpus pins in
 -- Ecluse.Test.OsvSpec. Each severity is the CVSS band ceiling for the fixture's GHSA label
--- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0), and no fixture carries a last_affected bound.
+-- (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0), each EPSS score comes from the fixture
+-- feed's row for the advisory's CVE alias, and no fixture carries a last_affected bound.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
-    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (FixedBefore "3.0.0"))
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (FixedBefore "1.0.0"))
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (FixedBefore "2.0.0"))
-    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just 10.0) (Just "1.0.0") Unbounded)
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0"))
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0"))
+    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (FixedBefore "3.0.0") (Just 0.25))
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (FixedBefore "2.0.0") Nothing)
+    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just 10.0) (Just "1.0.0") Unbounded (Just 0.5))
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0") (Just 0.875))
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0") (Just 0.0625))
     ]
 
 -- The behavioural contract, written once and run against every 'CveLookup'
@@ -54,8 +55,8 @@ lookupContract withLookup = do
         withLookup $ \l -> do
             ranges <- cveAdvisoriesFor l "corpus-vuln"
             sortOn arCveId ranges
-                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0")
-                           , AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0")
+                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (FixedBefore "1.2.0") (Just 0.875)
+                           , AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (FixedBefore "2.5.0") (Just 0.0625)
                            ]
 
     it "returns nothing for a package with no advisories" $
@@ -105,6 +106,14 @@ spec = do
                 -- The reader cannot trust decodes under affinity-hinted (non-STRICT) declarations,
                 -- so schema conformance must refuse the artifact as a value.
                 mkDbWithLaxSchema path
+                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+
+        it "rejects an artifact whose ranges table lacks a column the reader decodes" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "no-epss-column.db"
+                -- Reading a pre-column artifact would present every advisory as unscored, which
+                -- an EPSS deny rule reads as a denial. Conformance refuses it instead.
+                mkDbWithoutEpssColumn path
                 openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact compiled for a different ecosystem" $
@@ -237,7 +246,7 @@ spec = do
                         close conn
 
     describe "the artifact row decode" $ do
-        let boundOf fixed lastAffected = arUpperBound (toRange ("GHSA-decode", Just "1.0.0", fixed, lastAffected, Just 5.9))
+        let boundOf fixed lastAffected = arUpperBound (toRange ("GHSA-decode", Just "1.0.0", fixed, lastAffected, Just 5.9, Just 0.5))
 
         it "reads a fixed_version column as an exclusive bound" $
             boundOf (Just "2.0.0") Nothing `shouldBe` FixedBefore "2.0.0"
@@ -253,9 +262,9 @@ spec = do
             -- this. The decode must still yield exactly one bound.
             boundOf (Just "2.0.0") (Just "3.0.0") `shouldBe` FixedBefore "2.0.0"
 
-        it "carries the row's identity, lower bound, and severity through unchanged" $
-            toRange ("GHSA-decode", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9)
-                `shouldBe` AdvisoryRange "GHSA-decode" (Just 5.9) (Just "1.0.0") (FixedBefore "2.0.0")
+        it "carries the row's identity, lower bound, and both scores through unchanged" $
+            toRange ("GHSA-decode", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9, Just 0.5)
+                `shouldBe` AdvisoryRange "GHSA-decode" (Just 5.9) (Just "1.0.0") (FixedBefore "2.0.0") (Just 0.5)
 
 -- Every path this process holds an open descriptor to, read from Linux's /proc
 -- table. It is empty elsewhere, which degrades the leak assertion to the throw alone.

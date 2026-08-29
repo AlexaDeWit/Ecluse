@@ -49,7 +49,7 @@ module Ecluse.Core.Cve (
 
     -- * Pure range matching
     insideAffectedRange,
-    severityAtLeast,
+    scoreAtLeast,
 ) where
 
 import UnliftIO.Exception (catch, catchAny, onException, throwIO)
@@ -175,9 +175,9 @@ insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
         -- No upper bound: the range never ends.
         Unbounded -> True
 
-{- | Does this advisory segment's severity meet or exceed the threshold, a CVSS base score
-from 0 to 10? __Fail-closed:__ an unscored advisory ('Nothing', most of the npm malware
-feed) counts as meeting the threshold, because the threshold gates a deny.
+{- | Does this segment's score, a CVSS base score or an EPSS probability, meet the deny
+threshold? __Fail-closed:__ an absent score ('Nothing') meets every threshold, because an
+unprovable score must not open a deny gate.
 -}
-severityAtLeast :: Double -> Maybe Double -> Bool
-severityAtLeast threshold = maybe True (>= threshold)
+scoreAtLeast :: Double -> Maybe Double -> Bool
+scoreAtLeast threshold = maybe True (>= threshold)

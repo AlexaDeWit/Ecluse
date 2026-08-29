@@ -24,6 +24,7 @@ module Ecluse.Test.Osv (
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
     mkDbWithLaxSchema,
+    mkDbWithoutEpssColumn,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
 
@@ -131,12 +132,13 @@ mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
         \  last_affected_version TEXT,\
-        \  severity REAL\
+        \  severity REAL,\
+        \  epss_score REAL\
         \)"
     execute_
         conn
         "CREATE VIEW package_vulnerability_ranges AS \
-        \SELECT package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity FROM raw_rows"
+        \SELECT package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity, epss_score FROM raw_rows"
     setEpoch conn osvSchemaEpoch
 
 {- | An artifact that passes acceptance but carries a malicious trigger poised on the ranges table.
@@ -148,7 +150,7 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
     createRangesTable conn
     createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
-    execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', NULL, 7.5)"
+    execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', NULL, 7.5, 0.5)"
     execute_
         conn
         "CREATE TRIGGER malicious AFTER INSERT ON package_vulnerability_ranges \
@@ -185,9 +187,29 @@ mkDbWithLaxSchema path = withConnection path $ \conn -> do
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
         \  last_affected_version TEXT,\
-        \  severity REAL\
+        \  severity REAL,\
+        \  epss_score REAL\
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    setEpoch conn osvSchemaEpoch
+
+{- | A right-epoch, @STRICT@, otherwise conformant artifact whose ranges table carries no
+@epss_score@ column. Conformance must refuse it as a value rather than let the decode fail.
+-}
+mkDbWithoutEpssColumn :: FilePath -> IO ()
+mkDbWithoutEpssColumn path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
+        \) STRICT"
+    createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     setEpoch conn osvSchemaEpoch
 
@@ -205,7 +227,7 @@ mkDbWithCorruptPage path = do
         for_ [1 .. 32 :: Int] $ \i ->
             execute
                 conn
-                "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-corpus-bulk', '0', '1.0.0', NULL, NULL)"
+                "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-corpus-bulk', '0', '1.0.0', NULL, NULL, NULL)"
                 (Only (show i :: Text))
         setEpoch conn osvSchemaEpoch
     -- Overwrite page 2 (the ranges b-tree root, at the default 4096-byte page
@@ -225,7 +247,7 @@ mkMinimalValidDb path pkg = withConnection path $ \conn -> do
     createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     execute conn "INSERT INTO meta (key, value) VALUES ('source_url', ?)" (Only pkg)
-    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', NULL, NULL)" (Only pkg)
+    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', NULL, NULL, NULL)" (Only pkg)
     setEpoch conn osvSchemaEpoch
 
 -- The canonical tables, verbatim from the schema contract, so a builder here

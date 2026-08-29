@@ -27,7 +27,8 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
-import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
+import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
+import Ecluse.Core.Osv.Epss (epssFeedUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     superviseLoop,
@@ -87,7 +88,10 @@ exportEcosystem metrics eco telemetry s3Endpoint appCfg bucketName = do
             (telemetryTracerProvider telemetry)
             (advDataDir (cfgAdvisories appCfg))
             (ecosystemName eco)
-            (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (ecosystemName eco))
+            CompileSources
+                { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (ecosystemName eco)
+                , csEpssFeedUrl = epssFeedUrl
+                }
     exportToS3 (telemetryTracerProvider telemetry) s3Endpoint bucketName dbPath
 
 -- | Options for the one-shot 'runPilotCompile' mode.
@@ -97,6 +101,8 @@ data PilotCompileOptions = PilotCompileOptions
     {- ^ Overrides the export URL. 'Nothing' selects the configured export
     base for the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
     -}
+    , pcoEpssSource :: Maybe String
+    -- ^ Overrides the EPSS feed URL. 'Nothing' selects the shipped 'epssFeedUrl'.
     , pcoOutDir :: FilePath
     , pcoUpload :: Bool
     -- ^ Upload the compiled artifact to the configured vulnerability-database bucket.
@@ -118,14 +124,18 @@ unfetchable or unparseable source propagates, so the command exits non-zero and 
 -}
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
-    let url = fromMaybe (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (pcoEcosystem opts)) (pcoSource opts)
+    let sources =
+            CompileSources
+                { csOsvExportUrl = fromMaybe (osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) (pcoEcosystem opts)) (pcoSource opts)
+                , csEpssFeedUrl = fromMaybe epssFeedUrl (pcoEpssSource opts)
+                }
     metrics <- newMetrics telemetry
     -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
     -- outside it still writes its artifact, and records no series.
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
     moduleContext logEnv "Ecluse.Pilot" $
         runResourceT $ do
-            dbFile <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) url
+            dbFile <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) sources
             when (pcoUpload opts) $
                 case advBucket (cfgAdvisories appCfg) of
                     Nothing -> throwIO PilotUploadUnconfigured

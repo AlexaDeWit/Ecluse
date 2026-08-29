@@ -21,7 +21,7 @@ tests pin exactly when the slot retires a displaced generation.
 fakeDb :: Text -> IORef [Text] -> CveDb
 fakeDb tag closeLog =
     CveDb
-        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (FixedBefore "1.0.0"))]
+        { cveDbLookup = fakeCveLookup [(tag, AdvisoryRange "GHSA-slot-0001" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)]
         , cveDbClose = modifyIORef' closeLog (<> [tag])
         , cveDbMeta = []
         }

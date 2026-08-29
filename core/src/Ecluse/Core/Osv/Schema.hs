@@ -75,7 +75,8 @@ rangesTableDdl =
     \  introduced_version TEXT,\
     \  fixed_version TEXT,\
     \  last_affected_version TEXT,\
-    \  severity REAL\
+    \  severity REAL,\
+    \  epss_score REAL\
     \) STRICT"
 
 -- | The @meta@ provenance table's canonical DDL, @STRICT@ like 'rangesTableDdl'.
@@ -120,6 +121,7 @@ osvTableSpecs =
             , ColumnSpec{colName = "fixed_version", colDeclaredType = "TEXT", colNotNull = False}
             , ColumnSpec{colName = "last_affected_version", colDeclaredType = "TEXT", colNotNull = False}
             , ColumnSpec{colName = "severity", colDeclaredType = "REAL", colNotNull = False}
+            , ColumnSpec{colName = "epss_score", colDeclaredType = "REAL", colNotNull = False}
             ]
         }
     , TableSpec
@@ -143,6 +145,8 @@ data MetaKey
       MetaBuiltAt
     | -- | The advisory-dump URL Pilot compiled the artifact from.
       MetaSourceUrl
+    | -- | The EPSS feed URL Pilot joined the artifact's @epss_score@ column from.
+      MetaEpssSourceUrl
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
     deriving stock (Eq, Generic, Show)
@@ -158,4 +162,5 @@ renderMetaKey = \case
     MetaEcosystem -> "ecosystem"
     MetaBuiltAt -> "built_at"
     MetaSourceUrl -> "source_url"
+    MetaEpssSourceUrl -> "epss_source_url"
     MetaRowCount -> "row_count"
