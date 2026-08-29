@@ -84,8 +84,8 @@ flowchart TD
 
 **Evaluate beside the gate, not after it**. The implementer opens the draft PR at its first push,
 reports the PR number and the head SHA at once, and exits. It does not idle in a watch loop
-([watch ownership](#verification-fast-local-ci-gates-build-and-test)). The team lead dispatches the reviewer at that moment, pinned to
-that head, while CI runs. Findings from the review and reds from CI land as one follow-up commit,
+([watch ownership](#verification-fast-local-ci-gates-build-and-test)). The team lead dispatches
+the reviewer at that moment, pinned to that head, while CI runs. Findings from the review and reds from CI land as one follow-up commit,
 and both re-verify on the new head. A review that starts only after a green gate costs a second
 full CI cycle on every PR with a finding.
 
@@ -276,8 +276,8 @@ task check
 and dead-code (`weeder`) plus Haskell static analysis (`stan`). The hard stops within it are Semgrep
 clean (zero findings, no new ignores without the architect's approval) and a clean weeder/stan
 floor. Then push early and let CI parallelise the Docker and Haddock tiers. The team lead watches
-the run to green, per the watch ownership at the top of this section. Root-cause a red gate. Do
-not patch over it.
+the run to green, per the [watch ownership](#verification-fast-local-ci-gates-build-and-test)
+above. Root-cause a red gate. Do not patch over it.
 
 ### CI-verified batches: the wide parallel mode
 
