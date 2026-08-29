@@ -32,7 +32,8 @@ cleaner" is not one.
 
 ## Releases
 
-Releases are maintainer territory. The procedure lives in
+Releases are maintainer territory. The step-by-step procedure is the
+[release runbook](runbooks/release.md); the design behind it lives in
 [Release and supply-chain operations](docs/architecture/release-supply-chain.md). Consumers
 verify an image per the [README](README.md#verifying-the-image).
 
