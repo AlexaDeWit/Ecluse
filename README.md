@@ -38,8 +38,10 @@ the exact fix for a vulnerability skips the wait, so the quarantine never delays
 Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through untouched.
-It can also mirror each admitted public version into that registry, so a mirrored version survives a
-public outage or yank. AWS CodeArtifact is supported today. Écluse hosts no packages itself.
+Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can also mirror
+each admitted public version into a registry you nominate, so a mirrored version survives a public
+outage or yank. For an AWS CodeArtifact mirror target Écluse mints the short-lived write token
+itself, and any other host takes a static token you supply. Écluse hosts no packages itself.
 
 The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules

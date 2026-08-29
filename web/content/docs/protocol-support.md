@@ -17,7 +17,7 @@ document it publishes as JSON, so the page and the document always agree.
 | RubyGems | Planned |
 
 A planned registry is already a valid `mounts` key, but no adapter answers its routes yet,
-so declaring one serves nothing.
+so activating one refuses the boot.
 
 {{ openapi_reference() }}
 

@@ -47,9 +47,10 @@ a half-delivered tarball runs to completion.
 
 `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` bounds the drain at 30 seconds by default. **Set the
 platform's termination grace period above it**, so the orchestrator does not `SIGKILL` mid-drain.
-On Kubernetes that is `terminationGracePeriodSeconds`. On an interactive terminal a second
-`Ctrl+C` (or `Ctrl+D`) forces an immediate halt that bypasses the drain. That halt needs standard
-input to be a TTY, so production has no such bypass.
+On Kubernetes that is `terminationGracePeriodSeconds`. A second `SIGINT` or `SIGTERM` hard-stops
+the process wherever it runs: the drain handler fires once, and the runtime default takes the next
+signal. `Ctrl+D` forces the same immediate halt, and that path is armed only when standard input is
+a TTY.
 
 ## Exit codes
 
@@ -117,7 +118,7 @@ is an error in the log rather than a failed start.
 the same variable, so two on one host race for 9464. The loser logs the bind failure and serves
 nothing. A scraper pointed at that port then collects one role's series and sees no sign the
 others are missing, which reads on a dashboard as quiet rather than broken. So set a distinct
-`OTEL_EXPORTER_PROMETHEUS_PORT` per role and scrape each one. A one-shot `ecluse pilot-compile`
+`OTEL_EXPORTER_PROMETHEUS_PORT` per role and scrape each one. A one-shot `ecluse pilot compile`
 run beside a live Pilot boots the same way, so it attempts the same bind and logs the same error
 before doing its work. That one is harmless.
 
@@ -137,11 +138,14 @@ order, and warns once at boot naming every key that did not fit.
 ## Memory plan and runtime sizing
 
 Every byte-valued bound is a named tenant of the effective heap ceiling, not an independent
-multiplier. Four tenants share the ceiling (the cache, the response cap, the publish aggregate,
-and the in-memory queue), and each one boot-logs as a `memory plan:` line. A pod too small for
-the tenants' floors **degrades gracefully instead of refusing**: Écluse sheds the mirror-artifact
-cap first, then the cache, each to zero if needed, then serves uncached. Each step is a loud
-warning, and it always boots. Only an explicit override that breaks the plan refuses (exit `2`).
+multiplier. Seven tenants share the ceiling: the runtime reserve, the fixed enqueue buffer, the
+cache aggregate, the materialisation aggregate, the publish aggregate, the in-memory queue depth,
+and the mirror-artifact envelope. Each one boot-logs as a `memory plan:` line. The per-response
+wire cap is carved from the materialisation aggregate rather than being a tenant of its own. A pod
+too small for the tenants' floors **degrades gracefully instead of refusing**: Écluse sheds the
+mirror-artifact cap first, then the cache, each to zero if needed, then serves uncached. Each step
+is a loud warning, and it always boots. Only an explicit override that breaks the plan refuses
+(exit `2`).
 The model is in
 [Runtime sizing](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling).
 
@@ -185,10 +189,12 @@ re-fetches the artifact each time, until the retention window (up to 14 days) dr
 Écluse retires the job itself after `ECLUSE_QUEUE__MAX_RECEIVE_COUNT` deliveries: it writes an
 error log naming the job and the reason, and the `ecluse.mirror.jobs.processed` counter records
 it at `result="discarded"`. **Alert on that series**, because every discard is a job nothing else
-caught. With a redrive policy attached, Écluse runs one delivery above its `maxReceiveCount`, so
-your dead-letter queue always captures first and the discard path stays dormant. A poison job
-therefore always lands somewhere visible: the dead-letter queue when you have one, the error log
-and the discard metric when you do not. Mirroring is demand-driven, so the next client request
+caught. That count is a floor. With a redrive policy attached whose own `maxReceiveCount` Écluse
+can read, it runs one delivery above that count, so your dead-letter queue always captures first
+and the discard path stays dormant. When the policy's count is unreadable the configured floor
+stands alone. A poison job therefore always lands somewhere visible: the dead-letter queue when you
+have one, the error log and the discard metric when you do not. Mirroring is demand-driven, so the
+next client request
 for that artifact re-enqueues the job, and it fails the same way until you fix the cause.
 
 ## Appendix: runtime-sizing arithmetic

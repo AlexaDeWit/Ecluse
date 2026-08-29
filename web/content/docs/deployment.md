@@ -18,13 +18,14 @@ selects the role:
 - **`ecluse mirror`**: the mirror worker on its own, for a worker fleet you scale separately. See
   [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker).
 - **`ecluse pilot`**: the OSV advisory ingestion pipeline.
-- **`ecluse dredger`**: the registry cleanup worker.
+- **`ecluse dredger`**: the registry cleanup worker. Not yet implemented. The role starts and
+  answers its health probes, and it prunes nothing.
 - **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
   the resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI or
   before a rollout.
 
-All roles share one configuration. The proxy and the mirror worker scale: run Pilot and Dredger as
-singletons, because multiple instances race, duplicate API calls, and overlap registry deletions.
+All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
+because multiple instances race and duplicate API calls.
 
 **Give the advisory stack a writable volume.** Once `advisories.url` is set, the proxy lands each
 synced database under `advisories.dataDir` (default `/var/lib/ecluse/advisories`) and Pilot
@@ -64,7 +65,7 @@ beside the verdict, so you can alert on staleness as well as on the `503`.
 A Pilot pod does not need to idle between syncs. `ecluse pilot compile --out DIR` runs one OSV
 compilation and exits: it fetches an ecosystem's advisory export, writes
 `<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema3.db`) into `DIR`, and exits non-zero on
-failure. Three flags shape the run:
+failure. `--out DIR` is required. The rest are optional:
 
 - `--ecosystem` selects the export (default `npm`).
 - `--source URL` overrides the configured `advisories.osvExportBaseUrl`.
@@ -138,7 +139,7 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 
 | Deviation | What you lose | Does anything warn you? |
 |---|---|---|
-| One store for two roles: `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` equal to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either | Provenance separation and clean post-incident scoping. The perimeter holds, but first-party and public-derived packages share one store | Yes. The proxy logs a boot warning for each pair of a mount's endpoints that resolve to the same registry, and Dredger refuses to boot when `MIRROR_TARGET` equals `PUBLICATION_TARGET`, because automated pruning on a shared store risks first-party data loss |
+| One store for two roles: `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` equal to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either | Provenance separation and clean post-incident scoping. The perimeter holds, but first-party and public-derived packages share one store | Yes, for four pairs. The proxy logs a boot warning when the mirror target resolves to the same registry as the private upstream, the public upstream, or the publication target, and when the private upstream resolves to the same registry as the public upstream. A publication target equal to the private upstream is the documented publish arrangement, so it raises nothing |
 | A private upstream that itself draws from public, say a CodeArtifact repo with the stock `npm-store` upstream to npmjs | The rules, integrity floor, and freshness quarantine, all nullified. Raw ungated packages reach clients through the trusted read path, behind the gate instead of through it | **No. Écluse cannot detect this one.** |
 | An open edge: `ECLUSE_SERVER__AUTH_TOKEN` unset | Écluse's own authentication layer. Access control leans entirely on your network boundary | Nothing fires, but the posture is your own explicit setting |
 | A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
@@ -196,7 +197,9 @@ gate them:
 - **HTTPS-only fetching with TLS certificate validation.** Certificate validation is the guarantor
   against the resolve-to-internal and DNS-rebinding SSRF class, because no address a name steers to
   can present a CA-trusted certificate for the host.
-- **Response-size limits**, which bound every untrusted fetch.
+- **Response-size limits** on the metadata bodies Écluse decodes and on the artifact bytes the
+  mirror worker ingests before it publishes them. The client-facing tarball relay streams rather
+  than buffers, so no byte ceiling applies to it.
 
 A **literal internal-range block** adds defence in depth: loopback, link-local including the
 `169.254.169.254` metadata endpoint, RFC1918, CGNAT, and IPv6 ULA. Écluse refuses a `dist.tarball`
@@ -206,8 +209,9 @@ the block. The trusted private origin (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) i
 
 **The `dist.tarball` host gate.** Upstream chooses `dist.tarball`, so Écluse fetches a tarball only
 from the same allowlisted host that served the listing, comparing host **and port** as a pair. It
-upgrades a plaintext `dist.tarball` to https on its own host. On any other host it drops the
-tarball and skips the version, and no configuration widens that.
+upgrades a plaintext `dist.tarball` to https on its own host. A plaintext URL on any other host
+drops the version from the listing. An https URL on a host the gate does not permit stays listed
+and is refused with a `403` when a client asks for the artifact. No configuration widens that.
 
 Provide the second layer at the platform, default-denying egress and allowing only your registries,
 mirror target, and the metadata endpoint:
@@ -228,7 +232,7 @@ Each role needs a different slice of that allowance, and only the proxy needs in
 | `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The mirror-write credential, plus the advisory-store read (`s3:GetObject`) when that store is set. Nothing more |
 | `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The same as the proxy: the mirror-write credential and the advisory-store read |
 | `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the EPSS feed host in `ECLUSE_ADVISORIES__EPSS_FEED_URL` (default `epss.empiricalsecurity.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
-| `ecluse dredger` | None public | Your private mirror, for delete requests, and the metadata endpoint, for credentials | A standing high-privilege delete on the mirror |
+| `ecluse dredger` | None public (health probes only, for the orchestrator) | Not yet implemented. The role answers its probes and calls nothing | None |
 
 **Do not block the metadata endpoint or internal ranges for the proxy itself.** Écluse reaches
 metadata through the AWS SDK to mint its instance-role credentials, so denying it breaks those
@@ -241,8 +245,7 @@ Two Pilot details matter to the platform. It names the uploaded object
 `<ecosystem>-osv-schema<N>.db` under whatever prefix `advisories.url` carries, a key stable per
 ecosystem, so bucket policies and the proxy's ETag polling can target it. On an export-host
 `5xx`/`408`/`429` it retries with capped, jittered backoff, so a transient outage cannot get your
-NAT address rate-limited. Because Dredger holds that
-standing delete capability, isolate it from all untrusted networks.
+NAT address rate-limited.
 
 ## Locking down CI egress
 

@@ -17,16 +17,19 @@ as the exact fix for a vulnerability skips the wait, so the quarantine never del
 patch. Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through
-untouched. It can also mirror each admitted public version into that registry, so a mirrored
-version survives a public outage or yank. AWS CodeArtifact is supported today, and Écluse hosts no
-packages itself.
+untouched. Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can
+also mirror each admitted public version into a registry you nominate, so a mirrored version
+survives a public outage or yank. For an AWS CodeArtifact mirror target Écluse mints the short-lived
+write token itself, and any other host takes a static token you supply. Écluse hosts no packages
+itself.
 
 Écluse ships as one container image with four roles:
 
 - `ecluse proxy` serves clients and runs the mirror worker.
 - `ecluse mirror` runs the mirror worker alone, when you want to scale it apart from the proxy.
 - `ecluse pilot` compiles the advisory database the fast lane reads.
-- `ecluse dredger` prunes the mirror store.
+- `ecluse dredger` is the mirror-store pruning role. Not yet implemented: it answers its health
+  probes and prunes nothing.
 
 [Deploying Écluse](@/docs/deployment.md) covers all four.
 
@@ -78,7 +81,8 @@ above every allow by default.
 |------|------|----------------|-----------------|
 | `min-age` | Allow | On | Admits a public version older than seven days: the quarantine |
 | `remediation-fast-track` | Allow | On | Admits a version a synced advisory names as the exact fix for a vulnerability, as long as no other advisory still affects it |
-| `AllowByIdentity` | Allow | Off | Pins a package or version, or allow-lists your own scopes |
+| `AllowScope` | Allow | Off | Allow-lists every package under a scope you name |
+| `AllowByIdentity` | Allow | Off | Pins a package or a `package@version` by exact name |
 | `DenyByIdentity` | Deny | Off | Revokes a package or version |
 | `DenyInstallTimeExecution` | Deny | Off | Denies packages that run code at install time |
 | `DenyIfCve` | Deny | Off | Denies versions with a known vulnerability above a severity you choose |
