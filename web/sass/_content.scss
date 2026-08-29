@@ -1,0 +1,227 @@
+// Prose keeps the reading measure, and the blocks that carry wide content step
+// out to the full column and scroll inside their own box.
+.page,
+.docs-main {
+  > * {
+    max-width: var(--measure);
+  }
+
+  > pre,
+  > table,
+  > .cards {
+    max-width: 100%;
+  }
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.25;
+  scroll-margin-top: 1.5rem;
+}
+
+h1 {
+  margin: 0 0 0.9rem;
+  font-size: 2.1rem;
+  letter-spacing: -0.015em;
+}
+
+h2 {
+  margin: 2.9rem 0 0.85rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  font-size: 1.4rem;
+}
+
+h3 {
+  margin: 2.2rem 0 0.6rem;
+  font-size: 1.15rem;
+}
+
+h4 {
+  margin: 1.6rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+ul,
+ol {
+  margin: 0 0 1rem;
+  padding-left: 1.4rem;
+}
+
+li {
+  margin: 0.3rem 0;
+
+  > ul,
+  > ol {
+    margin: 0.3rem 0 0.4rem;
+  }
+}
+
+.page > h1 + p,
+.docs-main > h1 + p {
+  margin-bottom: 1.3rem;
+  font-size: 1.1rem;
+  line-height: 1.55;
+}
+
+.heading-anchor {
+  margin-left: 0.35rem;
+  color: var(--muted);
+  font-weight: 400;
+  opacity: 0;
+  text-decoration: none;
+}
+
+:is(h1, h2, h3, h4):hover > .heading-anchor,
+.heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+// An identifier longer than the column breaks instead of widening the page.
+:not(pre) > code {
+  overflow-wrap: break-word;
+}
+
+pre {
+  margin: 1.5rem 0;
+  padding: 0.9rem 1rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+  // The configuration reference runs past 200 lines, so the block scrolls in
+  // place and a long line's scrollbar stays in view.
+  max-height: min(70vh, 48rem);
+
+  > code {
+    font-size: 0.85rem;
+  }
+}
+
+blockquote {
+  margin: 1.5rem 0;
+  padding: 0.75rem 1.1rem;
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+table {
+  display: block;
+  width: 100%;
+  margin: 1.5rem 0;
+  border-collapse: collapse;
+  overflow-x: auto;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+tr > :first-child {
+  padding-left: 0;
+}
+
+tr > :last-child {
+  padding-right: 0;
+}
+
+thead th {
+  border-bottom: 2px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1em 0.55em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.78em;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.severity-critical {
+  background: var(--badge-critical-bg);
+  border-color: var(--badge-critical-border);
+  color: var(--badge-critical-fg);
+}
+
+.severity-high,
+.status-open {
+  background: var(--badge-high-bg);
+  border-color: var(--badge-high-border);
+  color: var(--badge-high-fg);
+}
+
+.severity-medium {
+  background: var(--badge-medium-bg);
+  border-color: var(--badge-medium-border);
+  color: var(--badge-medium-fg);
+}
+
+.severity-low {
+  background: var(--badge-low-bg);
+  border-color: var(--badge-low-border);
+  color: var(--badge-low-fg);
+}
+
+.status-mitigated {
+  background: var(--badge-mitigated-bg);
+  border-color: var(--badge-mitigated-border);
+  color: var(--badge-mitigated-fg);
+}
+
+.status-accepted {
+  background: var(--badge-accepted-bg);
+  border-color: var(--badge-accepted-border);
+  color: var(--badge-accepted-fg);
+}
+
+.status-na {
+  background: var(--badge-na-bg);
+  border-color: var(--badge-na-border);
+  color: var(--badge-na-fg);
+}
+
+// One rule per register entry, so a long detail run reads as separate entries.
+h3.threat {
+  margin-top: 2.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+
+  // The badge, category, and element line under the entry heading.
+  + p {
+    margin-bottom: 1rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+}

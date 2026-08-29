@@ -303,7 +303,7 @@ renderEffectivePosture p =
         <> renderMiB (erpAllocAreaBytes p)
         <> "/capability"
         <> maybe "" (\c -> ", nursery chunks " <> renderMiB c) (erpNurseryChunkBytes p)
-        <> " (RTS; tune with GHCRTS, see USAGE.md)"
+        <> " (RTS; tune with GHCRTS, see https://ecluse-proxy.com/docs/operations/)"
     ]
   where
     (capabilities, capsProvenance) = effectiveCapabilities p

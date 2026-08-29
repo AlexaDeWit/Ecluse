@@ -460,21 +460,11 @@
           # through their own jobs, and both are in `task check`.
           (hlib.justStaticExecutables toolHpkgs.weeder)
           (hlib.justStaticExecutables toolHpkgs.stan)
-          # Site rendering: pandoc turns the repo's Markdown into the published
-          # site pages (`task site`). Both the Pages publish and the PR-tier
-          # `site-stub` gate run it, so it is part of the CI closure.
-          pkgs.pandoc
+          # Zola builds the static site under web/, and pagefind indexes the built
+          # output into the search bundle. Both the publish and the site gate run them.
+          pkgs.zola
+          pkgs.pagefind
         ];
-
-        # Vendored Redoc bundle for the OpenAPI spec page: the self-contained
-        # standalone UMD build, pinned by hash. `task site` copies it into the
-        # published site, so the OpenAPI manifest renders client-side, with no
-        # external CDN dependency and no Node needed to render it. Bump the version
-        # and hash together.
-        redocJs = pkgs.fetchurl {
-          url = "https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js";
-          hash = "sha256-EyD0QhUcV8RH07cMf/xsT4bQhGQCD+NMjMXTFk6ZRPA=";
-        };
 
         # Interactive-only tooling: in the default (human) shell, never needed by
         # CI. HLS and ghcid give live feedback, and hoogle and cabal-plan search the
@@ -696,8 +686,6 @@
         ci = pkgs.mkShell (shellEnv // {
           name = "ecluse-ci";
           buildInputs = ciShellInputs;
-          # Path to the pinned Redoc bundle. `task site` copies it into _site/vendor.
-          REDOC_JS = "${redocJs}";
         });
 
         # The shell for humans: everything CI has, plus the interactive tooling CI
@@ -708,7 +696,6 @@
         default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
           buildInputs = ciShellInputs ++ ideInputs;
-          REDOC_JS = "${redocJs}";
         });
 
       };

@@ -22,7 +22,7 @@ durable memory: load detailed guidance only when the task needs it. See
 |---|---|
 | Implement or change Haskell | Active slice or issue, relevant architecture section, [`docs/style.md`](docs/style.md), then applicable sections of [`docs/haddock.md`](docs/haddock.md) |
 | Change architecture or module boundaries | [`docs/architecture.md`](docs/architecture.md) and only the linked concern documents affected |
-| Change operator behaviour or configuration | [`USAGE.md`](USAGE.md), [`config/default.yaml`](config/default.yaml), and the relevant architecture document |
+| Change operator behaviour or configuration | [`web/content/docs/`](web/content/docs/), [`config/default.yaml`](config/default.yaml), and the relevant architecture document |
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
@@ -33,7 +33,8 @@ durable memory: load detailed guidance only when the task needs it. See
 
 - Read architecture documents before structural changes, and update documentation in the same PR
   whenever behaviour, architecture, public interfaces, or configuration changes.
-- One fact, one home. [`USAGE.md`](USAGE.md) is the operator manual and
+- One fact, one home. The operator manual is [`web/content/docs/`](web/content/docs/), which the
+  site renders at <https://ecluse-proxy.com/docs/>, and
   [`config/default.yaml`](config/default.yaml) is the configuration reference: every key, its
   default, and its meaning live there as comments. `docs/architecture/` owns the *why*. A section
   there earns its place only by answering an operator or adoption question. Contributors read the

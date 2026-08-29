@@ -1,0 +1,32 @@
+{% macro sidebar(current) %}
+{% set docs = get_section(path="docs/_index.md") %}
+<button class="docs-nav-toggle" type="button" aria-expanded="false" aria-controls="docs-nav" data-pagefind-ignore hidden>
+  Documentation pages
+</button>
+<nav class="docs-nav" id="docs-nav" aria-label="Documentation" data-pagefind-ignore>
+  <ul>
+    <li>
+      <a href="{{ docs.permalink | safe }}"{% if current == docs.permalink %} class="current" aria-current="page"{% endif %}>{{ docs.title }}</a>
+    </li>
+    {% for entry in docs.pages %}
+    <li>
+      <a href="{{ entry.permalink | safe }}"{% if current == entry.permalink %} class="current" aria-current="page"{% endif %}>{{ entry.title }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endmacro sidebar %}
+
+{% macro toc(headings) %}
+{% set sections = headings | filter(attribute="level", value=2) %}
+{% if sections | length > 1 %}
+<nav class="toc" aria-label="On this page" data-pagefind-ignore>
+  <p class="toc-heading">On this page</p>
+  <ul>
+    {% for heading in sections %}
+    <li><a href="#{{ heading.id }}">{{ heading.title | safe }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endif %}
+{% endmacro toc %}

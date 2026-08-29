@@ -109,7 +109,7 @@ Because the filtered body differs from upstream's, the proxy computes its own `E
 
 The rule catalogue, each rule's type and parameters, lives in
 [`config/default.yaml`](../../config/default.yaml) and the operator manual's
-[rule policy](../../USAGE.md#rule-policy).
+[rule policy](https://ecluse-proxy.com/docs/configuration/#rule-policy).
 
 The **default precedence ladder** climbs from most-passive to most-decisive:
 
@@ -182,7 +182,8 @@ every threshold**, so the rule always denies malware while `minSeverity` governs
   confirm safety may admit.
 
 Enabling it on a cold mirror can deny historical versions an existing build depends on, so it
-ships off. Warm the mirror first (see USAGE → *Onboarding DenyIfCve*).
+ships off. Warm the mirror first, as
+[Onboarding DenyIfCve](https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve) sets out.
 
 ### Local polling, decoupled ingestion
 
@@ -235,7 +236,7 @@ one the rule evaluated against, since a shadow-swap can land mid-request.
 
 CVE gating happens at ingestion. Écluse checks a version once, before it enters the mirror, and
 serves it rule-free thereafter. So the gate does not catch a CVE disclosed after the version
-reaches the mirror. The [threat model](https://ecluse-proxy.com/threat-model.html) catalogues
+reaches the mirror. The [threat model](https://ecluse-proxy.com/docs/threat-model/) catalogues
 the post-ingestion disposition: operator scanning, a hard deny-by-identity revocation, and
 operator purge, *deny-then-purge*. Holding the dataset locally keeps a periodic mirror re-scan
 straightforward to add later.

@@ -18,8 +18,8 @@ rebuild.
 > run today. An AWS-backed deployment is wired end to end: an SQS mirror queue, a
 > demand-driven worker, and writes under a container-role credential. The GCP backends and
 > the deployment runbook are still to come. The release workflow publishes and attests
-> release candidates. Expect breaking changes before `v1.0.0`. [`USAGE.md`](USAGE.md) is the
-> deployment contract.
+> release candidates. Expect breaking changes before `v1.0.0`. The
+> [operator manual](https://ecluse-proxy.com/docs/) is the deployment contract.
 
 [Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
 
@@ -41,15 +41,16 @@ If you run a private registry, Écluse reads it first and passes your own packag
 It can also mirror each admitted public version into that registry, so a mirrored version survives a
 public outage or yank. AWS CodeArtifact is supported today. Écluse hosts no packages itself.
 
-[`USAGE.md`](USAGE.md) is the operator manual. [`docs/architecture.md`](docs/architecture.md) has
-the design: the registry roles, the rules engine, and the mirror queue. The threat model (OWASP
-Threat Dragon, STRIDE) lives in [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The
-site build renders it as a readable [register](https://ecluse-proxy.com/threat-model.html).
+The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
+[`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
+engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in
+[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as a
+readable [register](https://ecluse-proxy.com/docs/threat-model/).
 
 ## Using Écluse
 
-[`USAGE.md`](USAGE.md) is the operator manual: configuration, connecting your clients, the
-network-egress safety you're responsible for, the rule policy, and the health and
+The [operator manual](https://ecluse-proxy.com/docs/) covers configuration, connecting your
+clients, the network-egress safety you're responsible for, the rule policy, and the health and
 observability endpoints. The [`docs/architecture/`](docs/architecture.md) documents are the
 *why* behind each setting.
 
@@ -128,4 +129,5 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `test/`     | Unit and integration tests                                                                                               |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `docs/`     | Architecture and design documents                                                                                        |
+| `web/`      | The documentation site (Zola): content, templates, and styles. `web/content/docs/` holds the operator manual              |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |

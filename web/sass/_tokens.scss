@@ -1,0 +1,113 @@
+// Every colour the site paints comes from a token here. The anchors are the
+// artwork's own colours (docs/branding), and each scheme derives its roles from
+// them: paper and ink in daylight, ink and paper after dark. A derived value is
+// tuned until body text, links, and badge text clear WCAG AA on their ground.
+
+:root {
+  color-scheme: light dark;
+
+  --charcoal: #211f1c;
+  --cream: #f4efe3;
+  --sand: #ece4d2;
+  --tan: #ddd3bb;
+  --slate: #4f4b43;
+  --water: #3f6058;
+  --water-deep: #2e4a45;
+
+  --bg: var(--sand);
+  --surface: var(--cream);
+  --surface-sunk: #e3d9c3;
+  --header-bg: var(--tan);
+  --fg: var(--charcoal);
+  --muted: var(--slate);
+  --border: var(--tan);
+  --border-strong: #cbbfa2;
+  --accent: var(--water);
+  --accent-strong: var(--water-deep);
+  --code-bg: var(--cream);
+  --brand-edge: transparent;
+  --shadow: 0 10px 26px rgb(33 31 28 / 16%);
+
+  --code-comment: #6e6757;
+  --code-string: var(--water);
+  --code-keyword: #7a3b2e;
+  --code-number: #7a5a16;
+  --code-name: var(--water-deep);
+  --code-punctuation: var(--slate);
+
+  --badge-critical-bg: #eec3b8;
+  --badge-critical-fg: #6b1c0e;
+  --badge-critical-border: #d79f8f;
+  --badge-high-bg: #f3d9d2;
+  --badge-high-fg: #7a2718;
+  --badge-high-border: #e0b7ac;
+  --badge-medium-bg: #f3e7cf;
+  --badge-medium-fg: #7a5a16;
+  --badge-medium-border: #e2cfa6;
+  --badge-low-bg: #dde7e0;
+  --badge-low-fg: #2e4a45;
+  --badge-low-border: #c3d3c9;
+  --badge-mitigated-bg: #d7e6da;
+  --badge-mitigated-fg: #285c36;
+  --badge-mitigated-border: #b4d3bb;
+  --badge-accepted-bg: #e4dfed;
+  --badge-accepted-fg: #46335f;
+  --badge-accepted-border: #cfc4dd;
+  --badge-na-bg: var(--tan);
+  --badge-na-fg: var(--slate);
+  --badge-na-border: var(--border-strong);
+
+  // Prose keeps the reading measure. Code, tables, and card grids reclaim the
+  // full column, and the shell bounds header, footer, and the docs grid alike.
+  --measure: 44rem;
+  --column: 62rem;
+  --shell: 78rem;
+  --gutter: 1.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614;
+    --surface: #211f1c;
+    --surface-sunk: #1c1b18;
+    --header-bg: #1c1b18;
+    --fg: var(--cream);
+    --muted: #b3a992;
+    --border: #3b3630;
+    --border-strong: #55504a;
+    --accent: #8fb3aa;
+    --accent-strong: #b0cdc5;
+    --code-bg: #1c1b18;
+    --brand-edge: #55504a;
+    --shadow: 0 10px 26px rgb(0 0 0 / 45%);
+
+    --code-comment: #9a9182;
+    --code-string: #9ec4b9;
+    --code-keyword: #e0a08c;
+    --code-number: #d8bb7c;
+    --code-name: #b9d2c8;
+    --code-punctuation: #b3a992;
+
+    --badge-critical-bg: #5f2a1c;
+    --badge-critical-fg: #ffd2c4;
+    --badge-critical-border: #8a4331;
+    --badge-high-bg: #4a251c;
+    --badge-high-fg: #f0c3b6;
+    --badge-high-border: #6b382c;
+    --badge-medium-bg: #4a3a18;
+    --badge-medium-fg: #ecd39a;
+    --badge-medium-border: #6b552a;
+    --badge-low-bg: #24352f;
+    --badge-low-fg: #b9d2c8;
+    --badge-low-border: #3a4f47;
+    --badge-mitigated-bg: #1f3a27;
+    --badge-mitigated-fg: #a9d4b4;
+    --badge-mitigated-border: #33553d;
+    --badge-accepted-bg: #322a44;
+    --badge-accepted-fg: #cbbfe4;
+    --badge-accepted-border: #473d5e;
+    --badge-na-bg: #2b2822;
+    --badge-na-fg: #b3a992;
+    --badge-na-border: #55504a;
+  }
+}

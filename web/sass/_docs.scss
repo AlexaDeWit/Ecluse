@@ -1,0 +1,133 @@
+.docs-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 2.25rem var(--gutter) 4rem;
+}
+
+.docs-main {
+  min-width: 0;
+}
+
+.docs-nav-toggle {
+  justify-self: start;
+  padding: 0.45rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.docs-nav {
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    margin: 0;
+  }
+
+  a {
+    display: block;
+    padding: 0.35rem 0.75rem;
+    border-left: 2px solid var(--border);
+    color: var(--muted);
+    font-size: 0.95rem;
+    text-decoration: none;
+  }
+
+  a:hover {
+    background: var(--surface);
+    color: var(--accent-strong);
+  }
+
+  a.current {
+    background: var(--surface);
+    border-left-color: var(--accent);
+    color: var(--fg);
+    font-weight: 600;
+  }
+}
+
+.toc {
+  margin: 0 0 2rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.95rem;
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    margin: 0.2rem 0;
+    break-inside: avoid;
+  }
+
+  a {
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
+.toc-heading {
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+@media (min-width: 40rem) {
+  .toc ul {
+    columns: 2;
+    column-gap: 2rem;
+  }
+}
+
+// Only the script reveals the toggle, so a narrow screen without one keeps the
+// page list open rather than unreachable.
+@media (max-width: 59.99rem) {
+  .docs-nav-toggle:not([hidden]) + .docs-nav:not(.open) {
+    display: none;
+  }
+}
+
+@media (min-width: 60rem) {
+  .docs-layout {
+    grid-template-columns: 13.5rem minmax(0, 1fr);
+    gap: 2.5rem;
+    align-items: start;
+  }
+
+  .docs-nav-toggle {
+    display: none;
+  }
+
+  .docs-nav {
+    position: sticky;
+    top: 1.25rem;
+    max-height: calc(100vh - 2.5rem);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 30rem) {
+  .docs-layout {
+    padding: 1.75rem 1rem 3rem;
+  }
+}

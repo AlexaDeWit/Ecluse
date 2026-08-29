@@ -124,7 +124,7 @@ flowchart TD
 | [Cloud backends and mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`). AWS. |
 | [Configuration and authentication](architecture/configuration.md) | Environment config, outbound registry credentials, and inbound client auth. |
 | [Security posture](architecture/security.md) | The trust assumptions the threat model rests on, the credential posture, and the two floors that fail closed. |
-| [Threat model](https://ecluse-proxy.com/threat-model.html) | The STRIDE register, generated from the Threat Dragon model (`threat-modelling/ecluse.json`). The single source of truth for the system's threats. |
+| [Threat model](https://ecluse-proxy.com/docs/threat-model/) | The STRIDE register, generated from the Threat Dragon model (`threat-modelling/ecluse.json`). The single source of truth for the system's threats. |
 | [Observability](architecture/observability.md) | Opt-in OpenTelemetry/OTLP tracing and metrics, with Datadog optional. |
 | [Release and supply-chain operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (provenance + SBOM), and CVE and freshness scanning. |
 

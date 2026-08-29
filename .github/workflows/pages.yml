@@ -94,19 +94,20 @@ jobs:
       # across an epoch change: cabal reuses unchanged store entries and rebuilds only
       # the changed deps. Pages always runs on main, and the `pages` concurrency group
       # serialises it, so Pages is this cache's single writer: restore here, save
-      # below (main only).
+      # below (main only). The Haddock configuration is part of every store hash, and
+      # a save never overwrites a key, so a Haddock flag change moves the `v2` epoch.
       - name: Restore doc-variant cabal store
         id: restore-docs-cabal
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
-          key: cabal-store-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: cabal-store-docs-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
           restore-keys: |
-            cabal-store-docs-${{ runner.os }}-
+            cabal-store-docs-v2-${{ runner.os }}-
 
       # The doc-variant build products of the project's three libraries (the published
-      # Haddock HTML) and the openapi-gen executable, in their own builddir
-      # (DOCS_BUILDDIR). Kept distinct from the gate's regular-variant dist-newstyle.
+      # Haddock HTML) and the openapi-gen and site-gen executables, in their own
+      # builddir (DOCS_BUILDDIR). Kept distinct from the gate's regular dist-newstyle.
       # Small and fast-moving next to the store above. Same dep-plan key.
       - name: Restore doc-variant builddir
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -124,11 +125,11 @@ jobs:
         if: steps.restore-docs-cabal.outputs.cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # Assembles the Pages site into ./_site: the home page at the root and the
+      # Assembles the Pages site into ./_site: the Zola pages at the root and the
       # library Haddock under /api (with .nojekyll at the root). Runs in the `.#ci`
-      # shell every other job enters (it carries pandoc, plus REDOC_JS for the vendored
-      # Redoc bundle), not the heavier human shell. DOCS_BUILDDIR routes the
-      # doc-variant build into the separately-cached tree restored above.
+      # shell every other job enters (it carries zola and pagefind), not the heavier
+      # human shell. DOCS_BUILDDIR routes the doc-variant build into the
+      # separately-cached tree restored above.
       - name: Build the Pages site into ./_site
         run: nix develop .#ci --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
 
@@ -143,7 +144,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
-          key: cabal-store-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: cabal-store-docs-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save doc-variant builddir (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}

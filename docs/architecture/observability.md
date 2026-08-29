@@ -53,7 +53,7 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   artifact.
 - `ecluse.registry.merge.divergence` is the cross-upstream integrity alarm. It increments per
   contradicting version, and the package and version go on the paired `WARNING` line, never on a
-  label. See the [threat model](https://ecluse-proxy.com/threat-model.html).
+  label. See the [threat model](https://ecluse-proxy.com/docs/threat-model/).
 - `ecluse.credential.token.ttl.seconds` alarms a stuck refresh. `ecluse.credential.refresh` carries
   (result, provider).
 - `ecluse.mirror.jobs.processed` carries (result), one of `published`, `failed`, or `discarded`.
@@ -101,7 +101,7 @@ explosion. Two guarantees keep it and the telemetry safe:
 ## Logs
 
 Logs are structured JSON lines through `katip`, stitched to traces by trace-ID injection. The
-operator manual's [Logs bullet](../../USAGE.md#operating-écluse) states the line shape, the
+operator manual's [Logs section](https://ecluse-proxy.com/docs/operations/#logs) states the line shape, the
 reserved Datadog attributes, the level floor, and the redaction.
 
 ### URL minimisation
@@ -130,13 +130,13 @@ and mirror URL as the operator gave it. The effective posture then reads straigh
 log. Those lines need no reduction, because a configured registry URL has nothing to reduce. The
 loader refuses one carrying userinfo, a query string, or a fragment, and the error names the key.
 The credential then sits in a secret-typed key, which the dump redacts
-(see [Secrets](../../USAGE.md#secrets)).
+(see [Secrets](https://ecluse-proxy.com/docs/configuration/#secrets)).
 
 ## Configuration and deployment
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
-[Telemetry bullet](../../USAGE.md#operating-écluse) owns the variables and the wiring. Three
-design facts hold regardless:
+[Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
+and the wiring. Three design facts hold regardless:
 
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared

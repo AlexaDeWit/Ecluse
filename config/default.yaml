@@ -200,8 +200,8 @@ rules:
   # 0-10). Unscored npm malware advisories count as above every threshold, so
   # enabling this also blocks known malware. It sits just below `AllowByIdentity`, so
   # an identity pin still overrides it. On a cold mirror it can deny historical
-  # versions your builds depend on. Warm the mirror first: USAGE.md, Onboarding
-  # DenyIfCve.
+  # versions your builds depend on. Warm the mirror first:
+  # https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve
   # deny-known-cves:
   #   type: DenyIfCve
   #   minSeverity: 8          # CVSS >= 8.0 (high/critical). Unscored malware always blocks

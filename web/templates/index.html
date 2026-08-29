@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}{{ section.title }}: {{ section.extra.tagline | trim_end_matches(pat='.') }}{% endblock title %}
+{% block description %}{{ section.description }}{% endblock description %}
+
+{% block head %}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Écluse" />
+    <meta property="og:url" content="{{ section.permalink | safe }}" />
+    <meta property="og:title" content="{{ section.title }}: {{ section.extra.tagline | trim_end_matches(pat='.') }}" />
+    <meta property="og:description" content="{{ section.description }}" />
+    <meta property="og:image" content="{{ get_url(path='social-preview.png') }}" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="Écluse: a canal-lock section with a barge of shipping containers waiting in the chamber." />
+    <meta name="twitter:card" content="summary_large_image" />
+{% endblock head %}
+
+{% block content %}
+<main class="page landing" id="content">
+  <div class="hero">
+    <img
+      class="hero-art"
+      src="{{ get_url(path='lock-illustration.svg') }}"
+      alt="A draughtsman's section of a canal lock: a barge of stacked shipping containers waits in the low chamber below the closed gate."
+    />
+    <h1>{{ section.title }}</h1>
+    <p class="tagline">{{ section.extra.tagline }}</p>
+    <div class="lead">
+      {{ section.content | safe }}
+    </div>
+  </div>
+  <ul class="index">
+    <li><a href="{{ get_url(path='@/docs/_index.md') }}">Operator manual</a></li>
+    <li><a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a></li>
+    <li><a href="{{ get_url(path='@/api/_index.md') }}">API reference (Haddock and the OpenAPI spec)</a></li>
+    <li><a href="{{ config.extra.source_url | safe }}">Source on GitHub</a></li>
+  </ul>
+</main>
+{% endblock content %}

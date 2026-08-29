@@ -6,6 +6,8 @@ module Ecluse.Config.DocCoverageSpec (spec) where
 
 import Data.Char (isAsciiLower)
 import Data.Text qualified as T
+import System.Directory (listDirectory)
+import System.FilePath (takeExtension, (</>))
 import Test.Hspec
 
 import Ecluse.Config (loadConfig)
@@ -62,8 +64,8 @@ documentedEnvVars =
     , ("ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY", "warn")
     ]
 
-{- | Process-level and indirection spellings: documented in @USAGE.md@ prose, because
-they are consumed before (or beside) config resolution and have no document key.
+{- | Process-level and indirection spellings: documented in the operator manual's prose,
+because they are consumed before (or beside) config resolution and have no document key.
 -}
 documentedProcessVars :: [String]
 documentedProcessVars =
@@ -73,6 +75,16 @@ documentedProcessVars =
     , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
     , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE"
     ]
+
+-- | Every Markdown page of the operator manual, read as one text.
+readOperatorManual :: IO Text
+readOperatorManual = do
+    names <- listDirectory manualDir
+    pages <- traverse (readFileBS . (manualDir </>)) (filter isMarkdown names)
+    pure (foldMap decodeUtf8 pages)
+  where
+    manualDir = "web/content/docs"
+    isMarkdown = (== ".md") . takeExtension
 
 {- | The document key an @ECLUSE_*@ spelling resolves to: its top-level section and its
 leaf, camel-cased the way the resolver reads them (@ECLUSE_CACHE__MAX_BYTES@ is
@@ -120,12 +132,12 @@ spec = describe "the configuration reference covers the accepted variables" $ do
                 ]
         missing `shouldBe` []
 
-    it "USAGE.md mentions every process-level spelling" $ do
-        usage <- decodeUtf8 <$> readFileBS "USAGE.md"
+    it "the operator manual mentions every process-level spelling" $ do
+        manual <- readOperatorManual
         let missing =
                 [ var
                 | var <- documentedProcessVars
-                , not (T.pack var `T.isInfixOf` usage)
+                , not (T.pack var `T.isInfixOf` manual)
                 ]
         missing `shouldBe` []
 

@@ -16,7 +16,7 @@ commit or version. Expect an initial acknowledgement within a few business days.
 updated as I investigate and prepare a fix.
 
 Known risks and their dispositions live in the
-[threat model](https://ecluse-proxy.com/threat-model.html). Check it before reporting a
+[threat model](https://ecluse-proxy.com/docs/threat-model/). Check it before reporting a
 risk that's already recorded and accepted.
 
 Do not submit AI-generated reports you haven't verified. An unreproduced AI report consumes
@@ -27,9 +27,10 @@ first.
 
 Some of Écluse's security refusals can surprise an operator expecting a transparent
 passthrough. One example is the public integrity-digest floor, which drops weakly-hashed
-public versions. These refusals are deliberate. The [operator manual](USAGE.md#rule-policy)
-and the [security invariants](docs/architecture/security.md) document them. Confirm a
-surprising refusal against those before reporting it.
+public versions. These refusals are deliberate. The
+[operator manual](https://ecluse-proxy.com/docs/configuration/#rule-policy) and the
+[security invariants](docs/architecture/security.md) document them. Confirm a surprising
+refusal against those before reporting it.
 
 ## Supported versions
 

@@ -1,0 +1,104 @@
+.site-header {
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.header-shell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.75rem;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 0.7rem var(--gutter);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--fg);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+
+  // The mark is a charcoal tile, so after dark a hairline keeps its edge off the
+  // header ground.
+  img {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px var(--brand-edge);
+  }
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1.15rem;
+  font-size: 0.95rem;
+
+  a {
+    padding-bottom: 2px;
+    border-bottom: 1px solid transparent;
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  a:hover {
+    border-bottom-color: var(--accent);
+    color: var(--accent-strong);
+  }
+}
+
+.page {
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 2.75rem var(--gutter) 4rem;
+}
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.footer-shell {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 2rem var(--gutter) 3rem;
+
+  p {
+    margin: 0 0 0.5rem;
+  }
+
+  a {
+    color: var(--muted);
+  }
+
+  a:hover {
+    color: var(--accent-strong);
+  }
+
+  .made-in {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .header-shell,
+  .footer-shell {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .page {
+    padding: 2rem 1rem 3rem;
+  }
+
+  .site-nav {
+    gap: 0.15rem 0.9rem;
+    font-size: 0.9rem;
+  }
+}

@@ -1,0 +1,40 @@
+// Pagefind's own stylesheet reads these variables, so the search box follows the
+// page tokens in both colour schemes.
+.site-search {
+  position: relative;
+  flex: 0 1 17rem;
+  margin-left: auto;
+
+  --pagefind-ui-scale: 0.8;
+  --pagefind-ui-primary: var(--fg);
+  --pagefind-ui-text: var(--fg);
+  --pagefind-ui-background: var(--surface);
+  --pagefind-ui-border: var(--border-strong);
+  --pagefind-ui-tag: var(--surface-sunk);
+  --pagefind-ui-border-width: 1px;
+  --pagefind-ui-border-radius: 8px;
+  --pagefind-ui-font: inherit;
+}
+
+// Results overlay the page instead of pushing the header open.
+.site-search .pagefind-ui__drawer {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: 70vh;
+  padding: 0.75rem 1rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+@media (max-width: 44rem) {
+  .site-search {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+}

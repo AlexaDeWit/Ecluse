@@ -1,0 +1,74 @@
+@media print {
+  .site-header,
+  .site-footer,
+  .docs-nav,
+  .docs-nav-toggle,
+  .toc,
+  .skip-link,
+  .heading-anchor {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .docs-layout,
+  .page {
+    display: block;
+    max-width: none;
+    padding: 0;
+  }
+
+  .docs-main > *,
+  .page > * {
+    max-width: none;
+  }
+
+  // A capped, scrolling block prints as one cropped screen, so lift the cap and
+  // wrap the long lines instead.
+  pre {
+    max-height: none;
+    overflow: visible;
+    white-space: pre-wrap;
+    border: 1px solid #999;
+    break-inside: avoid;
+  }
+
+  table {
+    display: table;
+    width: 100%;
+  }
+
+  // A printer drops background colours, so the badges carry their meaning in ink.
+  .badge {
+    background: none;
+    border: 1px solid #666;
+    color: #000;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .docs-main a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    color: #333;
+    font-size: 0.85em;
+    word-break: break-all;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  blockquote,
+  tr,
+  .card {
+    break-inside: avoid;
+  }
+}
