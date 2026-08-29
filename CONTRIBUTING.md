@@ -83,9 +83,9 @@ Signed-off-by: Your Name <you@example.com>
 ## Pull requests
 
 Open as a draft while work or review is moving, and mark it ready when it is not. The template is
-[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): Summary, Checklist,
-Sign-off, AI assistance. Fill every section, and tick a checklist item only when it is true.
-Otherwise say "not applicable" and why. An untrue tick costs a reviewer more than an honest gap.
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): the body is the goal, the
+motivation, and the consequence, readable in seconds, plus a one-line AI-assistance disclosure.
+The old checklist is gone on purpose: CI enforces its items, and a body should not restate a gate.
 
 Pipe the body through stdin (`gh pr create --draft --body-file -`, and `gh pr edit --body-file -`
 to update it), or use a gitignored scratch file with a branch-scoped name
@@ -104,8 +104,10 @@ Rules for the Summary:
   second, and only as far as the diff does not already show it. No play-by-play of files.
 - Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
   the Summary.
-- Include evidence only where review depends on it (a verification table, a sweep result), and keep
-  it compact.
+- The body never carries inventories, counts, tables, or per-round appendices. Audit detail (what
+  was trimmed, why an over-cap comment stayed, an error-message change) lives in the commit message
+  of the change that did it. A review round rewrites the body only when the goal or a consequence
+  changed. It never appends.
 - The floor in [`docs/prose.md`](docs/prose.md) applies (plain words, Canadian spelling, no em- or
   en-dashes, no filler adjectives).
 
