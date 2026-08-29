@@ -30,6 +30,7 @@ import Ecluse.Core.Security (
     boundedRead,
     checkNestingDepth,
     checkVersionCount,
+    checkVersionCountOf,
     defaultLimits,
  )
 import Ecluse.Core.Version (Version, mkVersion)
@@ -131,6 +132,10 @@ versionCountSpec = describe "checkVersionCount" $ do
     it "passes a realistic packument under the default version budget" $
         -- Exercises 'defaultLimits' directly (not via a record override).
         checkVersionCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
+
+    it "applies the same ceiling through checkVersionCountOf, on a bare count" $ do
+        checkVersionCountOf limits 3 `shouldBe` Right ()
+        checkVersionCountOf limits 4 `shouldBe` Left (TooManyVersions 4 3)
 
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
