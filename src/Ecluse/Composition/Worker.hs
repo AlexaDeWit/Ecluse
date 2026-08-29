@@ -34,12 +34,14 @@ import Ecluse.Core.Credential (AuthToken (authSecret), currentToken)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), Origin (UntrustedOrigin), defaultLimits, thgPublicHostPort)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
@@ -132,11 +134,18 @@ workerPolicyFor env deps publish artifactMaxBytes =
             (tracingPortOf (envTelemetry env))
             (metricsPortOf (envMetrics env))
             Public
-            (Cached (envMetadataCache env) (Source (pdPublicBaseUrl deps)))
+            (Cached (envMetadataCache env) (Source (registryUrlText publicBaseUrl)))
             (\_ _ -> pure ())
             (\_ _ -> pure ())
             (\_ -> pure ())
-            (pdLimits deps)
-            (envManager env)
-            (pdPublicBaseUrl deps)
-            Nothing
+            publicOrigin
+
+    publicBaseUrl = pdPublicBaseUrl deps
+
+    publicOrigin =
+        OriginClient
+            { ocBaseUrl = publicBaseUrl
+            , ocManager = envManager env
+            , ocToken = Nothing
+            , ocLimits = pdLimits deps
+            }

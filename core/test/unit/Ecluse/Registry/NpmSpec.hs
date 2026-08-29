@@ -38,13 +38,13 @@ import Ecluse.Core.Registry (
     UrlFormationError (EmptyBaseUrl),
  )
 
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (..),
-    fetchMetadataFormBounded,
- )
+import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
+import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
+import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
 import Ecluse.Test.Stub (
@@ -60,7 +60,7 @@ spec = do
     configAndWiringSpec
 
 {- | The metadata fetch reads the upstream body through 'boundedRead' against the config's
-'npmLimits'. A body past 'maxBodyBytes' fails closed as a 'FetchBoundExceeded' value, never
+'ocLimits'. A body past 'maxBodyBytes' fails closed as a 'FetchBoundExceeded' value, never
 buffered whole. This is the body-size half of invariant 4 at the @http-client@ boundary.
 -}
 boundedBodySpec :: Spec
@@ -68,7 +68,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig stub
-            let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
+            let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
             outcome <- fetchMetadataFormBounded config Full noValidators isOdd
             outcome `shouldSatisfy` isBoundExceeded
 
@@ -76,7 +76,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- The read returns a body within the cap whole and unchanged: no false refusal.
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig stub
-            let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
+            let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
             resp <- fetchMetadataFormBounded config Full noValidators isOdd
             fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
 
@@ -86,7 +86,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- compressed bytes would let a gzip bomb straight through.
         withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do
             base <- stubConfig stub
-            let config = base{npmLimits = defaultLimits{maxBodyBytes = 1024}}
+            let config = base{ocLimits = defaultLimits{maxBodyBytes = 1024}}
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
@@ -97,7 +97,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- The read-path URL-formation fault is a value (mirroring the write path's
         -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
-        let config = (defaultNpmConfig manager){npmBaseUrl = ""}
+        let config = (defaultNpmConfig manager){ocBaseUrl = loopbackRegistryUrl ""}
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd
         outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
 
@@ -137,7 +137,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- Port 1 on the loopback is privileged and unbound, so the kernel refuses the
         -- connect. It is the one live-transport case a unit test can drive determinately.
         manager <- newManager defaultManagerSettings
-        let config = (defaultNpmConfig manager){npmBaseUrl = "http://127.0.0.1:1"}
+        let config = (defaultNpmConfig manager){ocBaseUrl = loopbackRegistryUrl "http://127.0.0.1:1"}
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd
         outcome `shouldSatisfy` isTransportFault
   where
@@ -148,14 +148,14 @@ configAndWiringSpec = describe "config wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig manager
-        npmBaseUrl config `shouldBe` publicRegistryBaseUrl
-        isJust (npmToken config) `shouldBe` False
+        registryUrlText (ocBaseUrl config) `shouldBe` publicRegistryBaseUrl
+        isJust (ocToken config) `shouldBe` False
         -- The secure-default bounds apply to an anonymous public fetch out of the box. A
         -- deployment overrides them per its budget.
-        npmLimits config `shouldBe` defaultLimits
+        ocLimits config `shouldBe` defaultLimits
         -- A 'Manager' is opaque (no Eq/Show), so forcing it to WHNF is the
         -- assertion that the field carries the manager we passed, not a bottom.
-        _ <- evaluate (npmManager config)
+        _ <- evaluate (ocManager config)
         pure ()
 
 -- A body larger than the tight 64-byte cap the bounded-body test sets.

@@ -61,10 +61,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
     digestOf,
  )
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (npmBaseUrl, npmLimits),
-    fetchMetadataFormBounded,
- )
+import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
@@ -77,6 +74,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
     selectVersionFromPackument,
  )
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (NameAgreement (NameAgrees, NameDisagrees), checkNameAgreement)
 import Ecluse.Core.Security (
@@ -87,6 +85,7 @@ import Ecluse.Core.Security (
     checkVersionCountOf,
     maxNestingDepth,
  )
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -105,36 +104,36 @@ newNpmMetadataClient ::
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
-    NpmClientConfig ->
+    OriginClient ->
     MetadataClient
-newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
-    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
+newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
+    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing origin) (fetchNpmVersion tracing origin)
 
 {- Fetch a package's full packument once under the fetch span, then run a pure projection over
 the wire bytes under the decode span. Both npm read operations differ only in that projection. -}
 fetchThenProject ::
     TracingPort ->
-    NpmClientConfig ->
+    OriginClient ->
     PackageName ->
     (ByteString -> Either MetadataError a) ->
     IO (Either MetadataError a)
-fetchThenProject tracing config name project =
-    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
+fetchThenProject tracing origin name project =
+    spanMetadataFetch tracing name (fetchMetadataFormBounded origin Full noValidators name) >>= \case
         Left fault -> pure (Left (MetadataFetch fault))
         Right response -> spanMetadataDecode tracing name (pure (project (responseBody response)))
 
 {- | Fetch a package's full packument and project it into a 'Manifest': the typed view, the
 raw document, and the wire bytes' 'ContentDigest'.
 
-The read is bounded against the config's response budget, so an oversized upstream is
+The read is bounded against the origin's response budget, so an oversized upstream is
 refused fail-closed before anything buffers it whole. The digest is computed here, over the
 strict body that read produced, the one place the wire bytes exist.
 -}
-fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError Manifest)
-fetchNpmManifest tracing config name =
-    fetchThenProject tracing config name $ \body ->
-        manifestOf (digestOf body) . first (enforceArtifactScheme (npmBaseUrl config))
-            <$> projectNpmManifest (npmLimits config) name body
+fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
+fetchNpmManifest tracing origin name =
+    fetchThenProject tracing origin name $ \body ->
+        manifestOf (digestOf body) . first (enforceArtifactScheme (originBaseUrl origin))
+            <$> projectNpmManifest (ocLimits origin) name body
   where
     -- Inject npm's raw packument 'Value' into the opaque served-document carrier at the
     -- fetch boundary: the neutral pipeline and cache thread it without reading it.
@@ -167,10 +166,15 @@ The win is that 'projectNpmVersion' parses them selectively, materialising one v
 rather than every version. A 'Nothing' is a version genuinely absent from a sound document,
 a forwarded miss.
 -}
-fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
-fetchNpmVersion tracing config name version =
-    fetchThenProject tracing config name $
-        fmap (>>= enforceArtifactSchemeDetails (npmBaseUrl config)) . projectNpmVersion (npmLimits config) name version
+fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+fetchNpmVersion tracing origin name version =
+    fetchThenProject tracing origin name $
+        fmap (>>= enforceArtifactSchemeDetails (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
+
+{- The origin's base URL as characters, for the scheme normalisation that must still
+recognise a non-https (dev loopback) upstream and leave its artifact URLs alone. -}
+originBaseUrl :: OriginClient -> Text
+originBaseUrl = registryUrlText . ocBaseUrl
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails', without
 decoding the other versions. Pure and total.

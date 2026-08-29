@@ -156,7 +156,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Rules (inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps)
-import Ecluse.Test.Wai (localhost, selfBaseUrl)
+import Ecluse.Test.Wai (localhost, localhostUrl, selfBaseUrl)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.
@@ -426,7 +426,13 @@ npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
     prepared <- prepare inertRuleDeps permissiveAgeRules
     pure
-        (npmServeDeps (Just (localhost privatePort)) (localhost publicPort) (MirrorOnAdmit "https://mirror.bench") prepared (pure benchNow))
+        ( npmServeDeps
+            (Just (localhostUrl privatePort))
+            (localhostUrl publicPort)
+            (MirrorOnAdmit (loopbackRegistryUrl "https://mirror.bench"))
+            prepared
+            (pure benchNow)
+        )
             { pdMountBaseUrl = "https://bench.proxy"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }

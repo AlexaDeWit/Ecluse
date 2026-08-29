@@ -145,7 +145,13 @@ mountBinding :: Text -> Text -> Text -> IO (Maybe MountBinding)
 mountBinding privateUrl publicUrl mirrorUrl = do
     prepared <- prepare inertRuleDeps admitOldEnough
     let deps =
-            (npmServeDeps (Just privateUrl) publicUrl (MirrorOnAdmit mirrorUrl) prepared (pure fixedNow))
+            ( npmServeDeps
+                (Just (loopbackRegistryUrl privateUrl))
+                (loopbackRegistryUrl publicUrl)
+                (MirrorOnAdmit (loopbackRegistryUrl mirrorUrl))
+                prepared
+                (pure fixedNow)
+            )
                 { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }

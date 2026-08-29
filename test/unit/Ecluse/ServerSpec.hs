@@ -25,12 +25,13 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
+import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
@@ -107,7 +108,7 @@ admission per application.
 basePublishDeps :: ByteAdmission -> PublishDeps
 basePublishDeps bodyBudget =
     PublishDeps
-        { pubTargetUrl = "http://127.0.0.1:1" -- an unconnectable port
+        { pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = Nothing
         , pubInboundToken = Nothing
@@ -115,7 +116,7 @@ basePublishDeps bodyBudget =
         , pubBodyBudget = bodyBudget
         , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
-        , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
+        , pubRelayPublish = relayPublishDocument
         , pubCanonicaliseName = rightToMaybe . Project.projectName
         , pubDeclaredNames = NpmPublish.declaredNames
         }
@@ -311,13 +312,13 @@ spec = do
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
 
-        with (publishAppWith (\b -> (basePublishDeps b){pubRelayPublish = \_ _ _ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")})) $
+        with (publishAppWith (\b -> (basePublishDeps b){pubRelayPublish = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw is an invariant break.
                 -- The perimeter answers it with the neutral 500 and the session survives.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
 
-        with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = ""})) $
+        with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = loopbackRegistryUrl ""})) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
                 -- An empty target URL cannot form a request, a configuration fault rather
                 -- than a transient outage, so the publish is a 500 (not a 502).

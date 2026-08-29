@@ -72,7 +72,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Request)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Credential (Secret)
@@ -301,7 +301,7 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 {- | Override the artifact request formation of every policy in the map, so a refusing builder
 proves which bundle's formation a job rides.
 -}
-withArtifactRequest :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
+withArtifactRequest :: (Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
 withArtifactRequest builder = Map.map (\p -> p{wpBuildArtifactRequest = builder})
 
 -- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.

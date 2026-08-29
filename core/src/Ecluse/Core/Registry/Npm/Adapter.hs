@@ -32,10 +32,7 @@ import Ecluse.Core.Registry.Adapter.Types (
     AdapterServe (..),
     RegistryAdapter (..),
  )
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (NpmClientConfig),
-    relayPublishDocument,
- )
+import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
@@ -43,10 +40,10 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
+import Ecluse.Core.Security.Egress (registryUrlText)
 
-{- | npm's capability record. The artifact builders ignore the response-bound and manager
-parameters, because npm request formation needs neither.
--}
+-- | npm's capability record.
 npmAdapter :: RegistryAdapter
 npmAdapter =
     RegistryAdapter
@@ -59,23 +56,21 @@ npmAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataNewClient = \tracing metrics upstream caching logFailure logInvalid logFetch limits manager baseUrl token ->
-                    newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch (NpmClientConfig baseUrl manager token limits)
+                { metadataNewClient = newNpmMetadataClient
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \_ _ baseUrl token -> NpmRequest.artifactRequestByFile baseUrl token
-                , artifactByUrl = \_ _ baseUrl token -> NpmRequest.artifactRequestByUrl baseUrl token
+                { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (registryUrlText (ocBaseUrl origin)) (ocToken origin)
+                , artifactByUrl = NpmRequest.artifactRequestByUrl
                 , -- npm serves tarball bytes from the registry host itself, so there
                   -- is no separate canonical files host to admit.
                   artifactHosts = []
                 }
         , adapterPublish =
             AdapterPublish
-                { publishRelay = \limits manager targetUrl token ->
-                    relayPublishDocument (NpmClientConfig targetUrl manager token limits)
+                { publishRelay = relayPublishDocument
                 , publishCanonicaliseName = rightToMaybe . projectName
                 , publishDeclaredNames = declaredNames
                 , publishCodec = npmPublishCodec

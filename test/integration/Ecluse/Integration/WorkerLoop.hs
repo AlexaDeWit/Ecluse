@@ -35,6 +35,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
@@ -97,7 +98,7 @@ mirrorPoliciesAt cap mirrorUrl digests = do
                   -- threads 'pdLimits'). The default here, since no override is set.
                   ptLimits = defaultLimits
                 }
-    pure (maybe admitAllPolicies admitAllPoliciesCapped cap (newMirrorPublish transport mirrorUrl npmPublishCodec) digests)
+    pure (maybe admitAllPolicies admitAllPoliciesCapped cap (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) npmPublishCodec) digests)
 
 -- | An 'Env' over handle doubles and a real (no-TLS) manager, carrying only the given queue.
 newQueueEnv :: MirrorQueue -> IO Env

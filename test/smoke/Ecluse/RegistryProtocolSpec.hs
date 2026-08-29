@@ -25,13 +25,11 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (npmLimits, npmManager),
-    fetchMetadataFormBounded,
- )
+import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated, Full))
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
@@ -140,8 +138,8 @@ the document, so an accidentally too-tight default surfaces as a failure, not a 
 -}
 admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
 admissibleUnderDefaults manager name = do
-    let config = (defaultNpmConfig manager){npmManager = manager, npmLimits = defaultLimits}
-    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against npmLimits,
+    let config = (defaultNpmConfig manager){ocManager = manager, ocLimits = defaultLimits}
+    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits,
     -- reporting any fetch fault (a bound breach included) as a value this smoke helper renders.
     response <-
         fetchMetadataFormBounded config Full noValidators name

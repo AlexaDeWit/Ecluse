@@ -30,10 +30,11 @@ import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), relayPublishDocument)
+import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
@@ -60,7 +61,7 @@ The relay forwards 'pubStaticToken' only when the client sends no token of its o
 publishDepsAt :: Int -> Maybe Secret -> ByteAdmission -> PublishDeps
 publishDepsAt targetPort staticToken bodyBudget =
     PublishDeps
-        { pubTargetUrl = "http://127.0.0.1:" <> show targetPort
+        { pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = staticToken
         , pubInboundToken = Nothing
@@ -68,7 +69,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubBodyBudget = bodyBudget
         , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
-        , pubRelayPublish = \l m t s -> relayPublishDocument (NpmClientConfig t m s l)
+        , pubRelayPublish = relayPublishDocument
         , pubCanonicaliseName = rightToMaybe . Project.projectName
         , pubDeclaredNames = NpmPublish.declaredNames
         }
@@ -254,7 +255,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
     -- An unformable target URL is this proxy's own misconfiguration (500). A target that
     -- never answers is an upstream outage (502). Both legs of that split are pinned here.
     it "500s a publish whose publication target URL cannot be formed (a misconfiguration, not an outage)" $ do
-        app <- proxyWith (Just (\budget -> (publishDepsAt 1 Nothing budget){pubTargetUrl = ""}))
+        app <- proxyWith (Just (\budget -> (publishDepsAt 1 Nothing budget){pubTargetUrl = loopbackRegistryUrl ""}))
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 500
 

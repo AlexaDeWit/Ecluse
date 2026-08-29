@@ -35,6 +35,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -119,14 +120,14 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
                 bindingPrefix binding `shouldBe` ("npm" :| [])
                 do
                     let deps = bindingPackumentDeps binding
-                    pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
-                    pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
+                    fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test"
+                    registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://public.example.test"
                     -- server.publicUrl is required once a mount is active, so the
                     -- mount base is always the absolute URL a real client needs.
                     pdMountBaseUrl deps `shouldBe` "https://registry.example.test/npm"
                     -- The mirror serve plan is wired from the mount's config: an
                     -- admitted public artifact enqueues toward the declared target.
-                    pdMirror deps `shouldBe` MirrorOnAdmit "https://mirror.example.test"
+                    mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
                     -- The binding derives the tarball-host gate from the upstreams the deps carry,
                     -- never from a second reading of the configuration. npm declares no ecosystem
                     -- artifact hosts.
@@ -316,8 +317,8 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         planFrom env Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                pdMirror deps `shouldBe` NoMirrorWrite
-                pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
+                mirrorTargetText (pdMirror deps) `shouldBe` Nothing
+                fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test"
             other -> expectationFailure ("expected one serve-only binding, got " <> show (fmap length other))
 
     it "binds a pure public gate from enabled alone (no endpoint keys declared)" $ do
@@ -327,8 +328,8 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 pdPrivateBaseUrl deps `shouldBe` Nothing
-                pdMirror deps `shouldBe` NoMirrorWrite
-                pdPublicBaseUrl deps `shouldBe` "https://registry.npmjs.org"
+                mirrorTargetText (pdMirror deps) `shouldBe` Nothing
+                registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://registry.npmjs.org"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish allow-list" $ do
@@ -387,7 +388,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         planFrom testEnv Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of
                 Just deps -> do
-                    pubTargetUrl deps `shouldBe` "https://publish.example.test"
+                    registryUrlText (pubTargetUrl deps) `shouldBe` "https://publish.example.test"
                     -- The allow-list reaches the mount as npm's own predicate: both
                     -- configured scopes admit, and anything outside them is refused.
                     map (pubAllowed deps) [scopedName "acme", scopedName "beta"] `shouldBe` [True, True]
@@ -408,7 +409,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         _ <- expectEnv testEnv
         planFrom testEnv Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of
-                Just deps -> pubTargetUrl deps `shouldBe` "https://publish.example.test"
+                Just deps -> registryUrlText (pubTargetUrl deps) `shouldBe` "https://publish.example.test"
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 
@@ -421,3 +422,10 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                 Nothing -> pure ()
                 Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
             _ -> expectationFailure "expected a single wired binding"
+
+{- The mirror serve plan's declared target as characters. The wired value carries the
+https-only egress witness, and these assertions read the configured URL back out of it. -}
+mirrorTargetText :: MirrorServePlan -> Maybe Text
+mirrorTargetText = \case
+    MirrorOnAdmit url -> Just (registryUrlText url)
+    NoMirrorWrite -> Nothing

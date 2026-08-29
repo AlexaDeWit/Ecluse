@@ -38,9 +38,6 @@ originates credential policy. Which token to send on which request is the reques
 pipeline's authority model, decided upstream of this module.
 -}
 module Ecluse.Core.Registry.Npm (
-    -- * Construction
-    NpmClientConfig (..),
-
     -- * Bounded metadata fetch
     fetchMetadataFormBounded,
 
@@ -48,9 +45,6 @@ module Ecluse.Core.Registry.Npm (
     relayPublishDocument,
 ) where
 
-import Network.HTTP.Client (Manager)
-
-import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
@@ -61,26 +55,9 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Request (Validators)
-import Ecluse.Core.Security (Limits)
-
-{- | Everything this data plane needs to reach one npm-speaking registry. The composition
-root supplies the pooled 'Manager', and the request pipeline picks the token.
--}
-data NpmClientConfig = NpmClientConfig
-    { npmBaseUrl :: Text
-    {- ^ The registry base URL (e.g. the public registry, or a CodeArtifact npm
-    endpoint). The proxy appends the package path to it.
-    -}
-    , npmManager :: Manager
-    -- ^ The shared @http-client@ 'Manager' to issue requests through.
-    , npmToken :: Maybe Secret
-    -- ^ An injected bearer token to attach, or 'Nothing' for anonymous requests.
-    , npmLimits :: Limits
-    {- ^ The response-bound budget 'fetchMetadataFormBounded' enforces on a metadata fetch,
-    fail-closed past 'Ecluse.Core.Security.maxBodyBytes'.
-    -}
-    }
+import Ecluse.Core.Security.Egress (registryUrlText)
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any conditional-GET
 'Validators'. Every failure, the body read included, comes back as a 'FetchFault' value, never
@@ -88,28 +65,28 @@ an exception. It reads the body through 'Ecluse.Core.Security.boundedRead' and r
 'Ecluse.Core.Security.maxBodyBytes' fail-closed, so a hostile upstream cannot exhaust memory.
 -}
 fetchMetadataFormBounded ::
-    NpmClientConfig ->
+    OriginClient ->
     MetadataForm ->
     Validators ->
     PackageName ->
     IO (Either FetchFault RegistryResponse)
-fetchMetadataFormBounded config form validators name =
+fetchMetadataFormBounded origin form validators name =
     formThen
         FetchUrlUnformable
-        (boundedFetch (npmManager config) (npmLimits config))
-        (metadataRequest (npmBaseUrl config) (npmToken config) form validators name)
+        (boundedFetch (ocManager origin) (ocLimits origin))
+        (metadataRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) form validators name)
 
 {- | Relay a client's npm publish document to the publication target and return the
 target's own response. It is the first-party publish primitive behind the
 @PUT /{pkg}@ serve path.
 -}
 relayPublishDocument ::
-    NpmClientConfig ->
+    OriginClient ->
     PackageName ->
     ByteString ->
     IO (Either FetchFault PublishRelayResponse)
-relayPublishDocument config name document =
+relayPublishDocument origin name document =
     formThen
         FetchUrlUnformable
-        (boundedRelay (npmManager config) (npmLimits config))
-        (publishRequest (npmBaseUrl config) (npmToken config) name document)
+        (boundedRelay (ocManager origin) (ocLimits origin))
+        (publishRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) name document)

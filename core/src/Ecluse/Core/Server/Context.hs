@@ -76,6 +76,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (FetchFault, PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
@@ -206,19 +207,16 @@ data PackumentDeps = PackumentDeps
         (PackageName -> MetadataError -> IO ()) ->
         (PackageName -> [InvalidEntry] -> IO ()) ->
         (PackageName -> IO ()) ->
-        Limits ->
-        Manager ->
-        Text ->
-        Maybe Secret ->
+        OriginClient ->
         MetadataClient
     {- ^ Build a per-request metadata client for one origin. The composition root closes over
-    the ecosystem's raw fetch primitives, and the pipeline supplies the runtime parameters.
+    the ecosystem's raw fetch primitives, and the pipeline names the origin to read through.
     -}
-    , pdBuildArtifactRequestByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
+    , pdBuildArtifactRequestByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
     {- ^ Build an artifact request by conventional filename path for the private
     (trusted) leg.
     -}
-    , pdBuildArtifactRequestByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    , pdBuildArtifactRequestByUrl :: Maybe Secret -> Text -> Either UrlFormationError Request
     -- ^ Build an artifact request by authoritative URL for the public leg.
     , pdAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
     {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
@@ -248,11 +246,11 @@ A plain function over 'pdUpstreams', not a record field, so a caller cannot repl
 while the tarball-host gate beside it keeps the old authorities. The same holds for
 'pdPublicBaseUrl' and 'pdMirror'.
 -}
-pdPrivateBaseUrl :: PackumentDeps -> Maybe Text
+pdPrivateBaseUrl :: PackumentDeps -> Maybe RegistryUrl
 pdPrivateBaseUrl = upstreamPrivateBaseUrl . pdUpstreams
 
 -- | The public upstream base URL. Reads are anonymous, with no client credential.
-pdPublicBaseUrl :: PackumentDeps -> Text
+pdPublicBaseUrl :: PackumentDeps -> RegistryUrl
 pdPublicBaseUrl = upstreamPublicBaseUrl . pdUpstreams
 
 {- | Whether an admitted public artifact is enqueued for the demand-driven mirror, and
@@ -308,9 +306,10 @@ publication target, and 'pubStaticToken' is only a fallback for a client that se
 'Ecluse.Core.Credential.CredentialProvider' (see @docs\/architecture\/registry-model.md@).
 -}
 data PublishDeps = PublishDeps
-    { pubTargetUrl :: Text
+    { pubTargetUrl :: RegistryUrl
     {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
-    @npm publish@ is relayed to. The package path is appended to it.
+    @npm publish@ is relayed to, carried as the https-only egress witness. The package path
+    is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
     {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
@@ -339,7 +338,7 @@ data PublishDeps = PublishDeps
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
-    , pubRelayPublish :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
+    , pubRelayPublish :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a publish document to the publication target, returning its response.
     , pubCanonicaliseName :: Text -> Maybe PackageName
     {- ^ Canonicalise a raw package-name string to a 'PackageName', or 'Nothing' if

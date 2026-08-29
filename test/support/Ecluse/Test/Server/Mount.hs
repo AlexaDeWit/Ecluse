@@ -43,13 +43,16 @@ module Ecluse.Test.Server.Mount (
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig))
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
+import Ecluse.Core.Registry.Adapter.Types (
+    AdapterArtifact (artifactByFile, artifactByUrl),
+    AdapterMetadata (metadataAssemble, metadataNewClient, metadataSerialise),
+    RegistryAdapter (adapterArtifact, adapterMetadata),
+ )
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -58,9 +61,11 @@ import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 upstream base URLs, the mirror plan, the rules, and the clock as parameters. A 'Nothing' private
 base URL gives a pure public gate, and the builder derives the tarball-host gate from these URLs
 so the two cannot disagree. The remaining fields carry defaults that a site record-updates,
-including the production https-only egress former 'mkRegistryUrl'.
+including the production https-only egress former 'mkRegistryUrl'. The ecosystem-shaped fields
+come straight off 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter', so a fixture spells no npm
+capability of its own.
 -}
-npmServeDeps :: Maybe Text -> Text -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
+npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
         { pdUpstreams = mountUpstreams [] privateBaseUrl publicBaseUrl mirror
@@ -75,12 +80,11 @@ npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         , pdDivergencePolicy = Warn
-        , pdNewMetadataClient = \tracing metrics upstream caching logFailure logInvalid logFetch limits manager baseUrl token ->
-            newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch (NpmClientConfig baseUrl manager token limits)
-        , pdBuildArtifactRequestByFile = \_limits _manager base token -> artifactRequestByFile base token
-        , pdBuildArtifactRequestByUrl = \_limits _manager base token -> artifactRequestByUrl base token
-        , pdAssemble = assembleMergedDocument
-        , pdSerialise = serialiseMergedDocument
+        , pdNewMetadataClient = metadataNewClient (adapterMetadata npmAdapter)
+        , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact npmAdapter)
+        , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact npmAdapter)
+        , pdAssemble = metadataAssemble (adapterMetadata npmAdapter)
+        , pdSerialise = metadataSerialise (adapterMetadata npmAdapter)
         , pdEgressUrl = mkRegistryUrl
         }
 
@@ -97,7 +101,7 @@ inertPackumentDeps =
   where
     -- Port 1 is reserved and never listening, so a fetch through these deps fails to
     -- connect rather than reaching anything.
-    closedPort = "http://localhost:1"
+    closedPort = loopbackRegistryUrl "http://localhost:1"
 
     fixedNow :: UTCTime
     fixedNow = UTCTime (fromGregorian 2020 1 1) 0
@@ -105,14 +109,15 @@ inertPackumentDeps =
 {- | Rebind a fixture's upstreams with the private base URL replaced. The rebind drops any declared
 ecosystem artifact hosts, so a fixture that wants both applies 'withEcosystemHosts' last.
 -}
-withPrivateBaseUrl :: Maybe Text -> PackumentDeps -> PackumentDeps
+withPrivateBaseUrl :: Maybe RegistryUrl -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
-{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the old one. A
+{- | 'withPrivateBaseUrl' for a fixture that rewrites the old private base URL's characters. A
 mount with no private upstream stays without one, and declared ecosystem artifact hosts are dropped.
+The rewritten URL re-enters as a loopback witness, because a fixture dials plain HTTP.
 -}
 overPrivateBaseUrl :: (Text -> Text) -> PackumentDeps -> PackumentDeps
-overPrivateBaseUrl f = rebind [] (fmap f) id
+overPrivateBaseUrl f = rebind [] (fmap (loopbackRegistryUrl . f . registryUrlText)) id
 
 {- | Rebind a fixture's upstreams with the mirror serve plan replaced. It drops any
 declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
@@ -129,6 +134,6 @@ withEcosystemHosts ecosystemHosts = rebind ecosystemHosts id id
 -- The one rebinding point every fixture tweak routes through, so the gate derives from what the
 -- result carries. The cluster does not carry the ecosystem hosts, so each rebind states or drops
 -- them.
-rebind :: [Text] -> (Maybe Text -> Maybe Text) -> (MirrorServePlan -> MirrorServePlan) -> PackumentDeps -> PackumentDeps
+rebind :: [Text] -> (Maybe RegistryUrl -> Maybe RegistryUrl) -> (MirrorServePlan -> MirrorServePlan) -> PackumentDeps -> PackumentDeps
 rebind ecosystemHosts onPrivate onMirror d =
     d{pdUpstreams = mountUpstreams ecosystemHosts (onPrivate (pdPrivateBaseUrl d)) (pdPublicBaseUrl d) (onMirror (pdMirror d))}

@@ -38,7 +38,7 @@ module Ecluse.Core.Registry.Adapter.Types (
     AdapterPublish (..),
 ) where
 
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -51,9 +51,9 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.Request (CredentialMapping)
-import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
@@ -117,14 +117,11 @@ data AdapterMetadata = AdapterMetadata
         (PackageName -> MetadataError -> IO ()) ->
         (PackageName -> [InvalidEntry] -> IO ()) ->
         (PackageName -> IO ()) ->
-        Limits ->
-        Manager ->
-        Text ->
-        Maybe Secret ->
+        OriginClient ->
         MetadataClient
-    {- ^ Build a per-request metadata client for one origin, given the per-fetch
-    runtime parameters. The adapter closes over the ecosystem's raw fetch
-    primitives.
+    {- ^ Build a per-request metadata client for one origin, given the serve-path
+    observation callbacks and the origin to read through. The adapter closes over the
+    ecosystem's raw fetch primitives.
     -}
     , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
     {- ^ Assemble the served document from a merge plan, the raw source documents, and the
@@ -141,14 +138,14 @@ dependency record ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByFile' and
 'Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl').
 -}
 data AdapterArtifact = AdapterArtifact
-    { artifactByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request by conventional filename path under a base URL:
+    { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
+    {- ^ Build an artifact request by conventional filename path under the origin's base URL:
     how the proxy addresses a trusted origin.
     -}
-    , artifactByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request at its authoritative upstream URL. The URL is complete on its
-    own, so an implementation must form the request from it alone. A caller may pass an empty
-    base URL and an anonymous credential ('Nothing'), as the mirror worker's fetch does.
+    , artifactByUrl :: Maybe Secret -> Text -> Either UrlFormationError Request
+    {- ^ Build an artifact request at its authoritative upstream URL. The URL is complete on
+    its own, so an implementation forms the request from it and the credential alone. It takes
+    no origin, because the mirror worker's fetch has none to name.
     -}
     , artifactHosts :: [Text]
     {- ^ The ecosystem's canonical artifact hosts, whose authorities feed the tarball-host gate.
@@ -163,8 +160,10 @@ the codec to the shared publish transport per mounted ecosystem
 ('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
 data AdapterPublish = AdapterPublish
-    { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
-    -- ^ Relay a client's publish document to the publication target, returning its response.
+    { publishRelay :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
+    {- ^ Relay a client's publish document to the publication target, named as the origin to
+    write through, and return the target's own response.
+    -}
     , publishCanonicaliseName :: Text -> Maybe PackageName
     -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.
     , publishDeclaredNames :: LByteString -> [Text]

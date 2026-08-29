@@ -37,6 +37,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
 import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
 {- | One ecosystem's mirror-write protocol: the pure request formations and projections, nothing
@@ -90,13 +91,17 @@ data MirrorPublish = MirrorPublish
 {- | Marry a protocol codec to the shared transport against one mirror-target endpoint. The
 transport mints a bearer per call and folds every thrown failure into the typed channel.
 -}
-newMirrorPublish :: MirrorTransport -> Text -> PublishCodec -> MirrorPublish
-newMirrorPublish transport targetUrl codec =
+newMirrorPublish :: MirrorTransport -> RegistryUrl -> PublishCodec -> MirrorPublish
+newMirrorPublish transport target codec =
     MirrorPublish
         { mpProbeMetadata = probeMetadata transport targetUrl codec
         , mpParseVersionList = pcParseVersionList codec
         , mpPublishArtifact = publishArtifact transport targetUrl codec
         }
+  where
+    -- The codec forms URLs from characters, so the egress witness is read once here
+    -- rather than at every formation.
+    targetUrl = registryUrlText target
 
 -- Execute the codec's probe read over the transport: mint, form, dial, and read
 -- the body bounded, with every failure folded into the typed 'FetchFault' channel.

@@ -23,6 +23,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0, validSha1)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
 
@@ -96,7 +97,7 @@ publishAt :: Text -> IO MirrorPublish
 publishAt targetUrl = do
     manager <- newManager defaultManagerSettings
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport targetUrl npmPublishCodec)
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
 -- | The shared descriptor, sized: the npm codec reports the attachment length it declares.
 sizedArtifact :: MirrorArtifact

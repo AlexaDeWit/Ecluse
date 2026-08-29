@@ -117,26 +117,24 @@ artifactRequestByFile baseUrl token name filename = do
     pure
         . withToken token
         $ base
-            { -- Never gunzip a tarball in flight: it is opaque binary whose
-              -- Never gunzip a tarball in flight: a @.tgz@ is opaque, already-compressed
+            { -- Never gunzip a tarball in flight: a @.tgz@ is opaque, already-compressed
               -- binary. It advertises no @Accept-Encoding@ either, because an encoding it then
               -- refuses to decode risks a doubly-gzipped body that fails its @dist.integrity@.
               decompress = const False
             }
 
 {- | Build npm's artifact @GET@ request for the absolute @url@ the projection preserved from the
-upstream's @dist.tarball@. It ignores @baseUrl@ because the location is absolute, and delegates
+upstream's @dist.tarball@. The location is absolute, so it names no base URL, and it delegates
 the credential, non-decompression, and redirect pinning to
 'Ecluse.Core.Registry.Request.artifactRequestByUrl'.
 
 Fails with a 'UrlFormationError' only when the @url@ cannot be parsed into a request.
 -}
 artifactRequestByUrl ::
-    Text ->
     Maybe Secret ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByUrl _baseUrl = Request.artifactRequestByUrl npmCredential
+artifactRequestByUrl = Request.artifactRequestByUrl npmCredential
 
 {- The metadata and publish URL for a package: @{baseUrl}/{encoded-name}@.
 -}

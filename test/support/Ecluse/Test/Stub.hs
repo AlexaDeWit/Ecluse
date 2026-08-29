@@ -31,8 +31,9 @@ import Network.Wai (
  )
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
+import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Wai (localhost)
 
 {- | What the stub captured from one request it served: enough to assert the method,
@@ -101,16 +102,16 @@ withStubHeaders status extraHeaders body action = do
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
 
--- | A config pointed at a stub, anonymous, sharing a no-TLS manager.
-stubConfig :: Stub -> IO NpmClientConfig
+-- | An origin pointed at a stub, anonymous, sharing a no-TLS manager.
+stubConfig :: Stub -> IO OriginClient
 stubConfig stub = do
     manager <- newManager defaultManagerSettings
     pure
-        NpmClientConfig
-            { npmBaseUrl = stubBaseUrl stub
-            , npmManager = manager
-            , npmToken = Nothing
-            , npmLimits = defaultLimits
+        OriginClient
+            { ocBaseUrl = loopbackRegistryUrl (stubBaseUrl stub)
+            , ocManager = manager
+            , ocToken = Nothing
+            , ocLimits = defaultLimits
             }
 
 -- | Look up a header (case-insensitively) in a captured request.

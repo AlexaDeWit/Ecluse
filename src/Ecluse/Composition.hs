@@ -91,7 +91,7 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
@@ -173,9 +173,9 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
                   pdUpstreams =
                     mountUpstreams
                         (artifactHosts (adapterArtifact adapter))
-                        (registryUrlText <$> regPrivateUpstream regs)
-                        (registryUrlText (regPublicUpstream regs))
-                        (maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs))
+                        (regPrivateUpstream regs)
+                        (regPublicUpstream regs)
+                        (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
                 , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
                 , pdRules = prepared
                 , -- The operator-configured ranges extending the fixed internal-range block
@@ -254,7 +254,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     allow <- mntPublishAllow mcfg
     pure
         PublishDeps
-            { pubTargetUrl = registryUrlText url
+            { pubTargetUrl = url
             , pubAllowed = publishAllowedName allow
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
@@ -292,7 +292,7 @@ artifacts to, and the provider that mints its bearer token. Resolved once, not p
 data PublishTarget = PublishTarget
     { ptEcosystem :: Ecosystem
     -- ^ The ecosystem this publish target serves.
-    , ptMirrorUrl :: Text
+    , ptMirrorUrl :: RegistryUrl
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptCredentials :: CredentialProvider
     -- ^ The provider minting the mirror-target write token.
@@ -320,7 +320,7 @@ publishTargetFor providers mount = do
             Right
                 PublishTarget
                     { ptEcosystem = mountEcosystem mount
-                    , ptMirrorUrl = registryUrlText (mtUrl target)
+                    , ptMirrorUrl = mtUrl target
                     , ptCredentials = provider
                     }
         Nothing ->

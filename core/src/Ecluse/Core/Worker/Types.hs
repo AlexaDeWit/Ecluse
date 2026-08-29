@@ -102,7 +102,7 @@ data WorkerPolicy = WorkerPolicy
     URL. The gate refuses an unextractable authority ('Nothing'), because the queue
     payload is a trust boundary.
     -}
-    , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    , wpBuildArtifactRequest :: Maybe Secret -> Text -> Either UrlFormationError Request
     {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL, through the
     mount ecosystem's own request formation
     ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). A job's bytes therefore come
