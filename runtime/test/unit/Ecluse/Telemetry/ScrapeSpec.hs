@@ -21,6 +21,7 @@ import Ecluse.Runtime.Telemetry.Scrape (
     metricScrapeFor,
     scrapeApplication,
     scrapeListenerFrom,
+    scrapeListenerWarnings,
     scrapeSelected,
  )
 
@@ -74,6 +75,16 @@ listenerSpec = describe "scrapeListenerFrom" $ do
     it "keeps the default port when the declared one is not a number" $
         scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_PORT", "nine-thousand")]
             `shouldBe` ScrapeListener "localhost" 9464
+
+    it "names an unusable port rather than defaulting in silence" $
+        -- An operator who typo'd the port would otherwise scrape 9464 and never learn why.
+        scrapeListenerWarnings [("OTEL_EXPORTER_PROMETHEUS_PORT", "nine-thousand")]
+            `shouldBe` ["OTEL_EXPORTER_PROMETHEUS_PORT is not a port number (nine-thousand). Serving the scrape exposition on 9464 instead."]
+
+    it "raises nothing when the port is absent, blank, or usable" $ do
+        scrapeListenerWarnings [] `shouldBe` []
+        scrapeListenerWarnings [("OTEL_EXPORTER_PROMETHEUS_PORT", "  ")] `shouldBe` []
+        scrapeListenerWarnings [("OTEL_EXPORTER_PROMETHEUS_PORT", "19464")] `shouldBe` []
 
 handleSpec :: Spec
 handleSpec = describe "metricScrapeFor" $ do

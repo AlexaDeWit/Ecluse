@@ -20,15 +20,15 @@ module Ecluse.Runtime.Telemetry.Scrape (
     -- * The dedicated listener
     ScrapeListener (..),
     scrapeListenerFrom,
+    scrapeListenerWarnings,
     scrapeApplication,
     withScrapeListener,
 ) where
 
 import Data.List (lookup)
-import Data.String (fromString)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Katip (LogEnv, Severity (ErrorS, InfoS))
+import Katip (LogEnv, Severity (ErrorS, InfoS, WarningS))
 import Network.HTTP.Types (hContentType, status404)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
@@ -41,7 +41,7 @@ import OpenTelemetry.Exporter.Metric (ResourceMetricsExport)
 import OpenTelemetry.Exporter.Prometheus.WAI (prometheusMiddleware)
 import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
 
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (displayExceptionT, nonBlank)
 import Ecluse.Runtime.Log (moduleLog)
 
 {- | One on-demand collection of the meter's current series. The substrate builds one only where
@@ -83,19 +83,56 @@ so publishing the exposition any wider is an operator's deliberate act.
 scrapeListenerFrom :: [(String, String)] -> ScrapeListener
 scrapeListenerFrom environment =
     ScrapeListener
-        { slHost = fromMaybe defaultScrapeHost (lk "OTEL_EXPORTER_PROMETHEUS_HOST")
-        , slPort = fromMaybe defaultScrapePort (readMaybe . toString =<< lk "OTEL_EXPORTER_PROMETHEUS_PORT")
+        { slHost = fromMaybe defaultScrapeHost (declared hostVar environment)
+        , slPort = case declaredPort environment of
+            PortDeclared port -> port
+            _ -> defaultScrapePort
         }
-  where
-    -- A present but blank value counts as unset, as it does across the telemetry resolution.
-    lk :: String -> Maybe Text
-    lk name = nonBlank . toText =<< lookup name environment
+
+{- | The warnings this environment raises, as values, so a test pins the message without a @katip@
+scribe. 'withScrapeListener' surfaces them before it binds.
+-}
+scrapeListenerWarnings :: [(String, String)] -> [Text]
+scrapeListenerWarnings environment = case declaredPort environment of
+    PortUnusable raw -> [unusablePortMessage raw]
+    _ -> []
+
+-- What the operator's port variable amounts to. One reading feeds both the resolution and the
+-- warning, so the two can never disagree about which values are usable.
+data PortSource
+    = PortAbsent
+    | PortDeclared Int
+    | PortUnusable Text
+
+declaredPort :: [(String, String)] -> PortSource
+declaredPort environment = case declared portVar environment of
+    Nothing -> PortAbsent
+    Just raw -> maybe (PortUnusable raw) PortDeclared (readMaybe (toString raw))
+
+-- A present but blank value counts as unset, as it does across the telemetry resolution.
+declared :: String -> [(String, String)] -> Maybe Text
+declared name environment = nonBlank . toText =<< lookup name environment
+
+hostVar :: String
+hostVar = "OTEL_EXPORTER_PROMETHEUS_HOST"
+
+portVar :: String
+portVar = "OTEL_EXPORTER_PROMETHEUS_PORT"
 
 defaultScrapeHost :: Text
 defaultScrapeHost = "localhost"
 
 defaultScrapePort :: Int
 defaultScrapePort = 9464
+
+unusablePortMessage :: Text -> Text
+unusablePortMessage raw =
+    toText portVar
+        <> " is not a port number ("
+        <> raw
+        <> "). Serving the scrape exposition on "
+        <> show defaultScrapePort
+        <> " instead."
 
 {- | Answer @\/metrics@ with the Prometheus text exposition of the current series, and every other
 path with a plain @404@. This is the whole surface of the dedicated listener.
@@ -114,9 +151,10 @@ it did not. A listener that cannot bind is reported and abandoned, never a faile
 withScrapeListener :: LogEnv -> Maybe MetricScrape -> IO a -> IO a
 withScrapeListener _ Nothing act = act
 withScrapeListener logEnv (Just scrape) act = do
-    listener <- scrapeListenerFrom <$> getEnvironment
+    environment <- getEnvironment
+    traverse_ (scrapeLog logEnv WarningS) (scrapeListenerWarnings environment)
     bound <- newEmptyMVar
-    withAsync (runScrapeListener logEnv listener scrape bound) $ \started -> do
+    withAsync (runScrapeListener logEnv (scrapeListenerFrom environment) scrape bound) $ \started -> do
         -- Whichever lands first: the port is bound, or the attempt gave up and logged. Racing
         -- them is what keeps a bind failure from parking the caller on a signal never sent.
         _ <- race (wait started) (takeMVar bound)
@@ -135,7 +173,10 @@ runScrapeListener logEnv listener scrape bound =
             $ Warp.defaultSettings
 
     say :: Severity -> Text -> IO ()
-    say = moduleLog logEnv "Ecluse.Runtime.Telemetry.Scrape"
+    say = scrapeLog logEnv
+
+scrapeLog :: LogEnv -> Severity -> Text -> IO ()
+scrapeLog logEnv = moduleLog logEnv "Ecluse.Runtime.Telemetry.Scrape"
 
 -- The bind line states what the exposition carries, because the posture is the operator's to hold.
 boundMessage :: ScrapeListener -> Text
@@ -149,7 +190,7 @@ failedMessage listener failure =
     "prometheus scrape exposition could not listen on "
         <> address listener
         <> ". Serving continues without it: "
-        <> show failure
+        <> displayExceptionT failure
 
 address :: ScrapeListener -> Text
 address listener = slHost listener <> ":" <> show (slPort listener)

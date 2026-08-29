@@ -148,7 +148,8 @@ and the wiring. Five design facts hold regardless:
   cluster identity, none of which belongs on the port untrusted clients reach. The bounded labels
   above answer cardinality, not exposure, so the loopback default is what makes reaching the
   exposition off the host a deliberate act. A scrape never enters the request path, so it does not
-  appear in the `http.server.*` series it reports.
+  appear in the `http.server.*` series it reports. The listener belongs to the telemetry
+  lifecycle, not to the front door, so every role opens its own and one scrape covers one role.
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared
   destination, so it is deliberately not SSRF-classified.
