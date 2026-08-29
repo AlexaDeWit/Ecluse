@@ -22,7 +22,7 @@ module Ecluse.Config.QueueTarget (
 import Data.Text qualified as T
 
 import Ecluse.Config.MirrorCredential (isAccountId)
-import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl (..))
+import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl (..), queueUrlTarget, queueUrlText)
 import Ecluse.Config.Types (HttpScheme (Https), splitHttpScheme)
 import Ecluse.Core.Security (refuseCredentialMaterial, splitHostPort)
 import Ecluse.Core.Text (nonBlank)
@@ -34,7 +34,7 @@ mkQueueUrl :: Text -> Text -> Either Text QueueUrl
 mkQueueUrl key raw
     | Left reason <- refuseCredentialMaterial key trimmed = Left reason
     | T.null trimmed = Left (key <> " must be a non-empty URL")
-    | otherwise = Right (QueueUrl{queueUrlText = trimmed, queueUrlTarget = parseQueueTarget trimmed})
+    | otherwise = Right (QueueUrl trimmed (parseQueueTarget trimmed))
   where
     trimmed = T.strip raw
 
