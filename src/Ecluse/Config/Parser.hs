@@ -5,9 +5,10 @@
 {- | The shared refusals every configuration key is decoded through: secret and unknown keys,
 enumerations, ports, durations, and the URL shapes.
 
-A malformed key fails at load with the key named, never at its first use. A group accepts
-exactly the keys its 'GroupDecoder' declares. Each URL-valued key is refined by the smart
-constructor of the type it resolves to, which names the key in the refusal it returns.
+A malformed key fails at load with the key named, never at its first use. A group accepts exactly
+the keys its 'GroupDecoder' declares. A URL-valued key is refined by the smart constructor of the
+type it resolves to: 'parseHttpUrl' and 'parseQueueUrl' pass it the key so the refusal names it,
+while 'parseRegistryUrl' prefixes the key itself and adds the host refusal 'RegistryUrl' omits.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding

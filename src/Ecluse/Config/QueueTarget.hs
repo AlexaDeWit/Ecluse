@@ -12,7 +12,9 @@ separate backend selector exists to disagree with the URL.
 -}
 module Ecluse.Config.QueueTarget (
     QueueTarget (..),
-    QueueUrl (..),
+    QueueUrl,
+    queueUrlText,
+    queueUrlTarget,
     mkQueueUrl,
     parseQueueTarget,
 ) where
@@ -20,7 +22,8 @@ module Ecluse.Config.QueueTarget (
 import Data.Text qualified as T
 
 import Ecluse.Config.MirrorCredential (isAccountId)
-import Ecluse.Config.Types (HttpScheme (Https), QueueTarget (..), QueueUrl (..), splitHttpScheme)
+import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl (..))
+import Ecluse.Config.Types (HttpScheme (Https), splitHttpScheme)
 import Ecluse.Core.Security (refuseCredentialMaterial, splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 

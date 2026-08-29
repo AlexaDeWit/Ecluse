@@ -23,7 +23,9 @@ module Ecluse.Config.Types (
     AppConfig (..),
     ServerSettings (..),
     QueueTarget (..),
-    QueueUrl (..),
+    QueueUrl,
+    queueUrlText,
+    queueUrlTarget,
     QueueSettings (..),
     LimitsSettings (..),
     CacheSettings (..),
@@ -49,6 +51,7 @@ import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
+import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl (..))
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
@@ -104,8 +107,7 @@ splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
 {- | The mirror-write credential, __derived from the mirror-target URL__ so a token can never pair
-with an endpoint it was not minted for. Config load resolves it once
-('Ecluse.Config.MirrorCredential.resolveMirrorCredential').
+with an endpoint it was not minted for. Load resolves it once ("Ecluse.Config.MirrorCredential").
 -}
 data MirrorCredential
     = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
@@ -127,9 +129,8 @@ data PublishAllow
 
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
-    {- ^ The mount's explicit on\/off switch. Any operator-declared key under the mount already
-    activates it, so @enabled: true@ serves the pure public gate that declares no other key, and
-    @enabled: false@ switches off a mount whose other keys stay in place.
+    {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
+    @true@ serves the public gate that declares no other key and @false@ switches one off in place.
     -}
     , mntPrivateUpstream :: Maybe RegistryUrl
     , mntPublicUpstream :: RegistryUrl
@@ -179,23 +180,6 @@ data ServerSettings = ServerSettings
     }
     deriving stock (Eq, Show)
 
--- | A recognised mirror-queue destination, parsed from the queue URL's shape.
-data QueueTarget
-    = -- | An SQS queue URL, carrying the region parsed from its host.
-      SqsTarget Text
-    | -- | A Pub\/Sub topic resource, carrying its project and topic.
-      PubSubTarget Text Text
-    deriving stock (Eq, Show)
-
-{- | @queue.url@ as parsed at load ('Ecluse.Config.QueueTarget.mkQueueUrl'): the value as written,
-with the backend its shape names, or no backend when only the SQS endpoint override can dial it.
--}
-data QueueUrl = QueueUrl
-    { queueUrlText :: Text
-    , queueUrlTarget :: Maybe QueueTarget
-    }
-    deriving stock (Eq, Show)
-
 {- | The @queue@ group: the mirror queue's destination, depth cap, and redelivery budget. The
 URL's shape decides the backend, and the load derives it once ("Ecluse.Config.QueueTarget").
 -}
@@ -204,9 +188,8 @@ data QueueSettings = QueueSettings
     , qsMemoryMaxDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
-    {- ^ How many deliveries one message gets before the worker retires it outright.
-    It is a __floor__: a queue with a dead-letter terminus runs one delivery above that terminus's
-    capture count, so the dead-letter queue always captures first ("Ecluse.Core.Queue").
+    {- ^ Deliveries one message gets before the worker retires it. A __floor__: a queue with a
+    dead-letter terminus runs one above its capture count, so it captures first ("Ecluse.Core.Queue").
     -}
     }
     deriving stock (Eq, Show)
@@ -291,8 +274,7 @@ data MountRegistries = MountRegistries
     deriving stock (Eq, Show)
 
 {- | Whether a mount mirrors, derived from its declared endpoints. A declared @mirrorTarget@ makes
-the mount 'Mirrored' and demands a private upstream to read the mirror back, so a mirrored mount
-without a readable private leg is unrepresentable.
+it 'Mirrored', which carries the private upstream the mirror is read back through, never without.
 -}
 data MountMode
     = -- | The mount mirrors admitted public artifacts, and it needs both legs.

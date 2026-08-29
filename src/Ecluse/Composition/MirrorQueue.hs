@@ -29,7 +29,8 @@ import Ecluse.Config (
     Mount (mountRegistries),
     QueueSettings (qsMaxReceiveCount, qsUrl),
     QueueTarget (..),
-    QueueUrl (queueUrlTarget, queueUrlText),
+    queueUrlTarget,
+    queueUrlText,
     regMirrorTarget,
  )
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
@@ -75,12 +76,8 @@ data MirrorQueuePlan
       MemoryBackend
     deriving stock (Eq, Show)
 
-{- | Select the mirror-queue backend from @ECLUSE_QUEUE__URL@'s shape and the ambient
-SDK environment. There is no backend selector, so a backend that disagrees with the URL
-is unrepresentable. An @AWS_ENDPOINT_URL_SQS@ override forces the SQS reading whatever
-the URL's shape, because an emulator or VPC endpoint URL matches no public shape. The
-generic @AWS_ENDPOINT_URL@ is deliberately not consulted: it is the S3 advisory client's
-override, and honouring it here would let an S3-only override redirect queue traffic.
+{- | Select the mirror-queue backend from @ECLUSE_QUEUE__URL@'s derived shape, which an @AWS_ENDPOINT_URL_SQS@ override overrules.
+The generic @AWS_ENDPOINT_URL@ is the S3 advisory client's, and honouring it here would redirect queue traffic.
 -}
 planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
@@ -132,10 +129,8 @@ memoryQueueBootWarning =
         <> "demand (no data loss, only deferred mirroring). Point ECLUSE_QUEUE__URL at a durable queue (SQS) "
         <> "for a production mirror that must not shed under load."
 
-{- | The boot warning a built queue's dead-letter probe warrants, or 'Nothing' when none
-is due. Pass the built handle's budget, not the plan's configured floor, so the warning
-states what the worker will do. The memory backend stays silent because
-'memoryQueueBootWarning' already says the mirror sheds jobs.
+{- | The warning a built queue's dead-letter probe warrants, or 'Nothing': the memory backend is silent, 'memoryQueueBootWarning' covering it.
+Pass the built handle's budget, not the plan's configured floor, so the warning states what the worker will do.
 -}
 deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either TransportFault DeadLetterTerminus -> Maybe Text
 deadLetterTerminusWarning plan budget probed = case plan of

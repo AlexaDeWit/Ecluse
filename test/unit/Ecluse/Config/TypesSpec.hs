@@ -47,8 +47,9 @@ urlSpec = describe "mkUrl" $ do
                 "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
 
     it "refuses a scheme that is neither http nor https, a blank value included" $ do
-        mkUrl "queue.url" "sqs://queue.example.test/q"
-            `shouldBe` Left "queue.url must be an http:// or https:// URL (got sqs://queue.example.test/q)"
+        mkUrl "advisories.osvExportBaseUrl" "s3://osv.example.test/exports"
+            `shouldBe` Left
+                "advisories.osvExportBaseUrl must be an http:// or https:// URL (got s3://osv.example.test/exports)"
         mkUrl "server.publicUrl" "   "
             `shouldBe` Left "server.publicUrl must be an http:// or https:// URL (got )"
 

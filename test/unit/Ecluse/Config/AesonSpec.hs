@@ -21,10 +21,11 @@ import Ecluse.Config (
     ObservabilitySettings (..),
     QueueSettings (..),
     QueueTarget (..),
-    QueueUrl (..),
     RuntimeSettings (..),
     ServerSettings (..),
     loadConfig,
+    queueUrlTarget,
+    queueUrlText,
     renderConfigError,
     unUrl,
  )
@@ -507,29 +508,21 @@ spec = describe "decodeDocument" $ do
         it "accepts a plain queue.url through both layers, deriving its backend at load" $ do
             loadedQueueUrl [("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing
                 `shouldBe` Right
-                    ( Just
-                        ( QueueUrl
-                            { queueUrlText = "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
-                            , queueUrlTarget = Just (SqsTarget "us-east-1")
-                            }
-                        )
-                    )
+                    (Just ("https://sqs.us-east-1.amazonaws.com/123456789012/mirror", Just (SqsTarget "us-east-1")))
             loadedQueueUrl [] (Just "{\"queue\":{\"url\":\"projects/acme/topics/mirror\"}}")
-                `shouldBe` Right
-                    ( Just
-                        ( QueueUrl
-                            { queueUrlText = "projects/acme/topics/mirror"
-                            , queueUrlTarget = Just (PubSubTarget "acme" "mirror")
-                            }
-                        )
-                    )
+                `shouldBe` Right (Just ("projects/acme/topics/mirror", Just (PubSubTarget "acme" "mirror")))
 
         it "loads a queue.url whose shape names no backend, for the endpoint-override path" $
             -- The emulator URL matches no public shape. Refusing it at load would take the
             -- AWS_ENDPOINT_URL_SQS deployment with it, so the derived target is simply absent.
             loadedQueueUrl [("ECLUSE_QUEUE__URL", "http://ministack:4566/000000000000/mirror")] Nothing
-                `shouldBe` Right
-                    (Just (QueueUrl{queueUrlText = "http://ministack:4566/000000000000/mirror", queueUrlTarget = Nothing}))
+                `shouldBe` Right (Just ("http://ministack:4566/000000000000/mirror", Nothing))
+
+        it "rejects a blank queue.url, naming the key, through both layers" $ do
+            loadConfig [("ECLUSE_QUEUE__URL", "   ")] Nothing
+                `shouldSatisfy` decodeErrorMentions "queue.url must be a non-empty URL"
+            loadConfig [] (Just "{\"queue\":{\"url\":\"\"}}")
+                `shouldSatisfy` decodeErrorMentions "queue.url must be a non-empty URL"
 
         it "leaves queue.url unset, which is the in-memory rollover" $
             loadedQueueUrl [] Nothing `shouldBe` Right Nothing
@@ -714,11 +707,11 @@ loadedLogLevel envVars doc =
         (obsLogLevel . cfgObservability . configApp)
         (loadConfig envVars doc)
 
-{- The resolved queue.url, flattened the same way. It carries the backend its shape names, so an
-assertion sees what the load derived rather than re-deriving it. -}
-loadedQueueUrl :: [(String, String)] -> Maybe ByteString -> Either Text (Maybe QueueUrl)
+{- The resolved queue.url as its value and the backend the load derived from it, flattened the same
+way. The type is abstract, so the assertion projects its two selectors rather than rebuilding it. -}
+loadedQueueUrl :: [(String, String)] -> Maybe ByteString -> Either Text (Maybe (Text, Maybe QueueTarget))
 loadedQueueUrl envVars doc =
     bimap
         (T.unlines . map renderConfigError)
-        (qsUrl . cfgQueue . configApp)
+        (fmap (\u -> (queueUrlText u, queueUrlTarget u)) . qsUrl . cfgQueue . configApp)
         (loadConfig envVars doc)
