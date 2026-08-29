@@ -98,9 +98,8 @@ data PublishBudget = PublishBudget
     , pbMaxRequestBytes :: Int
     }
 
-{- | Turn a validated 'Config' into the served 'MountBinding's, or every boot error at once,
-aggregated across every mount. The caller injects every capability, so this opens no socket,
-and the 'Limits' arrive resolved, so every metadata read is bounded.
+{- | Turn a validated 'Config' into the served 'MountBinding's, or every boot error at once. The
+caller injects every capability, so this opens no socket, and the 'Limits' arrive resolved.
 -}
 planMounts ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->

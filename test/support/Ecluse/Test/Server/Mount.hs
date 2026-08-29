@@ -8,10 +8,11 @@ The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ conve
 
 'npmServeDeps' is the one shared builder for an npm mount's 'PackumentDeps'. It fills the
 standard production wiring once: npm's own metadata and artifact capability records, the
-derived tarball-host gate, and the policy defaults. Each call site passes only its own
-axes: the two upstream base URLs, the mirror plan, the prepared rules, and the clock. A call site also record-updates the few fields unique to it: the
-mount base URL, the egress former, an inbound token. Every affected suite and the load
-bench build their deps through it, so a 'PackumentDeps' schema change lands in one place.
+derived tarball-host gate, and the policy defaults. Each call site passes only its own axes,
+the two upstream base URLs, the mirror plan, the prepared rules, and the clock, and
+record-updates the few fields unique to it: the mount base URL, the egress former, an inbound
+token. Every affected suite and the load bench build their deps through it, so a
+'PackumentDeps' schema change lands in one place.
 
 'inertPackumentDeps' is a complete but __unreachable__ 'PackumentDeps': every upstream it
 names is a closed port. A 'Ecluse.Core.Server.Context.MountBinding' always carries
@@ -52,13 +53,8 @@ import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUr
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
-{- | An npm mount's serve dependencies with the production wiring filled once, leaving the two
-upstream base URLs, the mirror plan, the rules, and the clock as parameters. A 'Nothing' private
-base URL gives a pure public gate, and the builder derives the tarball-host gate from these URLs
-so the two cannot disagree. The remaining fields carry defaults that a site record-updates,
-including the production https-only egress former 'mkRegistryUrl'. The ecosystem-shaped fields
-are the records 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter' carries, so a fixture spells no
-npm capability of its own.
+{- | An npm mount's serve dependencies over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
+The upstreams, mirror plan, rules, and clock are parameters, and the rest carry defaults.
 -}
 npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
@@ -104,8 +100,8 @@ ecosystem artifact hosts, so a fixture that wants both applies 'withEcosystemHos
 withPrivateBaseUrl :: Maybe RegistryUrl -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
-{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the old one. A
-mount with no private upstream stays without one, and declared ecosystem artifact hosts are dropped.
+{- | 'withPrivateBaseUrl' deriving the new private base URL from the old. A mount with no
+private upstream stays without one, and declared ecosystem artifact hosts are dropped.
 -}
 overPrivateBaseUrl :: (RegistryUrl -> RegistryUrl) -> PackumentDeps -> PackumentDeps
 overPrivateBaseUrl f = rebind [] (fmap f) id

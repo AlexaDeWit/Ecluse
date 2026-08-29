@@ -55,9 +55,8 @@ data AdapterMetadata = AdapterMetadata
         (PackageName -> IO ()) ->
         OriginClient ->
         MetadataClient
-    {- ^ Build a per-request metadata client for one origin, given the serve-path
-    observation callbacks and the origin to read through. The adapter closes over the
-    ecosystem's raw fetch primitives.
+    {- ^ Build a per-request metadata client for one origin. The adapter closes over the
+    ecosystem's raw fetch primitives, and the caller names the origin and the observers.
     -}
     , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
     {- ^ Assemble the served document from a merge plan, the raw source documents, and the
@@ -80,9 +79,8 @@ data AdapterArtifact = AdapterArtifact
     how the proxy addresses a trusted origin.
     -}
     , artifactByUrl :: Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request at its authoritative upstream URL. The URL is complete on
-    its own, so an implementation forms the request from it and the credential alone. It takes
-    no origin, because the mirror worker's fetch has none to name.
+    {- ^ Build an artifact request at its authoritative upstream URL. It names no origin: the
+    URL is complete on its own, and the mirror worker's fetch has none to give.
     -}
     , artifactHosts :: [Text]
     {- ^ The ecosystem's canonical artifact hosts, whose authorities feed the tarball-host gate.

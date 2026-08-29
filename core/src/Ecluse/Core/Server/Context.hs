@@ -195,16 +195,12 @@ data PackumentDeps = PackumentDeps
     withheld from the served listing ('Ecluse.Core.Package.Merge.FailClosed').
     -}
     , pdMetadata :: AdapterMetadata
-    {- ^ The mount ecosystem's metadata capability, carried whole: the per-origin read handle,
-    the served-document assembly, and its encoding
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterMetadata'). The composition root hands
-    over the adapter's own record rather than copying its fields onto this one.
+    {- ^ The mount ecosystem's metadata capability, carried whole
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterMetadata'), never copied field by field.
     -}
     , pdArtifact :: AdapterArtifact
-    {- ^ The mount ecosystem's artifact request formation, carried whole: by conventional
-    filename for the private (trusted) leg, by authoritative URL for the public leg, and the
-    declared artifact hosts the tarball-host gate was derived from
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterArtifact').
+    {- ^ The mount ecosystem's artifact request formation, carried whole
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterArtifact'), never copied field by field.
     -}
     , pdEgressUrl :: Text -> Either Text RegistryUrl
     {- ^ Form the validated egress witness for an artifact URL about to leave the process on a
@@ -285,8 +281,7 @@ publication target, and 'pubStaticToken' is only a fallback for a client that se
 data PublishDeps = PublishDeps
     { pubTargetUrl :: RegistryUrl
     {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
-    @npm publish@ is relayed to, carried as the https-only egress witness. The package path
-    is appended to it.
+    @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
     {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
@@ -317,9 +312,7 @@ data PublishDeps = PublishDeps
     -- ^ The operator help message appended to a publish denial, if configured.
     , pubAdapter :: AdapterPublish
     {- ^ The mount ecosystem's publish capability, carried whole
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterPublish'): the first-party relay this path
-    writes through, the name canonicaliser and declared-name reader the body-name guard applies,
-    and the mirror-write codec the worker's transport is married to.
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterPublish'), never copied field by field.
     -}
     }
 

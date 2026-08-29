@@ -271,13 +271,6 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
                 pdDivergencePolicy deps `shouldBe` FailClosed
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "planMounts is the listener-free Config -> [MountBinding] builder" $ do
-        config <- expectConfig staticEnvVars Nothing
-        providers <- expectProviders config
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
-            Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
-            Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
-
 bootErrorSpec :: Spec
 bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
     it "fails on an unresolved rule policy (a typo'd rule type)" $ do

@@ -103,9 +103,7 @@ data WorkerPolicy = WorkerPolicy
     -}
     , wpArtifact :: AdapterArtifact
     {- ^ The mount ecosystem's artifact capability, the same record the serve deps carry
-    ('Ecluse.Core.Server.Context.pdArtifact'). The worker forms a job's @GET@ through its
-    by-URL member, so a job's bytes come back through the formation the serve path streams
-    with.
+    ('Ecluse.Core.Server.Context.pdArtifact'). A job's @GET@ rides its by-URL member.
     -}
     , wpPublish :: MirrorPublish
     {- ^ The mount's married mirror-write capability
