@@ -1,0 +1,16 @@
+# How GitHub groups the release notes it generates from merged pull requests.
+# `scripts/release-notes.sh` asks for that body and appends it under the digest pin
+# and the `gh attestation verify` recipe. GitHub reads this file from the default
+# branch at generation time, so it must be merged before the version tag is pushed.
+# A pull request lands in the first category whose labels it carries, so the
+# catch-all stays last.
+changelog:
+  categories:
+    - title: Security
+      labels:
+        - security
+        - security:vuln-scan
+        - security:hsec-scan
+    - title: Everything else
+      labels:
+        - "*"
