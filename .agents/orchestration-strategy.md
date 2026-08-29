@@ -219,8 +219,8 @@ continue. It looks for:
 - **Performance problems likely to surface:** needless type conversions (the
   `String`/`Text`/`ByteString` bounce), avoidable re-parsing or re-allocation, lazy/strict
   mismatches, and accidentally-quadratic patterns. Catch them before later slices build on them.
-  Once the benchmark harness exists, measure this against the informational trend, which never
-  gates, instead of eyeballing it.
+  Measure this against the informational benchmark trend, which never gates, instead of
+  eyeballing it.
 - **Spec and doc reconciliation:** for each merged slice, reconcile the as-built code against its
   slice file and its architecture document(s). Fold the learnings, discoveries, and deviations back
   into the tracker and the architecture doc, so the design of record matches what shipped. A
@@ -255,9 +255,13 @@ substitutes for the other.
 
 In every mode the team lead owns the CI watch. At each PR-open report it starts one detached
 background watch per PR (`gh pr checks <pr> --watch` in a background shell). The watch returns
-once, at the terminal state, and is the authoritative signal. A foreground watch inside a subagent
-dies invisibly: the shell call times out before a cold run finishes, an API drop kills the agent
-silently, and a host suspend kills every watcher on the machine. An invisible death fails open.
+once, at the terminal state, and is the authoritative signal. A watch started at the report can
+land before GitHub attaches check runs to the new head, and `gh pr checks --watch` then exits at
+once with "no checks reported". Guard every start: poll plain `gh pr checks` until that message
+clears (about 20 seconds between tries), then start the watch. Only the no-checks message retries.
+A red exit is terminal. A foreground watch inside a subagent dies invisibly: the shell call times
+out before a cold run finishes, an API drop kills the agent silently, and a host suspend kills
+every watcher on the machine. An invisible death fails open.
 After any gap (a host suspend, a session restart) the team lead sweeps `gh pr checks` across every
 open PR and restarts the watches.
 
@@ -283,10 +287,12 @@ above. Root-cause a red gate. Do not patch over it.
 
 When several implementation agents run in parallel on one host, the fast floor does not scale. Each
 agent's `task check` contends for the cores every sibling needs. In this mode the floor shrinks to
-formatting, and the PR's CI run is the whole verification loop:
+hlint and formatting, and the PR's CI run is the whole verification loop:
 
-- The one build-adjacent local command is `env -u IN_NIX_SHELL nix develop --command task format`,
-  run as the last edit before every commit (CI gates on format-check).
+- Two build-adjacent local commands run before every commit: hlint on the changed Haskell files
+  (`env -u IN_NIX_SHELL nix develop --command hlint <files>`), fixing what it reports, then
+  `env -u IN_NIX_SHELL nix develop --command task format` as the last edit. CI gates on the hints
+  and on format-check, and hlint needs no build.
 - No local `task check`, builds, test tiers, Docker, or HLS. Agents navigate by grep and read, in a
   plain worktree (see [Subagents and isolation](#subagents-and-isolation)).
 - The team lead watches the PR's CI run
@@ -350,8 +356,15 @@ A PR reaches the architect only when **all** hold:
       test evidence. A non-gating smoke test never stands in for a criterion.
 - [ ] Independent Stage A + Stage B evaluation, by a fresh-context reviewer, passed with no open
       critical findings. Mandatory for every PR. A green CI `gate` does not substitute.
-- [ ] Local verification passed before pushing: `task check` for single-slice work, `task format`
-      plus a green CI run for batch work.
+- [ ] Local verification passed before pushing: `task check` for single-slice work, or hlint on
+      the changed files with its hints fixed, then `task format`, plus a green CI run for batch
+      work.
+- [ ] A PR that touches npm serving or fetching (the serve path or the worker's back-fill) does
+      not flip ready until the team lead reads both perf suites against main's latest artifacts:
+      the PR's own Work-per-request benchmarks run, and a load run dispatched with
+      `gh workflow run bench-load.yml --ref <branch>`. The comparison is a manual artifact read,
+      as no cross-run baseline exists. Allocations per request are the signal. Normalise by
+      successes when shedding dominates. Wall time is runner noise.
 - [ ] Foreseeable branches tested by intent. `codecov/project` is a context the ruleset requires,
       so it must be green. `codecov/patch` (≥ 85% on changed lines) prompts a unit or integration
       test. It is not a gate.
