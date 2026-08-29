@@ -281,12 +281,15 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"
 
-    it "loads the shipped advisory-sync defaults (poll interval, byte cap, no store)" $
+    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, no store)" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
                 advPollInterval (cfgAdvisories (configApp doc)) `shouldBe` 60
                 limMaxAdvisoryDatabaseBytes (cfgLimits (configApp doc)) `shouldBe` 536870912
+                -- Absolute on purpose: the shipped image sets no working directory, so a
+                -- relative path lands in a root the container's user cannot write.
+                advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
                 advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
     it "defaults the divergence policy to warn" $

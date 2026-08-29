@@ -6,11 +6,12 @@
 # integer key takes a positive integer unless its comment says otherwise, written as
 # plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
 #
-# The loader owns the whole ECLUSE_ prefix: every ECLUSE_* variable but ECLUSE_CONFIG
-# is read as a key of this schema, and one that names no key aborts the boot. Never put
-# an unrelated setting under the prefix. Écluse also reads the standard AWS_* and OTEL_*
-# variables of the SDKs it embeds, which are not keys here and are documented in the
-# operator manual.
+# The loader owns the whole ECLUSE_ prefix: every ECLUSE_* variable is read as a key of
+# this schema, and one that names no key aborts the boot. Two families are consumed
+# before the loader sees them and so name no key: ECLUSE_CONFIG, which relocates the
+# document, and the *_FILE secret indirections. Never put an unrelated setting under the
+# prefix. Écluse also reads the standard AWS_* and OTEL_* variables of the SDKs it
+# embeds, which are not keys here and are documented in the operator manual.
 
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port. Every role listens

@@ -93,9 +93,8 @@ data CveSyncHandle = CveSyncHandle
     -}
     }
 
-{- | Build the advisory-sync plan from config, one 'CveSyncHandle' per mount ecosystem, or nothing
-when no advisory store is configured. An operator who mounts an ecosystem the build does not ship
-declares an artifact that never arrives, so the pod never reports ready.
+{- | Build the advisory-sync plan, one 'CveSyncHandle' per mount ecosystem, or nothing with no
+store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
 -}
 planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
 planCveSync logEnv s3Endpoint appCfg = case advUrl (cfgAdvisories appCfg) of

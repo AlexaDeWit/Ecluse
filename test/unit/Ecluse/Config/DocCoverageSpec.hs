@@ -103,12 +103,8 @@ readOperatorManual = do
     manualDir = "web/content/docs"
     isMarkdown = (== ".md") . takeExtension
 
-{- | The document key an @ECLUSE_*@ spelling resolves to: its top-level section and, under it,
-the leaf camel-cased the way the resolver reads them (@ECLUSE_CACHE__MAX_BYTES@ is
-@cache.maxBytes@). Any segment between is irrelevant to the lookup, so a mount's own
-@integrity@ segment drops out. A one-segment spelling such as @ECLUSE_RULES@ names the section
-itself and yields 'Nothing' for the leaf. The whole result is 'Nothing' for a string that is
-not an @ECLUSE_@ spelling, which the test then reports as missing.
+{- | The section and leaf a spelling resolves to (@ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED@ is
+@mounts@ and @minTrusted@), camel-cased as the resolver reads them. One segment names the section.
 -}
 documentKey :: String -> Maybe (Text, Maybe Text)
 documentKey var = do
@@ -120,9 +116,8 @@ documentKey var = do
         (w : ws) -> w <> T.concat (map T.toTitle ws)
         [] -> ""
 
-{- | Whether @config/default.yaml@ documents a key: the leaf under its top-level section, or
-the section itself when the spelling names no leaf. A commented key (@# key:@) counts, section
-and leaf alike: it is how the file documents a computed default and a dormant section.
+{- | Whether @config/default.yaml@ documents a key: its leaf under the section, or the section
+alone for a spelling with no leaf. A commented @# key:@ counts, being how a computed default reads.
 -}
 documentsKey :: Text -> (Text, Maybe Text) -> Bool
 documentsKey yaml (section, mLeaf) = case mLeaf of

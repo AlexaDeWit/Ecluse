@@ -214,8 +214,7 @@ data QueueSettings = QueueSettings
     deriving stock (Eq, Show)
 
 {- | The @limits@ group: the hostile-input bounds. The memory plan computes the tenant-sized caps
-when unset ("Ecluse.Composition.MemoryPlan"), a configured value always winning. The bounds it
-does not size stay pinned policy.
+when unset ("Ecluse.Composition.MemoryPlan"), a configured value winning, and the rest stay pinned.
 -}
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int

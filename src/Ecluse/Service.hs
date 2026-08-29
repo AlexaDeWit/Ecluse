@@ -151,7 +151,7 @@ withServiceRuntime role bootEnv action = do
     -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
     providers <- initCredentialProviders credentialReporters config >>= orExit (T.unlines . map renderBootError)
     -- Each mount ecosystem syncs independently, so one missing artifact never holds back
-    -- another. Without a bucket the map is empty, rules abstain, and readiness is ungated.
+    -- another. Without a store the map is empty, rules abstain, and readiness is ungated.
     cveSyncPlan <- planCveSync logEnv (beS3Endpoint bootEnv) appConfig
     let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
     -- Where the plan shed the capability count (the nursery was the pressure),

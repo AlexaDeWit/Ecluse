@@ -21,9 +21,11 @@ that supplied it and redacting secrets, and `ecluse check-config` prints the sam
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
 > spells `cache.maxBytes`, and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` spells `mounts.npm.mirrorTarget`.
 
-Écluse owns the whole `ECLUSE_` prefix. Every `ECLUSE_*` variable but `ECLUSE_CONFIG` is read as a
-key of that schema, and one naming no key aborts the boot rather than resolving to a default, so a
-typo surfaces at startup. Keep your own unrelated settings out of the prefix.
+Écluse owns the whole `ECLUSE_` prefix. Every `ECLUSE_*` variable is read as a key of that schema,
+and one naming no key aborts the boot rather than resolving to a default, so a typo surfaces at
+startup. Only two families are consumed before the resolver sees them and therefore name no key:
+`ECLUSE_CONFIG`, and the `_FILE` secret indirections under [Secrets](@/docs/configuration.md#secrets).
+Keep your own unrelated settings out of the prefix.
 
 Mounts are off until you declare them. Mentioning one anywhere, whether through an
 `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable or a key under `mounts.<ecosystem>` in the document,
@@ -156,7 +158,7 @@ Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
-`min-age`, suppresses the fast-track, and adds five more by name:
+`min-age`, suppresses the fast-track, and adds six more by name:
 
 ```yaml
 rules:

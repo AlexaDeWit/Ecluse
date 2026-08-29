@@ -47,6 +47,24 @@ spec = do
                 -- the fixture feed holds for the advisory's CVE alias.
                 rows `shouldBe` [("hono", Just 0.75)]
 
+        it "reads the configured epssFeedUrl when the run passes no override" $ do
+            le <- newTestLogEnv
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
+            withSystemTempDirectory "ecluse-pilot-compile" $ \outDir ->
+                withStub status200 zipData $ \stub ->
+                    withStub status200 epssData $ \epssStub -> do
+                        -- The scheduled daemon passes no override either, so a feed URL
+                        -- hardcoded again would reach the real upstream instead of this stub.
+                        let feedUrl = unpack (stubBaseUrl epssStub) <> "/epss.csv.gz"
+                        appCfg <- expectAppConfig [("ECLUSE_ADVISORIES__EPSS_FEED_URL", feedUrl)] Nothing
+                        let opts = (compileOptions (stubBaseUrl stub) (stubBaseUrl epssStub) outDir){pcoEpssSource = Nothing}
+                        dbFile <- runPilotCompile le telemetryDisabled Nothing appCfg opts
+                        conn <- open dbFile
+                        rows <- query_ conn "SELECT package_name, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Maybe Double)]
+                        close conn
+                        rows `shouldBe` [("hono", Just 0.75)]
+
         it "fails loudly when an upload is requested without a configured advisory store" $ do
             le <- newTestLogEnv
             appCfg <- expectAppConfig [] Nothing

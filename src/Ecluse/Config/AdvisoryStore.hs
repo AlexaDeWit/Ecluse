@@ -32,7 +32,7 @@ import Ecluse.Config.Advisory.Internal (
 import Ecluse.Core.Security (refuseCredentialMaterial)
 import Ecluse.Core.Text (nonBlank)
 
--- | The scheme this build knows, named in its own refusal so the message stays in step.
+-- The scheme this build knows, named in its own refusal so the message stays in step.
 s3Scheme :: Text
 s3Scheme = "s3://"
 
@@ -70,9 +70,8 @@ bucketRefusal key bucket =
         <> bucket
         <> ")"
 
-{- | The S3 bucket naming rules, checked at load so a malformed name fails the boot rather than
-the first advisory poll. The dotted forms stay legal, because an existing bucket may carry one.
--}
+-- The S3 bucket naming rules, checked at load so a malformed name fails the boot rather than the
+-- first advisory poll. A dotted name stays legal, because an existing bucket may carry one.
 validBucketName :: Text -> Bool
 validBucketName bucket =
     T.compareLength bucket 3 /= LT

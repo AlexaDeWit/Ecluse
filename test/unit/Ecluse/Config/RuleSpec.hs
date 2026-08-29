@@ -157,6 +157,14 @@ spec = describe "rulePolicySpec" $ do
             resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minCvss\":50}}}"
                 `shouldBe` Left [MalformedRule "deny-cve" "\"minCvss\" must be a CVSS score between 0 and 10"]
 
+        -- The rename carries no alias, so the old spelling must not reach the threshold as a
+        -- silently absent one. The rule group refuses it as an unknown key before that.
+        it "refuses the retired minSeverity spelling on the add and the patch path" $ do
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}"
+                `shouldSatisfy` refusalMentions "minSeverity"
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":9}}}"
+                `shouldSatisfy` refusalMentions "minSeverity"
+
     describe "DenyIfEpss (add, patch, and validation)" $ do
         it "adds a DenyIfEpss from a minEpss, defaulting onUnavailable to fail-closed" $
             resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}"
@@ -364,6 +372,10 @@ containsAllowScope _ = False
 hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
+
+-- A refusal whose rendered text names the key, whichever layer raised it.
+refusalMentions :: Text -> Either [PolicyError] [PrecededRule] -> Bool
+refusalMentions needle = either (any (T.isInfixOf needle . renderPolicyError)) (const False)
 
 {- | A minimal well-formed "add" patch for each rule type, keyed by its type name. The "covers
 exactly" expectation ties it to 'knownRuleTypes', so a new 'Rule' type cannot join without an entry.

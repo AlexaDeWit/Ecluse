@@ -131,10 +131,8 @@ data PilotCompileOptions = PilotCompileOptions
     }
     deriving stock (Eq, Show)
 
-{- | Requesting an upload without a configured advisory store.
-
-This is a wiring fault at the composition root, so it throws rather than returning a
-value the caller could only re-raise.
+{- | Requesting an upload without a configured advisory store. It is a wiring fault at the
+composition root, so it throws rather than returning a value the caller could only re-raise.
 -}
 data PilotUploadUnconfigured = PilotUploadUnconfigured
     deriving stock (Eq, Show)
