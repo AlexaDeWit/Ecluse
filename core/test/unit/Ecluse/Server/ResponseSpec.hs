@@ -6,6 +6,7 @@ module Ecluse.Server.ResponseSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Network.HTTP.Types (Status, statusCode, statusMessage)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -32,8 +33,8 @@ import Ecluse.Core.Server.Response (
     ServeDecision (..),
     Transience (..),
     appendHelp,
+    artifactHttpStatus,
     artifactStatus,
-    artifactStatusCode,
     longestRetry,
     mkHelpMessage,
     packumentStatus,
@@ -62,6 +63,10 @@ pkg scope ageDays code =
         , pkgLicenses = ["MIT"]
         }
 
+-- | A status as its code and reason phrase, since 'Status' equality compares the code alone.
+codeAndReason :: Status -> (Int, ByteString)
+codeAndReason s = (statusCode s, statusMessage s)
+
 spec :: Spec
 spec = do
     describe "artifactStatus -- outcome to status (concrete artifact)" $ do
@@ -88,20 +93,21 @@ spec = do
             artifactStatus (Reject (Rejection BelowIntegrityFloor "too weak"))
                 `shouldBe` Forbidden
 
-    describe "artifactStatusCode -- numeric HTTP codes" $ do
-        it "Ok is 200" $ artifactStatusCode Ok `shouldBe` 200
-        it "Forbidden is 403" $ artifactStatusCode Forbidden `shouldBe` 403
+    describe "artifactHttpStatus -- code and reason phrase" $ do
+        it "Ok is 200 OK" $ codeAndReason (artifactHttpStatus Ok) `shouldBe` (200, "OK")
+        it "Forbidden is 403 Forbidden" $ codeAndReason (artifactHttpStatus Forbidden) `shouldBe` (403, "Forbidden")
         it "an Unavailable' is 503 regardless of the Retry-After delay" $ do
-            artifactStatusCode (Unavailable' Nothing) `shouldBe` 503
-            artifactStatusCode (Unavailable' (Just (RetryAfter 30))) `shouldBe` 503
-        it "ServerError is 500" $ artifactStatusCode ServerError `shouldBe` 500
-        it "NotFound is 404" $ artifactStatusCode NotFound `shouldBe` 404
+            codeAndReason (artifactHttpStatus (Unavailable' Nothing)) `shouldBe` (503, "Service Unavailable")
+            codeAndReason (artifactHttpStatus (Unavailable' (Just (RetryAfter 30)))) `shouldBe` (503, "Service Unavailable")
+        it "ServerError is 500 Internal Server Error" $
+            codeAndReason (artifactHttpStatus ServerError) `shouldBe` (500, "Internal Server Error")
+        it "NotFound is 404 Not Found" $ codeAndReason (artifactHttpStatus NotFound) `shouldBe` (404, "Not Found")
 
     describe "the 503-only-when-it-will-resolve rule" $
         it "503 iff the rejection believes it will resolve, else 500" $ do
-            artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "x")))
+            statusCode (artifactHttpStatus (artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "x"))))
                 `shouldBe` 503
-            artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x")))
+            statusCode (artifactHttpStatus (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x"))))
                 `shouldBe` 500
 
     describe "rejectUnavailable -- the one refusal for a verdict nothing could decide" $ do

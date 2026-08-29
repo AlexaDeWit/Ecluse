@@ -57,7 +57,7 @@ module Ecluse.Core.Server.Response (
     -- * Concrete-artifact status
     ArtifactStatus (..),
     artifactStatus,
-    artifactStatusCode,
+    artifactHttpStatus,
 
     -- * Packument status (over the merged survivor set)
     PackumentStatus (..),
@@ -72,6 +72,7 @@ module Ecluse.Core.Server.Response (
 
 import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
+import Network.HTTP.Types (Status, status200, status403, status404, status500, status503)
 
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules (renderDecision)
@@ -210,14 +211,14 @@ artifactStatus = \case
         -- misbehaving upstream on this path is an internal inability to serve.
         UpstreamInvalid -> ServerError
 
--- | The numeric HTTP status code for an 'ArtifactStatus'. Pure and total.
-artifactStatusCode :: ArtifactStatus -> Int
-artifactStatusCode = \case
-    Ok -> 200
-    Forbidden -> 403
-    Unavailable'{} -> 503
-    ServerError -> 500
-    NotFound -> 404
+-- | The HTTP status an 'ArtifactStatus' renders as. Pure and total.
+artifactHttpStatus :: ArtifactStatus -> Status
+artifactHttpStatus = \case
+    Ok -> status200
+    Forbidden -> status403
+    Unavailable'{} -> status503
+    ServerError -> status500
+    NotFound -> status404
 
 {- | The HTTP status a __packument__ request renders to, chosen over the merged survivor set
 (see 'packumentStatus'). There is no @404@: a packument whose versions were all withheld is not

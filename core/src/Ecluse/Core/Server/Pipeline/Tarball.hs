@@ -98,7 +98,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 ) where
 
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus, status401)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, status401, status403, status500)
 import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
 import Ecluse.Core.Credential (Secret)
@@ -176,13 +176,13 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
  )
 import Ecluse.Core.Server.Response (
-    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
+    ArtifactStatus (NotFound, Unavailable'),
     Rejection (rejectionMessage),
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
     appendHelp,
+    artifactHttpStatus,
     artifactStatus,
-    artifactStatusCode,
     rejectUnavailable,
     serveDecisionOf,
  )
@@ -537,7 +537,7 @@ a gate denial rather than a rule outcome, and it renders on the same @403@ surfa
 fixed reason. -}
 crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
-    tarballError replies (mkStatus 403 "Forbidden") [] "the upstream artifact host is not permitted by the tarball-host policy"
+    tarballError replies status403 [] "the upstream artifact host is not permitted by the tarball-host policy"
 
 {- | The status a refused artifact request renders. The version-absent miss is the forwarded
 @404@: every other inability keeps the @503@ or @500@ its transience earns.
@@ -551,7 +551,7 @@ artifactOutcomeStatus decision
 suggested delay, because the single-artifact path has none to offer. -}
 artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
 artifactError replies deps decision =
-    tarballError replies (toStatus status) retryHeaders (appendHelp (pdHelp deps) message)
+    tarballError replies (artifactHttpStatus status) retryHeaders (appendHelp (pdHelp deps) message)
   where
     status :: ArtifactStatus
     status = artifactOutcomeStatus decision
@@ -560,17 +560,6 @@ artifactError replies deps decision =
     retryHeaders = case status of
         Unavailable' retry -> retryAfterHeaders retry
         _ -> []
-
-    toStatus :: ArtifactStatus -> Status
-    toStatus s = mkStatus (artifactStatusCode s) (statusReason s)
-
-    statusReason :: ArtifactStatus -> ByteString
-    statusReason = \case
-        Ok -> "OK"
-        Forbidden -> "Forbidden"
-        Unavailable'{} -> "Service Unavailable"
-        ServerError -> "Internal Server Error"
-        NotFound -> "Not Found"
 
     message :: Text
     message = case decision of
@@ -582,4 +571,4 @@ decision. The package segment and filename are already known-safe, so only a mis
 base URL reaches here. -}
 internalArtifactError :: TarballReplies response -> response
 internalArtifactError replies =
-    tarballError replies (mkStatus 500 "Internal Server Error") [] "could not form the upstream artifact URL"
+    tarballError replies status500 [] "could not form the upstream artifact URL"
