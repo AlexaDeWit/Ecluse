@@ -1597,14 +1597,25 @@
                 },
                 {
                   "number": 23,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
-                  "title": "Package-name spoofing via invisible or confusable characters",
+                  "title": "Package-name spoofing via invisible characters",
                   "type": "Spoofing",
-                  "description": "A requested or published package name can impersonate another package to a human reader. Unicode format characters (zero-width and bidirectional controls) render invisibly or reorder glyphs, so two distinct names look identical in a lockfile, a log line, or a review diff. A name built only from ordinary permitted characters can also read as another name, for example a capital I in place of a lowercase l. The upstream npm namespace already contains legacy names outside the current validator's shape, so look-alike names arrive from outside as well as from first-party publishes.",
-                  "mitigation": "Every package-name component parses against an explicit ASCII allowlist before routing, caching, queueing, or publish admission. For npm the allowlist is the validator's own hard boundary: letters, digits, and - _ . ! ~ * ' ( ), with @ and / as scope structure and no leading period, hyphen, or underscore. A codepoint outside the set, non-ASCII or control, cannot enter by construction, on the serve path or the publish path. Detection of look-alike names within the allowed set is not implemented.",
+                  "description": "A requested or published package name can impersonate another package to a human reader. Unicode format characters (zero-width and bidirectional controls) render invisibly or reorder glyphs, so two distinct names look identical in a lockfile, a log line, or a review diff. A name can arrive from an upstream fetch as well as from a first-party publish, so the boundary applies to both directions.",
+                  "mitigation": "Every package-name component parses against an explicit ASCII allowlist before routing, caching, queueing, or publish admission. For npm the allowlist is the validator's own hard boundary: letters, digits, and - _ . ! ~ * ' ( ), with @ and / as scope structure and no leading period, hyphen, or underscore. A codepoint outside the set, non-ASCII or control, cannot enter by construction, on the serve path or the publish path.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000123"
+                },
+                {
+                  "number": 24,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Package-name typosquatting within the permitted character set",
+                  "type": "Spoofing",
+                  "description": "A name built only from permitted ASCII characters can read as another name to a human: a capital I in place of a lowercase l, rn in place of m, a swapped or doubled letter, a hyphen moved or dropped. The upstream npm namespace already contains such look-alike names, and a first-party publish can introduce one. A reader of a lockfile, a log line, or a review diff resolves the wrong package.",
+                  "mitigation": "The ASCII allowlist bounds the space to visible permitted characters, which keeps every name renderable and comparable. Detection or refusal of look-alike names within the permitted set is not implemented.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000124"
                 }
               ],
               "trustBoundaryIds": [
