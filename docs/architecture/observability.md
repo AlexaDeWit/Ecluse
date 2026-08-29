@@ -83,7 +83,7 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   leaves every consumer on its last-good artifact, ageing.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate
-dashboards, and all export over the same OTLP push pipeline as traces.
+dashboards. All of them leave by whichever metrics transport the deployment selected below.
 
 ### Cardinality and attributes
 
@@ -136,8 +136,15 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
-and the wiring. Four design facts hold regardless:
+and the wiring. Five design facts hold regardless:
 
+- **Metrics push or pull, traces always push.** OTLP push is the default and shares the traces'
+  pipeline, which suits the Datadog Agent and any Collector. A shop that scrapes sets
+  `OTEL_METRICS_EXPORTER=prometheus` instead, and the proxy answers `GET /metrics` with the
+  Prometheus text exposition of the same instruments. The SDK resolves that value to a no-op push
+  exporter, so the endpoint is the whole transport, and the bounded-label discipline above is what
+  keeps a scrape's series count finite. The route sits above the request stack, so a scrape opens
+  no span and never counts itself into the `http.server.*` series it reports.
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared
   destination, so it is deliberately not SSRF-classified.

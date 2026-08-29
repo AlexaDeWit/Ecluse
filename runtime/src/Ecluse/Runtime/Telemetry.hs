@@ -2,52 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The OpenTelemetry substrate. It holds the tracer and meter providers the rest of
-the proxy hangs spans and metrics on, behind a master switch that defaults to __off__.
+{- | The OpenTelemetry substrate: the tracer and meter providers the rest of the proxy hangs
+spans and metrics on, behind the @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Observability
+is opt-in and vendor-neutral, so with that switch unset nothing is wired, nothing is emitted,
+and the SDK is never initialised. The maintainer's own backend must never become a consumer's
+obligation. This module stands up, or declines to stand up, the providers and brackets their
+lifecycle. The request-lifecycle spans and the metric instruments layer on top, and nothing
+here instruments the hot path. @docs\/architecture\/observability.md@ describes the
+configuration model and the signal catalogue.
 
-Écluse is a self-hosted proxy operators run inside their own infrastructure, so
-observability is __opt-in and vendor-neutral__. The substrate is OpenTelemetry,
-emitting OTLP that any compatible backend can receive. The maintainer's choice of
-backend (Datadog) must never become every consumer's obligation, so __with
-@ECLUSE_OBSERVABILITY__TELEMETRY@ unset nothing is wired and no telemetry is
-emitted__. The SDK is not even initialised.
+== The handle
 
-This module is purely the __substrate__: it stands up (or, by default, declines to
-stand up) the providers and brackets their lifecycle. The spans on the request
-lifecycle and the metric instruments layer on top of this substrate. Nothing here
-instruments the hot path.
-
-== The switch and the handle
-
-'TelemetrySwitch' is the @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch, parsed at the
-configuration boundary (@Ecluse.Config@) in the same strict, fail-loud style as
-the other enums. The 'Telemetry' handle it produces is one of two shapes:
-
-* __'telemetryDisabled'__: the off-by-default no-op. It holds no providers, the
-  SDK is never initialised, and nothing is exported. This is what an unset
-  @ECLUSE_OBSERVABILITY__TELEMETRY@ yields.
-
-* an __enabled__ handle carrying the SDK's tracer and meter providers. The SDK builds
-  them from the standard @OTEL_*@ environment variables it reads directly:
-  @OTEL_SERVICE_NAME@, @OTEL_RESOURCE_ATTRIBUTES@, @OTEL_EXPORTER_OTLP_ENDPOINT@,
-  @OTEL_EXPORTER_OTLP_PROTOCOL@, and the sampler. The OTLP exporter defaults to
-  HTTP\/protobuf. gRPC stays behind the exporter's cabal flag, off.
-
-'withTelemetry' is the lifecycle bracket the composition root ("Ecluse.Runtime.Env")
-runs the proxy within. When enabled it initialises the providers and tears them down
-along every exit path, flushing buffered spans and metrics. When disabled it is a pure
-pass-through that opens nothing to tear down.
-
-When enabled it also makes export failures __visible__. The OTLP span and metric
-exporters are wrapped, so a failed export is observed and routed through the shared
-@katip@ throttle ("Ecluse.Runtime.Telemetry.Resolve"). Without those wrappers,
-@hs-opentelemetry 1.0.0.0@ drops that failure silently. The throttle logs the first
-failure plainly, then a periodic heartbeat. The wrappers only /observe/. Export
-semantics are unchanged, so an unreachable collector still degrades off the request
-path.
-
-@docs\/architecture\/observability.md@ describes the configuration model and the
-signal catalogue.
+'telemetryDisabled' holds no providers. An enabled handle carries the SDK's providers, built
+from the standard @OTEL_*@ variables the SDK reads directly, plus a 'MetricScrape' where the
+operator chose the pull transport ("Ecluse.Runtime.Telemetry.Scrape").
+'withTelemetry' is the lifecycle bracket the composition root ("Ecluse.Runtime.Env") runs the
+proxy within, tearing the providers down along every exit path and flushing what they hold. It
+also wraps the OTLP exporters, because @hs-opentelemetry 1.0.0.0@ drops a failed export
+silently. The wrappers only observe, routing the failure through the shared @katip@ throttle
+("Ecluse.Runtime.Telemetry.Resolve"), so export semantics stay untouched.
 -}
 module Ecluse.Runtime.Telemetry (
     -- * Master switch
@@ -61,6 +34,7 @@ module Ecluse.Runtime.Telemetry (
     telemetryEnabled,
     telemetryTracerProvider,
     telemetryMeterProvider,
+    telemetryMetricScrape,
 
     -- * Lifecycle
     withTelemetry,
@@ -102,6 +76,7 @@ import Ecluse.Runtime.Telemetry.Resolve (
     installExportErrorHandler,
     observeExportResult,
  )
+import Ecluse.Runtime.Telemetry.Scrape (MetricScrape, metricScrapeFor)
 
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
@@ -164,6 +139,8 @@ data TelemetryProviders = TelemetryProviders
     -- ^ The SDK tracer provider the proxy hangs spans on.
     , tpMeterProvider :: MeterProvider
     -- ^ The SDK meter provider the proxy hangs metric instruments on.
+    , tpMetricScrape :: Maybe MetricScrape
+    -- ^ The pull-side collection, present only under @OTEL_METRICS_EXPORTER=prometheus@.
     }
 
 {- | The disabled telemetry handle: the off-by-default no-op that holds no providers
@@ -173,12 +150,13 @@ telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
 -- | Build an enabled telemetry handle from the SDK signals 'withTelemetry' brackets.
-telemetryEnabled :: OTelSignals -> Telemetry
-telemetryEnabled signals =
+telemetryEnabled :: Maybe MetricScrape -> OTelSignals -> Telemetry
+telemetryEnabled scrape signals =
     TelemetryEnabled
         TelemetryProviders
             { tpTracerProvider = otelTracerProvider signals
             , tpMeterProvider = otelMeterProvider signals
+            , tpMetricScrape = scrape
             }
 
 {- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled.
@@ -197,6 +175,14 @@ telemetryMeterProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpMeterProvider providers)
 
+{- | The scrape collection a 'Telemetry' handle exposes, 'Nothing' when telemetry is off or the
+operator left the metrics transport on OTLP push. The front door mounts no route on 'Nothing'.
+-}
+telemetryMetricScrape :: Telemetry -> Maybe MetricScrape
+telemetryMetricScrape = \case
+    TelemetryDisabled -> Nothing
+    TelemetryEnabled providers -> tpMetricScrape providers
+
 {- | Run an action with a 'Telemetry' handle bracketed by the 'TelemetrySwitch'. 'TelemetryOff'
 never initialises the SDK, so no exporter opens. 'TelemetryOn' builds the providers from the
 @OTEL_*@ environment and tears them down on every exit path, flushing spans and metrics.
@@ -208,7 +194,8 @@ withTelemetry switch logEnv use = case switch of
         sink <- exportFailureSink logEnv
         installExportErrorHandler sink
         registerObservedSpanExporter sink
-        bracket (initializeObservedOpenTelemetry sink) otelShutdown (use . telemetryEnabled)
+        bracket (initializeObservedOpenTelemetry sink) (otelShutdown . fst) $ \(signals, scrape) ->
+            use (telemetryEnabled scrape signals)
 
 {- Wrap the OTLP span exporter so a failed export is observed: @hs-opentelemetry@ 1.0.0.0
 discards the 'ExportResult' in the batch processor, so the failure is otherwise invisible. -}
@@ -240,35 +227,35 @@ registerObservedSpanExporter sink =
         "otlp"
         (observeSpanExporter sink <$> (otlpExporter =<< loadExporterEnvironmentVariables))
 
-{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeOpenTelemetry@, wrapping the OTLP
-exporters for failure observation. 'registerObservedSpanExporter' must run first, since the
-tracer takes its exporter from the registry. Re-diff against the SDK on any version bump. -}
-initializeObservedOpenTelemetry :: ExportFailureSink -> IO OTelSignals
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeOpenTelemetry@. The tracer reads the
+registry, so 'registerObservedSpanExporter' runs first. Re-diff against the SDK on a bump. -}
+initializeObservedOpenTelemetry :: ExportFailureSink -> IO (OTelSignals, Maybe MetricScrape)
 initializeObservedOpenTelemetry sink = do
     tracerProvider <- initializeGlobalTracerProvider
-    meterProvider <- initializeObservedMeterProvider sink
+    (meterProvider, scrape) <- initializeObservedMeterProvider sink
     loggerProvider <- initializeGlobalLoggerProvider
     let shutdown = do
             void (shutdownTracerProvider tracerProvider Nothing) `catchAny` const pass
             void (shutdownMeterProvider meterProvider Nothing) `catchAny` const pass
             void (shutdownLoggerProvider loggerProvider Nothing) `catchAny` const pass
     pure
-        OTelSignals
+        ( OTelSignals
             { otelTracerProvider = tracerProvider
             , otelMeterProvider = meterProvider
             , otelLoggerProvider = loggerProvider
             , otelPropagators = mempty
             , otelShutdown = shutdown
             }
+        , scrape
+        )
 
-{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, differing only in
-wrapping the metric exporter for failure observation. The SDK's metric init takes the exporter
-directly, with no registry hook like the span path. Re-diff against the SDK on any version bump. -}
-initializeObservedMeterProvider :: ExportFailureSink -> IO MeterProvider
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, observing the metric
+exporter's failures and lifting the meter environment out for the scrape. Re-diff on a bump. -}
+initializeObservedMeterProvider :: ExportFailureSink -> IO (MeterProvider, Maybe MetricScrape)
 initializeObservedMeterProvider sink = do
     disabled <- lookupBooleanEnv "OTEL_SDK_DISABLED"
     if disabled
-        then noopMeterProvider <$ setGlobalMeterProvider noopMeterProvider
+        then (noopMeterProvider, Nothing) <$ setGlobalMeterProvider noopMeterProvider
         else do
             exporter <- observeMetricExporter sink <$> resolveMetricExporter
             readerOptions <- periodicMetricReaderOptionsFromEnv
@@ -279,7 +266,8 @@ initializeObservedMeterProvider sink = do
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
             let provider' = stopReaderOnShutdown readerHandle provider
             setGlobalMeterProvider provider'
-            pure provider'
+            scrape <- metricScrapeFor env
+            pure (provider', scrape)
 
 {- Mirrors the SDK's own shutdown ordering, and is part of the same version-pin re-diff
 surface as 'initializeObservedMeterProvider'. -}

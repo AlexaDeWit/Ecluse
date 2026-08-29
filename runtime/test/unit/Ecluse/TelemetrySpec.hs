@@ -35,10 +35,12 @@ import Ecluse.Runtime.Telemetry (
     telemetryDisabled,
     telemetryEnabled,
     telemetryMeterProvider,
+    telemetryMetricScrape,
     telemetryTracerProvider,
     withTelemetry,
  )
 import Ecluse.Runtime.Telemetry.Resolve (newExportFailureSink)
+import Ecluse.Runtime.Telemetry.Scrape (MetricScrape (MetricScrape))
 
 {- | Tests the OpenTelemetry substrate: the @ECLUSE_OBSERVABILITY__TELEMETRY@ switch parses
 strictly, the off handle initialises no SDK, and 'telemetryEnabled' wires the SDK providers
@@ -78,6 +80,9 @@ handleSpec = describe "telemetryDisabled" $ do
     it "exposes no meter provider (nothing to emit through)" $
         isNothing (telemetryMeterProvider telemetryDisabled) `shouldBe` True
 
+    it "exposes no scrape handle (there is no meter to collect from)" $
+        isNothing (telemetryMetricScrape telemetryDisabled) `shouldBe` True
+
     it "is the TelemetryDisabled constructor" $ case telemetryDisabled of
         TelemetryDisabled -> pure ()
         TelemetryEnabled{} -> expectationFailure "expected the disabled no-op handle"
@@ -104,19 +109,29 @@ enabledHandleSpec = describe "telemetryEnabled" $ do
     -- constructor shape plus a forced projection rather than value equality.
     it "carries the SDK providers into the TelemetryEnabled handle" $ do
         signals <- offlineSignals
-        case telemetryEnabled signals of
+        case telemetryEnabled Nothing signals of
             TelemetryDisabled ->
                 expectationFailure "expected the enabled handle from telemetryEnabled"
             TelemetryEnabled TelemetryProviders{} -> pure ()
 
     it "wires the signals' tracer provider through to the tracer accessor" $ do
         signals <- offlineSignals
-        present <- forceProvider (telemetryTracerProvider (telemetryEnabled signals))
+        present <- forceProvider (telemetryTracerProvider (telemetryEnabled Nothing signals))
         present `shouldBe` True
 
     it "wires the signals' meter provider through to the meter accessor" $ do
         signals <- offlineSignals
-        present <- forceProvider (telemetryMeterProvider (telemetryEnabled signals))
+        present <- forceProvider (telemetryMeterProvider (telemetryEnabled Nothing signals))
+        present `shouldBe` True
+
+    it "carries no scrape handle when the metrics transport stayed on OTLP push" $ do
+        signals <- offlineSignals
+        isNothing (telemetryMetricScrape (telemetryEnabled Nothing signals)) `shouldBe` True
+
+    it "wires a selected scrape handle through to the scrape accessor" $ do
+        signals <- offlineSignals
+        let scrape = MetricScrape (pure mempty)
+        present <- forceProvider (telemetryMetricScrape (telemetryEnabled (Just scrape) signals))
         present `shouldBe` True
   where
     -- Force the projected provider to WHNF and report whether it was present. A provider has no
