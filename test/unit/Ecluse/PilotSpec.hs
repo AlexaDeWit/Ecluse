@@ -9,7 +9,7 @@ import Data.Text (unpack)
 import Database.SQLite.Simple (close, open, query_)
 import Network.HTTP.Types.Status (status200)
 import System.Directory (doesFileExist)
-import System.FilePath (takeDirectory)
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -80,6 +80,22 @@ spec = do
                                 appCfg
                                 (compileOptions (stubBaseUrl stub) (stubBaseUrl epssStub) outDir){pcoUpload = True}
                 action `shouldThrow` (== PilotUploadUnconfigured)
+
+        it "refuses that upload before it compiles anything" $ do
+            le <- newTestLogEnv
+            appCfg <- expectAppConfig [] Nothing
+            withSystemTempDirectory "ecluse-pilot-compile" $ \dir -> do
+                -- A file stands where the output directory's parent would be, so the
+                -- compile's own first step fails if the run ever reaches it.
+                writeFileText (dir </> "blocker") ""
+                let outDir = dir </> "blocker" </> "out"
+                    opts = (compileOptions unreachable unreachable outDir){pcoUpload = True}
+                runPilotCompile le telemetryDisabled Nothing appCfg opts
+                    `shouldThrow` (== PilotUploadUnconfigured)
+
+-- No listener answers here, so a fetch that starts fails rather than reaching an upstream.
+unreachable :: Text
+unreachable = "http://127.0.0.1:1"
 
 compileOptions :: Text -> Text -> FilePath -> PilotCompileOptions
 compileOptions baseUrl epssBaseUrl outDir =

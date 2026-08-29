@@ -126,6 +126,9 @@ runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
     moduleContext logEnv "Ecluse.Pilot" $
         runResourceT $ do
+            -- Raised before the compile, so an upload the wiring cannot satisfy fails
+            -- without first downloading the artifact it could never publish.
+            plan <- either throwIO pure planned
             dbFile <-
                 compileOsvToSqlite
                     compileMetrics
@@ -133,9 +136,6 @@ runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
                     (pcoOutDir opts)
                     (pcoEcosystem opts)
                     (compileSources advisories opts)
-            -- Planned before the compile and raised after it, so an unconfigured upload
-            -- still leaves the artifact it would have published.
-            plan <- either throwIO pure planned
             runUploadPlan telemetry s3Endpoint plan dbFile
             pure dbFile
   where
