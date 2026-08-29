@@ -53,7 +53,7 @@ tasks:
     env:
       # Pin this worktree's reaping scope. The harness stamps every container with it
       # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECL_TEST_SCOPE:
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
@@ -75,7 +75,7 @@ tasks:
     env:
       # Pin this worktree's reaping scope. The harness stamps every container with it
       # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECL_TEST_SCOPE:
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
@@ -96,7 +96,7 @@ tasks:
         echo "==> image: $tag"
         
         echo "==> running ecluse-e2e"
-        ECL_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
+        ECLTEST_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
   test-clean:
     desc: Reap THIS worktree's leftover test containers/networks (scoped, safe while other agents or worktrees run)
     cmds:
@@ -147,7 +147,7 @@ tasks:
       - sh: docker info >/dev/null 2>&1
         msg: "coverage: the combined report needs a running Docker daemon (ecluse-integration drives ministack containers via testcontainers)."
     env:
-      ECL_COVERAGE_QUIET_PARTIAL: 1
+      ECLTEST_COVERAGE_QUIET_PARTIAL: 1
     cmds:
       - task: coverage-unit
         vars: { SUITE: ecluse-core-unit }
@@ -197,7 +197,7 @@ tasks:
       # this tier starts with it (see Ecluse.Test.Containers), and the reaps below then
       # target only this worktree's. Unset, the Haskell writer defaults to an
       # unreapable "local".
-      ECL_TEST_SCOPE:
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on

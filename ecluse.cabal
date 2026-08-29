@@ -1102,7 +1102,7 @@ test-suite ecluse-smoke
 -- across real containers. NON-GATING, for pre-merge visibility and the nightly run.
 -- It needs a Docker daemon, the npm CLI, and the `.#dockerImage` build, so it is far
 -- heavier than the gate. It COMPILES in the normal build, and RUNS only when
--- ECL_E2E_IMAGE names a loaded image. Without that variable every case is
+-- ECLTEST_E2E_IMAGE names a loaded image. Without that variable every case is
 -- `pending`, so a bare `cabal test` never fails on a machine without the setup.
 test-suite ecluse-e2e
   import:             shared

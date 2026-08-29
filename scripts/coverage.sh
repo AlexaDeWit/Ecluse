@@ -10,7 +10,7 @@
 # merged picture that matches the Codecov dashboard, run the combined report,
 # which needs Docker:
 #   scripts/coverage-combined.sh   (task coverage)
-# Each non-combined run prints this caveat. Set ECL_COVERAGE_QUIET_PARTIAL=1
+# Each non-combined run prints this caveat. Set ECLTEST_COVERAGE_QUIET_PARTIAL=1
 # to suppress it, as the combined script does when it drives this one per tier.
 #
 # Why we drive HPC by hand instead of `hpc-codecov cabal:<suite>`: the `cabal:`
@@ -32,9 +32,9 @@ builddir="dist-coverage" # isolated so -fhpc instrumentation never invalidates
 outdir="coverage"
 
 # When coverage-combined.sh drives this script per tier, it sets
-# ECL_COVERAGE_QUIET_PARTIAL to suppress the caveat below. It prints the
+# ECLTEST_COVERAGE_QUIET_PARTIAL to suppress the caveat below. It prints the
 # merged total itself.
-if [ -z "${ECL_COVERAGE_QUIET_PARTIAL:-}" ]; then
+if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
   case "$suite" in
     ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
     ecluse-unit) other="ecluse-core-unit and ecluse-integration" ;;

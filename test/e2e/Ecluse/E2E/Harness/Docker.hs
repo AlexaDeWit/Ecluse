@@ -74,11 +74,11 @@ import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
 
 {- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
-or @ECL_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
+or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
 -}
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable = do
-    useExisting <- lookupEnv "ECL_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> pure Nothing
         _ ->
@@ -90,7 +90,7 @@ e2eUnavailable = do
                     pure (if ok then Nothing else Just "no reachable docker daemon")
 
 imageVar :: String
-imageVar = "ECL_E2E_IMAGE"
+imageVar = "ECLTEST_E2E_IMAGE"
 
 dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
@@ -116,7 +116,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
 
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane action = do
-    useExisting <- lookupEnv "ECL_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> do
             -- Local development escape hatch: use existing ports on localhost.
@@ -181,7 +181,7 @@ stand up an OTLP collector at @otelcol@, up before the proxy so no export is mis
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2EWith cfg action gdp = do
-    useExisting <- lookupEnv "ECL_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> do
             manager <- newManager defaultManagerSettings
