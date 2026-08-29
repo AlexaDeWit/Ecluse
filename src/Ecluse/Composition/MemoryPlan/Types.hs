@@ -85,7 +85,7 @@ data MemoryPlan = MemoryPlan
     -- ^ The shed-ladder warnings, in the order taken. Empty when everything fits.
     , mpOverrideViolations :: [Text]
     {- ^ The pins the plan blames for a residual overshoot it cannot shed around, from
-    'Ecluse.Composition.MemoryPlan.Override.attributeOverrideViolations'. Boot refuses with exit 2.
+    'Ecluse.Composition.MemoryPlan.Override.attributeOverrideViolations'. The boot and check-config refuse on these with exit 2.
     -}
     }
     deriving stock (Eq, Show)

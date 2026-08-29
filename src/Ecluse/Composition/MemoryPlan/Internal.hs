@@ -2,11 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The solver's working records, the vocabulary "Ecluse.Composition.MemoryPlan" passes
-between resolving the tenant demands, walking the shed ladder, and rendering the boot
-lines. They live here so a test can build one without the public module carrying their
-constructors and eighteen fields. Only that module's own cluster imports this one, and
-importing it opts out of the public module's stability promise, as @text@ does.
+{- | The solver's working records, the vocabulary "Ecluse.Composition.MemoryPlan" passes between
+resolving the tenant demands, walking the shed ladder, and rendering the boot lines. Their
+constructors stay out of that module's public contract, so this is the only module exporting them,
+for its own cluster and for the specs that build a record directly. Importing it opts out of the
+public module's stability promise, as @text@ does.
 -}
 module Ecluse.Composition.MemoryPlan.Internal (
     PlanInputs (..),

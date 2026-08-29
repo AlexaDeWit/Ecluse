@@ -7,8 +7,9 @@
 so tenants give way in a fixed order: the mirror-artifact cap first, then the cache
 aggregate, then admission toward one in-flight operation, then the publish aggregate, then
 the queue depth. A pinned bound never sheds. One operation on one capability with no cache
-is the irreducible minimum, and it always boots. The capability count sheds separately,
-because the nursery sits outside the heap ceiling the tenant sum answers to.
+is the irreducible minimum, and it always boots. The capability count sheds separately, because the
+nursery sits outside the heap ceiling the tenant sum answers to. The entry bound the surviving cache
+aggregate affords is derived here as well.
 -}
 module Ecluse.Composition.MemoryPlan.Shed (
     shedToFit,
