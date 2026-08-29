@@ -6,7 +6,6 @@ module Ecluse.MirrorSpec (spec) where
 
 import Prelude hiding (get)
 
-import Data.ByteString.Lazy qualified as LBS
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.Wai (Application)
 import Test.Hspec
@@ -16,6 +15,7 @@ import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll))
 import Ecluse.Mirror (mirrorServerConfig)
 import Ecluse.Runtime.Server (ServerConfig (scMounts, scPort), probeOnlyApplication)
+import Ecluse.Test.Wai (bodyContainsAll)
 
 -- | A fixed poll instant, so the rendered probe body is deterministic.
 polledAt :: UTCTime
@@ -28,13 +28,6 @@ mirrorApp :: Liveness -> Bool -> IO Application
 mirrorApp liveness ready = do
     appCfg <- expectAppConfig [] Nothing
     probeOnlyApplication (mirrorServerConfig appCfg (pure ready) (pure liveness))
-
--- | Fail the match unless every needle appears in the body, avoiding any key-order coupling.
-bodyContainsAll :: [LByteString] -> MatchBody
-bodyContainsAll needles = MatchBody $ \_ body ->
-    case filter (not . (`LBS.isInfixOf` body)) needles of
-        [] -> Nothing
-        missing -> Just ("body " <> show body <> " is missing " <> show missing)
 
 spec :: Spec
 spec = do

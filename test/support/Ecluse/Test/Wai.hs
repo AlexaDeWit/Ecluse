@@ -23,11 +23,15 @@ module Ecluse.Test.Wai (
     header,
     decodedBody,
     servedVersions,
+
+    -- * Matching a response body
+    bodyContainsAll,
 ) where
 
 import Data.Aeson (Value (Null, Object), eitherDecodeStrict)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
@@ -35,6 +39,7 @@ import Network.HTTP.Types (Header, hAuthorization, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
 import Network.Wai (Request (requestHeaders))
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
+import Test.Hspec.Wai.Matcher (MatchBody (MatchBody))
 
 -- | The base URL of a loopback stub on the given port, by the @localhost@ DNS name.
 localhost :: Int -> Text
@@ -73,6 +78,15 @@ then surfaces as a plain assertion mismatch, not a crash.
 -}
 decodedBody :: SResponse -> Value
 decodedBody resp = fromRight Null (eitherDecodeStrict (LBS.toStrict (simpleBody resp)))
+
+{- | Match a body that contains every needle. An assertion over a JSON body wants this rather
+than a byte-exact match, because @aeson@ promises no key order.
+-}
+bodyContainsAll :: [ByteString] -> MatchBody
+bodyContainsAll needles = MatchBody $ \_ body ->
+    case filter (not . (`BS.isInfixOf` LBS.toStrict body)) needles of
+        [] -> Nothing
+        missing -> Just ("body " <> show body <> " is missing " <> show missing)
 
 -- | The version keys present in a served packument body, sorted.
 servedVersions :: SResponse -> [Text]

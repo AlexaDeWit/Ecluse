@@ -2,6 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | The liveness vocabulary behind @\/livez@: the mirror worker's consume-loop heartbeat, the
+staleness rule read against it, and the 'Liveness' verdict a probe renders.
+
+A process runs the worker or it does not ("Ecluse.Composition.MirrorRole" decides), so the
+verdict has two sources: 'heartbeatLivenessNow' where a loop runs, 'alwaysLive' where none
+does. Both carry the last recorded progress, so a probe can report staleness as well as
+pass or fail. This is the worker's own signal, kept apart from HTTP readiness.
+-}
 module Ecluse.Core.Worker.Liveness (
     WorkerHeartbeat,
     newWorkerHeartbeat,
@@ -40,12 +48,10 @@ job, or 'Nothing' before its first.
 lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
 lastPoll (WorkerHeartbeat var) = readTVarIO var
 
-{- | How long the worker's last recorded progress may be stale before the liveness probe
-counts the loop as stalled.
-
-The bound clears two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget' spans (~300s
-each, the fetch and the publish legs of one 512 MiB job) with headroom. A tighter bound
-would kill a healthy pod mid-publish, and the redelivered jobs would stall the same way.
+{- | How long the worker's last recorded progress may be stale before the liveness probe counts
+the loop as stalled. It clears two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget'
+spans with headroom, because a tighter bound would kill a healthy pod mid-publish and the
+redelivered jobs would stall the same way.
 -}
 workerHeartbeatStaleAfter :: NominalDiffTime
 workerHeartbeatStaleAfter = 660

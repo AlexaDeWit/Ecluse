@@ -18,6 +18,7 @@ import Ecluse.Composition.MirrorRole (
     mirrorRoleRefusal,
     roleInvocation,
     runsWorker,
+    spawnsWorker,
  )
 import Ecluse.Runtime.Queue.Sqs (SqsConfig, defaultSqsConfig)
 
@@ -30,7 +31,7 @@ sqsConfig = defaultSqsConfig "https://sqs.us-east-1.amazonaws.com/123456789012/m
 
 spec :: Spec
 spec = do
-    describe "runsWorker -- which roles spawn the consume loop" $ do
+    describe "runsWorker -- which roles want a consume loop at all" $ do
         it "keeps the worker embedded in the default proxy role" $
             runsWorker ServeAndMirror `shouldBe` True
 
@@ -39,6 +40,26 @@ spec = do
 
         it "runs the worker in the dedicated mirror role" $
             runsWorker MirrorOnly `shouldBe` True
+
+    describe "spawnsWorker -- the one fact the spawn decision and /livez both read" $ do
+        it "spawns no worker under --no-worker, so the proxy scales apart from queue depth" $
+            spawnsWorker ServeOnly durableQueue `shouldBe` False
+
+        it "spawns no worker with nothing to mirror, whatever the role wants" $ do
+            -- The inert queue returns an empty batch at once, so a loop over it would spin
+            -- unpaced and stamp a heartbeat for work that does not exist.
+            spawnsWorker ServeAndMirror NoMirroring `shouldBe` False
+            spawnsWorker ServeOnly NoMirroring `shouldBe` False
+            spawnsWorker MirrorOnly NoMirroring `shouldBe` False
+
+        it "spawns the embedded worker for the single-process role over a real queue" $
+            spawnsWorker ServeAndMirror durableQueue `shouldBe` True
+
+        it "spawns the worker for the dedicated mirror role over a real queue" $
+            spawnsWorker MirrorOnly durableQueue `shouldBe` True
+
+        it "spawns the embedded worker over the in-memory queue, the single-process default" $
+            spawnsWorker ServeAndMirror (MirrorWith MemoryBackend) `shouldBe` True
 
     describe "enqueuesJobs -- which roles need the enqueue buffer" $ do
         it "keeps enqueueing under --no-worker: the split moves the drain, not the producer" $

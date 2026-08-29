@@ -21,7 +21,6 @@ import Network.Wai.Handler.Warp qualified as Warp
 import UnliftIO (concurrently_, race_)
 import UnliftIO.Async (mapConcurrently_)
 
-import Ecluse.Composition.MirrorRole (runsWorker)
 import Ecluse.Config (
     AppConfig (cfgServer),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
@@ -54,7 +53,7 @@ runProxy runtime =
     frontDoor
         -- The worker loop never returns, so the server's graceful return must cancel it,
         -- never wait on it.
-        | runsWorker (svcRole runtime) =
+        | svcRunsWorker runtime =
             Server.raceServerAgainstLoop (runServer serverConfig env) (runWorker (svcWorkerPolicies runtime) env)
         | otherwise = runServer serverConfig env
 

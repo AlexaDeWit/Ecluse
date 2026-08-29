@@ -4,17 +4,21 @@
 
 module Ecluse.Worker.LivenessSpec (spec) where
 
-import Data.Time (addUTCTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
 import Ecluse.Core.Queue (Seconds (Seconds))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpPublishArtifact))
 import Ecluse.Core.Worker (
+    Liveness (Liveness, liveHealthy, liveLastPoll),
+    alwaysLive,
     heartbeatHealthy,
+    heartbeatLivenessNow,
     lastPoll,
     newWorkerHeartbeat,
     processBatch,
+    recordPoll,
     workerHeartbeatStaleAfter,
     workerLoop,
     workerPublishVisibilityBudget,
@@ -78,6 +82,31 @@ spec = do
         it "is unhealthy once the last poll is staler than the threshold" $
             heartbeatHealthy (addUTCTime (workerHeartbeatStaleAfter + 1) epoch) (Just epoch)
                 `shouldBe` False
+    describe "heartbeatLivenessNow (the verdict a running loop's probe renders)" $ do
+        it "reports the poll instant beside the verdict, so a probe can show staleness" $ do
+            heartbeat <- newWorkerHeartbeat
+            now <- getCurrentTime
+            recordPoll heartbeat now
+            liveness <- heartbeatLivenessNow heartbeat
+            liveness `shouldBe` Liveness{liveHealthy = True, liveLastPoll = Just now}
+
+        it "is healthy with no poll recorded, reporting no instant" $ do
+            liveness <- newWorkerHeartbeat >>= heartbeatLivenessNow
+            liveness `shouldBe` alwaysLive
+
+        it "is unhealthy once the recorded poll is staler than the threshold" $ do
+            heartbeat <- newWorkerHeartbeat
+            now <- getCurrentTime
+            let stale = addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now
+            recordPoll heartbeat stale
+            liveness <- heartbeatLivenessNow heartbeat
+            -- The stale instant still rides along: an orchestrator sees how far behind it is.
+            liveness `shouldBe` Liveness{liveHealthy = False, liveLastPoll = Just stale}
+
+    describe "alwaysLive (the verdict of a process running no loop)" $
+        it "is live with no poll to report, so a serve-only pod is never killed for a worker" $
+            alwaysLive `shouldBe` Liveness{liveHealthy = True, liveLastPoll = Nothing}
+
     describe "workerHeartbeatStaleAfter -- the staleness budget covers one job's worst case" $
         it "exceeds a fetch and a publish of the maximum artifact (each the publish-visibility budget)" $ do
             -- The budget must clear one job's worst case: a fetch and then a publish of the 512 MiB

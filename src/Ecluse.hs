@@ -109,7 +109,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly))
+import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
@@ -146,7 +146,8 @@ runServiceRole :: MirrorRole -> BootEnv -> IO ()
 runServiceRole role bootEnv =
     withServiceRuntime role bootEnv $ case role of
         MirrorOnly -> runMirror
-        _ -> runProxy
+        ServeAndMirror -> runProxy
+        ServeOnly -> runProxy
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.

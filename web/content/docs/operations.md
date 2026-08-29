@@ -18,10 +18,10 @@ both:
 | `GET /livez` | Process liveness: `200` while the process is healthy. On a process that runs no mirror worker that is the listener alone. | When the process is not healthy. Where a mirror worker runs, a stalled consume loop fails it. |
 | `GET /readyz` | Config loaded and the listener serving. | In exactly two cases: the instance is draining, or it is still starting up. |
 
-The `/livez` body carries the mirror worker's last successful poll beside the verdict, as
-`{"status":"live","lastPoll":"2026-06-23T09:41:02Z"}`. A process that runs no worker reports
-`"lastPoll":null`. Alert on the `503`, and use the timestamp when you want to see a loop slowing
-before it crosses the threshold.
+The `/livez` body is a JSON object with two keys, in no guaranteed order: `status`, the same
+verdict the status code carries, and `lastPoll`, the mirror worker's last successful poll as an
+ISO 8601 instant. A process that runs no mirror worker reports `lastPoll` as `null`. Alert on the
+`503`, and read `lastPoll` when you want to see a loop slowing before it crosses the threshold.
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory

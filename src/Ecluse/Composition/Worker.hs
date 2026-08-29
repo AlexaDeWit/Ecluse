@@ -2,18 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's worker bundle construction. One function turns the served
-mounts, the resolved publish targets, and the adapter registry into the per-ecosystem
-'WorkerPolicies' the mirror worker dispatches every job through.
+{- | The composition root's worker bundle construction: the per-ecosystem 'WorkerPolicies'
+the mirror worker dispatches every job through.
 
-'Ecluse.Service.withServiceRuntime' consumes it for every role, so the embedded worker
-and the dedicated @ecluse mirror@ worker dispatch through one construction. Only the
-composition root consumes the adapter registry: the worker receives plain handles.
-
-Each bundle reuses its mount's __own__ 'PackumentDeps', so the ingest decision cannot
-diverge from the serve decision. A mount that serves no packument contributes no bundle,
-and neither does an ecosystem without a resolved publish target or adapter. A job for it
-is fail-closed at the worker rather than half-wired here.
+'Ecluse.Service.withServiceRuntime' consumes it for every role, so the embedded and the
+dedicated worker dispatch through one construction. Only the composition root consumes the
+adapter registry: the worker receives plain handles. Each bundle reuses its mount's __own__
+'PackumentDeps', so the ingest decision cannot diverge from the serve decision.
 -}
 module Ecluse.Composition.Worker (
     workerPoliciesFor,
@@ -94,12 +89,10 @@ mirrorTransportFor env deps target =
         , ptLimits = pdLimits deps
         }
 
-{- Build one mount's worker bundle. Every decision input comes from the mount's own
-'PackumentDeps', so the ingest decision cannot diverge from the serve decision. The
-metadata client is anonymous, so no client credential reaches the public origin, and the
-host allowlist gates it with certificate validation authenticating the dialled host. The
-no-op callbacks elide the client's own failure and dropped-entry logs, because the worker
-logs its re-evaluation outcome per job, and the metrics still record. -}
+{- Build one mount's worker bundle. The metadata client is anonymous, so no client credential
+reaches the public origin, and the host allowlist gates it with certificate validation
+authenticating the dialled host. The no-op callbacks elide the client's own failure and
+dropped-entry logs, because the worker logs its re-evaluation outcome per job. -}
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy

@@ -3,10 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The dedicated mirror-worker role, for a fleet scaled on queue depth apart from the front
-door. 'runMirror' runs the same consume loop "Ecluse.Proxy" embeds, over the same
-'Ecluse.Service.ServiceRuntime', beside the advisory-sync tasks its policy re-evaluation
-reads. It serves only the health probes, so an orchestrator can judge the pod without the
-process holding a proxy's request surface.
+door. 'runMirror' runs 'Ecluse.Service.runWorker', the same consume-loop entry the proxy role
+embeds, over the same 'Ecluse.Service.ServiceRuntime', beside the advisory-sync tasks its
+policy re-evaluation reads. It serves only the health probes, so an orchestrator can judge the
+pod without the process holding a proxy's request surface.
 -}
 module Ecluse.Mirror (
     runMirror,

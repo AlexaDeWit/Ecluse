@@ -13,6 +13,7 @@ The split only works over a durable queue, which is what 'mirrorRoleRefusal' dec
 module Ecluse.Composition.MirrorRole (
     MirrorRole (..),
     runsWorker,
+    spawnsWorker,
     enqueuesJobs,
     roleInvocation,
     mirrorRoleRefusal,
@@ -34,14 +35,22 @@ data MirrorRole
       MirrorOnly
     deriving stock (Eq, Show)
 
-{- | Whether this role runs the mirror worker in-process. The composition root reads it to
-decide whether to spawn the worker and whether @\/livez@ folds in its heartbeat.
--}
+-- | Whether this role would run the mirror worker, given a runtime that has one to run.
 runsWorker :: MirrorRole -> Bool
 runsWorker = \case
     ServeAndMirror -> True
     ServeOnly -> False
     MirrorOnly -> True
+
+{- | Whether this process runs the mirror worker: its role wants one and a mount declares a
+mirror target. Under 'NoMirroring' there is no queue and no job, so a spawned loop would
+poll an inert queue with nothing to pace it. The composition root derives this once, and
+both the spawn decision and the @\/livez@ arm read that one value.
+-}
+spawnsWorker :: MirrorRole -> MirrorRuntimePlan -> Bool
+spawnsWorker role = \case
+    NoMirroring -> False
+    MirrorWith _ -> runsWorker role
 
 {- | Whether this role serves requests, and so enqueues a mirror job for each version it
 admits. The composition root reads it to decide whether to build the enqueue buffer.

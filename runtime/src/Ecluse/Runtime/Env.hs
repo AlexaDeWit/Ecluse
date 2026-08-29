@@ -2,37 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root: the single record from which every effectful
-component is reached.
+{- | The composition root: the single record from which every effectful component is reached,
+and the one place backend choice is resolved. Each handle it holds is an opaque record of
+functions whose closures already capture their backend's private state, so nothing downstream
+inspects which backend it got. It also carries the @http-client@ 'Manager' the data plane
+shares, so pooling and TLS setup happen once. Consumers read it through a projection:
+'serveRuntimeOf' per request, 'workerRuntimeOf' for the mirror worker.
 
-'Env' is the one place backend choice is resolved. It holds the proxy's __handles__,
-the mirror queue foremost. Each is an opaque record of functions (the Handle pattern)
-whose closures already capture their backend's private state. Nothing downstream
-inspects which backend a handle is. It only applies the field.
+== Invariants
 
-'Env' also carries the shared @http-client@ 'Manager' the data plane reuses across
-every request, for metadata fetch and artifact streaming. Connection pooling and TLS
-setup therefore happen once.
+* __No backend SDK appears here.__ 'Env' imports the handle /records/ only, never a cloud
+  SDK, and their effectful fields return 'IO'. That is what keeps an adapter from importing
+  back into this module (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
-Two invariants make this hold together:
-
-* __No backend SDK appears here.__ 'Env' imports only the handle /records/, never a
-  cloud SDK (no @amazonka@, no GCP client). Each handle's effectful fields return
-  'IO', not an application monad, so an adapter never imports back into this module.
-  There is no import cycle and no recursive
-  @Env@-holds-a-handle-whose-methods-need-@Env@ knot (see
-  @docs\/architecture\/technology-stack.md@ → "Key Decisions").
-
-* __It is the sole composition root.__ The server and worker are each a
-  self-contained entry function over this shared record, @runServer@ and @runWorker@ in
-  @Ecluse@. The single-process proxy and the split deployment (@ecluse proxy --no-worker@
-  beside an @ecluse mirror@ fleet) both wire up through here and nowhere else (see
-  @docs\/architecture\/cloud-backends.md@ → "Process model").
-
-Request handlers read this 'Env' through a per-request
-'Ecluse.Core.Server.Context.RequestCtx': the request runtime projected by
-'serveRuntimeOf', paired with the matched mount. The mirror worker reads it through
-the 'Ecluse.Core.Worker.WorkerRuntime' projected by 'workerRuntimeOf'.
+* __It is the sole composition root.__ The single-process proxy and the split deployment
+  (@ecluse proxy --no-worker@ beside an @ecluse mirror@ fleet) both wire up through here and
+  nowhere else (see @docs\/architecture\/cloud-backends.md@ → "Process model").
 -}
 module Ecluse.Runtime.Env (
     -- * Composition root

@@ -15,7 +15,7 @@ module Ecluse.Service (
     -- * The role-shared runtime
     ServiceRuntime (..),
     withServiceRuntime,
-    roleLiveness,
+    workerLiveness,
 
     -- * The mirror worker
     runWorker,
@@ -48,7 +48,7 @@ import Ecluse.Composition.MemoryPlan (
     planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
-import Ecluse.Composition.MirrorRole (MirrorRole, enqueuesJobs, mirrorRoleRefusal, runsWorker)
+import Ecluse.Composition.MirrorRole (MirrorRole, enqueuesJobs, mirrorRoleRefusal, spawnsWorker)
 import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections))
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
@@ -104,8 +104,10 @@ import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDa
 background tasks arrive already wrapped in their supervision policy.
 -}
 data ServiceRuntime = ServiceRuntime
-    { svcRole :: MirrorRole
-    -- ^ The role this process runs, which decides whether it spawns the worker.
+    { svcRunsWorker :: Bool
+    {- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the
+    spawn decision and the @\/livez@ arm below are derived from.
+    -}
     , svcEnv :: Env
     , svcAppConfig :: AppConfig
     , svcBindings :: [MountBinding]
@@ -170,6 +172,7 @@ withServiceRuntime role bootEnv action = do
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     heartbeat <- newWorkerHeartbeat
+    let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
@@ -191,7 +194,7 @@ withServiceRuntime role bootEnv action = do
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
         action
             ServiceRuntime
-                { svcRole = role
+                { svcRunsWorker = runsWorkerHere
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
@@ -199,15 +202,15 @@ withServiceRuntime role bootEnv action = do
                 , svcMirrorDrain = superviseDrain builtEnv <$> mirrorDrain
                 , svcSyncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor appConfig) cveSyncPlan
                 , svcCheckReady = cveSyncReady cveSyncPlan
-                , svcCheckLive = roleLiveness role heartbeat
+                , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
 
-{- | The @\/livez@ arm this role answers from: the worker's consume-loop heartbeat where the
-process runs the worker, and the listener alone where it does not.
+{- | The @\/livez@ arm a process answers from, given whether it runs the worker
+('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 -}
-roleLiveness :: MirrorRole -> WorkerHeartbeat -> IO Liveness
-roleLiveness role heartbeat
-    | runsWorker role = heartbeatLivenessNow heartbeat
+workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness
+workerLiveness runningWorker heartbeat
+    | runningWorker = heartbeatLivenessNow heartbeat
     | otherwise = pure alwaysLive
 
 {- Build the role's view of the mirror queue and, for a producing role, its drain. A

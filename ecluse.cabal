@@ -576,6 +576,7 @@ library ecluse-test-support
     , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
+    , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
     , http-types        ^>=0.12
     , exceptions        ^>=0.10

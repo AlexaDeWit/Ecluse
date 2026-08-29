@@ -8,6 +8,8 @@ environment layers, their targeted mutations, and the expect-helpers that load t
 module Ecluse.Composition.Support (
     fixedNow,
     testLimits,
+    fdLimit,
+    noCeiling,
     staticEnvVars,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
@@ -23,6 +25,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
 import Ecluse.Core.Security (Limits (..))
+import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
 
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
