@@ -1578,7 +1578,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -1594,6 +1594,17 @@
                   "mitigation": "Compensating control: under passthrough the request carries only the caller's own forwarded token, and the read path never substitutes a standing credential. No forwarded token means no private read. A breach of the edge exposes only the public-gated view plus the untrusted-egress and denial-of-service surface, never private packages. The publish path is the one exception. A configured static publication-target credential (PUBLICATION_TARGET_TOKEN) serves as the fallback for a tokenless publish, so 'no token, no publish' holds only for pure passthrough. The internal-credential publish mode is therefore fail-closed by construction. A configured publication-target token requires a verifiable inbound edge, PROXY_AUTH_TOKEN or stronger, so the composition root refuses internal-credential-plus-open-edge at boot. That state is unrepresentable, on the same principle the trusted-edge read identity follows. Restrict both north-south and east-west access, as the Golden Path documents. Any edge mode that substitutes \u00c9cluse's own identity, read or write, must require a verifiable edge. Use mTLS or a shared secret, never a bare spoofable header.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000103"
+                },
+                {
+                  "number": 23,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Package-name spoofing via invisible or confusable characters",
+                  "type": "Spoofing",
+                  "description": "A requested or published package name can impersonate another package to a human reader. Unicode format characters (zero-width and bidirectional controls) render invisibly or reorder glyphs, so two distinct names look identical in a lockfile, a log line, or a review diff. A name built only from ordinary permitted characters can also read as another name, for example a capital I in place of a lowercase l. The upstream npm namespace already contains legacy names outside the current validator's shape, so look-alike names arrive from outside as well as from first-party publishes.",
+                  "mitigation": "The npm name parser refuses any name component that carries a Unicode format character, and any name longer than 214 characters, the limits npm's own validator publishes. The refusal runs at parse, before routing, caching, or queueing, so an invisible-character name never reaches a store or a log under a spoofed identity. A name built from ordinary characters that merely resembles another name passes the parser, because it is itself a valid name. Deny-by-default rule precedence and exact scope equality on the publish allow-list bound what such a name can reach. Detection of confusable look-alike names is not implemented.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000123"
                 }
               ],
               "trustBoundaryIds": [
@@ -3166,6 +3177,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 14
+    "threatTop": 23
   }
 }
