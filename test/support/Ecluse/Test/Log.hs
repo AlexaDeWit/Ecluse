@@ -16,7 +16,7 @@ module Ecluse.Test.Log (
     captureStderr,
 ) where
 
-import GHC.IO.Handle (Handle, hClose, hDuplicate, hDuplicateTo)
+import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
     ColorStrategy (ColorLog),
     Environment (Environment),
