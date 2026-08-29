@@ -26,8 +26,8 @@ durable memory: load detailed guidance only when the task needs it. See
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
-| Coordinate implementation slices | the `orchestrate-implementation` skill and [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
-| Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md), the PR template, and the `open-pull-request` skill |
+| Coordinate implementation slices | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
+| Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the PR template |
 
 ## Documentation policy
 
@@ -95,17 +95,15 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
   register.
 - The version authority is `ecluse.cabal`'s `version:` field ([`VERSIONING.md`](VERSIONING.md)).
 - Every commit is Conventional-Commit formatted, GPG-signed, DCO-signed off as the human author, and
-  discloses non-trivial AI help with `Assisted-by:` (not `Co-Authored-By:`). The `open-pull-request`
-  skill is the recipe.
+  discloses non-trivial AI help with `Assisted-by:` (not `Co-Authored-By:`). The commands and the
+  recovery for a red DCO check are in
+  [CONTRIBUTING, DCO](CONTRIBUTING.md#developer-certificate-of-origin-dco).
 
 ## Skills
 
-- Reusable procedures live in [`.agents/skills/`](.agents/skills/), one directory per skill with a
-  `SKILL.md`, following the [Agent Skills](https://agentskills.io/specification) standard. Codex and
-  GitHub Copilot discover this location natively.
-- Claude Code discovers project skills only from `.claude/skills/`, so a tracked relative symlink
-  bridges each skill there. Update the matching symlink in the same commit as any skill add,
-  rename, or removal.
+- Agent skills are personal harness configuration and live outside this repository. The process
+  they run is owned by this repository's documents (`CONTRIBUTING.md`, `docs/`, `.agents/`), and a
+  skill defers to those files on any conflict.
 - `CLAUDE.md` (an `@AGENTS.md` import) exists only to point that harness at this file. Keep shared
   guidance here, never in per-agent files.
 
@@ -114,5 +112,6 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 - Keep stable rules in files and volatile decisions in the current task or compaction summary. The
   context layers, the per-phase retrieval table, and the compaction contract are in
   [`.agents/context-management.md`](.agents/context-management.md).
-- Use `orientation` for a cold task session and `resume-orchestration` for the team-lead seat after
-  compaction or restart, not both.
+- A cold task session orients by retrieval, and a team-lead seat resumes from its compaction
+  checkpoint instead. The startup procedure for both is in
+  [`.agents/context-management.md`](.agents/context-management.md). Never run both for one startup.
