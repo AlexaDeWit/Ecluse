@@ -75,6 +75,9 @@ data MirrorCredential
       MirrorStatic Secret
     deriving stock (Eq, Show)
 
+-- The sum is closed and grows one arm per ecosystem, so it stays a data declaration.
+{- HLINT ignore PublishAllow "Use newtype instead of data" -}
+
 {- | A mount's publish allow-list, one arm per ecosystem. An allow-list is read only in the shape
 its own registry names packages with, so a mount can never carry another ecosystem's.
 -}

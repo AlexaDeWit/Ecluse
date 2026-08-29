@@ -157,12 +157,16 @@ parseMountEntry (k, v) = do
 parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
--- The allow-list reads in the shape the mount's own registry names packages with. An ecosystem
--- with no arm yet refuses the key rather than parsing it as another ecosystem's.
+-- Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error. One with no
+-- allow-list shape yet refuses the key rather than parsing it as another ecosystem's.
 parsePublishAllow :: Ecosystem -> String -> Value -> Parser PublishAllow
 parsePublishAllow eco field v = case eco of
     Npm -> PublishAllowNpmScopes <$> parseNpmScopes field v
-    _ -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+    PyPI -> unsupported
+    RubyGems -> unsupported
+  where
+    unsupported :: Parser PublishAllow
+    unsupported = fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
 -- A configured list that admits nothing refuses every publish, so it fails the load instead.
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
