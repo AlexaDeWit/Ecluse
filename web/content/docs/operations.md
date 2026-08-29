@@ -33,7 +33,8 @@ whose artifact Pilot never publishes leaves the pod never ready.
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
 returns `501` by design, because search is a discovery convenience, not an install path. The
 mirror, Pilot, and Dredger roles export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`,
-and nothing else.
+and nothing else. With telemetry on, every role also opens a metrics listener on a second port,
+which co-located roles must not share ([Telemetry](@/docs/operations.md#telemetry-opt-in)).
 
 ## Graceful shutdown and pod drain
 
@@ -100,6 +101,34 @@ version, so the version tag is never blank.
 wherever `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` points. That is why `DD_API_KEY` and
 `DD_SITE` have no effect. Authenticate a remote collector out of band with
 `OTEL_EXPORTER_OTLP_HEADERS`.
+
+Metrics travel either way. They push over OTLP beside the traces by default. Set
+`OTEL_METRICS_EXPORTER=prometheus` and Écluse serves them for a scraper to pull instead, in
+Prometheus text exposition format, at `GET /metrics` on a listener of its own. It is never on the
+proxy port your npm clients reach: that port answers `/metrics` with the same `404` it gives any
+other unmounted path, whatever the transport. `OTEL_EXPORTER_PROMETHEUS_HOST` (default
+`localhost`) and `OTEL_EXPORTER_PROMETHEUS_PORT` (default `9464`) address the listener. It reads
+the instruments at the moment of the scrape, so `OTEL_METRIC_EXPORT_INTERVAL` does not apply to
+it, and a scrape never enters the proxy's request path, so it adds nothing to the
+`http.server.*` series. The listener runs only while telemetry is on, and a port it cannot bind
+is an error in the log rather than a failed start.
+
+**Give every co-located role its own port.** Each role starts its own listener, and they all read
+the same variable, so two on one host race for 9464. The loser logs the bind failure and serves
+nothing. A scraper pointed at that port then collects one role's series and sees no sign the
+others are missing, which reads on a dashboard as quiet rather than broken. So set a distinct
+`OTEL_EXPORTER_PROMETHEUS_PORT` per role and scrape each one. A one-shot `ecluse pilot-compile`
+run beside a live Pilot boots the same way, so it attempts the same bind and logs the same error
+before doing its work. That one is harmless.
+
+**Keep that port inside your network.** The exposition carries the whole OpenTelemetry resource,
+so it names your host and its machine id, the process owner, executable path, working directory
+and container id, and whatever cloud or Kubernetes identity the SDK detected, next to your own
+rule names. The `localhost` default reaches nothing off the host. Widening it with
+`OTEL_EXPORTER_PROMETHEUS_HOST` publishes that inventory to whoever can reach the port, so pair
+the change with something that decides who can.
+
+Traces push over OTLP either way, so the endpoint variables still matter on a scraped deployment.
 
 The W3C baggage limits cap `OTEL_RESOURCE_ATTRIBUTES` at 8192 bytes in total, 4096 bytes per
 attribute, and 180 attributes. Écluse admits its own identity first, then your attributes in key

@@ -83,7 +83,7 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   leaves every consumer on its last-good artifact, ageing.
 
 The remaining serving, gate, upstream, cache, publish-budget, and mirror signals populate
-dashboards, and all export over the same OTLP push pipeline as traces.
+dashboards. All of them leave by whichever metrics transport the deployment selected below.
 
 ### Cardinality and attributes
 
@@ -136,8 +136,20 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
-and the wiring. Four design facts hold regardless:
+and the wiring. Five design facts hold regardless:
 
+- **Metrics push or pull, and the pull side gets its own port.** OTLP push is the default and
+  shares the traces' pipeline, which suits the Datadog Agent and any Collector. A shop that
+  scrapes sets `OTEL_METRICS_EXPORTER=prometheus` instead, and Écluse answers `GET /metrics` on a
+  dedicated listener, addressed by `OTEL_EXPORTER_PROMETHEUS_HOST` (default `localhost`) and
+  `OTEL_EXPORTER_PROMETHEUS_PORT` (default 9464). The SDK resolves that value to a no-op push
+  exporter, so the endpoint is the whole transport. It is never mounted on the proxy's data port,
+  because the exposition carries the entire OpenTelemetry resource: host, process, and cloud or
+  cluster identity, none of which belongs on the port untrusted clients reach. The bounded labels
+  above answer cardinality, not exposure, so the loopback default is what makes reaching the
+  exposition off the host a deliberate act. A scrape never enters the request path, so it does not
+  appear in the `http.server.*` series it reports. The listener belongs to the telemetry
+  lifecycle, not to the front door, so every role opens its own and one scrape covers one role.
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared
   destination, so it is deliberately not SSRF-classified.
