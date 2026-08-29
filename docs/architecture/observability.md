@@ -136,7 +136,7 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
-and the wiring. Three design facts hold regardless:
+and the wiring. Four design facts hold regardless:
 
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared

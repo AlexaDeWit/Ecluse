@@ -29,8 +29,8 @@ way for the @dd@ log object and for the span resource. Blank members are dropped
 first, because operator-authored configuration carries a stray comma often enough.
 A value the grammar still rejects warns at boot and contributes nothing. The
 projection then overwrites the variable with the resolved identity alone. Both the
-@dd@ log object and the span resource carry that identity, and neither carries the
-operator's attributes.
+@dd@ log object and the span resource carry that identity, and in that rejected case
+neither carries the operator's attributes.
 
 The exported header carries the operator's own attributes plus @deployment.environment@
 and @service.version@. It never carries @service.name@, because @OTEL_SERVICE_NAME@ in
@@ -274,9 +274,8 @@ data ResourceAttributes = ResourceAttributes
     }
     deriving stock (Eq, Show)
 
-{- | Decide what the exported header carries. The SDK's encoder sheds whatever overflows the W3C
-limits in hash order, so the choice is made here: the carried set is the same on every restart, and
-'telemetryWarnings' names what did not fit.
+{- | Decide what the exported header carries. The SDK's encoder would shed the overflow in hash
+order, so the choice is made here: the carried set is stable and every shed key warns at boot.
 -}
 resourceAttributes :: [(String, String)] -> ResourceAttributes
 resourceAttributes environment = carry (admitMembers 0 0 (admissionOrder resolved merged))
