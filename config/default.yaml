@@ -3,7 +3,8 @@
 # document < environment. ECLUSE_CACHE__TTL spells cache.ttl. A commented key is
 # INACTIVE: it documents the schema, and names the computed or derived default that
 # applies while it stays unset. Put secrets in environment variables, never here. An
-# integer key takes a positive integer unless its comment says otherwise.
+# integer key takes a positive integer unless its comment says otherwise, written as
+# plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
 
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port.
