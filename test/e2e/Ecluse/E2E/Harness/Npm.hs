@@ -172,7 +172,7 @@ readable back over the private leg. The relay forwards the client's own bearer, 
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
     [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", publishScope)
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", publishScope)
     ]
 
 -- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'

@@ -32,7 +32,7 @@ import Ecluse.Test.Rules (noFaultReporter)
 spec :: Spec
 spec = do
     describe "planCveSync -- the per-ecosystem advisory-sync plan" $ do
-        it "plans nothing without a configured advisory bucket" $ do
+        it "plans nothing without a configured advisory store" $ do
             cfg <- expectAppConfig [] Nothing
             logEnv <- newTestLogEnv
             plan <- planCveSync logEnv Nothing cfg
@@ -49,7 +49,7 @@ spec = do
                 writeFileBS (dataDir </> "npm-osv-schema3.db") "prior artifact"
                 cfg <-
                     expectAppConfig
-                        [ ("ECLUSE_ADVISORIES__BUCKET", "advisories")
+                        [ ("ECLUSE_ADVISORIES__URL", "s3://advisories")
                         , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
                         ]
                         (Just mountedNpmDoc)
@@ -108,7 +108,7 @@ spec = do
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 
     describe "cveSyncReady -- the first-sync readiness gate" $ do
-        it "is vacuously ready with no advisory bucket (an empty plan)" $
+        it "is vacuously ready with no advisory store (an empty plan)" $
             cveSyncReady Map.empty `shouldReturn` True
 
         it "waits for every configured ecosystem, then reports ready" $ do

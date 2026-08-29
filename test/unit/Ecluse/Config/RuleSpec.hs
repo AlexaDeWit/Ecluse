@@ -117,45 +117,53 @@ spec = describe "rulePolicySpec" $ do
                 `shouldBe` Left [MalformedRule "pinned-fix" "\"AllowByIdentity\" requires \"identity\""]
 
     describe "DenyIfCve (add, patch, and validation)" $ do
-        it "adds a DenyIfCve from a minSeverity, defaulting onUnavailable to fail-closed" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}"
+        it "adds a DenyIfCve from a minCvss, defaulting onUnavailable to fail-closed" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}"
                 `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 8 FailDeny))
 
         it "reads onUnavailable:skip as fail-open" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":5.5,\"onUnavailable\":\"skip\"}}}"
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":5.5,\"onUnavailable\":\"skip\"}}}"
                 `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5.5 FailNoDecision))
 
         it "reads onUnavailable:deny as fail-closed" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8,\"onUnavailable\":\"deny\"}}}"
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8,\"onUnavailable\":\"deny\"}}}"
                 `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 8 FailDeny))
 
-        it "rejects a DenyIfCve add missing its minSeverity" $
+        it "rejects a DenyIfCve add missing its minCvss" $
             resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\"}}}"
-                `shouldBe` Left [MalformedRule "deny-cve" "\"DenyIfCve\" requires \"minSeverity\""]
+                `shouldBe` Left [MalformedRule "deny-cve" "\"DenyIfCve\" requires \"minCvss\""]
 
-        it "rejects a minSeverity above the CVSS range" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":11}}}"
-                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+        it "rejects a minCvss above the CVSS range" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":11}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minCvss\" must be a CVSS score between 0 and 10"]
 
-        it "rejects a negative minSeverity" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":-1}}}"
-                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+        it "rejects a negative minCvss" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":-1}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minCvss\" must be a CVSS score between 0 and 10"]
 
         it "rejects an unknown onUnavailable value" $
-            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8,\"onUnavailable\":\"maybe\"}}}"
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8,\"onUnavailable\":\"maybe\"}}}"
                 `shouldBe` Left [MalformedRule "deny-cve" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""]
 
-        it "patches an existing DenyIfCve's minSeverity, keeping its alignment" $
-            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":9}}}"
+        it "patches an existing DenyIfCve's minCvss, keeping its alignment" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minCvss\":9}}}"
                 `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 9 FailDeny))
 
-        it "patches an existing DenyIfCve's alignment, keeping its minSeverity" $
+        it "patches an existing DenyIfCve's alignment, keeping its minCvss" $
             resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"onUnavailable\":\"skip\"}}}"
                 `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5 FailNoDecision))
 
-        it "validates minSeverity on the patch path too, not only on add" $
-            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":50}}}"
-                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+        it "validates minCvss on the patch path too, not only on add" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minCvss\":50}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minCvss\" must be a CVSS score between 0 and 10"]
+
+        -- The rename carries no alias, so the old spelling must not reach the threshold as a
+        -- silently absent one. The rule group refuses it as an unknown key before that.
+        it "refuses the retired minSeverity spelling on the add and the patch path" $ do
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}"
+                `shouldSatisfy` refusalMentions "minSeverity"
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":9}}}"
+                `shouldSatisfy` refusalMentions "minSeverity"
 
     describe "DenyIfEpss (add, patch, and validation)" $ do
         it "adds a DenyIfEpss from a minEpss, defaulting onUnavailable to fail-closed" $
@@ -258,6 +266,47 @@ spec = describe "rulePolicySpec" $ do
                     `shouldMatchList` [UnknownRuleType "bad-type" "Nope", SuppressUnknownRule "ghost"]
             Right rs -> expectationFailure ("expected aggregated errors, got " <> show rs)
 
+    describe "a rule reads only its own type's parameters" $ do
+        let straySays name ty key =
+                Left [MalformedRule name ("\"" <> ty <> "\" does not read \"" <> key <> "\"")]
+
+        it "refuses a foreign parameter on an added rule" $
+            resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100,\"minCvss\":8}}}"
+                `shouldBe` straySays "young" "AllowIfOlderThan" "minCvss"
+
+        it "refuses a foreign parameter on a patched default" $
+            resolveJson "{\"rules\":{\"min-age\":{\"ageSeconds\":100,\"onUnavailable\":\"skip\"}}}"
+                `shouldBe` straySays "min-age" "AllowIfOlderThan" "onUnavailable"
+
+        it "refuses the other deny's threshold on each advisory rule" $ do
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8,\"minEpss\":0.5}}}"
+                `shouldBe` straySays "deny-cve" "DenyIfCve" "minEpss"
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5,\"minCvss\":8}}}"
+                `shouldBe` straySays "deny-epss" "DenyIfEpss" "minCvss"
+
+        it "refuses a foreign parameter on a patched DenyIfCve" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minEpss\":0.5}}}"
+                `shouldBe` straySays "deny-cve" "DenyIfCve" "minEpss"
+
+        it "names every stray at once, in schema order" $
+            resolveJson "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\",\"scope\":\"acme\",\"minEpss\":0.5}}}"
+                `shouldBe` Left
+                    [MalformedRule "r" "\"AllowIfRemediatesCve\" does not read \"scope\", \"minEpss\""]
+
+        it "reports the stray even when a required parameter is also missing" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"ageSeconds\":1}}}"
+                `shouldBe` straySays "deny-cve" "DenyIfCve" "ageSeconds"
+
+        it "still reports an unknown type rather than blaming its parameters" $
+            resolveJson "{\"rules\":{\"r\":{\"type\":\"Bogus\",\"minCvss\":8}}}"
+                `shouldBe` Left [UnknownRuleType "r" "Bogus"]
+
+        it "never counts type, precedence, or enabled as a rule's own parameter" $ do
+            resolveJsonOver emptyPolicy "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
+                `shouldBe` Right [PrecededRule 275 DenyInstallTimeExecution]
+            resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
+                `shouldBe` Right [PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+
     describe "rule-type name contract" $ do
         it "covers exactly the diagnostic knownRuleTypes list (neither has drifted)" $
             map fst knownRuleAdds `shouldMatchList` knownRuleTypes
@@ -324,6 +373,10 @@ hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
 
+-- A refusal whose rendered text names the key, whichever layer raised it.
+refusalMentions :: Text -> Either [PolicyError] [PrecededRule] -> Bool
+refusalMentions needle = either (any (T.isInfixOf needle . renderPolicyError)) (const False)
+
 {- | A minimal well-formed "add" patch for each rule type, keyed by its type name. The "covers
 exactly" expectation ties it to 'knownRuleTypes', so a new 'Rule' type cannot join without an entry.
 -}
@@ -333,7 +386,7 @@ knownRuleAdds =
     , ("AllowIfOlderThan", "{\"rules\":{\"r\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}")
     , ("AllowByIdentity", "{\"rules\":{\"r\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}")
     , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
-    , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}")
+    , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}")
     , ("DenyIfEpss", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}")
     , ("DenyInstallTimeExecution", "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\"}}}")
     , ("DenyByIdentity", "{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}}")

@@ -53,7 +53,7 @@ tasks:
     env:
       # Pin this worktree's reaping scope. The harness stamps every container with it
       # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLUSE_TEST_SCOPE:
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
@@ -75,7 +75,7 @@ tasks:
     env:
       # Pin this worktree's reaping scope. The harness stamps every container with it
       # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLUSE_TEST_SCOPE:
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on
@@ -96,7 +96,7 @@ tasks:
         echo "==> image: $tag"
         
         echo "==> running ecluse-e2e"
-        ECLUSE_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
+        ECLTEST_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
   test-clean:
     desc: Reap THIS worktree's leftover test containers/networks (scoped, safe while other agents or worktrees run)
     cmds:
@@ -147,7 +147,7 @@ tasks:
       - sh: docker info >/dev/null 2>&1
         msg: "coverage: the combined report needs a running Docker daemon (ecluse-integration drives ministack containers via testcontainers)."
     env:
-      ECLUSE_COVERAGE_QUIET_PARTIAL: 1
+      ECLTEST_COVERAGE_QUIET_PARTIAL: 1
     cmds:
       - task: coverage-unit
         vars: { SUITE: ecluse-core-unit }
@@ -158,10 +158,8 @@ tasks:
       # The integration tier drives ministack containers, so it runs in its own task
       # that pins the reaping scope and reaps around itself. That gives the integration
       # suite the same Docker lifecycle on the `task check` path (which runs coverage)
-      # that `test-integration` gives it. It stays out of the shared `coverage-unit`
-      # because the scope env var is ECLUSE_-prefixed. It would leak into the unit
-      # tiers, whose BootSpec boots the real server from the process environment and
-      # rejects ECLUSE_TEST_SCOPE as an unknown config key.
+      # that `test-integration` gives it. The unit tiers start no containers, so the
+      # scope stays off the shared `coverage-unit`.
       - task: coverage-integration
       - |
         core_unit_tix="$(find dist-coverage -type f -name ecluse-core-unit.tix | head -n1)"
@@ -197,12 +195,9 @@ tasks:
     env:
       # Pin this worktree's reaping scope. The harness stamps every ministack container
       # this tier starts with it (see Ecluse.Test.Containers), and the reaps below then
-      # target only this worktree's. Keep it on this task alone, never on the shared
-      # `coverage-unit`. The config resolver treats the ECLUSE_-prefixed
-      # ECLUSE_TEST_SCOPE as an unknown key, which aborts BootSpec's
-      # boot-the-real-server cases in the unit tiers (they read the process
-      # environment). Unset, the Haskell writer defaults to an unreapable "local".
-      ECLUSE_TEST_SCOPE:
+      # target only this worktree's. Unset, the Haskell writer defaults to an
+      # unreapable "local".
+      ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
       # Sweep this worktree's strays from a prior killed run first, then reap again on

@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Pilot's advisory-database upload against a real S3, the @ministack@ container's.
-It proves the object lands under its own file name through the ambient
-@AWS_ENDPOINT_URL@ override a released image carries. Needs a Docker daemon.
+It proves the object lands under the key the configured store derives, through the
+ambient @AWS_ENDPOINT_URL@ override a released image carries. Needs a Docker daemon.
 -}
 module Ecluse.Pilot.S3ExportSpec (
     spec,
@@ -12,6 +12,7 @@ module Ecluse.Pilot.S3ExportSpec (
 
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
+import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import TestContainers (containerAddress)
@@ -20,6 +21,7 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
+import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -35,7 +37,11 @@ spec = do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     let (host, port) = containerAddress container 4566
                         endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
-                        bucket = "test-osv-bucket"
+
+                    -- Bucket and object key both derive from the configured store, the way the
+                    -- export loop derives them, so the two cannot drift apart unnoticed.
+                    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" "s3://test-osv-bucket")
+                    let bucket = advisoryStoreBucket store
 
                     -- The override is the ambient AWS_ENDPOINT_URL a released image carries,
                     -- resolved through the same parser the boot uses.
@@ -51,7 +57,8 @@ spec = do
                     liftIO $ writeFile dummyDb "dummy sqlite data"
 
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket dummyDb)
+                    let objectKey = advisoryObjectKey store (takeFileName dummyDb)
+                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dummyDb)
 
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
                     let objects = fromMaybe [] (S3.contents resp)

@@ -39,7 +39,7 @@ spec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
-        renderBootError (PublishAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
+        renderBootError (PublicationAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
         -- A split-role refusal names the invocation the operator typed and the key that fixes it.
         renderBootError (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")

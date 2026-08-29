@@ -26,16 +26,16 @@ spec = do
 
         it "names only the pins whose individual removal flips the verdict" $ do
             -- Removing the cache fits (0). Removing the depth does not (12 over).
-            let violations = attributeOverrideViolations 1000 30 0 [("cache.maxBytes", 0), ("queue.memoryMaxDepth", 12)]
+            let violations = attributeOverrideViolations 1000 30 0 [("cache.maxBytes", 0), ("queue.maxMemoryDepth", 12)]
             violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
-            violations `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+            violations `shouldNotSatisfy` any (T.isInfixOf "queue.maxMemoryDepth")
 
         it "names all pins when none alone flips the verdict (they overshoot only jointly)" $ do
             -- The override-free minimum fits, but neither single removal does (each
             -- leaves 10 over): the pins overshoot only together, so blame both.
-            let violations = attributeOverrideViolations 1000 50 0 [("cache.maxBytes", 10), ("queue.memoryMaxDepth", 10)]
+            let violations = attributeOverrideViolations 1000 50 0 [("cache.maxBytes", 10), ("queue.maxMemoryDepth", 10)]
             violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
-            violations `shouldSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+            violations `shouldSatisfy` any (T.isInfixOf "queue.maxMemoryDepth")
 
         it "does not refuse when the override-free minimum also overshoots (the pod is too small)" $
             -- freeOvershoot > 0: the shed ladder's degradation owns this, not a refusal.
@@ -46,7 +46,7 @@ spec = do
 
     describe "overrideMinShedSum (the substitution arithmetic, in isolation)" $ do
         it "charges nothing extra for a queue depth pinned to the floor the ladder would compute" $ do
-            -- queue.memoryMaxDepth at the queue-depth floor (5000) is zero-delta.
+            -- queue.maxMemoryDepth at the queue-depth floor (5000) is zero-delta.
             let demands = baseDemands{tdMemoryBacked = True}
                 atFloor = overrideMinShedSum demands noOverridePins{opDepth = Just 5000}
                 unpinned = overrideMinShedSum demands noOverridePins
@@ -81,7 +81,7 @@ spec = do
                            , ("runtime.serveMaxInFlight", allPins{opAdmission = Nothing})
                            , ("limits.maxResponseBytes", allPins{opResponse = Nothing})
                            , ("limits.maxRequestBytes", allPins{opRequest = Nothing})
-                           , ("queue.memoryMaxDepth", allPins{opDepth = Nothing})
+                           , ("queue.maxMemoryDepth", allPins{opDepth = Nothing})
                            , ("limits.maxArtifactBytes", allPins{opArtifact = Nothing})
                            ]
 

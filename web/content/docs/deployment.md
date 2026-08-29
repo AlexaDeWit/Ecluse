@@ -26,6 +26,14 @@ selects the role:
 All roles share one configuration. The proxy and the mirror worker scale: run Pilot and Dredger as
 singletons, because multiple instances race, duplicate API calls, and overlap registry deletions.
 
+**Give the advisory stack a writable volume.** Once `advisories.url` is set, the proxy lands each
+synced database under `advisories.dataDir` (default `/var/lib/ecluse/advisories`) and Pilot
+compiles there. The image runs as uid `65532` and sets no working directory, so mount a volume at
+that path on every role that reads or writes advisories, and let uid `65532` write it. In
+Kubernetes an `emptyDir` is enough: the artifact re-syncs after a restart, and Écluse sweeps the
+partial downloads an interrupted run left behind. Without the mount the first sync fails on
+permissions and the pod never reports ready.
+
 ### Splitting the proxy from the mirror worker
 
 By default one `ecluse proxy` process does both jobs: it serves clients and drains the mirror
@@ -46,7 +54,7 @@ Split them when you want to size each on its own signal:
 4. Scale the worker fleet on queue depth (KEDA's SQS scaler, or an Auto Scaling policy on
    `ApproximateNumberOfMessagesVisible`) and the proxy fleet on request rate.
 
-Both fleets need the mirror-write credential and the advisory bucket, because the worker
+Both fleets need the mirror-write credential and the advisory store, because the worker
 re-evaluates policy before it publishes. Neither `ecluse mirror` nor `ecluse proxy --no-worker`
 changes what gets mirrored, only which process does the work.
 
@@ -60,8 +68,9 @@ failure. Three flags shape the run:
 
 - `--ecosystem` selects the export (default `npm`).
 - `--source URL` overrides the configured `advisories.osvExportBaseUrl`.
-- `--upload` also publishes the artifact to the advisory bucket, a full sync cycle in one
-  invocation. Without a configured bucket it aborts at once.
+- `--epss-source URL` overrides the configured `advisories.epssFeedUrl`.
+- `--upload` also publishes the artifact to the advisory store, a full sync cycle in one
+  invocation. Without a configured store it aborts at once.
 
 A corrupt or truncated export aborts the compile without publishing, so a running proxy keeps its
 last-good database. Run the one-shot as a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`,
@@ -93,7 +102,7 @@ unless you have a specific reason to diverge.
    `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint, and the worker mints a
    short-lived token under the task or instance role instead of carrying a static secret. Scope
    that role **write-only** to the mirror store, and keep
-   `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` short, because this is Écluse's only
+   `ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION` short, because this is Écluse's only
    standing credential and it writes the trusted store. Scope the mirror queue the same way.
    Anyone who can write the queue can force a write to the trusted store, so grant only the serve
    role `SendMessage`, and only the worker
@@ -108,8 +117,8 @@ unless you have a specific reason to diverge.
    reachable inside the cluster is a common vulnerability. See
    [Edge authentication](@/docs/deployment.md#edge-authentication-and-client-credentials).
 5. **Fence egress, keep metadata reachable.** Default-deny outbound, then allow only your
-   upstreams, the mirror target, the metadata endpoint, and the advisory bucket when
-   `ECLUSE_ADVISORIES__BUCKET` is set (the proxy needs `s3:GetObject` to sync it). Require IMDSv2
+   upstreams, the mirror target, the metadata endpoint, and the advisory store when
+   `ECLUSE_ADVISORIES__URL` is set (the proxy needs `s3:GetObject` to sync it). Require IMDSv2
    with hop limit 1, and do not block the metadata endpoint, because Écluse needs it to mint
    credentials. See [Network egress](@/docs/deployment.md#network-egress).
 6. **Make the proxy unbypassable.** Deny CI runners (and, where practical, workstations) outbound
@@ -152,7 +161,7 @@ Edge authentication to the proxy ships in two modes:
    ```ini
    # .npmrc
    registry=https://ecluse.example.internal/npm/
-   //ecluse.example.internal/npm/:_authToken=${ECLUSE_TOKEN}
+   //ecluse.example.internal/npm/:_authToken=${NPM_EDGE_TOKEN}
    ```
 
 The edge token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the
@@ -166,7 +175,7 @@ A `publish` forwards the publisher's own token the same way. Opt into a static
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
 needs `ECLUSE_SERVER__AUTH_TOKEN` in place, or the boot refuses
 (`PublishStaticCredentialNeedsEdge`), because the pairing would let any unauthenticated client
-publish under it. `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` limits which package names a client may
+publish under it. `ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW` limits which package names a client may
 publish. It authorises _names_, not _callers_, so it is not authentication. The reasoning is in
 [security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#a-static-publish-credential-is-fail-closed) and
 [Publishing first-party packages](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
@@ -216,9 +225,9 @@ Each role needs a different slice of that allowance, and only the proxy needs in
 
 | Role | Ingress | Egress allowlist | Credentials held |
 |---|---|---|---|
-| `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The mirror-write credential, plus the advisory-bucket read (`s3:GetObject`) when that bucket is set. Nothing more |
-| `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The same as the proxy: the mirror-write credential and the advisory-bucket read |
-| `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), `epss.empiricalsecurity.com` for the FIRST.org EPSS feed, the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
+| `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The mirror-write credential, plus the advisory-store read (`s3:GetObject`) when that store is set. Nothing more |
+| `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The same as the proxy: the mirror-write credential and the advisory-store read |
+| `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the EPSS feed host in `ECLUSE_ADVISORIES__EPSS_FEED_URL` (default `epss.empiricalsecurity.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
 | `ecluse dredger` | None public | Your private mirror, for delete requests, and the metadata endpoint, for credentials | A standing high-privilege delete on the mirror |
 
 **Do not block the metadata endpoint or internal ranges for the proxy itself.** Écluse reaches
@@ -229,9 +238,10 @@ credential split are in
 [Security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#trust-assumptions--credential-posture).
 
 Two Pilot details matter to the platform. It names the uploaded object
-`<ecosystem>-osv-schema<N>.db`, a key stable per ecosystem, so bucket policies and the proxy's ETag
-polling can target it. On an export-host `5xx`/`408`/`429` it retries with capped, jittered
-backoff, so a transient outage cannot get your NAT address rate-limited. Because Dredger holds that
+`<ecosystem>-osv-schema<N>.db` under whatever prefix `advisories.url` carries, a key stable per
+ecosystem, so bucket policies and the proxy's ETag polling can target it. On an export-host
+`5xx`/`408`/`429` it retries with capped, jittered backoff, so a transient outage cannot get your
+NAT address rate-limited. Because Dredger holds that
 standing delete capability, isolate it from all untrusted networks.
 
 ## Locking down CI egress

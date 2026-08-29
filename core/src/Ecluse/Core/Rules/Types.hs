@@ -113,7 +113,7 @@ data Rule
 the constructor, so its selectors stay total under the sum (@-Wpartial-fields@).
 -}
 data DenyIfCveParams = DenyIfCveParams
-    { dicMinSeverity :: Double
+    { dicMinCvss :: Double
     {- ^ The CVSS base score (0 to 10) at or above which an affecting advisory denies. A
     qualitative label counts as its band's ceiling, and an unscored advisory counts as
     above every threshold ('Ecluse.Core.Cve.scoreAtLeast'). Severity that cannot be

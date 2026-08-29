@@ -61,8 +61,9 @@ import Ecluse.Config (
     MirrorTarget (mtUrl),
     Mount (..),
     MountConfig (..),
+    MountIntegrity (..),
     MountRegistries (..),
-    PublishAllow (..),
+    PublicationAllow (..),
     ServerSettings (..),
     Url,
     regMirrorTarget,
@@ -185,10 +186,10 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
                 , -- The trusted-integrity admission floor: the global default
                   -- (SHA-256, loosenable below it), refined per mount so a legacy
                   -- registry's loosening never leaks onto a neighbouring mount.
-                  pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (mntMinTrustedIntegrity mcfg)
+                  pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (miMinTrusted (mntIntegrity mcfg))
                 , -- The cross-upstream divergence policy: the global default
                   -- (warn), refined per mount for the same reason.
-                  pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (mntDivergencePolicy mcfg)
+                  pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (miDivergencePolicy (mntIntegrity mcfg))
                 , pdMetadata = adapterMetadata adapter
                 , pdArtifact = adapterArtifact adapter
                 , pdEgressUrl = mkRegistryUrl
@@ -239,11 +240,11 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     url <- mntPublicationTarget mcfg
     adapter <- mAdapter
     budget <- publishBudget
-    allow <- mntPublishAllow mcfg
+    allow <- mntPublicationAllow mcfg
     pure
         PublishDeps
             { pubTargetUrl = url
-            , pubAllowed = publishAllowedName allow
+            , pubAllowed = publicationAllowedName allow
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
             , pubLimits = limits
@@ -257,8 +258,8 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     inboundToken = srvAuthToken (cfgServer app)
 
 -- Each arm derives the ecosystem-neutral predicate the publish path enforces.
-publishAllowedName :: PublishAllow -> PackageName -> Bool
-publishAllowedName (PublishAllowNpmScopes scopes) = npmPublishAllowed (toList scopes)
+publicationAllowedName :: PublicationAllow -> PackageName -> Bool
+publicationAllowedName (PublicationAllowNpmScopes scopes) = npmPublishAllowed (toList scopes)
 
 -- The caller applies this only to a mount with a configured publication target.
 publishBootErrors :: Ecosystem -> MountConfig -> Maybe Secret -> [BootError]
@@ -266,7 +267,7 @@ publishBootErrors eco mcfg inboundToken = catMaybes [allowError, edgeError]
   where
     allowError, edgeError :: Maybe BootError
     allowError
-        | isNothing (mntPublishAllow mcfg) = Just (PublishAllowMissing eco)
+        | isNothing (mntPublicationAllow mcfg) = Just (PublicationAllowMissing eco)
         | otherwise = Nothing
     edgeError
         | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)

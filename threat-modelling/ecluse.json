@@ -1248,7 +1248,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000032",
             "data": {
               "name": "Registry C:\npull-through read endpoint",
-              "description": "The trusted private-upstream read view (ECLUSE_PRIVATE_UPSTREAM). It is a pull-through aggregator over the first-party store (A) and the mirror store (B), and it is what the proxy reads.",
+              "description": "The trusted private-upstream read view (ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM). It is a pull-through aggregator over the first-party store (A) and the mirror store (B), and it is what the proxy reads.",
               "type": "tm.Store",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -1867,7 +1867,7 @@
                   "title": "Package shadowing via first-party publish",
                   "type": "Tampering",
                   "description": "\u00c9cluse relays a publish to the private store with the publisher's own token. The packument merge serves private versions as trusted, winning collisions over public ones. A compromised-CI or insider publisher could clear the publish-scope check, or slip past it. They could then publish a name that the merge serves as a trusted version over the public package. That is a dependency-confusion path through \u00c9cluse's own trust model.",
-                  "mitigation": "The PUBLISH_ALLOW allow-list, for npm a list of scopes, refuses any name outside the operator's scopes before any upstream write. That is the anti-shadowing guard. The scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity. \u00c9cluse validates the publish document's own declared name and _id, and the per-version names, equal to the scope-guarded URL-path name before the relay. It then builds the write URL from that same canonical name. The guarded name, the written name, and the merge collision key are therefore one identity by construction. Residual: shadowing within an allow-listed scope, and allow-precedence choices, stay the operator's risk. Give the publisher's target credential least privilege.",
+                  "mitigation": "The publicationAllow allow-list, for npm a list of scopes, refuses any name outside the operator's scopes before any upstream write. That is the anti-shadowing guard. The scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity. \u00c9cluse validates the publish document's own declared name and _id, and the per-version names, equal to the scope-guarded URL-path name before the relay. It then builds the write URL from that same canonical name. The guarded name, the written name, and the merge collision key are therefore one identity by construction. Residual: shadowing within an allow-listed scope, and allow-precedence choices, stay the operator's risk. Give the publisher's target credential least privilege.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000106"
                 }

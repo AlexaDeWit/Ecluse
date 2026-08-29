@@ -15,7 +15,6 @@ as unscored, which a deny-on-EPSS rule counts as exceeding every threshold.
 -}
 module Ecluse.Core.Osv.Epss (
     -- * The feed
-    epssFeedUrl,
     maxEpssFeedBytes,
     fetchEpssScores,
     EpssFeedTooLarge (..),
@@ -41,12 +40,6 @@ import Katip (KatipContext, Severity (InfoS), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
 
 import Ecluse.Core.Security.Authority (authorityLabel)
-
-{- | The daily feed of every scored CVE, over HTTPS. The host is the one an operator
-allowlists for Pilot's egress, and it redirects only within itself, to the dated file.
--}
-epssFeedUrl :: String
-epssFeedUrl = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
 {- | The byte ceiling Pilot fetches under, 64 MiB, applied to the served stream and again to its
 expansion. The feed is one short row per scored CVE, so the headroom is several times over.

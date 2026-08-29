@@ -21,6 +21,12 @@ that supplied it and redacting secrets, and `ecluse check-config` prints the sam
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
 > spells `cache.maxBytes`, and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` spells `mounts.npm.mirrorTarget`.
 
+Écluse owns the whole `ECLUSE_` prefix. Every `ECLUSE_*` variable is read as a key of that schema,
+and one naming no key aborts the boot rather than resolving to a default, so a typo surfaces at
+startup. Only two families are consumed before the resolver sees them and therefore name no key:
+`ECLUSE_CONFIG`, and the `_FILE` secret indirections under [Secrets](@/docs/configuration.md#secrets).
+Keep your own unrelated settings out of the prefix.
+
 Mounts are off until you declare them. Mentioning one anywhere, whether through an
 `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable or a key under `mounts.<ecosystem>` in the document,
 switches it on. Declaring `mirrorTarget` then makes the active mount **mirror**, and a mirrored
@@ -32,11 +38,11 @@ that resolve to the same registry. The design rationale is in
 Écluse also reads three ordinary AWS-SDK variables from the process environment. They are not
 document keys, and each one has a deliberately narrow reach:
 
-| Variable | Affects | Never affects |
+| Variable | Écluse reads it for | Never affects |
 |---|---|---|
-| `AWS_REGION` | The S3 advisory client, and SQS only under an `AWS_ENDPOINT_URL_SQS` override (a real SQS URL carries its own region) | CodeArtifact |
+| `AWS_REGION` | Scoping SQS, and only under an `AWS_ENDPOINT_URL_SQS` override, because a real SQS URL carries its own region. The AWS SDK still reads it on its own to region every other client | CodeArtifact, whose region comes from the mirror-target host |
 | `AWS_ENDPOINT_URL_SQS` | The SQS endpoint, and it forces the SQS reading of `queue.url` | S3 |
-| `AWS_ENDPOINT_URL` | The S3 advisory client | SQS |
+| `AWS_ENDPOINT_URL` | The S3 advisory client, including against an emulator or a VPC endpoint | SQS |
 
 Both endpoint values get the same hygiene as every other URL: whitespace is trimmed, and a value
 with userinfo, a query, a fragment, or a malformed port fails the boot. The error names the
@@ -73,7 +79,7 @@ queue:
   url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
 
 advisories:
-  bucket: acme-ecluse-advisories
+  url: s3://acme-ecluse-advisories
 
 mounts:
   npm:
@@ -133,24 +139,26 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships seven built-in rule types, catalogued below. A shipped name patches the rule it names,
-`enabled: false` suppresses it, and a new name with a `type` adds a rule:
+Écluse ships eight built-in rule types, catalogued below. A shipped name patches the rule it names,
+`enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
+type's knobs, and a knob written under a type that does not read it fails the load:
 
 | Name | Type | On by default | What it decides | Key knobs |
 |---|---|---|---|---|
 | `min-age` | `AllowIfOlderThan` | Yes | Admits public versions older than the quarantine window, the core defence against race-to-publish typosquatting and dependency confusion. | `ageSeconds` (7 days by default) |
-| `remediation-fast-track` | `AllowIfRemediatesCve` | Yes | Admits a release a synced advisory names as its exact fixed version ahead of the quarantine, provided no other advisory still affects it. Abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__BUCKET` and run Pilot), so without one only the quarantine governs. | (none) |
+| `remediation-fast-track` | `AllowIfRemediatesCve` | Yes | Admits a release a synced advisory names as its exact fixed version ahead of the quarantine, provided no other advisory still affects it. Abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__URL` and run Pilot), so without one only the quarantine governs. | (none) |
+| yours to add | `AllowScope` | No | Admits every version under an npm scope you already trust, past the quarantine and without reaching the advisory database. Sits above `min-age` and below every deny. | `scope` (the scope without its leading `@`) |
 | yours to add | `AllowByIdentity` | No | Admits a specific package or `package@version` past the quarantine. Sits at the top of the allow band but still below every deny. | `identity` |
 | yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
 | yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
-| yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minSeverity` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
+| yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minCvss` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
 | yours to add | `DenyIfEpss` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An advisory with no EPSS score counts as above every threshold. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
 
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
-`min-age`, suppresses the fast-track, and adds the other four by name:
+`min-age`, suppresses the fast-track, and adds six more by name:
 
 ```yaml
 rules:
@@ -166,9 +174,12 @@ rules:
   pin-fix:
     type: AllowByIdentity
     identity: left-pad@1.3.0
+  trust-our-scope:
+    type: AllowScope
+    scope: acme
   deny-known-cves:
     type: DenyIfCve
-    minSeverity: 8
+    minCvss: 8
   deny-exploitable-cves:
     type: DenyIfEpss
     minEpss: 0.5
@@ -187,7 +198,7 @@ covered them. Enable them *after* you warm your private mirror:
 1. Leave both out of your policy and run Écluse normally, so your CI and developers pull the
    versions you depend on. Each lands in the trusted store, which the rules never re-gate once the
    version is there.
-2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minSeverity` you are
+2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minCvss` you are
    comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
    of the threshold.
 3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,

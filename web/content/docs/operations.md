@@ -25,7 +25,7 @@ ISO 8601 instant. A process that runs no mirror worker reports `lastPoll` as `nu
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
-bucket configured, that startup gate also waits for each ecosystem's first advisory sync, a
+store configured, that startup gate also waits for each ecosystem's first advisory sync, a
 one-way flip that never flaps back. Give a cold pod room for that first database download: a
 Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Mounting an ecosystem
 whose artifact Pilot never publishes leaves the pod never ready.

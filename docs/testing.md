@@ -107,7 +107,7 @@ gate: an image build, multiple containers, and the npm CLI. But it is hermetic. 
 Verdaccio upstreams are local, so unlike smoke it has no external dependency to flake on, which
 makes gating safe. Its weight keeps it out of the local `task gate` and `task check`. Run
 `task test-e2e` on demand to build the image, load it, and run the suite. It needs a Docker daemon
-and the npm CLI, and skips every case as `pending` when `ECLUSE_E2E_IMAGE` is unset.
+and the npm CLI, and skips every case as `pending` when `ECLTEST_E2E_IMAGE` is unset.
 
 The egress guard refuses internal addresses on the public path. So the containers run on
 the RFC 5737 documentation subnet `203.0.113.0/24`, which the guard treats as external. The real
@@ -140,8 +140,12 @@ The integration and end-to-end tiers are the only ones that start Docker contain
 through `testcontainers` (ministack, the OTLP collector). The e2e tier goes through the raw `docker`
 harness: the proxy image plus its nginx/Verdaccio data plane. Both stamp every container with two
 labels: `com.ecluse.test` = `integration` | `e2e`, and `com.ecluse.test.scope` = a **per-worktree**
-id. That id comes from `ECLUSE_TEST_SCOPE`, which every container-running target sets:
+id. That id comes from `ECLTEST_SCOPE`, which every container-running target sets:
 `task test-integration`, `task test-e2e`, and the `coverage` tier `task check` runs.
+
+Every harness and CI variable uses the `ECLTEST_` prefix, never `ECLUSE_`. The config loader claims
+the whole `ECLUSE_` prefix and aborts the boot on any variable under it that is not a config key, so
+a harness variable on that prefix would stop the very proxy the tests are booting.
 
 Both harnesses tear their own containers down on a normal exit, and the `docker run`s carry `--rm`.
 The gap is a **hard kill** (SIGKILL, OOM, a timed-out command), which runs no cleanup and leaves the

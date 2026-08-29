@@ -18,6 +18,7 @@ import Ecluse.Config (
     ConfigError,
     EgressSettings (..),
     IntegritySettings (..),
+    LimitsSettings (..),
     ObservabilitySettings (..),
     QueueSettings (..),
     QueueTarget (..),
@@ -150,42 +151,42 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
             `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
 
-    it "rejects a malformed publishAllow entry (a wrong separator folds into one dead scope), naming publishAllow" $
+    it "rejects a malformed publicationAllow entry (a wrong separator folds into one dead scope), naming publicationAllow" $
         -- A stray separator would otherwise fold into a single unmatchable scope that
         -- passes the non-empty boot check, refusing every publish only at request time.
-        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme;@beta")] Nothing
-            `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme;@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
 
-    it "rejects a publishAllow with an empty segment from a stray comma, naming publishAllow" $
-        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme,,@beta")] Nothing
-            `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+    it "rejects a publicationAllow with an empty segment from a stray comma, naming publicationAllow" $
+        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme,,@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
 
-    it "rejects an empty publishAllow at load, naming publishAllow" $
+    it "rejects an empty publicationAllow at load, naming publicationAllow" $
         -- A configured list that admits nothing would refuse every publish, so the load
         -- refuses it rather than binding a dead allow-list.
-        loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"publishAllow\":\"\"}}}")
-            `shouldSatisfy` decodeErrorMentions "publishAllow must name at least one scope"
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"publicationAllow\":\"\"}}}")
+            `shouldSatisfy` decodeErrorMentions "publicationAllow must name at least one scope"
 
-    it "rejects publishAllow on a mount whose ecosystem has no allow-list shape yet" $
+    it "rejects publicationAllow on a mount whose ecosystem has no allow-list shape yet" $
         -- Without the per-ecosystem arm the entries would parse as npm scopes, so the key
         -- refuses at load and names the ecosystem it is unsupported for.
-        loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"publishAllow\":\"@acme\"}}}")
-            `shouldSatisfy` decodeErrorMentions "publishAllow is not supported for pypi yet"
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"publicationAllow\":\"@acme\"}}}")
+            `shouldSatisfy` decodeErrorMentions "publicationAllow is not supported for pypi yet"
 
-    describe "a publishAllow entry reads through npm's own scope grammar" $
+    describe "a publicationAllow entry reads through npm's own scope grammar" $
         -- The allow-list and the request path must not disagree about what a scope is, so the
         -- entry goes through the same splitter the route and the projection use.
         for_ scopeEntryVerdicts $ \(entry, valid) ->
             it (show entry <> (if valid then " is a scope" else " is refused")) $
                 if valid
-                    then loadPublishAllow entry `shouldSatisfy` isRight
-                    else loadPublishAllow entry `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
+                    then loadPublicationAllow entry `shouldSatisfy` isRight
+                    else loadPublicationAllow entry `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
 
-    it "accepts a well-formed comma-separated publishAllow (trimmed, leading sigil tolerated)" $
+    it "accepts a well-formed comma-separated publicationAllow (trimmed, leading sigil tolerated)" $
         case loadConfig
             ( pubUrlEnv
                 <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme, beta")
+                   , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme, beta")
                    ]
             )
             Nothing of
@@ -276,17 +277,20 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"cache\":{\"ttl\":\"" <> spelling <> "\"}}")))
                 `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
-    it "rejects a non-positive advisories.maxDatabaseBytes" $
-        loadConfig [] (Just "{\"advisories\":{\"maxDatabaseBytes\":0}}")
-            `shouldSatisfy` decodeErrorMentions "advisories.maxDatabaseBytes"
+    it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
+        loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
+            `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"
 
-    it "loads the shipped advisory-sync defaults (poll interval, byte cap, no bucket)" $
+    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, no store)" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
                 advPollInterval (cfgAdvisories (configApp doc)) `shouldBe` 60
-                advMaxDatabaseBytes (cfgAdvisories (configApp doc)) `shouldBe` 536870912
-                advBucket (cfgAdvisories (configApp doc)) `shouldBe` Nothing
+                limMaxAdvisoryDatabaseBytes (cfgLimits (configApp doc)) `shouldBe` 536870912
+                -- Absolute on purpose: the shipped image sets no working directory, so a
+                -- relative path lands in a root the container's user cannot write.
+                advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
+                advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
     it "defaults the divergence policy to warn" $
         case loadConfig [] Nothing of
@@ -582,7 +586,7 @@ spec = describe "decodeDocument" $ do
                     encodeUtf8 @Text @ByteString $
                         "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\
                         \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"t\",\
-                        \\"mirrorCodeArtifactTokenDuration\":"
+                        \\"mirrorTokenDuration\":"
                             <> show n
                             <> "}}}"
             case loadConfig pubUrlEnv (Just (docFor 900)) of
@@ -595,15 +599,15 @@ spec = describe "decodeDocument" $ do
         it "rejects a CodeArtifact token duration outside 900..43200, through both layers" $ do
             loadConfig
                 []
-                (Just "{\"mounts\":{\"npm\":{\"mirrorCodeArtifactTokenDuration\":899}}}")
-                `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
-            loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43201")] Nothing
-                `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
+                (Just "{\"mounts\":{\"npm\":{\"mirrorTokenDuration\":899}}}")
+                `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration must be a duration in seconds within 900..43200"
+            loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "43201")] Nothing
+                `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration must be a duration in seconds within 900..43200"
 
         it "rejects a quoted CodeArtifact token duration written as hex or padded" $
             for_ (["0x1000", " 3600", "(3600)"] :: [Text]) $ \spelling ->
-                loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"mounts\":{\"npm\":{\"mirrorCodeArtifactTokenDuration\":\"" <> spelling <> "\"}}}")))
-                    `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration: invalid duration"
+                loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"mounts\":{\"npm\":{\"mirrorTokenDuration\":\"" <> spelling <> "\"}}}")))
+                    `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration: invalid duration"
 
     describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
         it "round-trips a JSON-looking authToken exactly" $
@@ -634,7 +638,7 @@ spec = describe "decodeDocument" $ do
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
-{- Each publishAllow entry the loader must agree with the npm route about: the leading sigil is
+{- Each publicationAllow entry the loader must agree with the npm route about: the leading sigil is
 optional, and anything that is not one usable path component is refused. -}
 scopeEntryVerdicts :: [(Text, Bool)]
 scopeEntryVerdicts =
@@ -646,13 +650,13 @@ scopeEntryVerdicts =
     , ("..", False)
     ]
 
--- Load a config whose npm mount allows exactly the given publishAllow entry.
-loadPublishAllow :: Text -> Either [ConfigError] Config
-loadPublishAllow entry =
+-- Load a config whose npm mount allows exactly the given publicationAllow entry.
+loadPublicationAllow :: Text -> Either [ConfigError] Config
+loadPublicationAllow entry =
     loadConfig
         ( pubUrlEnv
             <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-               , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", toString entry)
+               , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", toString entry)
                ]
         )
         Nothing

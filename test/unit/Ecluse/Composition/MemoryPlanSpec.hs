@@ -56,7 +56,7 @@ spec = describe "resolveMemoryPlan" $ do
     it "honours explicit bounds over the computed shares" $ do
         let cache' = bareCache{csMaxBytes = Just 123456789, csMaxEntries = Just 42}
             limits' = bareLimits{limMaxResponseBytes = Just 13000000, limMaxRequestBytes = Just 30000000}
-            queue' = bareQueue{qsMemoryMaxDepth = Just 7777}
+            queue' = bareQueue{qsMaxMemoryDepth = Just 7777}
             (plan, lines') = resolve cache' limits' queue' Nothing (planWith (Just (8 * gib))) MemoryQueueTenant False
         mpCacheAggregateBytes plan `shouldBe` 123456789
         mpCacheMaxEntries plan `shouldBe` 42
@@ -157,7 +157,7 @@ spec = describe "resolveMemoryPlan" $ do
         it "boots, never refuses, on an explicit queue depth equal to the floor the ladder would compute" $ do
             -- A pin set to the floor the shed ladder reaches on its own adds no byte, so the pod
             -- must boot with its warning rather than refuse and blame the pin.
-            let queue' = bareQueue{qsMemoryMaxDepth = Just 5000} -- the queue-depth floor
+            let queue' = bareQueue{qsMaxMemoryDepth = Just 5000} -- the queue-depth floor
                 (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
                 (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
             mpOverrideViolations pinned `shouldBe` []
@@ -168,8 +168,8 @@ spec = describe "resolveMemoryPlan" $ do
 
         it "never refuses on an explicit queue depth under a non-memory backend (the depth charges no heap)" $ do
             -- Under a durable (or absent) queue backend queueCharge is identically zero, so
-            -- queue.memoryMaxDepth contributes to no overshoot whatever its value.
-            let queue' = bareQueue{qsMemoryMaxDepth = Just 100000} -- the cap, deliberately large
+            -- queue.maxMemoryDepth contributes to no overshoot whatever its value.
+            let queue' = bareQueue{qsMaxMemoryDepth = Just 100000} -- the cap, deliberately large
                 (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MirroringWithoutMemoryQueue False
             mpOverrideViolations plan `shouldBe` []
             mpQueueTenantBytes plan `shouldBe` 0
@@ -179,11 +179,11 @@ spec = describe "resolveMemoryPlan" $ do
             -- A 1 GiB cache on a 256 MiB pod genuinely cannot fit, but a queue depth pinned to
             -- the floor beside it contributes nothing, so the plan must not name it.
             let cache' = bareCache{csMaxBytes = Just (1 * gib)}
-                queue' = bareQueue{qsMemoryMaxDepth = Just 5000}
+                queue' = bareQueue{qsMaxMemoryDepth = Just 5000}
                 (plan, _) = resolve cache' bareLimits queue' Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
             mpOverrideViolations plan `shouldSatisfy` (not . null)
             mpOverrideViolations plan `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
-            mpOverrideViolations plan `shouldNotSatisfy` any (T.isInfixOf "queue.memoryMaxDepth")
+            mpOverrideViolations plan `shouldNotSatisfy` any (T.isInfixOf "queue.maxMemoryDepth")
 
     it "renders the whole plan block for a pinned pod (the check-config golden)" $ do
         -- 1 GiB, 4 capabilities, memory queue, publishing: the ordered lines
@@ -254,10 +254,10 @@ spec = describe "resolveMemoryPlan" $ do
     bareCache = CacheSettings{csTtl = 60, csMaxEntries = Nothing, csMaxBytes = Nothing}
 
     bareLimits :: LimitsSettings
-    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
+    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxAdvisoryDatabaseBytes = 536870912, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
 
     bareQueue :: QueueSettings
-    bareQueue = QueueSettings{qsUrl = Nothing, qsMemoryMaxDepth = Nothing, qsMaxReceiveCount = 5}
+    bareQueue = QueueSettings{qsUrl = Nothing, qsMaxMemoryDepth = Nothing, qsMaxReceiveCount = 5}
 
     enforcedAxis :: Int -> EffectiveAxis Int
     enforcedAxis n = EffectiveAxis{axDesired = n, axObserved = n, axProvenance = FromRts}

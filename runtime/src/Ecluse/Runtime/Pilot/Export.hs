@@ -20,7 +20,6 @@ import Conduit (MonadResource)
 import Control.Monad.Catch (MonadThrow)
 import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
 import System.Directory (getFileSize)
-import System.FilePath (takeFileName)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (withException)
 
@@ -32,12 +31,11 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
-{- | Upload an OSV artifact to @bucketName@, over the optional endpoint override. A failed upload
-logs and marks its span errored, so the export loop's supervisor sees more than a restart.
+{- | Upload an OSV artifact to @bucketName@ under the caller's @keyText@, which it derives from the
+configured store so the proxy's sync reads this object. A failed upload logs and errors its span.
 -}
-exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe AwsEndpoint -> Text -> FilePath -> m ()
-exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
-    let keyText = toText (takeFileName dbPath)
+exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe AwsEndpoint -> Text -> Text -> FilePath -> m ()
+exportToS3 mTracerProvider mEndpoint bucketName keyText dbPath = do
     size <- liftIO $ getFileSize dbPath
 
     withOptionalSpan mTracerProvider Client "ecluse.pilot.osv.upload" $

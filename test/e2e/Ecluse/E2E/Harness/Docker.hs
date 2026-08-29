@@ -74,23 +74,23 @@ import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
 
 {- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
-or @ECLUSE_E2E_IMAGE@ unset. @make test-e2e@ and the CI e2e job build and name the image.
+or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
 -}
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable = do
-    useExisting <- lookupEnv "ECLUSE_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> pure Nothing
         _ ->
             lookupEnv imageVar >>= \case
-                Nothing -> pure (Just (imageVar <> " is unset -- run via `make test-e2e`"))
-                Just "" -> pure (Just (imageVar <> " is empty -- run via `make test-e2e`"))
+                Nothing -> pure (Just (imageVar <> " is unset -- run via `task test-e2e`"))
+                Just "" -> pure (Just (imageVar <> " is empty -- run via `task test-e2e`"))
                 Just _ -> do
                     ok <- dockerDaemonReachable
                     pure (if ok then Nothing else Just "no reachable docker daemon")
 
 imageVar :: String
-imageVar = "ECLUSE_E2E_IMAGE"
+imageVar = "ECLTEST_E2E_IMAGE"
 
 dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
@@ -116,7 +116,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
 
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane action = do
-    useExisting <- lookupEnv "ECLUSE_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> do
             -- Local development escape hatch: use existing ports on localhost.
@@ -181,7 +181,7 @@ stand up an OTLP collector at @otelcol@, up before the proxy so no export is mis
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2EWith cfg action gdp = do
-    useExisting <- lookupEnv "ECLUSE_E2E_USE_EXISTING"
+    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> do
             manager <- newManager defaultManagerSettings
@@ -214,7 +214,7 @@ withE2EWith cfg action gdp = do
                 -- Pick the host port up front: ECLUSE_SERVER__PUBLIC_URL must be known before the
                 -- container starts, and it makes the proxy rewrite dist.tarball to an absolute URL.
                 proxyPort <- freeHostPort
-                -- The product image is built by `make test-e2e` or the CI e2e job, never pulled, so
+                -- The product image is built by `task test-e2e` or the CI e2e job, never pulled, so
                 -- it is 'LocallyBuilt' and unpinned: the pin invariant covers only registry pulls.
                 -- The test CA bundle it trusts (SSL_CERT_FILE in 'proxyEnv') is bind-mounted from
                 -- the certs dir.

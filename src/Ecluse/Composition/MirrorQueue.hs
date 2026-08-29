@@ -170,4 +170,4 @@ memoryQueueDropWarning dropped =
     "mirror queue at capacity: dropped a mirror job (drop-newest); "
         <> show dropped
         <> " job(s) dropped so far. Each is re-mirrored on the next demand; raise "
-        <> "ECLUSE_QUEUE__MEMORY_MAX_DEPTH to shed fewer under load."
+        <> "ECLUSE_QUEUE__MAX_MEMORY_DEPTH to shed fewer under load."
