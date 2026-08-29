@@ -30,7 +30,6 @@ module Ecluse.Core.Osv.Epss (
 ) where
 
 import Conduit
-import Control.Monad.Catch (MonadThrow, throwM)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Data.Conduit.Zlib (ungzip)
