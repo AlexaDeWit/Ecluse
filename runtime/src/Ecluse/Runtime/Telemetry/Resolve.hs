@@ -13,15 +13,14 @@ traces share a single identity whichever dialect was provided.
 
 == The resolver
 
-'resolveTelemetry' is a bounded precedence table over exactly four fields:
-@service.name@, @deployment.environment@, @service.version@, and the OTLP export
-endpoint. Each resolves __Datadog-value-wins → vanilla OpenTelemetry → default__. It
-is deliberately /not/ a general per-variable merge: only these four cross between the
-dialects, and only their fixed precedence is encoded. The @DD_API_KEY@ \/ @DD_SITE@
-agentless-SaaS credentials are __never read__. The exporter targets an
-__operator-declared__, node-local collector\/Agent, never a vendor's cloud directly,
-so no key in the environment can turn into off-cluster egress. This module normalises
-the endpoint and uses it as given, never classified or gated.
+'resolveTelemetry' is a bounded precedence table over exactly four fields: @service.name@,
+@deployment.environment.name@ and its deprecated @deployment.environment@ spelling,
+@service.version@, and the OTLP export endpoint. Each resolves __Datadog-value-wins → vanilla
+OpenTelemetry → default__. It is deliberately /not/ a general per-variable merge: only these
+four cross between the dialects. The @DD_API_KEY@ \/ @DD_SITE@ agentless-SaaS credentials are
+__never read__. The exporter targets an __operator-declared__, node-local collector\/Agent,
+never a vendor's cloud directly, so no key in the environment can turn into off-cluster
+egress. This module normalises the endpoint and uses it as given, never classified or gated.
 
 @OTEL_RESOURCE_ATTRIBUTES@ is read with the __W3C baggage grammar the SDK itself
 uses__. One grammar reads the variable, so a percent-encoded value decodes the same
@@ -32,13 +31,13 @@ projection then overwrites the variable with the resolved identity alone. Both t
 @dd@ log object and the span resource carry that identity, and in that rejected case
 neither carries the operator's attributes.
 
-The exported header carries the operator's own attributes plus @deployment.environment@
-and @service.version@. It never carries @service.name@, because @OTEL_SERVICE_NAME@ in
-the same projection already does and every SDK signal path prefers that variable. The
-W3C baggage limits cap the header, and the SDK's encoder sheds whatever overflows them in
-hash order. 'resourceAttributes' therefore makes the choice first: the resolved identity
-is admitted ahead of the operator's own keys, and a key the limits exclude warns once at
-boot, by name.
+The exported header carries the operator's own attributes plus @service.version@ and the
+deployment environment under both @deployment.environment.name@ and @deployment.environment@.
+It never carries @service.name@, because @OTEL_SERVICE_NAME@ in the same projection already
+does and every SDK signal path prefers that variable. The W3C baggage limits cap the header,
+and the SDK's encoder sheds whatever overflows them in hash order. 'resourceAttributes'
+therefore makes the choice first: the resolved identity is admitted ahead of the operator's
+own keys, and a key the limits exclude warns once at boot, by name.
 
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
 the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
@@ -138,7 +137,7 @@ data ResolvedTelemetry = ResolvedTelemetry
     { rtServiceName :: Text
     -- ^ @service.name@ \/ @dd.service@ (defaults to @ecluse@).
     , rtEnvironment :: Maybe Text
-    -- ^ @deployment.environment@ \/ @dd.env@, when configured.
+    -- ^ @deployment.environment.name@ and the deprecated @deployment.environment@ \/ @dd.env@.
     , rtVersion :: Maybe Text
     -- ^ @service.version@ \/ @dd.version@ (defaults to the build version).
     , rtEndpoint :: TelemetryEndpoint
@@ -150,9 +149,10 @@ data ResolvedTelemetry = ResolvedTelemetry
 __Datadog value wins → vanilla OpenTelemetry → default__.
 
 @service.name@ falls @DD_SERVICE@ → @OTEL_SERVICE_NAME@ → the @OTEL_RESOURCE_ATTRIBUTES@ key →
-@ecluse@. @deployment.environment@ and @service.version@ fall @DD_ENV@ \/ @DD_VERSION@ → the
-matching attribute key → unset and the build version. The endpoint falls @DD_AGENT_HOST@ (as
-@http:\/\/{host}:4318@) → @OTEL_EXPORTER_OTLP_ENDPOINT@ → @http:\/\/localhost:4318@.
+@ecluse@. The environment falls @DD_ENV@ → @deployment.environment.name@ → the deprecated
+@deployment.environment@ → unset. @service.version@ falls @DD_VERSION@ → the matching attribute
+key → the build version. The endpoint falls @DD_AGENT_HOST@ (as @http:\/\/{host}:4318@) →
+@OTEL_EXPORTER_OTLP_ENDPOINT@ → @http:\/\/localhost:4318@.
 
 A present but blank value counts as unset, so an empty @DD_ENV=@ stamps no environment onto a
 signal. The resolver never reads @DD_API_KEY@ or @DD_SITE@.
@@ -167,7 +167,7 @@ resolveTelemetry :: [(String, String)] -> ResolvedTelemetry
 resolveTelemetry environment =
     ResolvedTelemetry
         { rtServiceName = fromMaybe defaultServiceName serviceName
-        , rtEnvironment = lk "DD_ENV" <|> attr "deployment.environment"
+        , rtEnvironment = deploymentEnvironment
         , rtVersion = lk "DD_VERSION" <|> attr "service.version" <|> Just buildVersion
         , rtEndpoint = endpoint
         }
@@ -185,6 +185,12 @@ resolveTelemetry environment =
 
     serviceName :: Maybe Text
     serviceName = lk "DD_SERVICE" <|> lk "OTEL_SERVICE_NAME" <|> attr "service.name"
+
+    -- The SDK deprecates deployment.environment for deployment.environment.name, so the newer
+    -- spelling wins between the two attribute keys.
+    deploymentEnvironment :: Maybe Text
+    deploymentEnvironment =
+        lk "DD_ENV" <|> attr "deployment.environment.name" <|> attr "deployment.environment"
 
     endpoint :: TelemetryEndpoint
     endpoint = case lk "DD_AGENT_HOST" of
@@ -248,11 +254,14 @@ mergedResourceAttributes resolved environment =
     withoutServiceName :: Baggage
     withoutServiceName = maybe inherited (`Baggage.delete` inherited) (Baggage.mkToken "service.name")
 
+-- The resolved environment carries both spellings, because the SDK deprecates
+-- deployment.environment and the dashboards that join on it have yet to migrate.
 resolvedAttributes :: ResolvedTelemetry -> [(Text, Text)]
 resolvedAttributes resolved =
     [ (key, value)
     | (key, Just value) <-
-        [ ("deployment.environment", rtEnvironment resolved)
+        [ ("deployment.environment.name", rtEnvironment resolved)
+        , ("deployment.environment", rtEnvironment resolved)
         , ("service.version", rtVersion resolved)
         ]
     ]
