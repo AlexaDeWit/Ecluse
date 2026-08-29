@@ -157,6 +157,18 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme,,@beta")] Nothing
             `shouldSatisfy` decodeErrorMentions "invalid scope in publishAllow"
 
+    it "rejects an empty publishAllow at load, naming publishAllow" $
+        -- A configured list that admits nothing would refuse every publish, so the load
+        -- refuses it rather than binding a dead allow-list.
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"publishAllow\":\"\"}}}")
+            `shouldSatisfy` decodeErrorMentions "publishAllow must name at least one scope"
+
+    it "rejects publishAllow on a mount whose ecosystem has no allow-list shape yet" $
+        -- Without the per-ecosystem arm the entries would parse as npm scopes, so the key
+        -- refuses at load and names the ecosystem it is unsupported for.
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"publishAllow\":\"@acme\"}}}")
+            `shouldSatisfy` decodeErrorMentions "publishAllow is not supported for pypi yet"
+
     describe "a publishAllow entry reads through npm's own scope grammar" $
         -- The allow-list and the request path must not disagree about what a scope is, so the
         -- entry goes through the same splitter the route and the projection use.

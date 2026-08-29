@@ -22,7 +22,7 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
@@ -31,12 +31,10 @@ import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
 
-instance FromJSON MountConfig where
-    parseJSON = withObject "MountConfig" (decodeBareGroup "mount" mountDecoder)
-
 -- A mount's refusals name the bare key, because "Ecluse.Config" reports the mount around them.
-mountDecoder :: GroupDecoder MountConfig
-mountDecoder =
+-- The ecosystem comes from the mounts key, so a per-ecosystem value reads in its own shape.
+mountDecoder :: Ecosystem -> GroupDecoder MountConfig
+mountDecoder eco =
     MountConfig
         <$> optionalPlainKey "enabled"
         <*> optionalKey "privateUpstream" parseRegistryUrl
@@ -46,7 +44,7 @@ mountDecoder =
         <*> optionalKey "mirrorCodeArtifactTokenDuration" parseCodeArtifactDuration
         <*> optionalKey "publicationTarget" parseRegistryUrl
         <*> optionalKey "publicationTargetToken" parseSecret
-        <*> optionalKeyOr "publishAllow" (String "") parseScopes
+        <*> optionalKey "publishAllow" (parsePublishAllow eco)
         <*> optionalKey "minTrustedIntegrity" (parseEnum parseMinTrustedIntegrity)
         <*> optionalKey "divergencePolicy" (parseEnum parseDivergencePolicy)
         <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
@@ -153,14 +151,24 @@ parseMountEntry (k, v) = do
     eco <- case parseEcosystem (Key.toText k) of
         Just e -> pure e
         Nothing -> fail ("Invalid ecosystem: " <> T.unpack (Key.toText k))
-    mcfg <- parseJSON v
+    mcfg <- withObject "MountConfig" (decodeBareGroup "mount" (mountDecoder eco)) v
     pure (eco, mcfg)
 
 parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
-parseScopes :: String -> Value -> Parser [Scope]
-parseScopes field = commaSeparated field parseScopeEntry
+-- The allow-list reads in the shape the mount's own registry names packages with. An ecosystem
+-- with no arm yet refuses the key rather than parsing it as another ecosystem's.
+parsePublishAllow :: Ecosystem -> String -> Value -> Parser PublishAllow
+parsePublishAllow eco field v = case eco of
+    Npm -> PublishAllowNpmScopes <$> parseNpmScopes field v
+    _ -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+
+-- A configured list that admits nothing refuses every publish, so it fails the load instead.
+parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
+parseNpmScopes field v = do
+    scopes <- commaSeparated field parseScopeEntry v
+    maybe (fail (field <> " must name at least one scope")) pure (nonEmpty scopes)
 
 -- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
 -- typo fails the load instead of seeding an allow-list that refuses every publish.

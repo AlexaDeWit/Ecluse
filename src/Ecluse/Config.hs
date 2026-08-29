@@ -24,6 +24,7 @@ module Ecluse.Config (
     regMirrorTarget,
     MirrorTarget (..),
     MirrorCredential (..),
+    PublishAllow (..),
     MountConfig (..),
     Url (..),
     mkUrl,

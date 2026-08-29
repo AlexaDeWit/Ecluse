@@ -63,6 +63,7 @@ import Ecluse.Config (
     Mount (..),
     MountConfig (..),
     MountRegistries (..),
+    PublishAllow (..),
     ServerSettings (..),
     Url,
     regMirrorTarget,
@@ -71,6 +72,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (CredentialProvider, Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
@@ -263,10 +265,11 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     url <- mntPublicationTarget mcfg
     adapter <- mAdapter
     budget <- publishBudget
+    allow <- mntPublishAllow mcfg
     pure
         PublishDeps
             { pubTargetUrl = registryUrlText url
-            , pubAllowed = npmPublishAllowed (mntPublishAllow mcfg)
+            , pubAllowed = publishAllowedName allow
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
             , pubLimits = limits
@@ -281,13 +284,17 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     inboundToken :: Maybe Secret
     inboundToken = srvAuthToken (cfgServer app)
 
+-- Each arm derives the ecosystem-neutral predicate the publish path enforces.
+publishAllowedName :: PublishAllow -> PackageName -> Bool
+publishAllowedName (PublishAllowNpmScopes scopes) = npmPublishAllowed (toList scopes)
+
 -- The caller applies this only to a mount with a configured publication target.
 publishBootErrors :: Ecosystem -> MountConfig -> Maybe Secret -> [BootError]
-publishBootErrors eco mcfg inboundToken = catMaybes [scopesError, edgeError]
+publishBootErrors eco mcfg inboundToken = catMaybes [allowError, edgeError]
   where
-    scopesError, edgeError :: Maybe BootError
-    scopesError
-        | null (mntPublishAllow mcfg) = Just (PublishAllowMissing eco)
+    allowError, edgeError :: Maybe BootError
+    allowError
+        | isNothing (mntPublishAllow mcfg) = Just (PublishAllowMissing eco)
         | otherwise = Nothing
     edgeError
         | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)

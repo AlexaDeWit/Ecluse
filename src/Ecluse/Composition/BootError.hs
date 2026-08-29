@@ -63,8 +63,8 @@ data BootError
       tells a transient AWS error from a permanent one to fix.
       -}
       CodeArtifactMintFailed Text
-    | {- | A publication target is set with no publish allow-list, so the anti-shadowing guard has
-      nothing to enforce. An empty list would deny every publish, an open one shadow any name.
+    | {- | A publication target is set and the mount declares no publish allow-list, so the
+      anti-shadowing guard has nothing to enforce and any name could be shadowed.
       -}
       PublishAllowMissing Ecosystem
     | {- | A static publish credential is set without a verifiable inbound edge
@@ -108,7 +108,7 @@ renderBootError = \case
             <> detail
             <> " (a transient AWS error may clear on retry. A permanent one, such as a bad domain or region or a missing permission, must be fixed)"
     PublishAllowMissing eco ->
-        mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publishAllow" <> " is empty: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
+        mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publishAllow" <> " is not: a publication target needs a publish allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     MemoryPlanOverrideUnsafe details ->

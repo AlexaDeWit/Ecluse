@@ -9,6 +9,7 @@ module Ecluse.Config.Types (
     mkUrl,
     unUrl,
     MirrorCredential (..),
+    PublishAllow (..),
     MountConfig (..),
     AppConfig (..),
     ServerSettings (..),
@@ -74,6 +75,14 @@ data MirrorCredential
       MirrorStatic Secret
     deriving stock (Eq, Show)
 
+{- | A mount's publish allow-list, one arm per ecosystem. An allow-list is read only in the shape
+its own registry names packages with, so a mount can never carry another ecosystem's.
+-}
+data PublishAllow
+    = -- | The npm scopes a client may publish under, at least one.
+      PublishAllowNpmScopes (NonEmpty Scope)
+    deriving stock (Eq, Show)
+
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
     {- ^ The mount's explicit on\/off switch. Any operator-declared key under the mount already
@@ -87,7 +96,7 @@ data MountConfig = MountConfig
     , mntMirrorCodeArtifactTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
-    , mntPublishAllow :: [Scope]
+    , mntPublishAllow :: Maybe PublishAllow
     , mntMinTrustedIntegrity :: Maybe MinTrustedIntegrity
     {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
     legacy private registry whose loosening must not leak onto other mounts.

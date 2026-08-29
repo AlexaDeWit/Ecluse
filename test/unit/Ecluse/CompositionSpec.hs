@@ -331,13 +331,13 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
                 pdPublicBaseUrl deps `shouldBe` "https://registry.npmjs.org"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "fails when a publication target is set without a publish-scope allow-list" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW empty leaves
-        -- the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
+    it "fails when a publication target is set without a publish allow-list" $ do
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW absent
+        -- leaves the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
             Left errs -> errs `shouldBe` [PublishAllowMissing Npm]
-            Right _ -> expectationFailure "expected a publish-scopes-missing boot error"
+            Right _ -> expectationFailure "expected a publish-allow-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
         -- ECLUSE_SERVER__AUTH_TOKEN unset is the default open edge. With
@@ -354,9 +354,9 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
-    it "accumulates both publish boot errors when scopes are missing and the static credential has no edge" $ do
-        -- Both couplings trip at once and surface together in a stable order: scopes first, then
-        -- the edge requirement. The operator then fixes both before the next boot.
+    it "accumulates both publish boot errors when the allow-list is missing and the static credential has no edge" $ do
+        -- Both couplings trip at once and surface together in a stable order: the allow-list
+        -- first, then the edge requirement. The operator then fixes both before the next boot.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
