@@ -7,7 +7,9 @@
 # plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
 
 server:
-  # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port.
+  # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port. Every role listens
+  # here: the proxy serves its mounts and its probes, and the worker roles (mirror,
+  # pilot, dredger) serve /livez and /readyz alone.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
   # URLs against it. http(s) with a dialable authority, and http stays legal for
@@ -26,7 +28,10 @@ server:
 # durable SQS backend and takes its region from the host. A Pub/Sub topic resource
 # (projects/{p}/topics/{t}) names the GCP backend, which Écluse refuses at boot. Unset,
 # mirroring runs on the bounded in-memory queue: non-durable, best-effort, and warned
-# loudly at boot. That is fine for a single node or a trial.
+# loudly at boot. That is fine for a single node or a trial. A split deployment
+# (ecluse proxy --no-worker beside an ecluse mirror fleet) needs a durable url, because
+# in-memory jobs never leave the process that enqueued them: Écluse refuses those roles
+# at boot without one.
 queue:
   # How many deliveries one mirror job gets before the worker retires it outright. The
   # worker alarms and counts each retirement. A queue with a dead-letter queue attached

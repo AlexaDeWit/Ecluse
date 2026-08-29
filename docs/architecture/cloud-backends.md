@@ -37,12 +37,23 @@ present and succeeds.
 Between approval and a package appearing in the private upstream, requests fall through to the
 public upstream and re-run the deterministic rules.
 
-The mirror worker exists only when a mount mirrors. A serve-only deployment starts no worker and
-builds no queue. The worker runs inside the `ecluse proxy` process as a supervised concurrent
-thread, not a separate service. Its consume-loop heartbeat backs the process's liveness surface,
-distinct from HTTP readiness. The configured queue URL picks the backend: SQS for
-durability, or a bounded in-memory queue with a boot warning when unset. The keys are in
+The mirror worker exists only when a mount mirrors. A deployment with no mirror target starts no
+worker and builds no queue. The configured queue URL picks the backend: SQS for durability, or a
+bounded in-memory queue with a boot warning when unset. The keys are in
 [the operator manual](https://ecluse-proxy.com/docs/).
+
+By default the worker runs inside the `ecluse proxy` process as a supervised concurrent thread,
+which is what the in-memory queue requires: its jobs never leave the process that enqueued them.
+Over a durable queue the two halves can be split, so the front door scales on request rate and
+the worker fleet on queue depth. `ecluse proxy --no-worker` keeps the producer half and
+`ecluse mirror` runs the consumer half, both over the same composition root, so a worker's
+policy re-evaluation cannot diverge from the serve decision. Écluse refuses either split role at
+boot over the in-memory queue, because every job would be stranded.
+
+The consume-loop heartbeat backs the liveness surface of whichever process runs the worker,
+distinct from HTTP readiness. `/livez` reports it as a pass-or-fail status plus the instant of
+the last successful poll, so an orchestrator can judge staleness itself. A process that runs no
+worker reports no poll and stays live on its listener alone.
 
 ```mermaid
 sequenceDiagram

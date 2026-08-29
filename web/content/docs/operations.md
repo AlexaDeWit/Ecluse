@@ -15,8 +15,13 @@ both:
 
 | Endpoint | What it reports | When it answers `503` |
 |---|---|---|
-| `GET /livez` | Process liveness: `200` while the process is healthy. On a serve-only deployment that is the listener alone. | When the process is not healthy. On a mirroring deployment a stalled mirror worker fails it. |
+| `GET /livez` | Process liveness: `200` while the process is healthy. On a process that runs no mirror worker that is the listener alone. | When the process is not healthy. Where a mirror worker runs, a stalled consume loop fails it. |
 | `GET /readyz` | Config loaded and the listener serving. | In exactly two cases: the instance is draining, or it is still starting up. |
+
+The `/livez` body is a JSON object with two keys, in no guaranteed order: `status`, the same
+verdict the status code carries, and `lastPoll`, the mirror worker's last successful poll as an
+ISO 8601 instant. A process that runs no mirror worker reports `lastPoll` as `null`. Alert on the
+`503`, and read `lastPoll` when you want to see a loop slowing before it crosses the threshold.
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
@@ -26,8 +31,9 @@ Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Mount
 whose artifact Pilot never publishes leaves the pod never ready.
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
-returns `501` by design, because search is a discovery convenience, not an install path. Pilot
-and Dredger export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
+returns `501` by design, because search is a discovery convenience, not an install path. The
+mirror, Pilot, and Dredger roles export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`,
+and nothing else.
 
 ## Graceful shutdown and pod drain
 

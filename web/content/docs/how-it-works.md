@@ -21,13 +21,14 @@ untouched. It can also mirror each admitted public version into that registry, s
 version survives a public outage or yank. AWS CodeArtifact is supported today, and Écluse hosts no
 packages itself.
 
-Écluse ships as one container image with three roles:
+Écluse ships as one container image with four roles:
 
 - `ecluse proxy` serves clients and runs the mirror worker.
+- `ecluse mirror` runs the mirror worker alone, when you want to scale it apart from the proxy.
 - `ecluse pilot` compiles the advisory database the fast lane reads.
 - `ecluse dredger` prunes the mirror store.
 
-[Deploying Écluse](@/docs/deployment.md) covers all three.
+[Deploying Écluse](@/docs/deployment.md) covers all four.
 
 ## How it works
 

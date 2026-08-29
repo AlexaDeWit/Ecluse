@@ -2,6 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | The liveness vocabulary behind @\/livez@: the mirror worker's consume-loop heartbeat, the
+staleness rule read against it, and the 'Liveness' verdict a probe renders.
+
+A process runs the worker or it does not ("Ecluse.Composition.MirrorRole" decides), so the
+verdict has two sources: 'heartbeatLivenessNow' where a loop runs, 'alwaysLive' where none
+does. Both carry the last recorded progress, so a probe can report staleness as well as
+pass or fail.
+-}
 module Ecluse.Core.Worker.Liveness (
     WorkerHeartbeat,
     newWorkerHeartbeat,
@@ -9,7 +17,9 @@ module Ecluse.Core.Worker.Liveness (
     lastPoll,
     workerHeartbeatStaleAfter,
     heartbeatHealthy,
-    heartbeatHealthyNow,
+    Liveness (..),
+    alwaysLive,
+    heartbeatLivenessNow,
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
@@ -38,20 +48,17 @@ job, or 'Nothing' before its first.
 lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
 lastPoll (WorkerHeartbeat var) = readTVarIO var
 
-{- | How long the worker's last recorded progress may be stale before the liveness probe
-counts the loop as stalled.
-
-The bound clears two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget' spans (~300s
-each, the fetch and the publish legs of one 512 MiB job) with headroom. A tighter bound
-would kill a healthy pod mid-publish, and the redelivered jobs would stall the same way:
-a self-inflicted restart loop. @Ecluse.Worker.LivenessSpec@ pins the two together.
+{- | How long the worker's last recorded progress may be stale before the liveness probe counts
+the loop as stalled. It clears two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget'
+spans with headroom, because a tighter bound would kill a healthy pod mid-publish and the
+redelivered jobs would stall the same way.
 -}
 workerHeartbeatStaleAfter :: NominalDiffTime
 workerHeartbeatStaleAfter = 660
 
 {- | Whether the worker's consume loop is healthy as of @now@, given its last recorded
-progress. The single-process @\/livez@ probe folds this in (see "Ecluse.Server"), apart
-from HTTP readiness.
+progress. The @\/livez@ probe of a role that runs the worker folds this in (see
+"Ecluse.Runtime.Server"), apart from HTTP readiness.
 
 'Nothing' (no poll yet) is __healthy__: the worker is still starting, not stalled.
 
@@ -72,8 +79,25 @@ heartbeatHealthy :: UTCTime -> Maybe UTCTime -> Bool
 heartbeatHealthy _ Nothing = True
 heartbeatHealthy now (Just polledAt) = diffUTCTime now polledAt <= workerHeartbeatStaleAfter
 
-{- | Read the worker heartbeat and decide liveness against the current wall clock: the
-@IO@ wrapper the liveness probe calls.
+{- | What @\/livez@ answers from: the health verdict, plus the instant the checked loop last
+recorded progress so an orchestrator can judge staleness rather than only pass or fail.
 -}
-heartbeatHealthyNow :: WorkerHeartbeat -> IO Bool
-heartbeatHealthyNow heartbeat = heartbeatHealthy <$> getCurrentTime <*> lastPoll heartbeat
+data Liveness = Liveness
+    { liveHealthy :: Bool
+    , liveLastPoll :: Maybe UTCTime
+    -- ^ 'Nothing' before the loop's first poll, and for a role that runs no such loop.
+    }
+    deriving stock (Eq, Show)
+
+-- | The verdict of a role with no background loop to stall: live, with nothing to report.
+alwaysLive :: Liveness
+alwaysLive = Liveness{liveHealthy = True, liveLastPoll = Nothing}
+
+{- | Read the worker heartbeat and judge it against the current wall clock, keeping the
+instant judged. Both the embedded and the dedicated worker answer @\/livez@ through this.
+-}
+heartbeatLivenessNow :: WorkerHeartbeat -> IO Liveness
+heartbeatLivenessNow heartbeat = do
+    now <- getCurrentTime
+    polledAt <- lastPoll heartbeat
+    pure Liveness{liveHealthy = heartbeatHealthy now polledAt, liveLastPoll = polledAt}

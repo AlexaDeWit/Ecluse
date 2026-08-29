@@ -12,10 +12,12 @@ import Data.Version (showVersion)
 import Options.Applicative
 import Paths_ecluse (version)
 
+import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Pilot (PilotCompileOptions (..))
 
 data AppCommand
-    = RunProxy
+    = -- | The mirror pipeline in the selected role: @proxy@, @proxy --no-worker@, or @mirror@.
+      RunService MirrorRole
     | RunPilot
     | RunPilotCompile PilotCompileOptions
     | RunDredger
@@ -25,12 +27,21 @@ data AppCommand
 commandParser :: Parser AppCommand
 commandParser =
     hsubparser
-        ( command "proxy" (info (pure RunProxy) (progDesc "Run the Écluse proxy server"))
+        ( command "proxy" (info (RunService <$> proxyRoleParser) (progDesc "Run the Écluse proxy server"))
+            <> command "mirror" (info (pure (RunService MirrorOnly)) (progDesc "Run the Écluse mirror worker alone, for a worker fleet scaled on queue depth"))
             <> command "pilot" (info pilotCommandParser (progDesc "Run the Écluse Pilot (OSV ingestion pipeline)"))
             <> command "dredger" (info (pure RunDredger) (progDesc "Run the Écluse Dredger (mirror pruning worker)"))
             <> command "check-config" (info (pure RunCheckConfig) (progDesc "Validate the configuration and print the resolved posture, then exit (0 valid, 2 refused)"))
         )
-        <|> pure RunProxy
+        <|> pure (RunService ServeAndMirror)
+
+-- Absent, the proxy embeds the worker, which is what the in-memory queue requires.
+proxyRoleParser :: Parser MirrorRole
+proxyRoleParser =
+    flag
+        ServeAndMirror
+        ServeOnly
+        (long "no-worker" <> help "Serve without the embedded mirror worker; needs a durable ECLUSE_QUEUE__URL and an 'ecluse mirror' fleet to drain it")
 
 -- A bare @pilot@ keeps its serve-and-export meaning. @pilot compile@ selects the
 -- one-shot mode.

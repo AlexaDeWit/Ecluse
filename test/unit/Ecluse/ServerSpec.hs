@@ -37,7 +37,7 @@ import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
-import Ecluse.Core.Worker (heartbeatHealthyNow, workerHeartbeatStaleAfter)
+import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll), heartbeatLivenessNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server (
     DrainSignal,
@@ -58,6 +58,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Wai (bodyContainsAll)
 
 {- | A registry-handle double whose effectful fields refuse loudly. The web layer only
 routes and renders, so a refusal surfaces any leak into the data plane.
@@ -154,7 +155,11 @@ probeOnlyApp = probeOnlyApplication (mkServerConfig [])
 
 -- | 'probeOnlyApp' with the injected liveness check failing, which only @\/livez@ reads.
 deadProbeOnlyApp :: IO Application
-deadProbeOnlyApp = probeOnlyApplication ((mkServerConfig []){scCheckLive = pure False})
+deadProbeOnlyApp = probeOnlyApplication ((mkServerConfig []){scCheckLive = pure notLive})
+
+-- | A failing liveness verdict with no poll recorded, standing in for a stalled loop.
+notLive :: Liveness
+notLive = Liveness{liveHealthy = False, liveLastPoll = Nothing}
 
 {- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing in for
 an instance mid-graceful-shutdown without binding a socket.
@@ -183,7 +188,7 @@ stalledWorkerApp = do
     recordPoll (envWorkerHeartbeat env) (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
     -- The composition root folds the heartbeat into /livez only when a worker
     -- runs. This fixture models that mirrored-deployment wiring explicitly.
-    let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatHealthyNow (envWorkerHeartbeat env)}
+    let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatLivenessNow (envWorkerHeartbeat env)}
     pure (application cfg env)
 
 {- | A header matcher that passes only when the response carries __no__ @Connection@
@@ -204,6 +209,9 @@ spec = do
         with npmMountApp $ do
             it "answers /livez with 200" $
                 get "/livez" `shouldRespondWith` 200
+
+            it "reports a null last poll when no background loop is wired behind /livez" $
+                get "/livez" `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"lastPoll\":null"]}
 
             it "answers /readyz with 200" $
                 get "/readyz" `shouldRespondWith` 200

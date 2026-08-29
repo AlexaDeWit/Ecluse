@@ -15,10 +15,10 @@ import Ecluse.Composition.MirrorQueue (
     memoryQueueBootWarning,
  )
 import Ecluse.Composition.Plan (BootPlan (..), configDocumentPath, defaultConfigPath, resolveBootPlan)
-import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (expectConfig, fdLimit, noCeiling, overrideEnv, staticEnvVars, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Config (Config, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
+import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup))
 
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
@@ -137,23 +137,6 @@ serveOnlyEnvVars =
 -- | The preamble's first line when no document exists at the default path.
 absentDocumentLine :: Text
 absentDocumentLine = "Config document: none at /etc/ecluse/config.yaml (defaults and environment only)"
-
--- | A pinned file-descriptor soft limit, so both pool sizings are deterministic.
-fdLimit :: Int
-fdLimit = 1024
-
-{- | A posture with no heap-ceiling datapoint, so the memory plan renders its shipped
-fallbacks and every number in the golden is fixed.
--}
-noCeiling :: EffectiveRuntimePlan
-noCeiling =
-    EffectiveRuntimePlan
-        { erpCapabilities = EffectiveAxis{axDesired = 2, axObserved = 2, axProvenance = FromRts}
-        , erpMaxHeapBytes = EffectiveAxis{axDesired = Nothing, axObserved = Nothing, axProvenance = FromRts}
-        , erpAllocAreaBytes = 4 * mib
-        , erpNurseryChunkBytes = Nothing
-        , erpContainerMemoryBytes = Nothing
-        }
 
 -- | A 256 MiB pod on four capabilities: the computed tenants shed to fit, and nothing refuses.
 tightPod :: EffectiveRuntimePlan

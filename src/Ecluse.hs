@@ -89,7 +89,7 @@ module Ecluse (
     superviseProcess,
     exitCodeFor,
 
-    -- * Split-ready services
+    -- * The separately deployable services
     runServer,
     runWorker,
 
@@ -109,11 +109,14 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
+import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
+import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
+import Ecluse.Service
 
 run :: IO ()
 run = do
@@ -130,12 +133,21 @@ run = do
 runCommand :: AppCommand -> IO ()
 runCommand = \case
     RunCheckConfig -> runCheckConfig
-    RunProxy -> withBootEnv runProxy
+    RunService role -> withBootEnv (runServiceRole role)
     RunPilot -> withBootEnv runPilot
     RunPilotCompile opts ->
         withBootEnv $ \bootEnv ->
             void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beS3Endpoint bootEnv) (configApp (beConfig bootEnv)) opts)
     RunDredger -> withBootEnv runDredger
+
+{- Run one mirror-pipeline role over the assembly both roles share, so the dedicated worker
+composes the same wiring the serve path embeds. -}
+runServiceRole :: MirrorRole -> BootEnv -> IO ()
+runServiceRole role bootEnv =
+    withServiceRuntime role bootEnv $ case role of
+        MirrorOnly -> runMirror
+        ServeAndMirror -> runProxy
+        ServeOnly -> runProxy
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.

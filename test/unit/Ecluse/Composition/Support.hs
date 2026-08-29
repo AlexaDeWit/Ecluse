@@ -8,6 +8,8 @@ environment layers, their targeted mutations, and the expect-helpers that load t
 module Ecluse.Composition.Support (
     fixedNow,
     testLimits,
+    fdLimit,
+    noCeiling,
     staticEnvVars,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
@@ -23,6 +25,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
 import Ecluse.Core.Security (Limits (..))
+import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
 
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
@@ -32,6 +35,23 @@ fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 -- | The resolved 'Limits' the composition root would pass in.
 testLimits :: Limits
 testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}
+
+-- | A pinned file-descriptor soft limit, so both connection-pool sizings are deterministic.
+fdLimit :: Int
+fdLimit = 1024
+
+{- | A posture with no heap-ceiling datapoint, so the memory plan renders its shipped
+fallbacks and every number a golden pins is fixed.
+-}
+noCeiling :: EffectiveRuntimePlan
+noCeiling =
+    EffectiveRuntimePlan
+        { erpCapabilities = EffectiveAxis{axDesired = 2, axObserved = 2, axProvenance = FromRts}
+        , erpMaxHeapBytes = EffectiveAxis{axDesired = Nothing, axObserved = Nothing, axProvenance = FromRts}
+        , erpAllocAreaBytes = 4 * 1024 * 1024
+        , erpNurseryChunkBytes = Nothing
+        , erpContainerMemoryBytes = Nothing
+        }
 
 {- | A minimal valid environment. The mirror target is a non-CodeArtifact host with a
 static write token, so the mount's mirror credential derives to a static provider.

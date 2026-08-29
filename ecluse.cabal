@@ -277,6 +277,8 @@ library
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Proxy.CveSync
+    Ecluse.Mirror
+    Ecluse.Service
     Ecluse.Pilot
     Ecluse.Dredger
     Ecluse.Composition
@@ -291,6 +293,7 @@ library
     Ecluse.Composition.MemoryPlan.Shed
     Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
+    Ecluse.Composition.MirrorRole
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Worker
@@ -580,6 +583,7 @@ library ecluse-test-support
     , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
+    , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
     , http-types        ^>=0.12
     , exceptions        ^>=0.10
@@ -778,6 +782,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
+    Ecluse.Composition.MirrorRoleSpec
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
@@ -794,11 +799,13 @@ test-suite ecluse-unit
     Ecluse.ConfigSpec
     Ecluse.EnvSpec
     Ecluse.ManifestSpec
+    Ecluse.MirrorSpec
     Ecluse.PilotSpec
     Ecluse.Proxy.CveSyncSpec
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
+    Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Site.ThreatRegisterSpec

@@ -75,6 +75,14 @@ data BootError
       tenant shed to its minimum. A computed plan degrades and boots, an operator claim does not.
       -}
       MemoryPlanOverrideUnsafe [Text]
+    | {- | A split-deployment role (carried as its invocation) was selected over the bounded
+      in-memory queue, whose jobs never leave the process that enqueued them.
+      -}
+      SplitRoleNeedsDurableQueue Text
+    | {- | The dedicated mirror worker was launched with no mount declaring a mirror target, so
+      it has no queue to drain and nothing to publish.
+      -}
+      MirrorRoleWithoutMirroring
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -113,3 +121,8 @@ renderBootError = \case
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     MemoryPlanOverrideUnsafe details ->
         "memory plan refused: " <> T.intercalate "; " details
+    SplitRoleNeedsDurableQueue invocation ->
+        invocation
+            <> " splits the mirror worker from the proxy, but ECLUSE_QUEUE__URL is unset, so mirroring runs on the bounded in-memory queue whose jobs never leave the process that enqueued them: point ECLUSE_QUEUE__URL at a durable queue, or run the single-process ecluse proxy"
+    MirrorRoleWithoutMirroring ->
+        "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET, or run a role that needs no mirror queue"
