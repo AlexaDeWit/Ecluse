@@ -32,7 +32,7 @@ import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 -- | The serve-transform benches: realistic over the corpus, scaled over synthetic versions.
 benchmarks :: [LoadedEntry] -> Benchmark
 benchmarks loaded =
-    bgroup "serve (filter + merge-assemble + etag)" $
+    bgroup "serve (filter + merge-assemble)" $
         [ bench (entryName le) (whnfAppIO serveDepth (value, entryInfo le))
         | le@(_, _, value) <- loaded
         ]
