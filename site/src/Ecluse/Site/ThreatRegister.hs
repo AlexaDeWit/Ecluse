@@ -184,12 +184,13 @@ severityBadge threat = badge "severity" (threatSeverity threat) (fromMaybe "?" (
 statusBadge :: Threat -> Text
 statusBadge threat = badge "status" (threatStatus threat) (statusLabel (threatStatus threat))
 
--- Threat Dragon stores "not applicable" as NA, and the register spells it out.
+-- Threat Dragon stores "not applicable" as NA, and the register spells it out. A
+-- status the model omits reads as the question mark a missing severity uses.
 statusLabel :: Maybe Text -> Text
 statusLabel = \case
     Just "NA" -> "N/A"
     Just status -> status
-    Nothing -> ""
+    Nothing -> "?"
 
 -- The kind class carries the styling, so a value the model omits contributes no
 -- class rather than a dangling "severity-" token.

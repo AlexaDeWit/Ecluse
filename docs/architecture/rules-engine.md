@@ -182,7 +182,8 @@ every threshold**, so the rule always denies malware while `minSeverity` governs
   confirm safety may admit.
 
 Enabling it on a cold mirror can deny historical versions an existing build depends on, so it
-ships off. Warm the mirror first (see USAGE → *Onboarding DenyIfCve*).
+ships off. Warm the mirror first, as
+[Onboarding DenyIfCve](https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve) sets out.
 
 ### Local polling, decoupled ingestion
 

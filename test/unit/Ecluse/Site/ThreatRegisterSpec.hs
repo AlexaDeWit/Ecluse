@@ -120,8 +120,9 @@ spec = do
         it "spells NA out as N/A" $
             render [(numbered 7){threatStatus = Just "NA"}]
                 `carries` "<span class=\"badge status-na\">N/A</span>"
-        it "renders a missing severity as a question mark under no kind class" $
-            render [bare] `carries` "<span class=\"badge\">?</span>"
+        it "renders a missing severity or status as a question mark under no kind class" $ do
+            render [(numbered 7){threatSeverity = Nothing}] `carries` "<span class=\"badge\">?</span>"
+            render [(numbered 7){threatStatus = Nothing}] `carries` "<span class=\"badge\">?</span>"
         it "renders a missing category as a dash" $
             render [bare] `carries` "| - |"
 

@@ -293,10 +293,9 @@ tasks:
       # The repo owner excluded missing-integrity. SRI applies to fetched
       # subresources, and this site hosts none externally. The only absolute-URL
       # <link> tags are rel="canonical", which is pure metadata and fetches nothing.
-      # The site templates load no external script or stylesheet.
-      # Excluding the rule here, rather than through per-tag
-      # nosemgrep comments, also keeps the findings out of the SARIF upload, so code
-      # scanning stays quiet too.
+      # The site templates load no external script or stylesheet. Excluding the rule
+      # here, rather than through per-tag nosemgrep comments, also keeps the findings
+      # out of the SARIF upload, so code scanning stays quiet too.
       - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
   cabal-check:
     desc: Validate the .cabal package metadata

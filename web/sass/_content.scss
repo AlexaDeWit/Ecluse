@@ -169,6 +169,12 @@ thead th {
   white-space: nowrap;
 }
 
+.severity-critical {
+  background: var(--badge-critical-bg);
+  border-color: var(--badge-critical-border);
+  color: var(--badge-critical-fg);
+}
+
 .severity-high,
 .status-open {
   background: var(--badge-high-bg);

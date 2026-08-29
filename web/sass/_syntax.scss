@@ -1,7 +1,14 @@
 // Zola emits syntect scopes as z-prefixed classes. Colouring the coarse scopes
-// from the page tokens keeps one stylesheet for both colour schemes.
+// from the page tokens keeps one stylesheet for both colour schemes. One token
+// carries every scope on its path, so the widest scope leads and a narrower one
+// below it wins at equal specificity.
 .z-code {
   color: var(--fg);
+}
+
+.z-punctuation,
+.z-meta.z-separator {
+  color: var(--code-punctuation);
 }
 
 .z-comment {
@@ -25,9 +32,4 @@
 .z-entity,
 .z-support {
   color: var(--code-name);
-}
-
-.z-punctuation,
-.z-meta.z-separator {
-  color: var(--code-punctuation);
 }
