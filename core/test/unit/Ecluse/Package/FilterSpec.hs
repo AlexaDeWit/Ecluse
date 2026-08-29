@@ -32,7 +32,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
-import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
+import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, renderVersion)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 
@@ -169,7 +169,7 @@ propertiesSpec = describe "properties" $ do
             plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             case fpLatest plan of
                 Nothing -> assert (Set.null (fpSurvivors plan))
-                Just v -> assert (unVersion v `Set.member` fpSurvivors plan)
+                Just v -> assert (renderVersion v `Set.member` fpSurvivors plan)
 
     it "a surviving upstream latest is kept, never promoted to a higher survivor" $
         hedgehog $ do
@@ -238,7 +238,7 @@ versionPool = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0", "3.0.0-beta", "10.0.0"]
 
 -- | The resolved @latest@ as its raw version string, if present.
 latestRaw :: FilterPlan -> Maybe Text
-latestRaw = fmap unVersion . fpLatest
+latestRaw = fmap renderVersion . fpLatest
 
 -- | Whether a raw npm version string parses to a stable (non-prerelease) release.
 isStableRaw :: Text -> Bool

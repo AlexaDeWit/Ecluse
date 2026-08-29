@@ -24,8 +24,8 @@ import Ecluse.Core.Version (
     compareVersions,
     mkVersion,
     parseVersionKey,
+    renderVersion,
     selectLatest,
-    unVersion,
  )
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
@@ -48,7 +48,7 @@ versionPipelineDepth raws =
     versions = map (mkVersion Npm) raws
     parsed = length (filter isRight (map (parseVersionKey Npm) raws))
     ordered = length (List.sortBy semanticCompare versions)
-    latest = maybe 0 (T.length . unVersion) (selectLatest Nothing versions)
+    latest = maybe 0 (T.length . renderVersion) (selectLatest Nothing versions)
 
 {- | The semantic comparator, treating an unorderable pair as equal. The comparator is
 total over the parsed npm versions here, so this only keeps 'List.sortBy' total.

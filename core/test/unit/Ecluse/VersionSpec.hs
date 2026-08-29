@@ -19,12 +19,12 @@ import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 spec :: Spec
 spec = do
     describe "mkVersion" $ do
-        it "round-trips the raw text through unVersion" $
+        it "round-trips the raw text through renderVersion" $
             hedgehog $ do
                 v <- forAll (Gen.text (Range.linear 1 12) Gen.ascii)
-                unVersion (mkVersion Npm v) === v
+                renderVersion (mkVersion Npm v) === v
         it "keeps the raw text even when unparseable (proxy fidelity)" $
-            unVersion (mkVersion PyPI "totally bogus") `shouldBe` "totally bogus"
+            renderVersion (mkVersion PyPI "totally bogus") `shouldBe` "totally bogus"
         it "has no key for unparseable input" $
             versionKey (mkVersion PyPI "totally bogus") `shouldBe` Nothing
         it "parses a valid version into a key" $
@@ -260,10 +260,10 @@ spec = do
         -- All survivors here are npm versions. selectLatest is ecosystem-agnostic: it calls
         -- compareVersions and isStable on the keys.
         let v = mkVersion Npm
-            raws = map unVersion
+            raws = map renderVersion
             selRaw :: Maybe Text -> [Text] -> Maybe Text
             selRaw chosen survivors =
-                unVersion <$> selectLatest (v <$> chosen) (map v survivors)
+                renderVersion <$> selectLatest (v <$> chosen) (map v survivors)
 
         it "returns Nothing when there are no survivors" $
             selRaw (Just "1.0.0") [] `shouldBe` Nothing
@@ -311,7 +311,7 @@ spec = do
                     result = selectLatest (v <$> chosenRaw) survivors
                 case result of
                     Nothing -> survivorRaws === []
-                    Just r -> assert (unVersion r `elem` raws survivors)
+                    Just r -> assert (renderVersion r `elem` raws survivors)
 
 -- | Flip an 'Ordering' (the antisymmetry witness): @LT@↔@GT@, @EQ@ fixed.
 invertOrdering :: Ordering -> Ordering

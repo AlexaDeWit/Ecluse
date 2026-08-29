@@ -99,7 +99,7 @@ import Ecluse.Core.Package (
     sriBody,
  )
 import Ecluse.Core.Package.Integrity (assertedAlg)
-import Ecluse.Core.Version (Version, selectLatest, unVersion)
+import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | Which upstream a document came from. The caller decides this and applies it before merging.
@@ -206,7 +206,7 @@ applyDivergencePolicy FailClosed plan =
     plan
         { mpSurvivors = Map.withoutKeys (mpSurvivors plan) dropped
         , mpTime = Map.withoutKeys (mpTime plan) dropped
-        , mpDistTags = Map.filter (\target -> not (unVersion target `Set.member` dropped)) (mpDistTags plan)
+        , mpDistTags = Map.filter (\target -> not (renderVersion target `Set.member` dropped)) (mpDistTags plan)
         }
   where
     dropped = Set.map divVersion (mpDivergences plan)
@@ -405,7 +405,7 @@ planFrom acc = do
     -- tags never depend on the order the caller passed the inputs.
     reconciledTags :: Map Text Version
     reconciledTags =
-        let carried = Map.filter (survives . unVersion) (Map.map rankedValue (mergeDistTags acc))
+        let carried = Map.filter (survives . renderVersion) (Map.map rankedValue (mergeDistTags acc))
          in case resolvedLatest of
                 Nothing -> Map.delete "latest" carried
                 Just v -> Map.insert "latest" v carried

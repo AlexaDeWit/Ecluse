@@ -63,7 +63,7 @@ npmPublishCodec =
                 targetUrl
                 token
                 name
-                (npmPublishDocument name version (unFilename (maFilename artifact)) (sriOf artifact) (sha1Of artifact) bytes)
+                (npmPublishDocument name version (unFilename (maFilename artifact)) (firstHashValue SRI artifact) (firstHashValue SHA1 artifact) bytes)
         , pcPublishOutcome = classifyPublish
         }
 
@@ -73,14 +73,6 @@ classifyPublish code
     | code == 409 = Right () -- version already present, immutable, so success-equivalent
     | otherwise =
         Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
-
--- Pick the SRI (@dist.integrity@) string from the admitted digests, if present.
-sriOf :: MirrorArtifact -> Maybe Text
-sriOf = firstHashValue SRI
-
--- Pick the SHA-1 shasum from the admitted digests, if present.
-sha1Of :: MirrorArtifact -> Maybe Text
-sha1Of = firstHashValue SHA1
 
 {- | Build the publish @PUT /{pkg}@ request from the already-serialised npm publish document,
 carrying the bearer token. Fails with a 'UrlFormationError' only when the URL cannot be formed,

@@ -51,21 +51,17 @@ data ByteAdmission = ByteAdmission
     , baCapacity :: Int
     }
 
-{- How long an acquisition finding the capacity busy waits before it is shed: the shared
-'admissionWaitMicros' budget, which explains why a refusal never beats the retry hint.
--}
-byteAdmissionWaitMicros :: Int
-byteAdmissionWaitMicros = admissionWaitMicros
-
 {- | The bounded waiting room, a count of waiters. Publishes are rare and heavy, so a short
 queue absorbs a brush with the capacity and anything deeper is refused at once.
 -}
 byteAdmissionWaiterRoom :: Int
 byteAdmissionWaiterRoom = 8
 
--- | Allocate a handle over the given byte capacity (clamped to at least one byte).
+{- | Allocate a handle over the given byte capacity (clamped to at least one byte), with the
+shared 'admissionWaitMicros' budget.
+-}
 newByteAdmission :: Int -> IO ByteAdmission
-newByteAdmission capacity = newByteAdmissionTuned capacity byteAdmissionWaiterRoom byteAdmissionWaitMicros
+newByteAdmission capacity = newByteAdmissionTuned capacity byteAdmissionWaiterRoom admissionWaitMicros
 
 {- | Allocate a handle with an explicit waiter-room bound and wait budget (microseconds),
 so a test can exercise the queueing behaviour without real-second sleeps. Production

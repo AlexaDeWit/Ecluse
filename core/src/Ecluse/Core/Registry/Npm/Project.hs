@@ -105,7 +105,7 @@ import Ecluse.Core.Registry.WireSupport (
  )
 import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (lastPathSegment)
-import Ecluse.Core.Version (Version, mkVersion, unVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- The packument as this projection reads it: the wire fields plus the per-version @_npmUser@
 that "Ecluse.Core.Registry.Npm.Wire" leaves off the manifest, so the publisher survives. -}
@@ -311,7 +311,7 @@ projectArtifact version dist =
 @\<version\>.tgz@ when the URL ends in a slash or has no segment. -}
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
-    fromMaybe (unVersion version <> ".tgz") (lastPathSegment url)
+    fromMaybe (renderVersion version <> ".tgz") (lastPathSegment url)
 
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags

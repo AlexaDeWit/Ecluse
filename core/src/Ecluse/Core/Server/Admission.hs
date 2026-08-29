@@ -40,14 +40,8 @@ checked acquire\/wait\/release operations can mutate its capacity and waiting ro
 -}
 newtype ServeAdmission = ServeAdmission WeightedAdmission
 
-{- How long a serve operation waits for a slot when it finds the cap busy, before the request
-is refused. See 'admissionWaitMicros' for why the budget matches the @Retry-After: 1@ hint.
--}
-serveAdmissionWaitMicros :: Int
-serveAdmissionWaitMicros = admissionWaitMicros
-
 {- | Allocate a bounded handle with the given positive capacity, a waiting room of the same
-size, and the 'serveAdmissionWaitMicros' budget.
+size, and the shared 'admissionWaitMicros' budget.
 
 The room equals the capacity, so a burst of twice the cap queues briefly and anything deeper
 is refused at once. That bounds both the waiting memory and the worst-case latency.
@@ -58,7 +52,7 @@ is refused at once. That bounds both the waiting memory and the worst-case laten
 newServeAdmission :: Int -> IO ServeAdmission
 newServeAdmission capacity
     | capacity <= 0 = error "ServeAdmission capacity must be positive"
-    | otherwise = newServeAdmissionTuned capacity capacity serveAdmissionWaitMicros
+    | otherwise = newServeAdmissionTuned capacity capacity admissionWaitMicros
 
 {- | Allocate a bounded handle with an explicit waiting-room bound and wait budget
 (microseconds), so a test can exercise the queueing behaviour without real-second sleeps.

@@ -30,7 +30,7 @@ import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgMounts),
  )
 import Ecluse.Core.Breaker (BreakerReporter)
-import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
@@ -44,8 +44,8 @@ ecosystem's advisory database, and abstain when the sync plan carries no slot fo
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> FaultReporter -> Ecosystem -> RuleDeps
 cveRuleDepsFor plan reporter faultReporter eco =
     RuleDeps
-        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco plan)
-        , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . csSlot) (Map.lookup eco plan)
+        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . syncSlot . csEnv) (Map.lookup eco plan)
+        , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco plan)
         , rdBreakerReporter = reporter
         , rdFaultReporter = faultReporter
         }
@@ -81,12 +81,12 @@ cveSyncScheduleFor env =
 
 -- | One configured ecosystem's advisory-sync wiring.
 data CveSyncHandle = CveSyncHandle
-    { csSlot :: CveSlot
-    -- ^ The slot this ecosystem's mount rules borrow through.
-    , csReady :: TVar Bool
+    { csReady :: TVar Bool
     -- ^ The one-way first-sync readiness flag.
     , csEnv :: SyncEnv
-    -- ^ The sync task's environment.
+    {- ^ The sync task's environment. Its 'syncSlot' is the slot this ecosystem's mount
+    rules borrow through.
+    -}
     }
 
 {- | Build the advisory-sync plan from config, one 'CveSyncHandle' per mount ecosystem, or nothing
@@ -117,7 +117,7 @@ cveSyncHandleFor appCfg cveSource bucket eco = do
                 , syncDbPath = advDataDir (cfgAdvisories appCfg) </> key
                 , syncSlot = slot
                 }
-    pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
+    pure (eco, CveSyncHandle{csReady = ready, csEnv = syncEnv})
 
 {- | Sweep the in-progress downloads an interrupted run left behind, which an @emptyDir@ keeps
 across a container restart. The sweep is best effort, per 'sweepStep'.

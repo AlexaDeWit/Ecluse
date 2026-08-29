@@ -9,6 +9,7 @@ module Ecluse.Dredger (
 import Katip (Severity (InfoS))
 
 import Ecluse.Boot (BootEnv (..), probeServerConfig)
+import Ecluse.Config (Config (configApp))
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, runWarp)
 
@@ -17,6 +18,6 @@ liveness and readiness probes.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do
-    let cfg = probeServerConfig (beConfig bootEnv)
+    let cfg = probeServerConfig (configApp (beConfig bootEnv))
     moduleLog (beLogEnv bootEnv) "Ecluse.Dredger" InfoS ("Dredger mode starting up on port " <> show (scPort cfg))
     runWarp cfg probeOnlyApplication

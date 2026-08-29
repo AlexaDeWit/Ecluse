@@ -44,7 +44,7 @@ import Network.HTTP.Client (
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (parseVersionList)
-import Ecluse.Core.Version (unVersion)
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Registry.Pypi.Wire qualified as Pypi
 import Ecluse.Test.Registry.Rubygems.Wire qualified as Rubygems
 
@@ -141,7 +141,7 @@ decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
-    Npm -> rightToMaybe (map unVersion <$> parseVersionList (RegistryResponse (BSL.toStrict body)))
+    Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse (BSL.toStrict body)))
     PyPI -> Pypi.projectVersions <$> decode' body
     RubyGems -> Rubygems.listingVersions <$> decode' body
   where
