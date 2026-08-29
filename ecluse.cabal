@@ -273,6 +273,13 @@ library
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
     Ecluse.Composition.MemoryPlan
+    Ecluse.Composition.MemoryPlan.Bounds
+    Ecluse.Composition.MemoryPlan.Demands
+    Ecluse.Composition.MemoryPlan.Internal
+    Ecluse.Composition.MemoryPlan.Override
+    Ecluse.Composition.MemoryPlan.Render
+    Ecluse.Composition.MemoryPlan.Shed
+    Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
@@ -750,6 +757,7 @@ test-suite ecluse-unit
     Ecluse.CLISpec
     Ecluse.Composition.BootErrorSpec
     Ecluse.Composition.CredentialSpec
+    Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.PlanSpec
