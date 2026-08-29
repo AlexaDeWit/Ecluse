@@ -130,7 +130,7 @@ advisories:
 #   # then gets 503 with Retry-After: 1. That 503 is backpressure: exclude it from
 #   # alerts. A real upstream failure returns 503 without the header.
 #   serveMaxInFlight: 128
-#   # Pooled connections per public upstream host: clamp(32, 1024, nofile / 8).
+#   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.
 #   publicConnectionsPerHost: 64
 #   # Pooled connections to the private upstream host: nofile / 4, clamped to 64..4096.

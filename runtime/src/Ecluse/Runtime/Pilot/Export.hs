@@ -18,7 +18,6 @@ module Ecluse.Runtime.Pilot.Export (
 
 import Conduit (MonadResource)
 import Control.Monad.Catch (MonadThrow)
-import GHC.Clock (getMonotonicTime)
 import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
 import System.Directory (getFileSize)
 import System.FilePath (takeFileName)
@@ -27,6 +26,7 @@ import UnliftIO.Exception (withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Ecluse.Core.Telemetry.Record (timedSeconds)
 import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -53,14 +53,14 @@ exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
             body <- liftIO $ AWS.chunkedFile 1048576 dbPath
             let req = S3.newPutObject (S3.BucketName bucketName) (S3.ObjectKey keyText) body
 
-            start <- liftIO getMonotonicTime
-            withException
-                (void $ AWS.send env req)
-                ( \(e :: SomeException) -> do
-                    forM_ mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show e))
-                    logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show e))
-                )
-            elapsed <- liftIO getMonotonicTime
+            (_, elapsed) <-
+                timedSeconds $
+                    withException
+                        (void $ AWS.send env req)
+                        ( \(e :: SomeException) -> do
+                            forM_ mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show e))
+                            logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show e))
+                        )
 
-            katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" (elapsed - start)) $
+            katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" elapsed) $
                 logFM InfoS "S3 upload complete"

@@ -82,7 +82,7 @@ serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
 
 {- | The effective private-upstream connection-pool size and its boot-log line: the
-explicit @privateConnectionsPerHost@, else @clamp 64 4096 (nofile \/ 4)@. It is not tied
+explicit @privateConnectionsPerHost@, else @clamp (64, 4096) (nofile \/ 4)@. It is not tied
 to @serveMaxInFlight@, because private-hit tarball streams run outside serve admission
 and their concurrency is the inbound fan-out. 'Network.HTTP.Client.managerConnCount'
 caps retention, not concurrency, so sizing up retains more idle connections for reuse
@@ -113,7 +113,7 @@ privateConnectionsCap :: Int
 privateConnectionsCap = 4096
 
 {- | The effective public-upstream connection-pool size and its boot-log line: the
-explicit @publicConnectionsPerHost@, else @clamp 32 1024 (nofile \/ 8)@, half the private
+explicit @publicConnectionsPerHost@, else @clamp (32, 1024) (nofile \/ 8)@, half the private
 share. The pool is not metadata-only: onboarding fail-over artifact streams and the
 worker's back-fill fetches ride the same manager and do not coalesce, so an onboarding
 burst tracks the inbound fan-out. Sizing up is safe for the reason
