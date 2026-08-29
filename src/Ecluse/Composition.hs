@@ -83,6 +83,7 @@ import Ecluse.Core.Registry.Adapter (
     metadataAssemble,
     metadataNewClient,
     metadataSerialise,
+    publishAllowed,
     publishCanonicaliseName,
     publishDeclaredNames,
     publishRelay,
@@ -265,7 +266,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     pure
         PublishDeps
             { pubTargetUrl = registryUrlText url
-            , pubScopes = mntPublishAllow mcfg
+            , pubAllowed = publishAllowed (adapterPublish adapter) (mntPublishAllow mcfg)
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
             , pubLimits = limits

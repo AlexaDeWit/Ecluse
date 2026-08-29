@@ -31,10 +31,8 @@ import Ecluse.Core.Registry.Npm (
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
-import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Abbreviated, Full),
-    noValidators,
- )
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated, Full))
+import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 

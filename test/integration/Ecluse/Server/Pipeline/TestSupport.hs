@@ -130,6 +130,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Env (Env (envQueue))
@@ -815,7 +816,7 @@ admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
 -- A flat projection of a mirror job, for an order-stable equality assertion over
 -- the coordinates the queued worker consumes.
 jobShape :: MirrorJob -> (PackageName, Version, Text, Text)
-jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), jobArtifactFilename job)
+jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), unFilename (jobArtifactFilename job))
 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do

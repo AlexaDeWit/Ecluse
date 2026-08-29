@@ -19,7 +19,6 @@ module Ecluse.Core.Security.Authority (
     hostPortAddress,
     hostPortAddressWithDefault,
     splitHostPort,
-    carriesUserinfo,
 
     -- * Configured-URL refusal
     refuseCredentialMaterial,
@@ -109,12 +108,8 @@ parsePort t = do
     guard (n >= 1 && n <= 65535)
     pure (fromInteger n)
 
-{- | Whether a URI or bare @host[:port]@ value carries userinfo in its authority. It is the only
-question about the credential half a caller outside this module may ask, and it returns no text.
-
->>> carriesUserinfo "https://registry.npmjs.org/@acme/thing"
-False
--}
+{- Whether a URI or bare @host[:port]@ value carries userinfo in its authority. It answers the
+one question about the credential half, and returns no text. -}
 carriesUserinfo :: Text -> Bool
 carriesUserinfo = T.isInfixOf "@" . authoritySpan
 
@@ -123,6 +118,9 @@ or a fragment. Run it before any check that quotes the value, and the reason it 
 
 >>> refuseCredentialMaterial "server.publicUrl" "https://deploy:hunter2@ecluse.example.test"
 Left "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
+
+>>> refuseCredentialMaterial "registry.url" "https://registry.npmjs.org/@acme/thing"
+Right ()
 -}
 refuseCredentialMaterial :: Text -> Text -> Either Text ()
 refuseCredentialMaterial subject url

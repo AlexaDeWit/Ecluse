@@ -23,10 +23,10 @@ import Ecluse.Core.Package (
 import Network.HTTP.Types.Method (Method, methodGet, methodPut)
 
 import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
-import Ecluse.Core.Server.Path (Filename (Filename))
+import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Package (unsafeFilename, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
@@ -112,24 +112,24 @@ spec = do
     describe "classify -- tarballs (the parsed artifact coordinate)" $ do
         it "routes an unscoped tarball to its artifact, parsing the version" $
             classify ["is-odd", "-", "is-odd-3.0.1.tgz"]
-                `shouldBe` ToTarball (unscopedNpm "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
+                `shouldBe` ToTarball (unscopedNpm "is-odd") (npmVersion "3.0.1") (unsafeFilename "is-odd-3.0.1.tgz")
         it "routes a scoped tarball (two segments) to its artifact" $
             -- The basename drops the scope: @\@babel\/code-frame@ → @code-frame-7.0.0.tgz@.
             classify ["@babel", "code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "routes a scoped tarball (one decoded segment) to its artifact" $
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "reads a prerelease-hyphen version out of the basename verbatim" $
             -- The version itself carries hyphens (@1.0.0-rc.1@). The parse must split on
             -- the FIRST @{name}-@ boundary, taking everything after it as the version.
             classify ["pkg", "-", "pkg-1.0.0-rc.1.tgz"]
-                `shouldBe` ToTarball (unscopedNpm "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
+                `shouldBe` ToTarball (unscopedNpm "pkg") (npmVersion "1.0.0-rc.1") (unsafeFilename "pkg-1.0.0-rc.1.tgz")
         it "preserves the filename verbatim, not one rebuilt from (name, version)" $
             -- The file's parsed version round-trips and the Filename is byte-identical
             -- to what arrived. That Filename, not a reconstruction, fetches the bytes.
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
             -- The file names a DIFFERENT package's artifact under @is-odd@'s path.
             -- The basename lacks the @is-odd-@ prefix, so the parse denies rather than fabricates.
@@ -269,8 +269,8 @@ spec = do
                 case route of
                     ToPackument pn ->
                         H.assert (all safe (nameComponents pn))
-                    ToTarball pn _ (Filename file) ->
-                        H.assert (all safe (file : nameComponents pn))
+                    ToTarball pn _ file ->
+                        H.assert (all safe (unFilename file : nameComponents pn))
                     _ -> pure ()
 
 -- | Whether a route is an accepted package route (the arms the invariant binds).

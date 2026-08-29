@@ -62,13 +62,9 @@ module Ecluse.Runtime.Telemetry.Tracing (
     -- * Domain spans
     withRuleEvalSpan,
     withMirrorEnqueueSpan,
-    withPackumentGateSpan,
-    withMetadataFetchSpan,
-    withMetadataDecodeSpan,
     withMirrorJobSpan,
     withAdvisorySyncSpan,
     JobSpanOutcome (..),
-    withDomainSpan,
 
     -- * The core tracing ports
     tracingPortOf,
@@ -239,7 +235,7 @@ withAdvisorySyncSpan telemetry eco project action =
         recordFields mSpan [("ecluse.advisory.sync.result", advisorySyncResultName (project result))]
         pure result
 
--- | Run a packument-gate domain span around the rules and filter application for a public packument.
+-- Run a packument-gate domain span around the rules and filter application for a public packument.
 withPackumentGateSpan :: (MonadUnliftIO m) => Telemetry -> PackageName -> m a -> m a
 withPackumentGateSpan telemetry name action =
     withDomainSpan telemetry Internal [] "ecluse.packument.gate" $ \mSpan -> do

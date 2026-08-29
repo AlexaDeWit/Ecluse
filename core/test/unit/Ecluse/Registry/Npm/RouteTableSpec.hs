@@ -45,9 +45,10 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
-import Ecluse.Core.Server.Path (Filename (Filename), isSafeComponent)
+import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Registry.Npm (genPathSegments)
 
 {- | The route a request takes: the name of the first route to claim it, or 'Nothing' when
@@ -120,10 +121,10 @@ spec = do
 
         it "reads the version out of an artifact name, preserving the file verbatim" $
             tarballCoordinate (mkPackageName Npm Nothing "lodash") "lodash-1.0.0.tgz"
-                `shouldBe` Just (mkVersion Npm "1.0.0", Filename "lodash-1.0.0.tgz")
+                `shouldBe` Just (mkVersion Npm "1.0.0", unsafeFilename "lodash-1.0.0.tgz")
         it "drops the scope from a scoped package's artifact name, as npm does" $
             tarballCoordinate (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "code-frame-7.0.0.tgz"
-                `shouldBe` Just (mkVersion Npm "7.0.0", Filename "code-frame-7.0.0.tgz")
+                `shouldBe` Just (mkVersion Npm "7.0.0", unsafeFilename "code-frame-7.0.0.tgz")
         it "refuses an artifact name for a different package (path confusion)" $
             tarballCoordinate (mkPackageName Npm Nothing "lodash") "evil-1.0.0.tgz" `shouldBe` Nothing
         it "refuses a bare .tgz with no version" $

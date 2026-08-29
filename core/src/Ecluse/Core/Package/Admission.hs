@@ -2,29 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The single public-version admission gate, shared by the serve path and the
-mirror worker.
-
-Admitting a public version to a concrete artifact request is a three-step decision.
-The rules engine decides the __version__ ('Ecluse.Core.Rules.evalRules'). The
-requested filename selects the __artifact__ ('artifactFor'). The integrity-floor
-admission policy decides whether that artifact's digests are __strong enough to
-gate__ ('Ecluse.Core.Package.Integrity.classifyArtifacts').
-
-The serve pipeline's public tarball gate and the mirror worker's ingest-time
-re-evaluation both call the one 'admitArtifact' here. The two contexts therefore
-cannot drift. A version the worker would freeze into the rule-exempt mirror is exactly
-a version the serve gate would admit. A tightened policy refuses it in both places for
-the same reason: a new deny rule, a raised floor, or a withdrawn file. Each context
-renders the shared 'ArtifactAdmission' on its own surface, an HTTP status or a queue
-ack/redeliver, but neither decides for itself whether a retry could change the verdict.
-That is 'admissionTransience', read by both.
+{- | The single public-version admission gate, shared by the serve path and the mirror worker.
+Admitting a version to a concrete artifact request is a three-step decision: the rules engine
+decides the __version__, the requested 'Filename' selects the __artifact__, and the integrity
+floor decides whether that artifact's digests are __strong enough to gate__. The serve path's
+public tarball gate and the worker's ingest re-evaluation both call the one 'admitArtifact', so
+a version the worker would freeze into the rule-exempt mirror is exactly a version the serve
+gate would admit. Neither context decides for itself whether a retry could change a refusal:
+that is 'admissionTransience', read by both.
 -}
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
     admitArtifact,
-    artifactFor,
 ) where
 
 import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
@@ -39,6 +29,7 @@ import Ecluse.Core.Rules.Types (
     EvalContext,
     Transience (WontResolve),
  )
+import Ecluse.Core.Server.Path (Filename, unFilename)
 
 {- | The admission verdict for one requested artifact of one public version, shared by the
 serve gate and the worker's ingest re-evaluation.
@@ -94,7 +85,7 @@ admitArtifact ::
     [PreparedRule] ->
     MinIntegrity ->
     -- | The requested artifact filename (the client's, or the mirror job's).
-    Text ->
+    Filename ->
     PackageDetails ->
     IO ArtifactAdmission
 admitArtifact ctx rules minIntegrity file details = do
@@ -128,10 +119,10 @@ admissionTransience = \case
     AdmissionIntegrityMissing -> Nothing
     AdmissionBelowFloor -> Nothing
 
-{- | Select the artifact a request's filename names from a version's distribution files.
+{- Select the artifact a request's filename names from a version's distribution files.
 'Nothing' when no artifact carries that filename: a forwarded miss, never a fabricated
 location.
 -}
-artifactFor :: Text -> PackageDetails -> Maybe Artifact
+artifactFor :: Filename -> PackageDetails -> Maybe Artifact
 artifactFor file details =
-    find ((== file) . artFilename) (pkgArtifacts details)
+    find ((== unFilename file) . artFilename) (pkgArtifacts details)

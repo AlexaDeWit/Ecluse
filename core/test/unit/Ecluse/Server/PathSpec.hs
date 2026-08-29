@@ -6,7 +6,7 @@ module Ecluse.Server.PathSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Server.Path (Filename (Filename), encodeComponent, isSafeComponent)
+import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent, mkFilename, unFilename)
 
 {- | The shared URL-path vocabulary: the artifact-name type, and the ecosystem-independent
 component-safety gate. No ecosystem's routes live here. Every registry shares the /threat/ of a
@@ -15,12 +15,16 @@ decoded path component interpolated into an upstream URL, and these specs pin th
 spec :: Spec
 spec = do
     describe "Filename -- the artifact name an artifact route carries" $ do
-        -- A distinct type, not a bare 'Text', holds the verbatim on-the-wire name, because that
-        -- name is authoritative for fetching the bytes.
+        -- A refinement, not a bare 'Text': the name is authoritative for fetching the bytes, so
+        -- only a component 'isSafeComponent' admits can become one.
+        it "reads back the verbatim name it was built from" $
+            fmap unFilename (mkFilename "is-odd-3.0.1.tgz") `shouldBe` Just "is-odd-3.0.1.tgz"
         it "compares equal for the same preserved file name" $
-            Filename "is-odd-3.0.1.tgz" `shouldBe` Filename "is-odd-3.0.1.tgz"
+            mkFilename "is-odd-3.0.1.tgz" `shouldBe` mkFilename "is-odd-3.0.1.tgz"
         it "compares unequal for different preserved file names" $
-            Filename "is-odd-3.0.1.tgz" `shouldNotBe` Filename "is-odd-3.0.2.tgz"
+            mkFilename "is-odd-3.0.1.tgz" `shouldNotBe` mkFilename "is-odd-3.0.2.tgz"
+        it "refuses a name that is not a safe path component" $
+            mkFilename "../etc/passwd" `shouldBe` Nothing
 
     describe "isSafeComponent -- the shared traversal gate" $ do
         it "accepts an ordinary name" $

@@ -29,11 +29,6 @@ Three details of the wire protocol are load-bearing and handled here:
 module Ecluse.Core.Registry.Npm.Request (
     -- * Content negotiation
     MetadataForm (..),
-    metadataAccept,
-
-    -- * Conditional-GET validators (re-exported from the shared request home)
-    Validators (..),
-    noValidators,
 
     -- * Request building
     metadataRequest,
@@ -43,7 +38,6 @@ module Ecluse.Core.Registry.Npm.Request (
     packageUrl,
 
     -- * Shared internals
-    encodePackagePath,
     withToken,
     parseRequestEither,
 ) where
@@ -55,7 +49,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Request (Validators (..), addValidators, attachCredential, joinPath, noValidators, parseRequestEither)
+import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -74,14 +68,7 @@ data MetadataForm
       Full
     deriving stock (Eq, Show)
 
-{- | The @Accept@ header value selecting a 'MetadataForm'.
-
->>> metadataAccept Abbreviated
-"application/vnd.npm.install-v1+json"
-
->>> metadataAccept Full
-"application/json"
--}
+-- The @Accept@ header value selecting a 'MetadataForm'.
 metadataAccept :: MetadataForm -> ByteString
 metadataAccept = \case
     Abbreviated -> "application/vnd.npm.install-v1+json"

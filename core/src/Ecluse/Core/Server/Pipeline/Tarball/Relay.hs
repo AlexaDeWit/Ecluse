@@ -26,7 +26,8 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
     -- * Relaying the upstream response
     relayUpstreamWhen,
     acceptArtifact,
-    relayArtifact,
+    relayUnjudged,
+    relayJudged,
 
     -- * Judging the public relay
     RelayVerdict (..),
@@ -41,7 +42,7 @@ import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType
 import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder, probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder, UpstreamBody (NoBody, StreamBody), withUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -77,24 +78,34 @@ relayUpstreamWhen ::
     Manager ->
     HTTP.Request ->
     (Status -> Bool) ->
-    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders)) ->
+    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
-    IO (Maybe response)
-relayUpstreamWhen = \case
-    ServeFull -> streamUpstreamWhen
-    ServeHead -> probeUpstreamWhen
+    IO (Maybe (verdict, response))
+relayUpstreamWhen mode manager request =
+    withUpstreamWhen manager request $ case mode of
+        ServeFull -> StreamBody
+        ServeHead -> NoBody
 
 {- The private relay accepts a @2xx@ and a @304 Not Modified@, because a @304@ says the client's
 relayed validators matched. Any other status is a clean private miss the caller falls through. -}
 acceptArtifact :: Status -> Bool
 acceptArtifact s = statusIsSuccessful s || isNotModified s
 
-{- Forward the upstream status and headers, dropping only the hop-by-hop framing headers, whose
-values describe the upstream hop, not the artifact. The content headers and the @ETag@ pass through
-unchanged, so the client verifies @dist.integrity@ over exactly the relayed bytes. -}
-relayArtifact :: Status -> ResponseHeaders -> (Status, ResponseHeaders)
-relayArtifact status headers =
-    (status, filter (not . isHopByHop . fst) headers)
+{- The trusted leg's pre-commit relay. It judges nothing, so the private hot path pays no
+header scan for an anomaly only the public leg can have. -}
+relayUnjudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())
+relayUnjudged status headers = pure (status, forwardedHeaders headers, ())
+
+{- The public leg's pre-commit relay. The verdict is decided before any body moves and rides back
+beside the response, so a committed relay always carries exactly one. -}
+relayJudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, RelayVerdict)
+relayJudged status headers = pure (status, forwardedHeaders headers, relayVerdict status headers)
+
+{- Drop only the hop-by-hop framing headers, whose values describe the upstream hop, not the
+artifact. The content headers and the @ETag@ pass through unchanged, so the client verifies
+@dist.integrity@ over exactly the relayed bytes. -}
+forwardedHeaders :: ResponseHeaders -> ResponseHeaders
+forwardedHeaders = filter (not . isHopByHop . fst)
   where
     isHopByHop name = name == "Transfer-Encoding" || name == "Connection"
 

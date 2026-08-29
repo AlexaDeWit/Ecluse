@@ -32,6 +32,7 @@ module Ecluse.Core.Registry (
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (Hash, HashAlg, hashAlg, hashValue)
 import Ecluse.Core.Security (LimitError, authorityLabel)
+import Ecluse.Core.Server.Path (Filename)
 
 {- | A raw response fetched from a registry, the unparsed bytes 'fetchMetadata' returned.
 The bytes stay opaque here to keep fetching separate from parsing.
@@ -47,7 +48,7 @@ not the queue payload, so a publish names only what the admission gate floor-che
 "Ecluse.Core.Worker.Job"). 'maHashes' is 'NonEmpty' because admission refuses a digest-less version.
 -}
 data MirrorArtifact = MirrorArtifact
-    { maFilename :: Text
+    { maFilename :: Filename
     {- ^ The artifact's on-the-wire filename, the @_attachments@ key in the publish
     document.
     -}

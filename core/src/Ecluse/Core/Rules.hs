@@ -68,13 +68,6 @@ module Ecluse.Core.Rules (
 
     -- * The resilience harness
     runEffectfulRule,
-    EffectfulConfig (..),
-    defaultEffectfulConfig,
-    backoffPolicy,
-    Breaker (..),
-    newBreaker,
-    BreakerReporter (..),
-    noBreakerReporter,
     FaultReporter (..),
 ) where
 
@@ -84,20 +77,14 @@ import UnliftIO (tryAny)
 import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
 
-import Ecluse.Core.Breaker (
-    Breaker (..),
-    BreakerReporter (..),
-    noBreakerReporter,
- )
+import Ecluse.Core.Breaker (BreakerReporter (..))
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, severityAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
-    EffectfulConfig (..),
     FaultReporter (..),
     Resilience (..),
-    backoffPolicy,
     defaultEffectfulConfig,
     newBreaker,
     runResilient,
@@ -123,11 +110,11 @@ data RuleDeps = RuleDeps
     -}
     , rdBreakerReporter :: BreakerReporter
     {- ^ The observer that effectful rules report their breaker transitions to, as
-    @ecluse.rule.breaker.state@. 'noBreakerReporter' when unobserved.
+    @ecluse.rule.breaker.state@. 'Ecluse.Core.Breaker.noBreakerReporter' when unobserved.
     -}
     , rdFaultReporter :: FaultReporter
     {- ^ The observer that effectful rules report an exhausted evaluation's fault detail to,
-    or 'noFaultReporter' when unobserved. The detail stays in the operator log and never
+    or 'Ecluse.Core.Rules.Effectful.noFaultReporter' when unobserved. The detail stays in the operator log and never
     reaches the client-facing message.
     -}
     }

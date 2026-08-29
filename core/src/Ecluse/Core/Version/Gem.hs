@@ -20,7 +20,6 @@ prerelease marker such as @.pre@ or @.rc1@.
 module Ecluse.Core.Version.Gem (
     GemKey (..),
     parseGem,
-    compareGemTokens,
     isGemStable,
 ) where
 
@@ -38,7 +37,7 @@ newtype GemKey = GemKey [VToken]
 instance Ord GemKey where
     compare (GemKey a) (GemKey b) = compareGemTokens a b
 
--- | Compare gem token lists, zero-padding the shorter side.
+-- Compare gem token lists, zero-padding the shorter side.
 compareGemTokens :: [VToken] -> [VToken] -> Ordering
 compareGemTokens [] [] = EQ
 compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys

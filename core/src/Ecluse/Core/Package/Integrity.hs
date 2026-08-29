@@ -48,13 +48,6 @@ module Ecluse.Core.Package.Integrity (
     -- * Algorithm strength
     assertedAlg,
 
-    -- * Algorithm names and SRI strings
-    renderHashAlg,
-    parseHashAlg,
-    sriAlgorithm,
-    sriPrefix,
-    sriBody,
-
     -- * The authoritative digest of a set
     authoritativeDigest,
 
@@ -91,8 +84,6 @@ import Ecluse.Core.Package.Hash (
     parseHashAlg,
     renderHashAlg,
     sriAlgorithm,
-    sriBody,
-    sriPrefix,
  )
 
 {- | The algorithm a 'Hash' asserts: its tag directly, or, for an 'SRI' string, the algorithm named
@@ -232,6 +223,3 @@ classifyArtifacts flr arts
   where
     meetsFloorArtifact art = any hashMeetsFloor (artHashes art)
     hashMeetsFloor h = maybe False (meetsFloor flr) (assertedAlg h)
-
--- Callers, including the worker and SQS, import the algorithm vocabulary from here. This
--- module re-exports it from "Ecluse.Core.Package.Hash", where it lives.

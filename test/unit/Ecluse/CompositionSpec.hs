@@ -28,7 +28,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -367,6 +367,14 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldMatchList` [PublishAllowMissing Npm, PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
+-- An npm name under the given scope, for the publish allow-list predicate.
+scopedName :: Text -> PackageName
+scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
+
+-- An unscoped npm name: in no scope, so the deny-by-default guard refuses it.
+bareName :: PackageName
+bareName = mkPackageName Npm Nothing "thing"
+
 publishWiringSpec :: Spec
 publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
@@ -380,7 +388,10 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
             Right [binding] -> case bindingPublishDeps binding of
                 Just deps -> do
                     pubTargetUrl deps `shouldBe` "https://publish.example.test"
-                    pubScopes deps `shouldBe` [mkScope "acme", mkScope "beta"]
+                    -- The allow-list reaches the mount as npm's own predicate: both
+                    -- configured scopes admit, and anything outside them is refused.
+                    map (pubAllowed deps) [scopedName "acme", scopedName "beta"] `shouldBe` [True, True]
+                    map (pubAllowed deps) [scopedName "evil", bareName] `shouldBe` [False, False]
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 

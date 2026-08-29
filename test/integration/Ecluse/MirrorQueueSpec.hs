@@ -34,7 +34,7 @@ import Ecluse.Runtime.Queue.Sqs (
     defaultSqsConfig,
     newSqsQueue,
  )
-import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
 
 {- | These cases drive the SQS 'MirrorQueue' backend against a @ministack@ container from
 "Ecluse.Integration.Ministack". They are gating and need a Docker daemon, never real AWS.
@@ -143,6 +143,6 @@ sampleJob =
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
         , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
-        , jobArtifactFilename = "left-pad-1.3.0.tgz"
+        , jobArtifactFilename = unsafeFilename "left-pad-1.3.0.tgz"
         , jobTraceContext = Nothing
         }

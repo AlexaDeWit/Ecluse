@@ -18,7 +18,6 @@ import Ecluse.Core.Package (
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
-import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount))
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -34,16 +33,14 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
-import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpBuildArtifactRequest, wpPublish),
-    processBatch,
     processJob,
  )
-import Ecluse.Core.Worker.Job (ReevalOutcome (ReevalDrop, ReevalRetry), outcomeOfAdmission, outcomeOfFetchFault)
-import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
+import Ecluse.Core.Worker.Job (outcomeOfAdmission, outcomeOfFetchFault)
+import Ecluse.Test.Package (unsafeFilename, unsafeHash)
+import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
 import Ecluse.Worker.Support
@@ -72,14 +69,14 @@ spec = do
         -- the serve gate reads it to choose a 503 over a 500. The two cannot disagree.
         it "retries an inability the evaluator expects to clear (an advisory source briefly down)" $
             case outcomeOfAdmission (jobWith unreachableUrl) (undecided (WillResolve Nothing) "no advisory database is loaded") of
-                ReevalRetry reason -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
+                Left (Retried reason) -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
                 other -> expectationFailure ("expected a retry for a clearing inability, got " <> show other)
 
         it "drops an inability no retry can clear, rather than redelivering until the budget retires it" $
             -- WontResolve is the rule engine's own statement that no redelivery changes the
             -- verdict. A repaired advisory source rides the next request's enqueue instead.
             case outcomeOfAdmission (jobWith unreachableUrl) (undecided WontResolve "the advisory index is corrupt") of
-                ReevalDrop reason -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
+                Left (Dropped reason) -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
     describe "npmPublishDocument" $ do
@@ -162,7 +159,7 @@ spec = do
                     descriptors <- plArtifacts <$> readIORef logRef
                     descriptors
                         `shouldBe` [ MirrorArtifact
-                                        { maFilename = "thing-1.0.0.tgz"
+                                        { maFilename = unsafeFilename "thing-1.0.0.tgz"
                                         , maHashes = unsafeHash SRI trueSri :| []
                                         , maSize = Nothing
                                         }
@@ -386,38 +383,6 @@ spec = do
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
-        it "acks a policy-denied job, retiring it from the queue" $ do
-            -- A current-policy deny is non-retryable, so the worker acks the job rather than
-            -- leaving it for the backend to redeliver. The ack is the retire decision, observed at
-            -- the handle.
-            (queue, ackedReceipts) <- recordingAckQueue
-            withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
-                enqueue_ queue (jobWith unreachableUrl)
-                messages <- receive_ queue
-                runWM runtime (processBatch messages)
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-                acked <- ackedReceipts
-                acked `shouldBe` map msgReceipt messages
-
-        it "dead-letters an over-cap artifact on the memory backend: metered, never published, routed to deadLetter not ack (issue #846)" $
-            -- A fetch cap below the served bytes makes the over-cap fault terminal, so the worker
-            -- routes it to the dead-letter terminus and meters it. The memory backend drops it, its
-            -- only terminus.
-            withUpstream $ \url -> do
-                (queue, deadReceipts) <- recordingDeadLetterQueue
-                (metricsPort, recordedMetrics) <- recordingWorkerMetricsPort
-                withRuntimeQueue queue (`recordingPublish` Right ()) (withArtifactCap 8 admitPolicies) metricsPort $ \runtime logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    published <- plDocuments <$> readIORef logRef
-                    published `shouldBe` []
-                    dead <- deadReceipts
-                    dead `shouldBe` map msgReceipt messages
-                    metered <- recordedMetrics
-                    metered `shouldBe` [Failed]
-
     describe "processJob: the mirror-presence dedup probe" $ do
         -- The default 'recordingPublish' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that
@@ -454,16 +419,6 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-        it "acks the skipped duplicate, retiring it from the queue" $ do
-            (queue, ackedReceipts) <- recordingAckQueue
-            withRuntimeQueue queue (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
-                enqueue_ queue (jobWith unreachableUrl)
-                messages <- receive_ queue
-                runWM runtime (processBatch messages)
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-                acked <- ackedReceipts
-                acked `shouldBe` map msgReceipt messages
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
         -- The serve-time tarball gate and the worker both resolve a version through this one
         -- function, so these cases pin its classification directly.
@@ -489,105 +444,6 @@ spec = do
             -- transient degrade.
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
-    describe "processBatch -- ack decisions at the queue handle" $ do
-        -- The worker's retire-vs-retry decision is its ack call, recorded by 'recordingAckQueue'.
-        -- The memory backend's ack is a no-op, so "Ecluse.WorkerSpec" pins real redelivery against
-        -- SQS.
-        it "acks a successfully-mirrored job, retiring it from the queue" $
-            withUpstream $ \url -> do
-                (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    acked <- ackedReceipts
-                    acked `shouldBe` map msgReceipt messages
-
-        it "does not ack a transiently-failed job (left for the backend to redeliver)" $
-            withUpstream $ \url -> do
-                (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingPublish` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    -- The registry rejection is retryable, so the worker must not ack: over a
-                    -- redelivering backend the un-acked message comes back ("retry is don't ack").
-                    acked <- ackedReceipts
-                    acked `shouldBe` []
-
-        it "acks a DROPPED job, retiring a tampered artifact rather than retrying it" $
-            -- An integrity mismatch is non-retryable, because redelivery could never make the bytes
-            -- match, so the worker acks rather than leaving the job to redeliver indefinitely.
-            withUpstream $ \url -> do
-                (queue, ackedReceipts) <- recordingAckQueue
-                withRuntimeQueue queue (`recordingPublish` Right ()) (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort $ \runtime logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    -- The worker published nothing (the mismatch refused the publish)...
-                    published <- plDocuments <$> readIORef logRef
-                    published `shouldBe` []
-                    -- ...and it acked the job: retired at the handle.
-                    acked <- ackedReceipts
-                    acked `shouldBe` map msgReceipt messages
-    describe "processBatch -- the redelivery budget, the terminus a queue without a DLQ has (issue #935)" $ do
-        it "retires a delivery that has spent the budget, without ever running the job" $
-            withUpstream $ \url -> do
-                (metricsPort, readResults) <- recordingWorkerMetricsPort
-                (base, ackedReceipts) <- recordingAckQueue
-                let queue = base{deliveryBudget = DeliveryBudget 3}
-                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies metricsPort $ \runtime logRef -> do
-                    enqueue_ queue (jobWith url)
-                    [message] <- receive_ queue
-                    runWM runtime (processBatch [message{msgReceiveCount = 3}])
-                    -- The worker checks the budget before it runs the job, so it never
-                    -- re-fetches the artifact and spares that repeated cost.
-                    published <- plDocuments <$> readIORef logRef
-                    published `shouldBe` []
-                    -- The ack retires the delivery rather than let it cycle until the queue's
-                    -- retention window drops it unseen...
-                    acked <- ackedReceipts
-                    acked `shouldBe` [msgReceipt message]
-                    -- ...and it counts the delivery as a discard: the signal an operator
-                    -- alerts on, distinct from an ordinary failure.
-                    readResults >>= (`shouldBe` [Discarded])
-
-        it "still runs the job on the delivery one below the budget" $
-            withUpstream $ \url -> do
-                (metricsPort, readResults) <- recordingWorkerMetricsPort
-                (base, ackedReceipts) <- recordingAckQueue
-                let queue = base{deliveryBudget = DeliveryBudget 3}
-                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies metricsPort $ \runtime logRef -> do
-                    enqueue_ queue (jobWith url)
-                    [message] <- receive_ queue
-                    runWM runtime (processBatch [message{msgReceiveCount = 2}])
-                    -- The worker mirrors the job and acks it on success.
-                    published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
-                    acked <- ackedReceipts
-                    acked `shouldBe` [msgReceipt message]
-                    readResults >>= (`shouldBe` [Published])
-
-    describe "the worker metrics port" $ do
-        it "records a Published result for a successfully-mirrored job, through the port" $
-            -- Asserts the worker classified the terminal outcome and recorded it through the
-            -- recording 'WorkerMetricsPort', which proves the port is wired.
-            withUpstream $ \url -> do
-                (metricsPort, readResults) <- recordingWorkerMetricsPort
-                withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    readResults >>= (`shouldBe` [Published])
-
-        it "records a Failed result for a tampered job, through the port" $
-            withUpstream $ \url -> do
-                (metricsPort, readResults) <- recordingWorkerMetricsPort
-                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) metricsPort (Right ()) $ \runtime queue _logRef -> do
-                    enqueue_ queue (jobWith url)
-                    messages <- receive_ queue
-                    runWM runtime (processBatch messages)
-                    readResults >>= (`shouldBe` [Failed])
 
 -- An admission verdict no rule could decide, with the given transience.
 undecided :: Transience -> Text -> ArtifactAdmission

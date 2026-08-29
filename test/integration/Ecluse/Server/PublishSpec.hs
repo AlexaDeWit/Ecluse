@@ -61,7 +61,7 @@ publishDepsAt :: Int -> Maybe Secret -> ByteAdmission -> PublishDeps
 publishDepsAt targetPort staticToken bodyBudget =
     PublishDeps
         { pubTargetUrl = "http://127.0.0.1:" <> show targetPort
-        , pubScopes = [mkScope "acme"]
+        , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = staticToken
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits

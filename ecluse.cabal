@@ -190,6 +190,7 @@ library ecluse-core
       Ecluse.Core.Worker.Job
       Ecluse.Core.Worker.Liveness
       Ecluse.Core.Worker.Loop
+      Ecluse.Core.Worker.Realise
       Ecluse.Core.Worker.Types
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
@@ -685,6 +686,7 @@ test-suite ecluse-core-unit
     Ecluse.Worker.JobSpec
     Ecluse.Worker.LivenessSpec
     Ecluse.Worker.LoopSpec
+    Ecluse.Worker.RealiseSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime

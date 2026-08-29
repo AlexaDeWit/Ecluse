@@ -37,7 +37,6 @@ module Ecluse.Core.Registry.Npm.Metadata (
     fetchNpmManifest,
 
     -- * npm single-version fetch
-    fetchNpmVersion,
 
     -- * Pure projection
     projectNpmManifest,
@@ -75,15 +74,13 @@ import Ecluse.Core.Registry.Npm.Project (
     projectName,
     projectVersionEntry,
  )
-import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Full),
-    noValidators,
- )
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
 import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svName, svTime, svVersion, svVersionCount),
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
     selectVersionFromPackument,
  )
+import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested, TooManyVersions),
     Limits,
@@ -157,7 +154,7 @@ projectNpmManifest limits name body = do
     boundedInfo <- first MetadataBoundExceeded (checkVersionCount limits info)
     pure (boundedInfo, bounded)
 
-{- | Fetch a package's full packument and project __only the requested version__ into its
+{- Fetch a package's full packument and project __only the requested version__ into its
 'PackageDetails'.
 
 npm carries the @time@ map only in the full document, so this still fetches the full bytes.

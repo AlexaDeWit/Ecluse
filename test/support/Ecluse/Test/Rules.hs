@@ -38,6 +38,7 @@ module Ecluse.Test.Rules (
     filterPlan,
 ) where
 
+import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Package (
     CodeExecSignal (RunsCodeOnInstall),
     PackageDetails (pkgInstallCode),
@@ -49,7 +50,6 @@ import Ecluse.Core.Rules (
     PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience),
     RuleDeps (..),
     evalRules,
-    noBreakerReporter,
     prepare,
  )
 import Ecluse.Core.Rules.Types (

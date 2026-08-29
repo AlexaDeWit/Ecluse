@@ -44,9 +44,6 @@ module Ecluse.Runtime.Telemetry.Instruments (
 
     -- * Serve decision
     recordServeDecision,
-    recordServeAdmissionInFlight,
-    recordServeAdmissionQueued,
-    recordMergeDivergence,
 
     -- * Rule gate
     recordRuleDenial,
@@ -65,8 +62,6 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * Mirror
     recordMirrorEnqueued,
     recordMirrorEnqueueFailure,
-    recordPublicRelayAnomaly,
-    recordRequestPerimeterFault,
     recordMirrorJobProcessed,
     recordMirrorPublishDuration,
 
@@ -322,17 +317,17 @@ recordServeDecision :: (MonadIO m) => Metrics -> Decision -> m ()
 recordServeDecision m decision =
     addOne (mServeDecision m) [LDecision decision]
 
--- | Record a change in in-flight metadata parses (@ecluse.serve.admission.in_flight@).
+-- Record a change in in-flight metadata parses (@ecluse.serve.admission.in_flight@).
 recordServeAdmissionInFlight :: (MonadIO m) => Metrics -> Int -> m ()
 recordServeAdmissionInFlight m delta =
     addDelta (mServeAdmissionInFlight m) (fromIntegral delta) []
 
--- | Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+-- Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
 recordServeAdmissionQueued :: (MonadIO m) => Metrics -> m ()
 recordServeAdmissionQueued m =
     addOne (mServeAdmissionQueued m) []
 
-{- | Record one cross-upstream integrity divergence (@ecluse.registry.merge.divergence@),
+{- Record one cross-upstream integrity divergence (@ecluse.registry.merge.divergence@),
 incremented once per contradicting version. Label-free: the package, version, and digest
 bodies live on the @WARNING@ log line, never a metric label (the bounded-label discipline).
 -}
@@ -413,11 +408,11 @@ recordMirrorEnqueued m = addOne (mMirrorEnqueued m) []
 recordMirrorEnqueueFailure :: (MonadIO m) => Metrics -> m ()
 recordMirrorEnqueueFailure m = addOne (mMirrorEnqueueFailures m) []
 
--- | Record one perimeter-answered handler escape (@ecluse.serve.perimeter.faults@) by cause.
+-- Record one perimeter-answered handler escape (@ecluse.serve.perimeter.faults@) by cause.
 recordRequestPerimeterFault :: (MonadIO m) => Metrics -> RequestFaultCause -> m ()
 recordRequestPerimeterFault m cause = addOne (mServePerimeterFaults m) [LPerimeterCause cause]
 
--- | Record one anomalous public relay (@ecluse.serve.relay.anomalies@) by class.
+-- Record one anomalous public relay (@ecluse.serve.relay.anomalies@) by class.
 recordPublicRelayAnomaly :: (MonadIO m) => Metrics -> RelayAnomaly -> m ()
 recordPublicRelayAnomaly m cls = addOne (mServeRelayAnomalies m) [LRelayAnomaly cls]
 

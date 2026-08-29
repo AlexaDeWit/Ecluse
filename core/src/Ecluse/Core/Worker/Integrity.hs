@@ -20,8 +20,8 @@ module Ecluse.Core.Worker.Integrity (
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Text qualified as T
 
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SRI), computeDigest)
-import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest, sriBody, sriPrefix)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SRI), computeDigest, sriBody, sriPrefix)
+import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 
 {- | The result of verifying fetched bytes against the admitted integrity digests. A mismatch
 carries the detail an operator needs to explain why the worker refused a publish.

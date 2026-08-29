@@ -16,7 +16,7 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (methodHead, status200, status304, status404, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (ResponseHeaders, Status, methodHead, status200, status304, status404, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (hContentType, hETag)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -24,7 +24,7 @@ import Test.Hspec
 import UnliftIO (concurrently)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), probeUpstreamWhen, pumpBody, streamUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), pumpBody, withUpstreamWhen)
 
 waiRelayResponder :: (Response -> IO ResponseReceived) -> RelayResponder ResponseReceived
 waiRelayResponder respond =
@@ -116,7 +116,7 @@ spec = do
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 0
 
-    describe "streamUpstreamWhen -- large body, end to end over an in-process upstream" $
+    describe "withUpstreamWhen -- large body, end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
             -- A 4 MiB body must arrive intact through the full http-client wiring. The pump case
             -- above is the proof that this path never buffers the body whole.
@@ -128,7 +128,7 @@ spec = do
                     resp <- httpLbs req manager
                     toStrict (responseBody resp) `shouldBe` bigBody
 
-    describe "streamUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
+    describe "withUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
             -- The client verifies dist.integrity over the relayed bytes and headers, so the relay
             -- must forward the upstream's content headers along with the body.
@@ -174,7 +174,7 @@ spec = do
                     (snd <$> find ((== hETag) . fst) (HTTP.responseHeaders resp))
                         `shouldBe` Just "\"v1\""
 
-    describe "probeUpstreamWhen -- bodiless relay (HEAD, no pump)" $ do
+    describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $ do
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
             -- never trigger.
@@ -234,9 +234,9 @@ spec = do
     notModifiedProxy :: HTTP.Manager -> Int -> Application
     notModifiedProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (curry pure) (waiRelayResponder respond)
+        outcome <- withUpstreamWhen manager upReq StreamBody (\s -> statusIsSuccessful s || isNotModified s) relayVerbatim (waiRelayResponder respond)
         case outcome of
-            Just received -> pure received
+            Just (_, received) -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
     {- An upstream that answers a content header with no body, as a HEAD reply does. -}
@@ -249,9 +249,9 @@ spec = do
     probeProxy :: HTTP.Manager -> Int -> Application
     probeProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (curry pure) (waiRelayResponder respond)
+        outcome <- withUpstreamWhen manager upReq{HTTP.method = methodHead} NoBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
         case outcome of
-            Just received -> pure received
+            Just (_, received) -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
     {- The proxy under test: a hit is observable as the upstream body, a miss (rejected status,
@@ -259,10 +259,15 @@ spec = do
     conditionalProxy :: HTTP.Manager -> Int -> Application
     conditionalProxy manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
-        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (curry pure) (waiRelayResponder respond)
+        outcome <- withUpstreamWhen manager upReq StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
         case outcome of
-            Just received -> pure received
+            Just (_, received) -> pure received
             Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+
+    -- The pre-commit relay these proxies run: forward the upstream status and headers, with
+    -- no verdict of their own to carry back.
+    relayVerbatim :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())
+    relayVerbatim status headers = pure (status, headers, ())
 
     -- The body a proxy answers on a conditional-relay miss (no upstream relay
     -- occurred), distinct from any upstream body so a miss is unambiguous.

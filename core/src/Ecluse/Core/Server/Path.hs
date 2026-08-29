@@ -19,7 +19,9 @@ defence is ecosystem-independent, so it lives here. Every router applies it
 -}
 module Ecluse.Core.Server.Path (
     -- * The artifact name
-    Filename (..),
+    Filename,
+    mkFilename,
+    unFilename,
 
     -- * Component safety
     isSafeComponent,
@@ -30,12 +32,24 @@ import Data.Char (isControl)
 import Data.Text qualified as T
 import Network.HTTP.Types.URI (urlEncode)
 
-{- | An artifact's on-the-wire file name, kept verbatim and safe to interpolate: the router has
-already applied 'isSafeComponent'. It is a distinct type because it is authoritative for fetching
-the bytes. The upstream path uses this exact name, never one rebuilt from @(package, version)@.
+{- | An artifact's on-the-wire file name, kept verbatim and safe to interpolate: it cleared
+'isSafeComponent' at construction. The type is authoritative for fetching the bytes, because the
+upstream path uses this exact name, never one rebuilt from @(package, version)@.
 -}
 newtype Filename = Filename Text
     deriving stock (Eq, Show)
+
+{- | Read a filename from untrusted text, 'Nothing' when it is not a safe path component. Every
+boundary that admits one (a route capture, a queue payload) parses through this single gate.
+-}
+mkFilename :: Text -> Maybe Filename
+mkFilename raw
+    | isSafeComponent raw = Just (Filename raw)
+    | otherwise = Nothing
+
+-- | The verbatim name, for interpolation into an upstream URL through 'encodeComponent'.
+unFilename :: Filename -> Text
+unFilename (Filename name) = name
 
 {- | Whether one decoded path component is safe to interpolate into an upstream URL: the
 deny-by-default gate a classifier applies to every scope, base name, and tarball filename. The

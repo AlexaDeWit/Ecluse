@@ -121,7 +121,6 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
-import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -156,7 +155,6 @@ import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
-    RetryAfter (RetryAfter),
     ServeDecision (Admit, Reject),
     Transience (WillResolve),
     appendHelp,
@@ -247,14 +245,15 @@ serveWithDeps ::
     Handler ResponseReceived
 serveWithDeps mode replies deps clientToken name request respond
     | not (edgeTokenMatches (pdInboundToken deps) clientToken) =
-        liftIO (respond (packumentUnauthorised replies [] "authentication required"))
+        liftIO (respond (packumentUnauthorised replies [] unauthorisedMessage))
     | otherwise = do
         rt <- asks ctxRuntime
-        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmittedPackument mode replies deps clientToken name request respond rt) >>= \case
-            Just received -> pure received
-            Nothing -> liftIO $ do
-                mpServeDecision (srMetrics rt) Metric.Unavailable
-                respond (packumentUnavailable replies [shedRetryAfter] "server is busy; retry later")
+        withAdmissionOrShed
+            (srMetrics rt)
+            (srAdmission rt)
+            (liftIO (respond (packumentUnavailable replies [shedRetryAfter] shedMessage)))
+            (serveAdmittedPackument mode replies deps clientToken name request respond rt)
+            pure
 
 {- Serve a packument past the admission gate: fetch both origins concurrently, then gate,
 merge, and either answer the conditional serve or take the no-survivors terminal. Its
@@ -521,7 +520,7 @@ noSurvivors :: PackumentReplies response -> PackumentDeps -> [ServeDecision] -> 
 noSurvivors replies deps decisions = case status of
     PackumentOk -> packumentInternal replies [] body
     PackumentForbidden -> packumentForbidden replies [] body
-    PackumentUnavailable{} -> packumentUnavailable replies (retryAfterHeader status) body
+    PackumentUnavailable retry -> packumentUnavailable replies (retryAfterHeaders retry) body
     PackumentBadGateway -> packumentBadGateway replies [] body
     PackumentServerError -> packumentInternal replies [] body
   where
@@ -541,10 +540,3 @@ noSurvivors replies deps decisions = case status of
     rejectionText = \case
         Admit -> Nothing
         Reject rej -> Just (rejectionMessage rej)
-
--- The @Retry-After@ header for a transient no-survivors status that suggested a delay.
--- Nothing for the other statuses.
-retryAfterHeader :: PackumentStatus -> ResponseHeaders
-retryAfterHeader = \case
-    PackumentUnavailable (Just (RetryAfter secs)) -> [("Retry-After", show secs)]
-    _ -> []

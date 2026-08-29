@@ -91,8 +91,6 @@ module Ecluse.Rts (
     -- * Cgroup v2 parsing
     parseCpuMax,
     parseMemoryMax,
-    parseCgroupSelfPath,
-    ancestorPaths,
 ) where
 
 import Data.Text qualified as T
@@ -537,14 +535,14 @@ readCgroupLimits = do
     readIfExists path =
         rightToMaybe <$> tryJust (guard . isDoesNotExistError) (decodeUtf8 <$> readFileBS path)
 
-{- | The process's cgroup-v2 path from a @\/proc\/self\/cgroup@ body: the @0::@ line's path
+{- The process's cgroup-v2 path from a @\/proc\/self\/cgroup@ body: the @0::@ line's path
 (@"0::\/a\/b"@ yields @"\/a\/b"@). 'Nothing' on a pure cgroup-v1 host.
 -}
 parseCgroupSelfPath :: Text -> Maybe Text
 parseCgroupSelfPath body =
     listToMaybe (mapMaybe (T.stripPrefix "0::") (lines (T.strip body)))
 
-{- | A cgroup path and its ancestors, leaf first, ending at the root (the empty suffix).
+{- A cgroup path and its ancestors, leaf first, ending at the root (the empty suffix).
 @"\/a\/b"@ yields @["\/a\/b", "\/a", ""]@, and @"\/"@ yields just @[""]@.
 -}
 ancestorPaths :: Text -> [Text]

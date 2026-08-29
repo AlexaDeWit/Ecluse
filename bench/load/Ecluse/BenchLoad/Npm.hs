@@ -150,7 +150,7 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpWeight), corpusPackages, cpName, permissiveAgeRules)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeHash, validSha1, validSha512Sri)
+import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (inertRuleDeps)
@@ -514,7 +514,7 @@ mirrorJob url =
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = loopbackRegistryUrl url
-        , jobArtifactFilename = packageText <> "-1.0.0.tgz"
+        , jobArtifactFilename = unsafeFilename (packageText <> "-1.0.0.tgz")
         , jobTraceContext = Nothing
         }
 
