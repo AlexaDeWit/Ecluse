@@ -68,9 +68,8 @@ runPilot bootEnv = do
             (liftIO $ runWarp cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfig bootEnv))
 
-{- | Run the loop 'exportLoopPlan' names. Every fault inside it is transient, because a cycle
-has no wiring fault to fail up on.
--}
+-- Run the loop 'exportLoopPlan' names. Every fault inside it is transient, because a cycle
+-- has no wiring fault to fail up on.
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> Config -> m ()
 runExportLoop telemetry s3Endpoint config = case exportLoopPlan advisories of
     ExportIdle -> do
@@ -89,9 +88,8 @@ runExportLoop telemetry s3Endpoint config = case exportLoopPlan advisories of
     cadence = exportCadenceMicros advisories
     schedule = BackoffSchedule{bsBaseMicros = cadence, bsCapMicros = cadence}
 
-{- | One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
-@npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
--}
+-- One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
+-- @npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
 exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
 exportEcosystem metrics eco telemetry s3Endpoint advisories store = do
     logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
