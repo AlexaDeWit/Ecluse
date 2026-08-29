@@ -8,7 +8,8 @@ One file holds both what Écluse defends against and what it leaves to you: an [
 Dragon](https://owasp.org/www-project-threat-dragon/) model,
 [`threat-modelling/ecluse.json`](https://github.com/AlexaDeWit/Ecluse/blob/main/threat-modelling/ecluse.json).
 The site build generates the register below from that file on every deploy, so the register
-and the model cannot drift. The model also records the canonical deployment posture, the
+and the model cannot drift. Each number is a lifetime identifier from the model, not a row
+count, so the sequence keeps its gaps. The model also records the canonical deployment posture, the
 trust assumptions it rests on, and the operator responsibilities it places out of scope,
 such as edge access control and storage-layer scanning.
 
