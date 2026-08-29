@@ -30,6 +30,8 @@ import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), Respo
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCanonicaliseName, publishDeclaredNames, publishRelay))
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
@@ -99,15 +101,25 @@ publishWithDeps replies deps clientToken name request respond
                 Left _ -> pure (publishTooLarge replies deps)
                 -- The body-name agreement leg of the anti-shadowing guard. A crafted body could
                 -- otherwise write a name the guard never saw. Refuse before the relay.
-                Right body -> case bodyNameDisagreement (pubDeclaredNames deps) (pubCanonicaliseName deps) name (LBS.fromStrict body) of
+                Right body -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (publishCanonicaliseName (pubAdapter deps)) name (LBS.fromStrict body) of
                     Just declared -> pure (bodyNameMismatch replies deps name declared)
                     -- The relay reports failures as the typed 'FetchFault' value, so the
                     -- render below is total and nothing is caught here.
                     Nothing ->
                         renderRelay replies deps
-                            <$> liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name body)
+                            <$> liftIO (publishRelay (pubAdapter deps) (publicationTarget rt) name body)
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
+    -- The publication target as one origin. The posture is passthrough: the publisher's own
+    -- token rides, and the static fallback applies only when the client presented none.
+    publicationTarget rt =
+        OriginClient
+            { ocBaseUrl = pubTargetUrl deps
+            , ocManager = srPrivateManager rt
+            , ocToken = clientToken <|> pubStaticToken deps
+            , ocLimits = pubLimits deps
+            }
+
     -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
     -- 'maxBodyBytes', so the response budget's other 'Limits' fields do not matter here.
     requestBodyLimits = (pubLimits deps){maxBodyBytes = pubMaxRequestBytes deps}

@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
 import Ecluse.Test.Stub (Stub, headerValue, lastCaptured, stubBaseUrl, withStub)
@@ -76,7 +77,7 @@ spec = do
                             , ptMintToken = pure Nothing
                             , ptLimits = defaultLimits{maxBodyBytes = 16}
                             }
-                    publish = newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
                 outcome <- mpProbeMetadata publish isOdd
                 outcome `shouldSatisfy` isBoundExceededFetch
 
@@ -91,7 +92,7 @@ spec = do
                             , ptMintToken = pure Nothing
                             , ptLimits = defaultLimits{maxBodyBytes = 16}
                             }
-                    publish = newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
                 outcome <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
                 outcome `shouldSatisfy` isBoundExceededPublish
 
@@ -122,14 +123,14 @@ mintCountingPublish stub = do
             atomicModifyIORef' mints (\n -> (n + 1, ()))
             pure (Just (mkSecret "minted-token"))
         transport = MirrorTransport{ptManager = manager, ptMintToken = mint, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport (stubBaseUrl stub) npmPublishCodec, mints)
+    pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec, mints)
 
 -- The anonymous marriage against an arbitrary target URL.
 publishAt :: Text -> IO MirrorPublish
 publishAt targetUrl = do
     manager <- Client.newManager Client.defaultManagerSettings
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport targetUrl npmPublishCodec)
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
 isUrlUnformableFetch :: Either FetchFault a -> Bool
 isUrlUnformableFetch = \case

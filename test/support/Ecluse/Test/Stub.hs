@@ -31,8 +31,9 @@ import Network.Wai (
  )
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
+import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Wai (localhost)
 
 {- | What the stub captured from one request it served: enough to assert the method,
@@ -101,16 +102,18 @@ withStubHeaders status extraHeaders body action = do
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
 
--- | A config pointed at a stub, anonymous, sharing a no-TLS manager.
-stubConfig :: Stub -> IO NpmClientConfig
-stubConfig stub = do
+{- | An origin pointed at a stub, anonymous, sharing a no-TLS manager. The caller supplies the
+egress former: a stub speaks plain HTTP, and only a @dev-http-egress@ build can witness one.
+-}
+stubConfig :: (Text -> RegistryUrl) -> Stub -> IO OriginClient
+stubConfig egressUrl stub = do
     manager <- newManager defaultManagerSettings
     pure
-        NpmClientConfig
-            { npmBaseUrl = stubBaseUrl stub
-            , npmManager = manager
-            , npmToken = Nothing
-            , npmLimits = defaultLimits
+        OriginClient
+            { ocBaseUrl = egressUrl (stubBaseUrl stub)
+            , ocManager = manager
+            , ocToken = Nothing
+            , ocLimits = defaultLimits
             }
 
 -- | Look up a header (case-insensitively) in a captured request.

@@ -38,7 +38,6 @@ mis-enforced or half-wired state (see
 module Ecluse.Composition (
     -- * Boot-time wiring
     planMounts,
-    composeBindings,
     validateComposition,
 
     -- * Publish-side wiring
@@ -79,28 +78,28 @@ import Ecluse.Core.Registry.Adapter (
     adapterFor,
     adapterMetadata,
     adapterPublish,
-    artifactByFile,
-    artifactByUrl,
     artifactHosts,
-    metadataAssemble,
-    metadataNewClient,
-    metadataSerialise,
-    publishCanonicaliseName,
-    publishDeclaredNames,
-    publishRelay,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
-{- | The composition root's single entry to the served mount bindings, or every boot error
-at once. The caller injects every capability, so this opens no socket.
+{- | The publish-side byte discipline: the process-wide aggregate admission and the
+per-request cap. It exists exactly when a publication target is configured.
+-}
+data PublishBudget = PublishBudget
+    { pbBodyBudget :: ByteAdmission
+    , pbMaxRequestBytes :: Int
+    }
+
+{- | Turn a validated 'Config' into the served 'MountBinding's, or every boot error at once. The
+caller injects every capability, so this opens no socket, and the 'Limits' arrive resolved.
 -}
 planMounts ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
@@ -111,29 +110,7 @@ planMounts ::
     Maybe PublishBudget ->
     Config ->
     IO (Either [BootError] [MountBinding])
-planMounts = composeBindings
-
-{- | The publish-side byte discipline: the process-wide aggregate admission and the
-per-request cap. It exists exactly when a publication target is configured.
--}
-data PublishBudget = PublishBudget
-    { pbBodyBudget :: ByteAdmission
-    , pbMaxRequestBytes :: Int
-    }
-
-{- | Turn a validated 'Config' into the served 'MountBinding's, or the boot errors aggregated
-across every mount. The 'Limits' arrive resolved, so every metadata read is bounded.
--}
-composeBindings ::
-    (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
-    IO UTCTime ->
-    (Ecosystem -> RuleDeps) ->
-    CredentialProviders ->
-    Limits ->
-    Maybe PublishBudget ->
-    Config ->
-    IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
+planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
     -- 'Ecluse.Composition.Plan.resolveBootPlan' runs 'validateComposition' first on both
     -- entry points. This call keeps the structural errors in reach of a caller without a plan.
     let structuralErrs = validateComposition config
@@ -171,8 +148,8 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
       where
         eco = mountEcosystem mount
 
-    {- The ecosystem-shaped fields carry over the adapter's capabilities unchanged, and
-    the rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
+    {- The ecosystem-shaped fields are the adapter's own records, carried whole, and the
+    rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
     packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
     packumentDepsFor adapter mount mcfg = do
         -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
@@ -187,9 +164,9 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
                   pdUpstreams =
                     mountUpstreams
                         (artifactHosts (adapterArtifact adapter))
-                        (registryUrlText <$> regPrivateUpstream regs)
-                        (registryUrlText (regPublicUpstream regs))
-                        (maybe NoMirrorWrite (MirrorOnAdmit . registryUrlText . mtUrl) (regMirrorTarget regs))
+                        (regPrivateUpstream regs)
+                        (regPublicUpstream regs)
+                        (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
                 , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
                 , pdRules = prepared
                 , -- The operator-configured ranges extending the fixed internal-range block
@@ -212,11 +189,8 @@ composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget 
                 , -- The cross-upstream divergence policy: the global default
                   -- (warn), refined per mount for the same reason.
                   pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (mntDivergencePolicy mcfg)
-                , pdNewMetadataClient = metadataNewClient (adapterMetadata adapter)
-                , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
-                , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
-                , pdAssemble = metadataAssemble (adapterMetadata adapter)
-                , pdSerialise = metadataSerialise (adapterMetadata adapter)
+                , pdMetadata = adapterMetadata adapter
+                , pdArtifact = adapterArtifact adapter
                 , pdEgressUrl = mkRegistryUrl
                 }
 
@@ -242,7 +216,7 @@ mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
 {- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig'. It
-leaves provider initialisation ('UnresolvedCredential') to 'composeBindings'.
+leaves provider initialisation ('UnresolvedCredential') to 'planMounts'.
 -}
 validateComposition :: Config -> [BootError]
 validateComposition config = missingAdapters <> publishPolicyErrors
@@ -268,7 +242,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
     allow <- mntPublishAllow mcfg
     pure
         PublishDeps
-            { pubTargetUrl = registryUrlText url
+            { pubTargetUrl = url
             , pubAllowed = publishAllowedName allow
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
@@ -276,9 +250,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
             , pubBodyBudget = pbBodyBudget budget
             , pubMaxRequestBytes = pbMaxRequestBytes budget
             , pubHelp = helpMessage
-            , pubRelayPublish = publishRelay (adapterPublish adapter)
-            , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
-            , pubDeclaredNames = publishDeclaredNames (adapterPublish adapter)
+            , pubAdapter = adapterPublish adapter
             }
   where
     inboundToken :: Maybe Secret
@@ -306,26 +278,20 @@ artifacts to, and the provider that mints its bearer token. Resolved once, not p
 data PublishTarget = PublishTarget
     { ptEcosystem :: Ecosystem
     -- ^ The ecosystem this publish target serves.
-    , ptMirrorUrl :: Text
+    , ptMirrorUrl :: RegistryUrl
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptCredentials :: CredentialProvider
     -- ^ The provider minting the mirror-target write token.
     }
 
 {- | Resolve each configured mount to its publish target, or the aggregated boot errors. An
-unresolved credential raises the same error 'composeBindings' reports for the serve side.
+unresolved credential raises the same error 'planMounts' reports for the serve side.
 -}
 planPublishTargets ::
     CredentialProviders ->
     Config ->
     Either [BootError] [PublishTarget]
-planPublishTargets = composePublishTargets
-
-composePublishTargets ::
-    CredentialProviders ->
-    Config ->
-    Either [BootError] [PublishTarget]
-composePublishTargets providers config =
+planPublishTargets providers config =
     case partitionEithers (mapMaybe (publishTargetFor providers) (Map.elems (configMounts config))) of
         ([], targets) -> Right targets
         (errs, _) -> Left (concat errs)
@@ -340,7 +306,7 @@ publishTargetFor providers mount = do
             Right
                 PublishTarget
                     { ptEcosystem = mountEcosystem mount
-                    , ptMirrorUrl = registryUrlText (mtUrl target)
+                    , ptMirrorUrl = mtUrl target
                     , ptCredentials = provider
                     }
         Nothing ->

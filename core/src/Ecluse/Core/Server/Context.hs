@@ -61,7 +61,7 @@ import Data.IP (IPRange)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (Method)
 import Network.Wai (ResponseReceived)
 import Network.Wai qualified as Wai
@@ -69,13 +69,11 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
-import Ecluse.Core.Package (InvalidEntry, PackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (DivergencePolicy, MergePlan, SourceId)
+import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry (FetchFault, PublishRelayResponse, UrlFormationError)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish)
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
@@ -84,7 +82,6 @@ import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
-import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (HelpMessage)
 import Ecluse.Core.Server.Upstream (
     MirrorServePlan,
@@ -94,7 +91,6 @@ import Ecluse.Core.Server.Upstream (
     upstreamPublicBaseUrl,
     upstreamTarballHostGate,
  )
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
@@ -198,38 +194,13 @@ data PackumentDeps = PackumentDeps
     fires regardless. This only decides whether the contested version is additionally
     withheld from the served listing ('Ecluse.Core.Package.Merge.FailClosed').
     -}
-    , pdNewMetadataClient ::
-        TracingPort ->
-        MetricsPort ->
-        Metric.Upstream ->
-        ManifestCaching ->
-        (PackageName -> MetadataError -> IO ()) ->
-        (PackageName -> [InvalidEntry] -> IO ()) ->
-        (PackageName -> IO ()) ->
-        Limits ->
-        Manager ->
-        Text ->
-        Maybe Secret ->
-        MetadataClient
-    {- ^ Build a per-request metadata client for one origin. The composition root closes over
-    the ecosystem's raw fetch primitives, and the pipeline supplies the runtime parameters.
+    , pdMetadata :: AdapterMetadata
+    {- ^ The mount ecosystem's metadata capability, carried whole
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterMetadata'), never copied field by field.
     -}
-    , pdBuildArtifactRequestByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request by conventional filename path for the private
-    (trusted) leg.
-    -}
-    , pdBuildArtifactRequestByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    -- ^ Build an artifact request by authoritative URL for the public leg.
-    , pdAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
-    {- ^ Assemble the served document ('CachedDoc') from a merge plan and the raw source
-    documents, rebuilding the plan-owned keys from the winning sources onto the
-    precedence-winning base ('Nothing' when there is none). It rewrites each surviving
-    version's artifact URL under the given mount base in the same pass.
-    -}
-    , pdSerialise :: CachedDoc -> LByteString
-    {- ^ Encode an assembled served document ('CachedDoc') to its wire bytes, through the
-    adapter's own representation. The serve tail therefore materialises the served body
-    without reading the document.
+    , pdArtifact :: AdapterArtifact
+    {- ^ The mount ecosystem's artifact request formation, carried whole
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterArtifact'), never copied field by field.
     -}
     , pdEgressUrl :: Text -> Either Text RegistryUrl
     {- ^ Form the validated egress witness for an artifact URL about to leave the process on a
@@ -248,11 +219,11 @@ A plain function over 'pdUpstreams', not a record field, so a caller cannot repl
 while the tarball-host gate beside it keeps the old authorities. The same holds for
 'pdPublicBaseUrl' and 'pdMirror'.
 -}
-pdPrivateBaseUrl :: PackumentDeps -> Maybe Text
+pdPrivateBaseUrl :: PackumentDeps -> Maybe RegistryUrl
 pdPrivateBaseUrl = upstreamPrivateBaseUrl . pdUpstreams
 
 -- | The public upstream base URL. Reads are anonymous, with no client credential.
-pdPublicBaseUrl :: PackumentDeps -> Text
+pdPublicBaseUrl :: PackumentDeps -> RegistryUrl
 pdPublicBaseUrl = upstreamPublicBaseUrl . pdUpstreams
 
 {- | Whether an admitted public artifact is enqueued for the demand-driven mirror, and
@@ -308,9 +279,9 @@ publication target, and 'pubStaticToken' is only a fallback for a client that se
 'Ecluse.Core.Credential.CredentialProvider' (see @docs\/architecture\/registry-model.md@).
 -}
 data PublishDeps = PublishDeps
-    { pubTargetUrl :: Text
+    { pubTargetUrl :: RegistryUrl
     {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
-    @npm publish@ is relayed to. The package path is appended to it.
+    @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
     {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
@@ -339,16 +310,9 @@ data PublishDeps = PublishDeps
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
-    , pubRelayPublish :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
-    -- ^ Relay a publish document to the publication target, returning its response.
-    , pubCanonicaliseName :: Text -> Maybe PackageName
-    {- ^ Canonicalise a raw package-name string to a 'PackageName', or 'Nothing' if
-    it cannot be parsed. Used by the body-name agreement guard.
-    -}
-    , pubDeclaredNames :: LByteString -> [Text]
-    {- ^ Every package name a publish body declares as its own identity, the ecosystem's reading
-    of its publish-document schema ('Ecluse.Core.Registry.Adapter.Types.publishDeclaredNames').
-    The body-name guard refuses a name that disagrees with the URL path. @[]@ means none readable.
+    , pubAdapter :: AdapterPublish
+    {- ^ The mount ecosystem's publish capability, carried whole
+    ('Ecluse.Core.Registry.Adapter.Capability.AdapterPublish'), never copied field by field.
     -}
     }
 

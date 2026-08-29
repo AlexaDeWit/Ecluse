@@ -36,6 +36,9 @@ module Ecluse.Core.Server.Pipeline.Origin (
     fetchPrivateOrigin,
     fetchPublicOrigin,
     withPublicMetadataClient,
+
+    -- * One origin's coordinates
+    mountOrigin,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -47,6 +50,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Merge (Provenance)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -54,7 +58,8 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataNameMismatch),
  )
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     Handler,
@@ -142,9 +147,10 @@ fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
+        let origin = mountOrigin deps (srPrivateManager rt) privateBase token
         resolved <-
             tryAny $
-                withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) privateBase token $ \client ->
+                withMetadataClient rt deps Metric.Private Uncached origin $ \client ->
                     fetchFullManifest client name
         pure (originResultOf resolved)
 
@@ -169,17 +175,14 @@ withMetadataClient ::
     PackumentDeps ->
     Metric.Upstream ->
     ManifestCaching ->
-    Limits ->
-    Manager ->
-    Text ->
-    Maybe Secret ->
+    OriginClient ->
     (MetadataClient -> IO a) ->
     Handler a
-withMetadataClient rt deps upstream caching limits manager baseUrl token k =
+withMetadataClient rt deps upstream caching origin k =
     withRunInIO $ \runInIO ->
         k $
-            pdNewMetadataClient
-                deps
+            metadataNewClient
+                (pdMetadata deps)
                 (srTracing rt)
                 (srMetrics rt)
                 upstream
@@ -187,15 +190,24 @@ withMetadataClient rt deps upstream caching limits manager baseUrl token k =
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
-                limits
-                manager
-                baseUrl
-                token
+                origin
+  where
+    -- The log lines name the origin, and a diagnostic reads characters, not a witness.
+    baseUrl = registryUrlText (ocBaseUrl origin)
 
 {- | The public origin's read handle: anonymous, resolved through the shared metadata cache
 under the base URL's 'Source'. Both 'fetchFullManifest' and the tarball gate's
 'fetchVersionMetadata' go through it, so they share one cache entry.
 -}
-withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> Text -> (MetadataClient -> IO a) -> Handler a
+withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> (MetadataClient -> IO a) -> Handler a
 withPublicMetadataClient rt deps baseUrl =
-    withMetadataClient rt deps Metric.Public (Cached (srMetadataCache rt) (Source baseUrl)) (pdLimits deps) (srPublicManager rt) baseUrl Nothing
+    withMetadataClient rt deps Metric.Public caching (mountOrigin deps (srPublicManager rt) baseUrl Nothing)
+  where
+    caching = Cached (srMetadataCache rt) (Source (registryUrlText baseUrl))
+
+{- | One origin's coordinates for this mount: its own response bound, the leg's manager, and
+the credential posture the caller decided. The artifact path forms its request through it too.
+-}
+mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe Secret -> OriginClient
+mountOrigin deps manager baseUrl token =
+    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = pdLimits deps}

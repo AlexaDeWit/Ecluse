@@ -7,7 +7,7 @@ module Ecluse.CompositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (PublishBudget (..), composeBindings, planMounts)
+import Ecluse.Composition (PublishBudget (..), planMounts)
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Support (
@@ -35,6 +35,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -60,7 +61,7 @@ aggregated boot error, and the injected clock and adapter resolver keep this spe
 -}
 spec :: Spec
 spec = do
-    composeBindingsSpec
+    planMountsSpec
     bootErrorSpec
     publishWiringSpec
 
@@ -109,8 +110,8 @@ planFromWith limits envVars mDocBytes = do
                     let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
                     planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
 
-composeBindingsSpec :: Spec
-composeBindingsSpec = describe "planMounts / composeBindings (config-driven serving)" $ do
+planMountsSpec :: Spec
+planMountsSpec = describe "planMounts (config-driven serving)" $ do
     it "produces one npm binding with packument-serve deps wired (served, not a 501 stub)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -119,14 +120,14 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 bindingPrefix binding `shouldBe` ("npm" :| [])
                 do
                     let deps = bindingPackumentDeps binding
-                    pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
-                    pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
+                    fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test"
+                    registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://public.example.test"
                     -- server.publicUrl is required once a mount is active, so the
                     -- mount base is always the absolute URL a real client needs.
                     pdMountBaseUrl deps `shouldBe` "https://registry.example.test/npm"
                     -- The mirror serve plan is wired from the mount's config: an
                     -- admitted public artifact enqueues toward the declared target.
-                    pdMirror deps `shouldBe` MirrorOnAdmit "https://mirror.example.test"
+                    mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
                     -- The binding derives the tarball-host gate from the upstreams the deps carry,
                     -- never from a second reading of the configuration. npm declares no ecosystem
                     -- artifact hosts.
@@ -165,7 +166,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -270,13 +271,6 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 pdDivergencePolicy deps `shouldBe` FailClosed
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do
-        config <- expectConfig staticEnvVars Nothing
-        providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
-            Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
-            Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
-
 bootErrorSpec :: Spec
 bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
     it "fails on an unresolved rule policy (a typo'd rule type)" $ do
@@ -316,8 +310,8 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         planFrom env Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                pdMirror deps `shouldBe` NoMirrorWrite
-                pdPrivateBaseUrl deps `shouldBe` Just "https://private.example.test"
+                mirrorTargetText (pdMirror deps) `shouldBe` Nothing
+                fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test"
             other -> expectationFailure ("expected one serve-only binding, got " <> show (fmap length other))
 
     it "binds a pure public gate from enabled alone (no endpoint keys declared)" $ do
@@ -327,8 +321,8 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 pdPrivateBaseUrl deps `shouldBe` Nothing
-                pdMirror deps `shouldBe` NoMirrorWrite
-                pdPublicBaseUrl deps `shouldBe` "https://registry.npmjs.org"
+                mirrorTargetText (pdMirror deps) `shouldBe` Nothing
+                registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://registry.npmjs.org"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish allow-list" $ do
@@ -387,7 +381,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         planFrom testEnv Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of
                 Just deps -> do
-                    pubTargetUrl deps `shouldBe` "https://publish.example.test"
+                    registryUrlText (pubTargetUrl deps) `shouldBe` "https://publish.example.test"
                     -- The allow-list reaches the mount as npm's own predicate: both
                     -- configured scopes admit, and anything outside them is refused.
                     map (pubAllowed deps) [scopedName "acme", scopedName "beta"] `shouldBe` [True, True]
@@ -408,7 +402,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         _ <- expectEnv testEnv
         planFrom testEnv Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of
-                Just deps -> pubTargetUrl deps `shouldBe` "https://publish.example.test"
+                Just deps -> registryUrlText (pubTargetUrl deps) `shouldBe` "https://publish.example.test"
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 
@@ -421,3 +415,10 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                 Nothing -> pure ()
                 Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
             _ -> expectationFailure "expected a single wired binding"
+
+{- The mirror serve plan's declared target as characters. The wired value carries the
+https-only egress witness, and these assertions read the configured URL back out of it. -}
+mirrorTargetText :: MirrorServePlan -> Maybe Text
+mirrorTargetText = \case
+    MirrorOnAdmit url -> Just (registryUrlText url)
+    NoMirrorWrite -> Nothing

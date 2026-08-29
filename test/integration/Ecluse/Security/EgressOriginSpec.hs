@@ -15,14 +15,11 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
-    fetchMetadataFormBounded,
- )
+import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 
@@ -70,15 +67,15 @@ fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault Registry
 fetchMetadata manager port token =
     fetchMetadataFormBounded (clientConfig manager port token) Abbreviated noValidators thing
 
--- An npm client config pointed at the loopback upstream on @port@. Its base URL comes
--- from the test-only plain-HTTP opt-in, a constructor a release build does not have.
-clientConfig :: Manager -> Port -> Maybe Text -> NpmClientConfig
+-- An origin pointed at the loopback upstream on @port@. Its base URL comes from the
+-- test-only plain-HTTP opt-in, a constructor a release build does not have.
+clientConfig :: Manager -> Port -> Maybe Text -> OriginClient
 clientConfig manager port token =
-    NpmClientConfig
-        { npmBaseUrl = registryUrlText (loopbackRegistryUrl ("http://127.0.0.1:" <> show port))
-        , npmManager = manager
-        , npmToken = mkSecret <$> token
-        , npmLimits = defaultLimits
+    OriginClient
+        { ocBaseUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show port)
+        , ocManager = manager
+        , ocToken = mkSecret <$> token
+        , ocLimits = defaultLimits
         }
 
 -- Run an action against an in-process upstream serving the packument on loopback.

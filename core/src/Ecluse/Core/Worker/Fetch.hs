@@ -12,7 +12,7 @@ module Ecluse.Core.Worker.Fetch (
     fetchArtifactBytes,
 ) where
 
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse (responseBody), UrlFormationError)
@@ -26,16 +26,16 @@ than streamed, because the whole tarball must be in hand to verify it before the
 -}
 fetchArtifactBytes ::
     Limits ->
-    (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) ->
+    (Maybe Secret -> Text -> Either UrlFormationError Request) ->
     RegistryUrl ->
     WorkerM (Either FetchFault ByteString)
 fetchArtifactBytes limits buildRequest url = do
     manager <- asks wrManager
-    -- The job's URL is absolute and the public artifact fetch is anonymous, so the builder needs no
-    -- base and no token.
+    -- The job's URL is absolute and the public artifact fetch is anonymous, so the builder
+    -- names no origin and no token.
     liftIO
         ( formThen
             FetchUrlUnformable
             (fmap (fmap responseBody) . boundedFetch manager limits)
-            (buildRequest limits manager "" Nothing (registryUrlText url))
+            (buildRequest Nothing (registryUrlText url))
         )

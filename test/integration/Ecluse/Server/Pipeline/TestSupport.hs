@@ -565,7 +565,13 @@ deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
     prepared <- prepare inertRuleDeps policy
     pure
-        (npmServeDeps (Just (localhost privatePort)) (localhost publicPort) (MirrorOnAdmit "https://mirror.test") prepared (pure now))
+        ( npmServeDeps
+            (Just (loopbackRegistryUrl (localhost privatePort)))
+            (loopbackRegistryUrl (localhost publicPort))
+            (MirrorOnAdmit (loopbackRegistryUrl "https://mirror.test"))
+            prepared
+            (pure now)
+        )
             { pdInboundToken = mkSecret <$> inbound
             , pdEgressUrl = Right . loopbackRegistryUrl
             }

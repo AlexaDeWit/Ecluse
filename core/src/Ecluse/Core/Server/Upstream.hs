@@ -5,24 +5,10 @@
 {- | A mount's configured upstreams and the tarball-host gate derived from them, held
 together as one __opaque cluster with a private constructor__.
 
-The artifact path checks an honoured @dist.tarball@ location against a
-'Ecluse.Core.Security.TarballHostGate', the mount's SSRF gate. That gate comes from a
-mount's three configured upstream URLs: the private upstream, the public upstream, and
-the mirror target. Building it once per mount keeps the hot artifact path from rebuilding
-a host set and re-parsing those URLs on every request. It also makes the gate a __cached
-projection__. A gate that disagrees with the URLs beside it authorises the wrong
-authorities. It does so silently, because nothing about a stale pair is ill-typed.
-
-'MountUpstreams' prevents that divergence. The URLs and the gate are one value,
-'mountUpstreams' is its only builder, and that builder derives the gate from the URLs it
-stores. No caller can construct a divergent pair, so the per-request gate can trust what
-it reads.
-
-This module exports neither the constructor nor the record selectors. Hiding the
-constructor alone would not be enough. Record-update syntax needs only a selector in
-scope. An exported selector would leave @upstreams{...}@ free to replace a URL and leave
-the gate behind, which is exactly the divergence this type forbids. The exported surface
-is four accessor functions, which read and cannot write.
+The 'Ecluse.Core.Security.TarballHostGate' is built once per mount from the three upstream
+URLs, so the hot artifact path re-parses nothing. A gate that disagreed with those URLs would
+silently authorise the wrong authorities, so 'mountUpstreams' is the only builder and neither
+the constructor nor the selectors are exported: @upstreams{...}@ alone would break the pair.
 -}
 module Ecluse.Core.Server.Upstream (
     -- * Mirror serve plan
@@ -38,6 +24,7 @@ module Ecluse.Core.Server.Upstream (
 ) where
 
 import Ecluse.Core.Security (TarballHostGate, tarballHostGate)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
 {- | Whether an admitted public artifact is enqueued for the demand-driven mirror, and
 where that write lands. The discriminant is an absent capability, not a no-op handle.
@@ -49,7 +36,7 @@ data MirrorServePlan
       endpoint, the mount's declared destination. The worker resolves its publish
       capability from the same configuration.
       -}
-      MirrorOnAdmit Text
+      MirrorOnAdmit RegistryUrl
     | {- | Serve-only: admitted public artifacts stream to the client and are never
       mirrored anywhere. Every artifact stays on the gated public leg.
       -}
@@ -63,8 +50,8 @@ tests and debugging (an assertion's failure message, a fixture comparison). They
 a way around the builder.
 -}
 data MountUpstreams = MountUpstreams
-    { muPrivateBaseUrl :: Maybe Text
-    , muPublicBaseUrl :: Text
+    { muPrivateBaseUrl :: Maybe RegistryUrl
+    , muPublicBaseUrl :: RegistryUrl
     , muMirror :: MirrorServePlan
     , muTarballHostGate :: TarballHostGate
     }
@@ -79,18 +66,25 @@ This builder is the only caller of 'Ecluse.Core.Security.tarballHostGate' outsid
 own specs, so a mount's allowlist and reference authorities have one derivation that no second
 argument list can drift from.
 -}
-mountUpstreams :: [Text] -> Maybe Text -> Text -> MirrorServePlan -> MountUpstreams
+mountUpstreams :: [Text] -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> MountUpstreams
 mountUpstreams ecosystemHostUrls privateBaseUrl publicBaseUrl mirror =
     MountUpstreams
         { muPrivateBaseUrl = privateBaseUrl
         , muPublicBaseUrl = publicBaseUrl
         , muMirror = mirror
-        , muTarballHostGate = tarballHostGate ecosystemHostUrls privateBaseUrl publicBaseUrl (mirrorTargetUrl mirror)
+        , -- The gate reasons over authorities, so it takes the URLs as text. That is the
+          -- one place the egress witness is read for its characters.
+          muTarballHostGate =
+            tarballHostGate
+                ecosystemHostUrls
+                (registryUrlText <$> privateBaseUrl)
+                (registryUrlText publicBaseUrl)
+                (registryUrlText <$> mirrorTargetUrl mirror)
         }
 
 -- The mirror target's URL, or 'Nothing' for a serve-only mount. It is the third
 -- authority that feeds the gate's allowlist.
-mirrorTargetUrl :: MirrorServePlan -> Maybe Text
+mirrorTargetUrl :: MirrorServePlan -> Maybe RegistryUrl
 mirrorTargetUrl = \case
     MirrorOnAdmit url -> Just url
     NoMirrorWrite -> Nothing
@@ -98,11 +92,11 @@ mirrorTargetUrl = \case
 {- | The private upstream base URL. 'Nothing' when the mount has no private upstream, so
 the private leg is structurally absent rather than misconfigured.
 -}
-upstreamPrivateBaseUrl :: MountUpstreams -> Maybe Text
+upstreamPrivateBaseUrl :: MountUpstreams -> Maybe RegistryUrl
 upstreamPrivateBaseUrl = muPrivateBaseUrl
 
 -- | The public upstream base URL.
-upstreamPublicBaseUrl :: MountUpstreams -> Text
+upstreamPublicBaseUrl :: MountUpstreams -> RegistryUrl
 upstreamPublicBaseUrl = muPublicBaseUrl
 
 -- | The mirror serve plan, carrying the mirror-target endpoint when there is one.

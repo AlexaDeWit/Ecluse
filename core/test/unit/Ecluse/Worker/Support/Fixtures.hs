@@ -72,7 +72,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Request)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Credential (Secret)
@@ -86,6 +86,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (ParseError (ParseError), UrlFormationError)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule)
@@ -101,7 +102,7 @@ import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried),
     WorkerPolicies,
-    WorkerPolicy (wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpPublish),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpPublish),
  )
 import Ecluse.Test.Package (
     unsafeFilename,
@@ -301,8 +302,8 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 {- | Override the artifact request formation of every policy in the map, so a refusing builder
 proves which bundle's formation a job rides.
 -}
-withArtifactRequest :: (Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
-withArtifactRequest builder = Map.map (\p -> p{wpBuildArtifactRequest = builder})
+withArtifactRequest :: (Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
+withArtifactRequest builder = Map.map (\p -> p{wpArtifact = (wpArtifact p){artifactByUrl = builder}})
 
 -- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.
 withArtifactCap :: Int -> WorkerPolicies -> WorkerPolicies

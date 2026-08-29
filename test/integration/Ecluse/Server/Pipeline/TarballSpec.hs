@@ -9,6 +9,8 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (pdPublicBaseUrl)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
@@ -65,7 +67,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        let breakPrivate = withPrivateBaseUrl (Just "")
+        let breakPrivate = withPrivateBaseUrl (Just (loopbackRegistryUrl ""))
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -296,7 +298,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The double advertises its dist.tarball on cross.localhost at its own runtime port.
         -- Declare that authority from the public base URL, which carries the real port, not a
         -- placeholder.
-        let crossBase d = T.replace "localhost" "cross.localhost" (pdPublicBaseUrl d)
+        let crossBase d = T.replace "localhost" "cross.localhost" (registryUrlText (pdPublicBaseUrl d))
         withProxyEnvQueueDepsHosts queue privateUp publicUp Nothing (\d -> [crossBase d]) id $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -339,7 +341,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let internalIpPrivate = overPrivateBaseUrl (T.replace "localhost" "127.0.0.1")
+        let internalIpPrivate = overPrivateBaseUrl (loopbackRegistryUrl . T.replace "localhost" "127.0.0.1" . registryUrlText)
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app

@@ -93,7 +93,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 (metricsPort, divergences) <- recordingDivergenceMetricsPort
                 rt <- mkRuntime metricsPort
                 baseDeps <- depsFor publicPort
-                let deps = withPrivateBaseUrl (Just ("http://localhost:" <> show privatePort)) baseDeps
+                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) baseDeps
                 resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 200
                 divergences >>= (`shouldBe` 1)
@@ -184,7 +184,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmission 1
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor 1
-            let privateDeps = withPrivateBaseUrl (Just ("http://localhost:" <> show port)) deps
+            let privateDeps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) deps
             held <-
                 withServeAdmission (srMetrics rt) admission $
                     captureServe
@@ -273,7 +273,13 @@ depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare inertRuleDeps allowPolicy
     pure
-        (npmServeDeps (Just "http://localhost:1") ("http://localhost:" <> show publicPort) (MirrorOnAdmit "http://mirror.test") prepared (pure fixedNow))
+        ( npmServeDeps
+            (Just (loopbackRegistryUrl "http://localhost:1"))
+            (loopbackRegistryUrl ("http://localhost:" <> show publicPort))
+            (MirrorOnAdmit (loopbackRegistryUrl "http://mirror.test"))
+            prepared
+            (pure fixedNow)
+        )
             { pdMountBaseUrl = "http://proxy.test"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }

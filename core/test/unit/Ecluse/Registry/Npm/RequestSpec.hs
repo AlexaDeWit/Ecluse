@@ -166,7 +166,7 @@ artifactSpec = describe "artifact request building" $ do
             `shouldBe` Right "https://reg.test/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
 
     it "artifactRequestByUrl composes npm's bearer attach through the shared builder" $ do
-        case artifactRequestByUrl "https://reg.test" (Just (mkSecret "tok-xyz")) "https://private.reg/files/thing.tgz" of
+        case artifactRequestByUrl (Just (mkSecret "tok-xyz")) "https://private.reg/files/thing.tgz" of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
             Right req ->
                 lookup "Authorization" (Client.requestHeaders req)

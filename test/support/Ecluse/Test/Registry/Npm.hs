@@ -48,8 +48,9 @@ import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Package (HashAlg (SHA1), PackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
+import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
@@ -205,16 +206,16 @@ The default target when no managed backend is configured.
 publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
-{- | An anonymous client config against the public registry at the secure-default response
-bounds. Override 'npmBaseUrl', 'npmToken', or 'npmLimits' for a managed backend.
+{- | An anonymous origin against @baseUrl@ at the secure-default response bounds. The caller
+supplies the base as an egress witness, so one fixture serves the public registry and a stub.
 -}
-defaultNpmConfig :: Manager -> NpmClientConfig
-defaultNpmConfig manager =
-    NpmClientConfig
-        { npmBaseUrl = publicRegistryBaseUrl
-        , npmManager = manager
-        , npmToken = Nothing
-        , npmLimits = defaultLimits
+defaultNpmConfig :: RegistryUrl -> Manager -> OriginClient
+defaultNpmConfig baseUrl manager =
+    OriginClient
+        { ocBaseUrl = baseUrl
+        , ocManager = manager
+        , ocToken = Nothing
+        , ocLimits = defaultLimits
         }
 
 -- | A URL path of arbitrary segments, at the length a router's property explores.

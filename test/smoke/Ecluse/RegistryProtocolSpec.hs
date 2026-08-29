@@ -25,16 +25,15 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (npmLimits, npmManager),
-    fetchMetadataFormBounded,
- )
+import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated, Full))
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
-import Ecluse.Test.Registry.Npm (defaultNpmConfig)
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
 
 {- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm our JSON decoding
 and protocol handling match reality. They depend on uncontrolled external services, so they never
@@ -76,7 +75,8 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
         manager <- newManager tlsManagerSettings
         let isOdd = mkPackageName Npm Nothing "is-odd"
-        outcome <- fetchMetadataFormBounded (defaultNpmConfig manager) Abbreviated noValidators isOdd
+        config <- publicRegistryOrigin manager
+        outcome <- fetchMetadataFormBounded config Abbreviated noValidators isOdd
         case outcome of
             Left _ ->
                 -- The typed channel reports the unreachable-registry case as a value.
@@ -140,8 +140,8 @@ the document, so an accidentally too-tight default surfaces as a failure, not a 
 -}
 admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
 admissibleUnderDefaults manager name = do
-    let config = (defaultNpmConfig manager){npmManager = manager, npmLimits = defaultLimits}
-    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against npmLimits,
+    config <- publicRegistryOrigin manager
+    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits,
     -- reporting any fetch fault (a bound breach included) as a value this smoke helper renders.
     response <-
         fetchMetadataFormBounded config Full noValidators name
@@ -172,3 +172,9 @@ collectDistDigests value =
         [(SHA1, s) | Just (String s) <- [KeyMap.lookup "shasum" dist]]
             <> [(SRI, i) | Just (String i) <- [KeyMap.lookup "integrity" dist]]
     ]
+
+-- The live public registry as an origin at the secure-default bounds. Its URL is https, so
+-- the production former builds the witness and a refusal here is a broken constant.
+publicRegistryOrigin :: Manager -> IO OriginClient
+publicRegistryOrigin manager =
+    either (throwString . toString) (pure . (`defaultNpmConfig` manager)) (mkRegistryUrl publicRegistryBaseUrl)

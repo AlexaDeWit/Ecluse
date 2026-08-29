@@ -18,9 +18,9 @@ anything an operator configures. That keeps three situations distinct:
 constructor. A new ecosystem is therefore additive: it brings its own adapter
 module (npm's is "Ecluse.Core.Registry.Npm.Adapter") and gains an arm here. It
 touches neither another ecosystem's code nor the core engine. Only the composition
-root consumes the adapter. The root resolves it once per activation and projects
-each consuming pipeline's dependency record from its fields. The pipelines never
-import this module.
+root consumes the adapter. The root resolves it once per activation and carries its
+metadata, artifact, and publish records onto each consuming pipeline's dependency
+record whole. The pipelines never import this module.
 -}
 module Ecluse.Core.Registry.Adapter (
     -- * The capability record

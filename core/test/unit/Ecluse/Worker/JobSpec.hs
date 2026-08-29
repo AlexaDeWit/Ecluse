@@ -25,6 +25,7 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch, PublishRejected),
     UrlFormationError (EmptyBaseUrl),
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataFetch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
@@ -35,7 +36,7 @@ import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve,
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
-    WorkerPolicy (wpBuildArtifactRequest, wpPublish),
+    WorkerPolicy (wpArtifact, wpPublish),
     processJob,
  )
 import Ecluse.Core.Worker.Job (outcomeOfAdmission, outcomeOfFetchFault)
@@ -283,7 +284,8 @@ spec = do
             -- refuses outright. The npm job must ride its own ecosystem's builder, so
             -- nothing consults the decoy entry and the publish succeeds.
             withUpstream $ \url -> do
-                let refusing = (npmPolicy presentResolver [admitRule]){wpBuildArtifactRequest = \_ _ _ _ _ -> Left EmptyBaseUrl}
+                let base = npmPolicy presentResolver [admitRule]
+                    refusing = base{wpArtifact = (wpArtifact base){artifactByUrl = \_ _ -> Left EmptyBaseUrl}}
                     policies = Map.insert PyPI refusing (npmPolicies presentResolver [admitRule])
                 withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
@@ -314,7 +316,7 @@ spec = do
         it "drops the job when the job ecosystem's own request formation refuses the URL, without publishing" $
             -- The npm bundle's own builder refuses, with no other builder to fall back to. A
             -- redelivery would refuse identically, so the worker retires the job.
-            withRuntimePolicies (withArtifactRequest (\_ _ _ _ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+            withRuntimePolicies (withArtifactRequest (\_ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob receipt job)
                 case outcome of

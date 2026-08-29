@@ -187,7 +187,13 @@ proxyApp ruleDeps privateUrl publicUrl = do
     queue <- newTestMemoryQueue
     env <- newTestEnvWith queue (manager, manager) telemetryDisabled
     let deps =
-            (npmServeDeps (Just privateUrl) publicUrl (MirrorOnAdmit privateUrl) prepared (pure fixedNow))
+            ( npmServeDeps
+                (Just (loopbackRegistryUrl privateUrl))
+                (loopbackRegistryUrl publicUrl)
+                (MirrorOnAdmit (loopbackRegistryUrl privateUrl))
+                prepared
+                (pure fixedNow)
+            )
                 { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }

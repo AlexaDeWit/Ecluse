@@ -2,24 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The vocabulary of the ecosystem adapter registry: the capability record an
-ecosystem registers ('RegistryAdapter') and its four cohesive slices.
+{- | The vocabulary of the ecosystem adapter registry: the capability record an ecosystem
+registers ('RegistryAdapter') and the serve surface it carries. The three slices a consuming
+pipeline's deps record embeds live in "Ecluse.Core.Registry.Adapter.Capability".
 
-A 'RegistryAdapter' captures what an ecosystem __is__: a static fact of the build,
-independent of anything an operator configures. It holds the serve surface, the metadata
-read and assembly, the artifact request formation, and the publish path. Which
-ecosystems are __active__ is configuration's fact, not this record's: nothing here holds
-a URL, a credential, a limit, or a policy. Those arrive as arguments when the
-composition root projects a consuming pipeline's dependency record
-('Ecluse.Core.Server.Context.PackumentDeps', 'Ecluse.Core.Server.Context.PublishDeps',
-the worker runtime's fetch wiring) from an adapter's fields. The pipelines keep their
-own records and never read this one. The root resolves an adapter at boot, so it never
-rides the hot path.
-
-The record vocabulary lives apart from the registration
-("Ecluse.Core.Registry.Adapter"). An ecosystem's adapter module can then type its
-record without importing the registry, which must import every adapter. That is the
-cycle-breaking @.Types@ extraction STYLE.md sanctions.
+A 'RegistryAdapter' holds no URL, credential, limit, or policy: it is a static fact of the
+build. It lives apart from the registration ("Ecluse.Core.Registry.Adapter"), the cycle-breaking
+@.Types@ extraction STYLE.md sanctions, so an adapter module never imports that registry.
 -}
 module Ecluse.Core.Registry.Adapter.Types (
     -- * The capability record
@@ -28,38 +17,21 @@ module Ecluse.Core.Registry.Adapter.Types (
     -- * The serve surface
     AdapterServe (..),
 
-    -- * Metadata
+    -- * The embedded slices
     AdapterMetadata (..),
-
-    -- * Artifact requests
     AdapterArtifact (..),
-
-    -- * Publish
     AdapterPublish (..),
 ) where
 
-import Network.HTTP.Client (Manager, Request)
-
-import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Package (InvalidEntry, PackageName)
-import Ecluse.Core.Package.Merge (MergePlan, SourceId)
-import Ecluse.Core.Registry (
-    FetchFault,
-    PublishRelayResponse,
-    UrlFormationError,
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterArtifact (..),
+    AdapterMetadata (..),
+    AdapterPublish (..),
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
-import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.Request (CredentialMapping)
-import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Context (MountRouter)
-import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.RouteSpec (RouteSpec)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 
 {- | One ecosystem's complete capability record, which the composition root wires every
 consuming pipeline from. 'Ecluse.Core.Registry.Adapter.adapterFor' resolves it (npm's is
@@ -100,81 +72,5 @@ data AdapterServe = AdapterServe
     {- ^ The ecosystem's credential presentation: how the mount recovers a client's credential
     from its headers, and how Écluse carries one upstream. The neutral pipeline spells no scheme
     of its own and keeps the constant-time edge compare and the deny-by-default refusal.
-    -}
-    }
-
-{- | The ecosystem's metadata capability: reading a package's metadata from an origin,
-assembling the served document, and encoding it. The fields match the consuming dependency
-record ('Ecluse.Core.Server.Context.pdNewMetadataClient' and
-'Ecluse.Core.Server.Context.pdAssemble'), so the composition root projects them unchanged.
--}
-data AdapterMetadata = AdapterMetadata
-    { metadataNewClient ::
-        TracingPort ->
-        MetricsPort ->
-        Metric.Upstream ->
-        ManifestCaching ->
-        (PackageName -> MetadataError -> IO ()) ->
-        (PackageName -> [InvalidEntry] -> IO ()) ->
-        (PackageName -> IO ()) ->
-        Limits ->
-        Manager ->
-        Text ->
-        Maybe Secret ->
-        MetadataClient
-    {- ^ Build a per-request metadata client for one origin, given the per-fetch
-    runtime parameters. The adapter closes over the ecosystem's raw fetch
-    primitives.
-    -}
-    , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
-    {- ^ Assemble the served document from a merge plan, the raw source documents, and the
-    precedence-winning base document ('Nothing' when there is none), rewriting each surviving
-    version's artifact URL under the given mount base.
-    -}
-    , metadataSerialise :: CachedDoc -> LByteString
-    -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
-    }
-
-{- | The ecosystem's artifact request formation: by conventional filename under a registry base,
-or at the artifact's authoritative upstream URL. The request fields match the consuming
-dependency record ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByFile' and
-'Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl').
--}
-data AdapterArtifact = AdapterArtifact
-    { artifactByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request by conventional filename path under a base URL:
-    how the proxy addresses a trusted origin.
-    -}
-    , artifactByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request at its authoritative upstream URL. The URL is complete on its
-    own, so an implementation must form the request from it alone. A caller may pass an empty
-    base URL and an anonymous credential ('Nothing'), as the mirror worker's fetch does.
-    -}
-    , artifactHosts :: [Text]
-    {- ^ The ecosystem's canonical artifact hosts, whose authorities feed the tarball-host gate.
-    The secure-default same-host policy admits them (PyPI's is @https://files.pythonhosted.org@)
-    without the operator naming hostnames. Empty for npm, whose artifacts ride the registry host.
-    -}
-    }
-
-{- | The ecosystem's publish capability: the first-party relay, the name canonicaliser, the
-declared-name extractor, and the mirror write's protocol codec. The composition root marries
-the codec to the shared publish transport per mounted ecosystem
-('Ecluse.Core.Registry.Publish.newMirrorPublish').
--}
-data AdapterPublish = AdapterPublish
-    { publishRelay :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
-    -- ^ Relay a client's publish document to the publication target, returning its response.
-    , publishCanonicaliseName :: Text -> Maybe PackageName
-    -- ^ Canonicalise a raw package-name string, or 'Nothing' when it cannot be parsed.
-    , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Extract every package name a publish body declares as its own identity. The
-    anti-shadowing guard refuses any declared name that disagrees with the URL-path name. A body
-    that declares no readable name yields @[]@.
-    -}
-    , publishCodec :: PublishCodec
-    {- ^ The mirror write's protocol codec: publish document assembly, request formation, the
-    probe's request and version-list projection, and the status semantics. Protocol only: the
-    manager, credential mint, and fault classification belong to the shared transport.
     -}
     }

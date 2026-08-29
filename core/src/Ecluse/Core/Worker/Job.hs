@@ -44,6 +44,7 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch, PublishRejected),
     renderUrlFormationError,
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent), versionTransience)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact))
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
@@ -224,7 +225,7 @@ outcomeOfFetchFault render fault = verdict (render fault)
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
-    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (wpBuildArtifactRequest policy) (jobArtifactUrl job)
+    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) (jobArtifactUrl job)
     case fetched of
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and
         -- 'processMessage' logs the reason at the queue-realisation site.

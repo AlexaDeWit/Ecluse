@@ -17,16 +17,15 @@ module Ecluse.Core.Worker.Types (
 
 import Data.Time (UTCTime, getCurrentTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
@@ -102,11 +101,9 @@ data WorkerPolicy = WorkerPolicy
     URL. The gate refuses an unextractable authority ('Nothing'), because the queue
     payload is a trust boundary.
     -}
-    , wpBuildArtifactRequest :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
-    {- ^ Form the artifact @GET@ request for a job's authoritative artifact URL, through the
-    mount ecosystem's own request formation
-    ('Ecluse.Core.Server.Context.pdBuildArtifactRequestByUrl'). A job's bytes therefore come
-    back through the same request formation the serve path streams with.
+    , wpArtifact :: AdapterArtifact
+    {- ^ The mount ecosystem's artifact capability, the same record the serve deps carry
+    ('Ecluse.Core.Server.Context.pdArtifact'). A job's @GET@ rides its by-URL member.
     -}
     , wpPublish :: MirrorPublish
     {- ^ The mount's married mirror-write capability
