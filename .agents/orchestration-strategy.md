@@ -398,10 +398,11 @@ checklist. These are the standing rules it does not capture:
   shared helper the slices call. Duplicated invariant logic drifts, and someone fixes it N times.
 - **Surface decisions one at a time, paced by a task list**. When several design questions are open
   at once, the team lead does not front-load them all in one message. The series goes on a task list
-  first, one entry per question. Use the harness task list where available, otherwise a short-lived
-  `design-queue.md` under `.agents/`. Create that file when decisions accumulate, and remove it once
-  the questions drain into `docs/` and issues. Bring one question at a time, each leading with a
-  recommendation. Resolve and record it before you ask the next. This complements
+  first, one entry per question. Prefer the harness task list. When none is available, keep the
+  queue in agent memory or under a gitignored scratch location. Never park it as an untracked file
+  in the working tree, per [AGENTS.md, Workspace
+  hygiene](../AGENTS.md#project-structure-and-code-conventions). Bring one question at a time, each
+  leading with a recommendation. Resolve and record it before you ask the next. This complements
   _escalate, don't guess_: surface proactively, but in series.
 - **Reference work by identifiers the architect can see**. Name a piece of work by its PR or issue
   number (`#168`), or by a short descriptive title. Never use an internal task-tracker ID the
@@ -414,6 +415,6 @@ checklist. These are the standing rules it does not capture:
 ## What lives under `.agents/`
 
 Everything agent-facing: this strategy, the context-management guide, the compaction prompt, and
-the skills. When design questions accumulate, a short-lived `design-queue.md`
-holding area joins them. Work it one question at a time, drain it into `docs/` and issues, and
-remove it once it is empty. Design lives in `docs/`. Process lives here.
+the skills. Only tracked files live here: a decision queue or any other temporary working file
+belongs in the harness task list, agent memory, or a gitignored scratch location instead. Design
+lives in `docs/`. Process lives here.
