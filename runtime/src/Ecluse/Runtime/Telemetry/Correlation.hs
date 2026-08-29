@@ -6,12 +6,12 @@
 ambient context and stamp its ids onto the @dd@ log object ("Ecluse.Runtime.Log"). A
 reader then joins a JSONL line to the trace it was emitted within.
 
-"Ecluse.Runtime.Log" owns the @dd@ object's /shape/ and the Datadog id format
-('Ecluse.Runtime.Log.formatDdTraceId' \/ 'Ecluse.Runtime.Log.formatDdSpanId'), and
-stays free of any OpenTelemetry dependency. This module is the IO half that
-"Ecluse.Runtime.Log" deferred. It reaches into the OpenTelemetry thread-local context
-for the active span. It renders the trace and span ids into a 'DdSpan' and fills that
-onto a 'DdContext'.
+"Ecluse.Runtime.Log" owns the @dd@ object's /shape/ and stays free of any OpenTelemetry
+dependency. This module is the IO half that "Ecluse.Runtime.Log" deferred. It reaches into
+the OpenTelemetry thread-local context for the active span. It renders the trace and span
+ids into a 'DdSpan' and fills that onto a 'DdContext'. The id format is the declared SDK's
+own @hs-opentelemetry-propagator-datadog@ conversion: the unsigned decimal of the low 64
+bits, big-endian, which is what @dd.trace_id@ and @dd.span_id@ join on.
 
 == The identity and the span
 
@@ -42,16 +42,17 @@ module Ecluse.Runtime.Telemetry.Correlation (
 import System.Environment (getEnvironment)
 
 import Katip (SimpleLogPayload)
+import OpenTelemetry.Propagator.Datadog (
+    convertOpenTelemetrySpanIdToDatadogSpanId,
+    convertOpenTelemetryTraceIdToDatadogTraceId,
+ )
 import OpenTelemetry.Trace.Core (getActiveSpanContext, isValid)
 import OpenTelemetry.Trace.Core qualified as OTel
-import OpenTelemetry.Trace.Id (spanIdBytes, traceIdBytes)
 
 import Ecluse.Runtime.Log (
     DdContext (..),
     DdSpan (DdSpan),
     ddField,
-    formatDdSpanId,
-    formatDdTraceId,
  )
 import Ecluse.Runtime.Telemetry.Resolve (
     ResolvedTelemetry (rtEnvironment, rtServiceName, rtVersion),
@@ -87,8 +88,8 @@ activeDdSpan = do
             | isValid spanContext ->
                 Just
                     ( DdSpan
-                        (formatDdTraceId (traceIdBytes (OTel.traceId spanContext)))
-                        (formatDdSpanId (spanIdBytes (OTel.spanId spanContext)))
+                        (show (convertOpenTelemetryTraceIdToDatadogTraceId (OTel.traceId spanContext)))
+                        (show (convertOpenTelemetrySpanIdToDatadogSpanId (OTel.spanId spanContext)))
                     )
         _ -> Nothing
 

@@ -402,6 +402,7 @@ library ecluse-runtime
     , hs-opentelemetry-exporter-otlp  ^>=1.0
     , hs-opentelemetry-instrumentation-http-client  ^>=1.0
     , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-datadog ^>=1.0
     , hs-opentelemetry-propagator-w3c ^>=1.0
     , hs-opentelemetry-sdk            ^>=1.0
     , iproute                         ^>=1.7

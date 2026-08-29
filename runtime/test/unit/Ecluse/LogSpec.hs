@@ -8,7 +8,6 @@ import Data.Aeson (Object, Value (Object), decodeStrict, eitherDecodeStrict, obj
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseMaybe)
-import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Data.Time (UTCTime (..), fromGregorian)
@@ -37,8 +36,6 @@ import Ecluse.Runtime.Log (
     LogLevel (..),
     ddField,
     ddObject,
-    formatDdSpanId,
-    formatDdTraceId,
     formatterFor,
     newLogEnv,
     newScribe,
@@ -342,15 +339,7 @@ spec = do
             captured `shouldSatisfy` T.isInfixOf "[Warning]"
             captured `shouldSatisfy` T.isInfixOf "denied"
 
-    describe "the Datadog id format" $ do
-        it "renders a trace id as the unsigned decimal of its low 64 bits (high bits ignored)" $ do
-            formatDdTraceId (BS.pack (replicate 8 0xFF <> [0, 0, 0, 0, 0, 0, 0, 42])) `shouldBe` "42"
-            formatDdTraceId (BS.pack (replicate 8 0x00 <> [0, 0, 0, 0, 0, 0, 1, 0])) `shouldBe` "256"
-
-        it "renders a span id as the unsigned decimal of its 64 bits (big-endian)" $ do
-            formatDdSpanId (BS.pack [0, 0, 0, 0, 0, 0, 0, 1]) `shouldBe` "1"
-            formatDdSpanId (BS.pack [1, 0, 0, 0, 0, 0, 0, 0]) `shouldBe` "72057594037927936"
-
+    describe "the Datadog context object" $
         it "builds the dd context object: service always, env/version when set, ids only with a span" $ do
             ddObject (DdContext "ecluse" (Just "prod") (Just "1.4.2") (Just (DdSpan "42" "7")))
                 `shouldBe` object
