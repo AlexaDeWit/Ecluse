@@ -7,7 +7,7 @@ module Ecluse.CompositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (PublishBudget (..), composeBindings, planMounts)
+import Ecluse.Composition (PublishBudget (..), planMounts)
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Support (
@@ -60,7 +60,7 @@ aggregated boot error, and the injected clock and adapter resolver keep this spe
 -}
 spec :: Spec
 spec = do
-    composeBindingsSpec
+    planMountsSpec
     bootErrorSpec
     publishWiringSpec
 
@@ -109,8 +109,8 @@ planFromWith limits envVars mDocBytes = do
                     let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
                     planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
 
-composeBindingsSpec :: Spec
-composeBindingsSpec = describe "planMounts / composeBindings (config-driven serving)" $ do
+planMountsSpec :: Spec
+planMountsSpec = describe "planMounts (config-driven serving)" $ do
     it "produces one npm binding with packument-serve deps wired (served, not a 501 stub)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -165,7 +165,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -270,10 +270,10 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 pdDivergencePolicy deps `shouldBe` FailClosed
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do
+    it "planMounts is the listener-free Config -> [MountBinding] builder" $ do
         config <- expectConfig staticEnvVars Nothing
         providers <- expectProviders config
-        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 

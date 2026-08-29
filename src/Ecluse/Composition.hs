@@ -38,7 +38,6 @@ mis-enforced or half-wired state (see
 module Ecluse.Composition (
     -- * Boot-time wiring
     planMounts,
-    composeBindings,
     validateComposition,
 
     -- * Publish-side wiring
@@ -99,8 +98,17 @@ import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
-{- | The composition root's single entry to the served mount bindings, or every boot error
-at once. The caller injects every capability, so this opens no socket.
+{- | The publish-side byte discipline: the process-wide aggregate admission and the
+per-request cap. It exists exactly when a publication target is configured.
+-}
+data PublishBudget = PublishBudget
+    { pbBodyBudget :: ByteAdmission
+    , pbMaxRequestBytes :: Int
+    }
+
+{- | Turn a validated 'Config' into the served 'MountBinding's, or every boot error at once,
+aggregated across every mount. The caller injects every capability, so this opens no socket,
+and the 'Limits' arrive resolved, so every metadata read is bounded.
 -}
 planMounts ::
     (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
@@ -111,29 +119,7 @@ planMounts ::
     Maybe PublishBudget ->
     Config ->
     IO (Either [BootError] [MountBinding])
-planMounts = composeBindings
-
-{- | The publish-side byte discipline: the process-wide aggregate admission and the
-per-request cap. It exists exactly when a publication target is configured.
--}
-data PublishBudget = PublishBudget
-    { pbBodyBudget :: ByteAdmission
-    , pbMaxRequestBytes :: Int
-    }
-
-{- | Turn a validated 'Config' into the served 'MountBinding's, or the boot errors aggregated
-across every mount. The 'Limits' arrive resolved, so every metadata read is bounded.
--}
-composeBindings ::
-    (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
-    IO UTCTime ->
-    (Ecosystem -> RuleDeps) ->
-    CredentialProviders ->
-    Limits ->
-    Maybe PublishBudget ->
-    Config ->
-    IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
+planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
     -- 'Ecluse.Composition.Plan.resolveBootPlan' runs 'validateComposition' first on both
     -- entry points. This call keeps the structural errors in reach of a caller without a plan.
     let structuralErrs = validateComposition config
@@ -242,7 +228,7 @@ mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
 {- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig'. It
-leaves provider initialisation ('UnresolvedCredential') to 'composeBindings'.
+leaves provider initialisation ('UnresolvedCredential') to 'planMounts'.
 -}
 validateComposition :: Config -> [BootError]
 validateComposition config = missingAdapters <> publishPolicyErrors
@@ -313,19 +299,13 @@ data PublishTarget = PublishTarget
     }
 
 {- | Resolve each configured mount to its publish target, or the aggregated boot errors. An
-unresolved credential raises the same error 'composeBindings' reports for the serve side.
+unresolved credential raises the same error 'planMounts' reports for the serve side.
 -}
 planPublishTargets ::
     CredentialProviders ->
     Config ->
     Either [BootError] [PublishTarget]
-planPublishTargets = composePublishTargets
-
-composePublishTargets ::
-    CredentialProviders ->
-    Config ->
-    Either [BootError] [PublishTarget]
-composePublishTargets providers config =
+planPublishTargets providers config =
     case partitionEithers (mapMaybe (publishTargetFor providers) (Map.elems (configMounts config))) of
         ([], targets) -> Right targets
         (errs, _) -> Left (concat errs)
