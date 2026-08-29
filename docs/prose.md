@@ -2,9 +2,9 @@
 
 How to write prose for Écluse: the operator manual (`web/content/docs/`), the repository's
 Markdown, PR bodies, and issues. [`docs/haddock.md`](haddock.md) owns in-source documentation, and
-[CONTRIBUTING](../CONTRIBUTING.md#the-pull-request) owns the PR-body shape. When the two registers
-below pull against each other, structure wins: move the facts into a table or diagram and let the
-prose shrink.
+[CONTRIBUTING](../CONTRIBUTING.md#pull-requests) owns the PR-body shape. When the floor and the
+register below pull against each other, structure wins: move the facts into a table or diagram and
+let the prose shrink.
 
 ## The floor
 
@@ -12,7 +12,8 @@ Plain language is the baseline on every surface.
 
 - Active voice, with the actor named: "the parser drops the header", never "the header is
   dropped".
-- One idea per sentence. Prefer the short common word.
+- One idea per sentence. Prefer the short common word, and define an unavoidable term in a
+  clause.
 - No filler adjectives, no marketing, no reassurance ("robust", "safely", "with confidence").
 - Reproduce commands, paths, defaults, numbers, and error text exactly.
 - Canadian English. No em-dashes or en-dashes.
