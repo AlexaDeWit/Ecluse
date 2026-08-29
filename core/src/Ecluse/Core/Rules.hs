@@ -114,7 +114,7 @@ data RuleDeps = RuleDeps
     -}
     , rdFaultReporter :: FaultReporter
     {- ^ The observer that effectful rules report an exhausted evaluation's fault detail to,
-    or 'Ecluse.Core.Rules.Effectful.noFaultReporter' when unobserved. The detail stays in the operator log and never
+    or an inert reporter when unobserved. The detail stays in the operator log and never
     reaches the client-facing message.
     -}
     }

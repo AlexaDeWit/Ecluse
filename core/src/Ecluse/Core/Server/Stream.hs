@@ -88,9 +88,8 @@ withUpstreamWhen ::
     RelayResponder response ->
     IO (Maybe (verdict, response))
 withUpstreamWhen manager request body accept relay respond =
-    -- The open-to-'finally' handoff runs masked, so an async exception between 'responseOpen'
-    -- returning the connection and 'finally' arming 'responseClose' cannot strand it.
-    -- 'restore' keeps the open and the relay interruptible.
+    -- Masked from 'responseOpen' to 'finally' arming 'responseClose', so an async exception
+    -- between the two cannot strand the connection. 'restore' keeps the relay interruptible.
     mask $ \restore ->
         tryAny (restore (responseOpen request manager)) >>= \case
             Left _ -> pure Nothing

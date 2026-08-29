@@ -360,9 +360,8 @@ resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (
 resolveMetadata = resolveMetadataWith (pure ())
 
 {- As 'resolveMetadata', but with a hook run on the leading thread between the in-flight claim's
-STM commit and the leader's exception guard taking the marker. Only a test uses it, to cancel a
-leader inside that window. 'resolveMetadata' passes @pure ()@.
--}
+STM commit and the leader's exception guard taking the marker. 'resolveMetadata' passes @pure ()@,
+which is the only caller. -}
 resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadataWith afterClaim metrics cache source name =
     resolveSingleFlight

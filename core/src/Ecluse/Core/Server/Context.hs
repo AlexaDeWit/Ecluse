@@ -313,11 +313,8 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
-    {- ^ The anti-shadowing guard: whether the configured publish allow-list
-    (@ECLUSE_MOUNTS__{ECOSYSTEM}__PUBLISH_ALLOW@) covers this name, read through the
-    ecosystem's own namespace grammar ('Ecluse.Core.Registry.Adapter.Types.publishAllowed').
-    A name it refuses is rejected __before any upstream write__, so a client cannot publish
-    a name that shadows an existing public package, a dependency-confusion vector.
+    {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
+    derives it at the composition root, npm's from exact scope equality, deny by default.
     -}
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the

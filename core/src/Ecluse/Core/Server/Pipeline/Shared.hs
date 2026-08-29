@@ -73,12 +73,8 @@ no header, because a transience with no suggested delay has nothing to promise.
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
 retryAfterHeaders = foldMap (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 
-{- | Run the gated work under the serve admission bound, answering the caller's own shed
-response when the gate refuses. The shed counts one unavailable serve decision here, so no
-handler can shed silently.
-
-@answer@ runs __outside__ the admission slot, so committing the response (streaming an
-artifact, assembling a packument) never holds a slot the next request is waiting on.
+{- | Run the gated work under the serve admission bound, counting one unavailable serve decision
+when it sheds. @answer@ runs __outside__ the slot, so committing a response never holds one.
 -}
 withAdmissionOrShed ::
     (MonadUnliftIO m) =>

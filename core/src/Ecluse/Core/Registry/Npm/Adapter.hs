@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishAllowed, npmPublishCodec)
+import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 
@@ -78,7 +78,6 @@ npmAdapter =
                     relayPublishDocument (NpmClientConfig targetUrl manager token limits)
                 , publishCanonicaliseName = rightToMaybe . projectName
                 , publishDeclaredNames = declaredNames
-                , publishAllowed = npmPublishAllowed
                 , publishCodec = npmPublishCodec
                 }
         }

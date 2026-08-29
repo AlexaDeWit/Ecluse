@@ -15,6 +15,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import UnliftIO.Exception (throwString)
 
+import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))

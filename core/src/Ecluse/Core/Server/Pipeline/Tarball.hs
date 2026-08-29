@@ -404,7 +404,7 @@ publicArtifactGate :: PackageDetails -> ArtifactAdmission -> PublicArtifactGate
 publicArtifactGate details admission = case admission of
     -- The carried floor-checked digest set is the worker's ingest concern. The serve path
     -- streams without rehashing, so it has no consumer for the set.
-    AdmissionAdmit artifact _ -> Admitted artifact
+    AdmissionAdmit _ artifact _ -> Admitted artifact
     AdmissionDenied decision -> Refused (serveDecisionOf details decision)
     AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision details decision))
     AdmissionFileAbsent -> Refused versionAbsent

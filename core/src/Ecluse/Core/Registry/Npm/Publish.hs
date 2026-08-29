@@ -194,9 +194,8 @@ declaredNames body =
     , Just (String declared) <- [slot]
     ]
 
-{- | Whether npm's publish allow-list covers a name: its scope must equal a configured entry.
-Deny by default, and equality is exact, so an unscoped name and @\@acme-evil@ against an
-@\@acme@ entry are both refused.
+{- | Whether npm's publish allow-list covers a name: its scope must equal a configured entry
+exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused.
 -}
 npmPublishAllowed :: [Scope] -> PackageName -> Bool
 npmPublishAllowed scopes name = case pkgNamespace name of

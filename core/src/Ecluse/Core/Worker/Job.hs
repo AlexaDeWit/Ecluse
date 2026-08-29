@@ -24,7 +24,7 @@ import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
-import Ecluse.Core.Package (Artifact (artFilename, artSize), Hash, pkgEcosystem)
+import Ecluse.Core.Package (Artifact (artSize), Hash, pkgEcosystem)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
         AdmissionAdmit,
@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (mpParseVersionList, mpProbeM
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Path (mkFilename)
+import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
@@ -166,14 +166,12 @@ reevaluatePolicy policy job
                         )
                 pure (outcomeOfAdmission job admission)
 
-{- | Render the shared 'ArtifactAdmission' as the worker's outcome: the descriptor to publish, or
-the outcome the queue realises. 'admissionTransience' alone decides retry versus drop, so this
-fold and the serve gate cannot diverge.
+{- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
+realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
 -}
 outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> Either JobOutcome MirrorArtifact
 outcomeOfAdmission job admission = case admission of
-    AdmissionAdmit artifact digests ->
-        maybe (refused (unusableArtifactName job)) Right (readmittedDescriptor artifact digests)
+    AdmissionAdmit filename artifact digests -> Right (readmittedDescriptor filename artifact digests)
     AdmissionDenied (Blocked ruleName reason) ->
         refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
@@ -200,27 +198,17 @@ retryOrDrop transience reason = case transience of
     Just WontResolve -> Dropped reason
     Nothing -> Dropped reason
 
-{- Derive the publish descriptor from current metadata alone: the floor-checked digests the tamper
-gate verifies against, plus the filename and declared size. 'Nothing' when current metadata names
-the artifact with something that is not a safe path component, which the publish document must
-never carry. The payload's own filename only selects the artifact, so no queue-payload text
-reaches the trusted-tier publish document. -}
-readmittedDescriptor :: Artifact -> NonEmpty Hash -> Maybe MirrorArtifact
-readmittedDescriptor artifact digests = do
-    filename <- mkFilename (artFilename artifact)
-    pure
-        MirrorArtifact
-            { maFilename = filename
-            , maHashes = digests
-            , maSize = artSize artifact
-            }
-
--- The audit reason for metadata that names its artifact with an unusable filename.
-unusableArtifactName :: MirrorJob -> Text
-unusableArtifactName job =
-    "current metadata names the artifact of "
-        <> renderJob job
-        <> " with a filename that is not a safe path component; refusing to mirror it"
+{- Derive the publish descriptor from what the admission gate settled: the floor-checked digests
+the tamper gate verifies against, the filename it matched against current metadata, and the
+declared size. Nothing the queue payload asserted reaches the trusted-tier publish document
+unchecked. -}
+readmittedDescriptor :: Filename -> Artifact -> NonEmpty Hash -> MirrorArtifact
+readmittedDescriptor filename artifact digests =
+    MirrorArtifact
+        { maFilename = filename
+        , maHashes = digests
+        , maSize = artSize artifact
+        }
 
 {- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
 The artifact fetch and the mirror write read this one table, so no fault splits between them.

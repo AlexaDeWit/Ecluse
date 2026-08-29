@@ -39,15 +39,10 @@ serve renders a denial @403@ and an inability @503@\/@500@, and the worker acks 
 but leaves an inability a retry could clear to redeliver ('admissionTransience').
 -}
 data ArtifactAdmission
-    = {- | The rules admitted the version, the requested filename selected an
-      artifact, and its digests clear the integrity floor: serve it or mirror it.
-      Carries the artifact and its integrity digests exactly as the floor checked
-      them, non-empty as a fact of admission, so both consumers act on this one
-      floor-checked set rather than each re-deriving and re-guarding it from the
-      artifact. The serve pipeline captures the set on the mirror job it enqueues,
-      and the worker's tamper gate verifies the fetched bytes against it.
+    = {- | The rules admitted the version and its digests clear the integrity floor. Carries the
+      'Filename' the gate matched against current metadata, and the floor-checked digest set.
       -}
-      AdmissionAdmit Artifact (NonEmpty Hash)
+      AdmissionAdmit Filename Artifact (NonEmpty Hash)
     | {- | A rule (or deny-by-default) blocked the version. Carries the 'Blocked' \/
       'BlockedByDefault' 'Decision' so each consumer renders the deciding rule and
       reason on its own surface.
@@ -97,7 +92,7 @@ admitArtifact ctx rules minIntegrity file details = do
                 MeetsFloor ->
                     -- 'MeetsFloor' guarantees a digest is present, but 'artHashes' is a plain list.
                     -- The unreachable empty case fails closed, as if no digest existed.
-                    maybe AdmissionIntegrityMissing (AdmissionAdmit artifact) (nonEmpty (artHashes artifact))
+                    maybe AdmissionIntegrityMissing (AdmissionAdmit file artifact) (nonEmpty (artHashes artifact))
                 BelowFloor -> AdmissionBelowFloor
                 NoIntegrity -> AdmissionIntegrityMissing
         Blocked{} -> AdmissionDenied decision

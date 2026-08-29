@@ -174,9 +174,8 @@ recordWorkerProgress = do
     now <- liftIO getCurrentTime
     liftIO (recordPoll heartbeat now)
 
-{- | Run one operation on the worker's queue handle and hand its typed failure to @onFault@.
-Every such operation is best-effort: a fault costs at most a redelivery, which idempotent
-publishing makes harmless, so it never fails the job.
+{- | Run one operation on the worker's queue handle, handing its typed failure to @onFault@. A
+fault costs at most a redelivery, which idempotent publishing makes harmless, so it never fails.
 -}
 queueOp :: (MirrorQueue -> IO (Either TransportFault a)) -> (TransportFault -> WorkerM ()) -> WorkerM ()
 queueOp op onFault = do

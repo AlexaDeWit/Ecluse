@@ -42,7 +42,7 @@ import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
+import Ecluse.Core.Package (InvalidEntry, PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
@@ -171,11 +171,6 @@ data AdapterPublish = AdapterPublish
     {- ^ Extract every package name a publish body declares as its own identity. The
     anti-shadowing guard refuses any declared name that disagrees with the URL-path name. A body
     that declares no readable name yields @[]@.
-    -}
-    , publishAllowed :: [Scope] -> PackageName -> Bool
-    {- ^ Whether the operator's configured publish allow-list covers a name, read through the
-    ecosystem's own namespace grammar. Deny by default: an empty allow-list admits nothing, so
-    an ecosystem whose names carry no namespace refuses every publish until it says otherwise.
     -}
     , publishCodec :: PublishCodec
     {- ^ The mirror write's protocol codec: publish document assembly, request formation, the

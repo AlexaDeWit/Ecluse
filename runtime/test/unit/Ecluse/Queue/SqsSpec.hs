@@ -53,7 +53,7 @@ npmJob =
                     }
         }
 
--- | A scoped npm job fixture, to exercise the scope arm of the wire mapping.
+-- | A scoped npm job fixture, to exercise the namespace arm of the wire mapping.
 scopedJob :: MirrorJob
 scopedJob =
     MirrorJob
@@ -76,6 +76,13 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
+{- | A namespaced non-npm job fixture. No ecosystem ships namespaced names beside npm today, but
+the wire mapping is the one every backend inherits, so the namespace must survive the hop.
+-}
+namespacedPypiJob :: MirrorJob
+namespacedPypiJob =
+    pypiJob{jobPackage = mkPackageName PyPI (Just (mkScope "acme")) "Flask"}
+
 {- | A job body with every required field and no @traceContext@ key at all, as a job
 enqueued with tracing off carries. The decode must accept it as a 'Nothing' carrier.
 -}
@@ -91,11 +98,16 @@ spec = do
         it "round-trips an unscoped npm job" $
             decodeJob mirrorJobPackage mkRegistryUrl (encodeJob npmJob) `shouldBe` Right npmJob
 
-        it "round-trips a scoped npm job (scope and bare name both recovered)" $
+        it "round-trips a scoped npm job (namespace and bare name both recovered)" $
             decodeJob mirrorJobPackage mkRegistryUrl (encodeJob scopedJob) `shouldBe` Right scopedJob
 
         it "round-trips a PyPI job (ecosystem carried through)" $
             decodeJob mirrorJobPackage mkRegistryUrl (encodeJob pypiJob) `shouldBe` Right pypiJob
+
+        it "round-trips a namespaced non-npm job, so the namespace is not npm's alone" $
+            -- The identity rides as two fields rather than one rendered name, so an ecosystem
+            -- that grows namespaced names inherits a codec that already carries them.
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob namespacedPypiJob) `shouldBe` Right namespacedPypiJob
 
         it "carries every field through unchanged" $ do
             -- Field-by-field so a single mangled field is pinpointed, not lost in
@@ -120,13 +132,13 @@ spec = do
                     jobVersion job `shouldBe` mkVersion Npm "1.3.0"
 
     describe "decodeJob -- the one npm name grammar at the queue trust boundary" $ do
-        -- The payload is untrusted, so its wire name is read through the same splitter the front
-        -- door uses ('mirrorJobPackage'). The verdicts are the shared table's.
+        -- The payload is untrusted, so its namespace and name are re-joined and read through the
+        -- same splitter the front door uses ('mirrorJobPackage'). The verdicts are the shared table's.
         for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
             it (NpmFixture.nameVerdictLabel raw valid) $
                 isRight (decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "npm" raw)) `shouldBe` valid
 
-        it "reads a scoped name back from the single rendered wire name" $
+        it "rebuilds a scoped name from the payload's separate namespace and name fields" $
             case decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "npm" "@babel/core") of
                 Left err -> expectationFailure (toString err)
                 Right job -> jobPackage job `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "core"
@@ -291,19 +303,26 @@ spec = do
             delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
-{- | A job body for @ecosystem@ naming @wireName@ in the single @name@ field 'encodeJob' writes.
-Every other field is well-formed.
+{- | A job body for @ecosystem@ naming @wireName@, split into the separate @namespace@ and @name@
+fields 'encodeJob' writes. Every other field is well-formed.
 -}
 jobBodyFor :: Text -> Text -> Text
 jobBodyFor ecosystem wireName =
     "{\"ecosystem\":"
         <> quoted ecosystem
+        <> ",\"namespace\":"
+        <> namespaceField
         <> ",\"name\":"
-        <> quoted wireName
+        <> quoted bare
         <> ",\"version\":\"1.0.0\""
         <> ",\"artifactUrl\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\""
         <> ",\"filename\":\"x-1.0.0.tgz\"}"
   where
+    (namespaceField, bare) = case T.breakOn "/" wireName of
+        (namespacePart, rest)
+            | Just basePart <- T.stripPrefix "/" rest ->
+                (quoted (fromMaybe namespacePart (T.stripPrefix "@" namespacePart)), basePart)
+        _ -> ("null", wireName)
     quoted t = "\"" <> t <> "\""
 
 {- | One well-formed message and one of each drop cause: missing body, missing receipt,

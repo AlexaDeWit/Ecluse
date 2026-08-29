@@ -101,9 +101,8 @@ beside the response, so a committed relay always carries exactly one. -}
 relayJudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, RelayVerdict)
 relayJudged status headers = pure (status, forwardedHeaders headers, relayVerdict status headers)
 
-{- Drop only the hop-by-hop framing headers, whose values describe the upstream hop, not the
-artifact. The content headers and the @ETag@ pass through unchanged, so the client verifies
-@dist.integrity@ over exactly the relayed bytes. -}
+{- Drop only the hop-by-hop framing headers, which describe the upstream hop rather than the
+artifact. The content headers and the @ETag@ pass through, so the client verifies the bytes. -}
 forwardedHeaders :: ResponseHeaders -> ResponseHeaders
 forwardedHeaders = filter (not . isHopByHop . fst)
   where

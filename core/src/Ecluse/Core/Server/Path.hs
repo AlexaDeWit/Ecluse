@@ -32,9 +32,8 @@ import Data.Char (isControl)
 import Data.Text qualified as T
 import Network.HTTP.Types.URI (urlEncode)
 
-{- | An artifact's on-the-wire file name, kept verbatim and safe to interpolate: it cleared
-'isSafeComponent' at construction. The type is authoritative for fetching the bytes, because the
-upstream path uses this exact name, never one rebuilt from @(package, version)@.
+{- | An artifact's on-the-wire file name, verbatim and safe to interpolate: it cleared
+'isSafeComponent'. The upstream path uses this exact name, never one rebuilt from the version.
 -}
 newtype Filename = Filename Text
     deriving stock (Eq, Show)

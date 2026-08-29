@@ -58,7 +58,7 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfDetail, transportFault)
-import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, unScope, unscopedName)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -109,16 +109,16 @@ data RemoteSpanContext = RemoteSpanContext
     }
     deriving stock (Eq, Show)
 
-{- | Encode a 'MirrorJob' as the JSON text of a queue message body, the inverse of 'decodeJob'.
-The package name rides in its own ecosystem's wire form, so no backend re-encodes a namespace
-split of its own.
+{- | Encode a 'MirrorJob' as the JSON text of a queue message body, the inverse of 'decodeJob'. The
+identity rides as a namespace and a base name, so a namespaced name round-trips on any ecosystem.
 -}
 encodeJob :: MirrorJob -> Text
 encodeJob job =
     decodeUtf8 . Aeson.encode $
         object
             [ "ecosystem" .= ecosystemName (pkgEcosystem (jobPackage job))
-            , "name" .= renderPackageName (jobPackage job)
+            , "namespace" .= (unScope <$> pkgNamespace (jobPackage job))
+            , "name" .= unscopedName (jobPackage job)
             , "version" .= renderVersion (jobVersion job)
             , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
             , "filename" .= unFilename (jobArtifactFilename job)
@@ -135,12 +135,11 @@ encodeTraceContext rsc =
         ]
 
 {- | Decode a queue message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
-the name, the filename, and the artifact URL each go back through their own gate rather than
-being taken as given.
+the name, the filename, and the artifact URL each go back through their own gate.
 -}
 decodeJob ::
-    -- | Read a wire name through its ecosystem's own grammar.
-    (Ecosystem -> Text -> Either Text PackageName) ->
+    -- | Read a wire namespace and base name through the ecosystem's own grammar.
+    (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
     -- | Re-form the artifact URL's validated https egress witness.
     (Text -> Either Text RegistryUrl) ->
     Text ->
@@ -152,15 +151,18 @@ decodeJob packageName egressUrl body =
 -- Parse the top-level job object 'encodeJob' writes, delegating the nested trace-context
 -- carrier to 'parseTraceContext'.
 parseMirrorJob ::
-    (Ecosystem -> Text -> Either Text PackageName) ->
+    (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
     (Text -> Either Text RegistryUrl) ->
     Aeson.Value ->
     Parser MirrorJob
 parseMirrorJob packageName egressUrl = withObject "MirrorJob" $ \o -> do
     ecoName <- o .: "ecosystem"
     eco <- maybe (fail (unusable "ecosystem" ecoName)) pure (parseEcosystem ecoName)
+    rawNamespace <- o .:? "namespace"
     rawName <- o .: "name"
-    package <- either (fail . toString) pure (packageName eco rawName)
+    -- The payload states the namespace and the base name separately, so the ecosystem re-joins
+    -- and re-reads them rather than either field being trusted as given.
+    package <- either (fail . toString) pure (packageName eco rawNamespace rawName)
     rawVersion <- o .: "version"
     rawArtifactUrl <- o .: "artifactUrl"
     -- The type the worker's fetch requires cannot be fabricated from an unvalidated string.

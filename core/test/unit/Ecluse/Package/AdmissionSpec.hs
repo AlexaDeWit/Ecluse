@@ -54,11 +54,13 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     Transience (WillResolve, WontResolve),
  )
+import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (
     artifactWith,
     defaultMinIntegrity,
     thingName,
+    unsafeFilename,
     unsafeHash,
     unsafeSriHashes,
     v1_0_0,
@@ -126,10 +128,13 @@ spec = do
     describe "admitArtifact -- the shared serve/worker admission oracle" $ do
         it "admits a rule-admitted, floor-clearing artifact, selecting it by filename" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             case admission of
-                AdmissionAdmit artifact digests -> do
+                AdmissionAdmit filename artifact digests -> do
                     artFilename artifact `shouldBe` "thing-1.0.0.tgz"
+                    -- The admit carries the filename the gate matched against current metadata, so
+                    -- the worker's publish descriptor never re-derives one from the queue payload.
+                    unFilename filename `shouldBe` artFilename artifact
                     -- The carried digest set is the admitted artifact's own, so the mirror enqueue
                     -- and the worker tamper gate act on exactly what the floor checked.
                     toList digests `shouldBe` artHashes artifact
@@ -137,34 +142,34 @@ spec = do
 
         it "carries a rule denial through as AdmissionDenied (both surfaces render the same decision)" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected a rule denial, got " <> show other)
 
         it "carries a fail-closed uncomputable rule through as AdmissionUndecidable" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             case admission of
                 AdmissionUndecidable Undecidable{} -> pass
                 other -> expectationFailure ("expected undecidable, got " <> show other)
 
         it "reports an absent filename as AdmissionFileAbsent, never selecting another artifact" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "renamed-2.0.0.tgz" details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "renamed-2.0.0.tgz") details
             case admission of
                 AdmissionFileAbsent -> pass
                 other -> expectationFailure ("expected a file miss, got " <> show other)
 
         it "refuses a hashless artifact as AdmissionIntegrityMissing" $ do
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" (detailsWith [])
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
             case admission of
                 AdmissionIntegrityMissing -> pass
                 other -> expectationFailure ("expected integrity-missing, got " <> show other)
 
         it "refuses a weak-only digest set as AdmissionBelowFloor" $ do
             let details = detailsWith [unsafeHash SHA1 (Package.hexSha1Of sampleBytes)]
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             case admission of
                 AdmissionBelowFloor -> pass
                 other -> expectationFailure ("expected below-floor, got " <> show other)
@@ -172,7 +177,7 @@ spec = do
         it "never pays artifact selection or floor classification for a version a rule denies" $ do
             -- A denied version with a hashless artifact must surface the denial, not
             -- the integrity refusal: the rules run first.
-            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity "thing-1.0.0.tgz" (detailsWith [])
+            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected the rule denial to win, got " <> show other)
@@ -180,7 +185,7 @@ spec = do
     describe "admissionTransience -- the retry projection the serve gate and the worker share" $ do
         it "reads out the transience of an inability the evaluator expects to clear" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             admissionTransience admission `shouldBe` Just (WillResolve Nothing)
 
         it "carries a WontResolve inability through, so serve renders a 500 and the worker drops" $
@@ -191,7 +196,7 @@ spec = do
 
         it "reports no transience for a settled verdict, so no consumer waits on one" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             admissionTransience admitted `shouldBe` Nothing
             admissionTransience (AdmissionDenied (Blocked "test-deny" "denied by current policy")) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
@@ -207,9 +212,9 @@ spec = do
                 hashes = sriHashesOf joined
                 details = detailsWith hashes
             classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             case admission of
-                AdmissionAdmit _ admitted -> do
+                AdmissionAdmit _ _ admitted -> do
                     verifyIntegrity admitted sampleBytes `shouldBe` IntegrityVerified
                     case verifyIntegrity admitted tamperedBytes of
                         IntegrityMismatch _ -> pass

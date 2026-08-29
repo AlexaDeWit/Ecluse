@@ -38,16 +38,14 @@ discards it unseen. Every operation reports its AWS failure as the handle's type
 this edge ("Ecluse.Runtime.Aws.Fault"). A queue outage never rides the exception channel
 through a caller.
 
-'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture
-it. The backend's state therefore never reaches the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The job's wire mapping belongs
-to the payload rather than to this backend ('Ecluse.Core.Queue.decodeJob'), and this module
-supplies only the ecosystem name gate that decode reads through ('mirrorJobPackage'). A body
-that fails to parse is dropped rather than yielded as a partial. Like any message left
-unprocessed, it is not 'ack'ed, so SQS redelivers it and it eventually reaches the
-dead-letter queue. Each drop is logged at 'DebugS' with its reason and the SQS message id
-when present: a missing body or receipt, or an undecodable body. A poison message is then
-visible rather than cycling silently. The untrusted body is never logged.
+'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture it, so
+the backend's state never reaches the proxy's @Env@\/@App@ (see
+@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The job's wire mapping belongs to
+the payload ('Ecluse.Core.Queue.decodeJob'), and this module supplies only the ecosystem name
+gate that decode reads through ('mirrorJobPackage'). An undecodable body is dropped rather than
+yielded as a partial, and like any unprocessed message it is not 'ack'ed, so it redelivers and
+reaches the dead-letter queue. Each drop is logged at 'DebugS' with its reason and message id, so
+a poison message is visible rather than cycling silently. The untrusted body is never logged.
 
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
 URL, or an endpoint override). Like the OTLP telemetry endpoint (see
@@ -92,7 +90,7 @@ import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
@@ -350,12 +348,14 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
-{- | Read a queue payload's package name through its ecosystem's own grammar, the gate
-'Ecluse.Core.Queue.decodeJob' applies at the trust boundary. npm has a name grammar, so its wire
-name goes through 'projectName'. PyPI and RubyGems have none, so both take the name as given.
+{- | Read a queue payload's package identity through its ecosystem's own grammar, the gate
+'Ecluse.Core.Queue.decodeJob' applies at the trust boundary. Only npm has one to read it through.
 -}
-mirrorJobPackage :: Ecosystem -> Text -> Either Text PackageName
-mirrorJobPackage eco rawName = case eco of
-    Npm -> first parseErrorMessage (projectName rawName)
-    PyPI -> Right (mkPackageName eco Nothing rawName)
-    RubyGems -> Right (mkPackageName eco Nothing rawName)
+mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
+mirrorJobPackage eco namespace rawName = case eco of
+    Npm -> first parseErrorMessage (projectName npmWireName)
+    PyPI -> Right asGiven
+    RubyGems -> Right asGiven
+  where
+    asGiven = mkPackageName eco (mkScope <$> namespace) rawName
+    npmWireName = maybe rawName (\ns -> "@" <> ns <> "/" <> rawName) namespace

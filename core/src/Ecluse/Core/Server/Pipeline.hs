@@ -6,9 +6,9 @@
 
 This module re-exports the top-level handlers for packument merges (@GET \/{pkg}@),
 artifact relays (@GET \/{pkg}\/-\/{file}.tgz@), and first-party publishes (@PUT \/{pkg}@).
-An ecosystem's route table names the handlers one module at a time, so nothing imports this
-hub. It stays as the named entry point the route tables, the internals module, and the
-telemetry ports cross-reference.
+An ecosystem's route table names the handlers one module at a time, so no production module
+imports this hub. It stays as the named entry point the route tables, the internals module, and
+the telemetry ports cross-reference.
 
 == Ecosystem neutrality
 
